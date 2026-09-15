@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "id": "org.sysc.timer",
+  "name": "Timer",
+  "version": "1.0.0",
+  "protocol": {"major": 1, "minor": 0},
+  "exec": "bin/sysc-plugin-timer",
+  "capabilities": ["notifications", "panels", "settings", "state"],
+  "requires": {"commands": []},
+  "services": [{"id": "timer"}],
+  "widgets": [{"id": "bar", "settings": []}],
+  "panels": [{"id": "panel", "width": 320, "height": 280, "placement": "attached"}],
+  "settings": [
+    {"key": "default_duration", "type": "string", "label": "Default duration", "default": "5m"}
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "id": "org.sysc.notes",
+  "name": "Notes",
+  "version": "1.0.0",
+  "protocol": {"major": 1, "minor": 0},
+  "exec": "bin/sysc-plugin-notes",
+  "capabilities": ["notifications", "panels", "settings", "state"],
+  "requires": {"commands": []},
+  "services": [{"id": "notes"}],
+  "widgets": [{"id": "bar", "settings": []}],
+  "panels": [{"id": "panel", "width": 420, "height": 800, "placement": "attached"}],
+  "settings": [
+    {"key": "notes_dir", "type": "folder", "label": "Notes directory", "default": "~/Documents/Notes"},
+    {"key": "extension", "type": "string", "label": "Extension", "default": "md"}
+  ]
+}

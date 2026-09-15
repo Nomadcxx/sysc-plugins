@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "id": "org.sysc.screen-recorder",
+  "name": "Screen Recorder",
+  "version": "1.0.0",
+  "protocol": {"major": 1, "minor": 0},
+  "exec": "bin/sysc-plugin-screen-recorder",
+  "capabilities": ["notifications", "panels", "settings", "state"],
+  "requires": {"commands": ["gpu-screen-recorder"]},
+  "services": [{"id": "recorder"}],
+  "widgets": [{"id": "bar", "settings": []}],
+  "panels": [{"id": "panel", "width": 640, "height": 720, "placement": "attached", "include_settings": true}],
+  "settings": [
+    {"key": "video_source", "type": "select", "label": "Video source", "default": "portal",
+      "options": [{"value": "focused", "label": "Focused output"}, {"value": "portal", "label": "Portal"}]},
+    {"key": "directory", "type": "folder", "label": "Output directory", "default": "~/Videos/Recordings"},
+    {"key": "filename_pattern", "type": "string", "label": "Filename pattern", "default": "recording_%Y%m%d_%H%M%S"},
+    {"key": "frame_rate", "type": "int", "label": "Frame rate", "default": 60, "min": 1, "max": 240},
+    {"key": "video_codec", "type": "select", "label": "Video codec", "default": "h264",
+      "options": [
+        {"value": "h264", "label": "H.264"},
+        {"value": "hevc", "label": "HEVC"},
+        {"value": "av1", "label": "AV1"},
+        {"value": "vp8", "label": "VP8"},
+        {"value": "vp9", "label": "VP9"}
+      ]},
+    {"key": "video_qp", "type": "int", "label": "Quality (QP)", "default": 25, "min": 0, "max": 51},
+    {"key": "resolution", "type": "string", "label": "Resolution", "default": "original"},
+    {"key": "audio_source", "type": "select", "label": "Audio source", "default": "default_output",
+      "options": [
+        {"value": "default_output", "label": "System output"},
+        {"value": "default_input", "label": "Microphone"},
+        {"value": "both", "label": "Output and input"},
+        {"value": "none", "label": "None"}
+      ]},
+    {"key": "audio_codec", "type": "select", "label": "Audio codec", "default": "opus",
+      "options": [
+        {"value": "opus", "label": "Opus"},
+        {"value": "aac", "label": "AAC"},
+        {"value": "flac", "label": "FLAC"}
+      ]},
+    {"key": "audio_bitrate", "type": "int", "label": "Audio bitrate (kbps)", "default": 0, "min": 0, "max": 512},
+    {"key": "show_cursor", "type": "bool", "label": "Show cursor", "default": true},
+    {"key": "color_range", "type": "select", "label": "Color range", "default": "limited",
+      "options": [{"value": "limited", "label": "Limited"}, {"value": "full", "label": "Full"}]},
+    {"key": "hide_inactive", "type": "bool", "label": "Hide when idle", "default": false},
+    {"key": "replay_enabled", "type": "bool", "label": "Replay buffer", "default": false},
+    {"key": "replay_duration", "type": "int", "label": "Replay duration (s)", "default": 30, "min": 5, "max": 3600,
+      "visible_when": {"key": "replay_enabled", "equals": true}},
+    {"key": "replay_filename_pattern", "type": "string", "label": "Replay filename pattern", "default": "replay_%Y%m%d_%H%M%S",
+      "visible_when": {"key": "replay_enabled", "equals": true}},
+    {"key": "replay_storage", "type": "select", "label": "Replay storage", "default": "ram",
+      "options": [{"value": "ram", "label": "RAM"}, {"value": "disk", "label": "Disk"}],
+      "visible_when": {"key": "replay_enabled", "equals": true}}
+  ]
+}
