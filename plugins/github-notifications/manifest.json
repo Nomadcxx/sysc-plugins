@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "id": "org.sysc.github-notifications",
+  "name": "GitHub Notifications",
+  "version": "0.1.0",
+  "protocol": {"major": 1, "minor": 0},
+  "exec": "bin/sysc-plugin-github-notifications",
+  "capabilities": ["notifications", "panels", "settings", "state"],
+  "requires": {"commands": ["gh"]},
+  "services": [{"id": "github-notifications"}],
+  "widgets": [{"id": "bar", "settings": []}],
+  "panels": [{"id": "panel", "width": 420, "height": 640, "placement": "attached"}],
+  "settings": [
+    {"key": "refresh_interval_seconds", "type": "int", "label": "Refresh interval (s)", "default": 120, "min": 30, "max": 3600},
+    {"key": "per_page", "type": "int", "label": "Max notifications", "default": 50, "min": 1, "max": 50},
+    {"key": "display_mode", "type": "select", "label": "Bar display", "default": "icon_and_count",
+      "options": [
+        {"value": "icon_and_count", "label": "Icon and count"},
+        {"value": "icon_only", "label": "Icon only"}
+      ]},
+    {"key": "hide_when_zero", "type": "bool", "label": "Hide count when zero", "default": false}
+  ]
+}
