@@ -24,14 +24,21 @@ After `make install`, enable plugins from sysc-shell's Plugins manager panel
 
 | Plugin | ID | Status | Origin |
 |---|---|---|---|
-| Screen Recorder | `org.sysc.screen-recorder` | stable | extracted from sysc-shell |
-| Notes | `org.sysc.notes` | stable | extracted from sysc-shell |
-| Timer | `org.sysc.timer` | stable | extracted from sysc-shell + noctalia deltas |
-| World Clock | `org.sysc.world-clock` | stable | extracted from sysc-shell + noctalia deltas |
-| Calendar | `org.sysc.calendar` | 0.1.0 | port of the built-in clock-panel calendar |
+| Screen Recorder | `org.sysc.screen-recorder` | first sweep | extracted from sysc-shell |
+| Notes | `org.sysc.notes` | first sweep | extracted from sysc-shell |
+| Timer | `org.sysc.timer` | first sweep | extracted from sysc-shell + noctalia deltas |
+| World Clock | `org.sysc.world-clock` | first sweep | extracted from sysc-shell + noctalia deltas |
+| Calendar | `org.sysc.calendar` | first sweep | port of the built-in clock-panel calendar |
 | GitHub Notifications | `org.sysc.github-notifications` | 0.1.0 | port of noctalia community plugin |
 | Mini Docker | `org.sysc.mini-docker` | 0.1.0 | port of noctalia community plugin |
 | Wallpaper Depth | `org.sysc.wallpaper-depth` | 0.1.0 stub | port of noctalia official plugin |
+
+"First sweep" means working but early: these plugins were generated before
+much of the shell's plugin infrastructure existed, and their views are
+visually extremely basic. The plan is to refactor them and rebuild their UIs
+against the noctalia plugins as prior art (layout, density, interaction
+patterns), now that iteration happens in this repo. The 0.1.0 ports are
+skeletons by design; wallpaper-depth is blocked on a shell wallpaper API.
 
 ## Adding a plugin
 
