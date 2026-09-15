@@ -31,16 +31,25 @@ type manifest struct {
 		ID string `json:"id"`
 	} `json:"services"`
 	Widgets []struct {
-		ID string `json:"id"`
+		ID       string `json:"id"`
+		Settings []any  `json:"settings"`
 	} `json:"widgets"`
 	Panels []struct {
-		ID     string `json:"id"`
-		Width  int    `json:"width"`
-		Height int    `json:"height"`
+		ID              string `json:"id"`
+		Width           int    `json:"width"`
+		Height          int    `json:"height"`
+		Placement       string `json:"placement"`
+		IncludeSettings bool   `json:"include_settings"`
 	} `json:"panels"`
 	Settings []struct {
-		Key  string `json:"key"`
-		Type string `json:"type"`
+		Key         string         `json:"key"`
+		Type        string         `json:"type"`
+		Label       string         `json:"label"`
+		Default     any            `json:"default"`
+		Min         any            `json:"min"`
+		Max         any            `json:"max"`
+		Options     []any          `json:"options"`
+		VisibleWhen map[string]any `json:"visible_when"`
 	} `json:"settings"`
 }
 

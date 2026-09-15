@@ -41,6 +41,21 @@ After `make install`, enable plugins from sysc-shell's Plugins manager panel
    `main.go` under `cmd/sysc-plugin-<name>/` that handshakes via
    `internal/wire`'s `Client` and serves its views.
 3. Add the plugin to `PLUGINS` in the `Makefile` and to the table above.
+4. Validate every view tree with `wire.Validate(...)` in a test — the host
+   rejects invalid trees at render time.
+
+Notes the hard way taught us:
+
+- Icon names must come from the shell's catalogue (`render.IconNames()` in
+  sysc-shell: weather, battery, camera, record, notifications, close,
+  schedule, ghost, sysmon gauges). They are `[a-z0-9-]` identifiers — no
+  underscores — and an unknown name fails the host's conversion. Additions
+  need a sysc-shell font update.
+- Only `normal` and `error` tones exist; interactive nodes need
+  `ID`, `Name`, `Role`, and a non-empty `Events` list; buttons cannot carry
+  children (put the icon on the button itself).
+- The wire vocabulary has no grid or desktop-widget view kind; compose grids
+  from rows/columns, and note that noctalia desktop widgets are not portable.
 
 ## Attribution
 
