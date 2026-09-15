@@ -16,8 +16,22 @@ type Clock struct {
 	pendingRemove string
 }
 
+// defaultZones mirrors the noctalia world clock's starting list; users then
+// add and remove freely and the result persists through the state store.
+var defaultZones = []string{"UTC", "America/New_York", "Europe/Berlin", "Asia/Tokyo"}
+
 func New() *Clock {
-	return &Clock{zones: []string{"UTC"}, hour24: true}
+	zones := append([]string{}, defaultZones...)
+	return &Clock{zones: zones, hour24: true}
+}
+
+// ShortLabel renders a zone's last path segment with underscores as spaces:
+// "America/New_York" becomes "New York".
+func ShortLabel(zone string) string {
+	if i := strings.LastIndex(zone, "/"); i >= 0 && i+1 < len(zone) {
+		zone = zone[i+1:]
+	}
+	return strings.ReplaceAll(zone, "_", " ")
 }
 
 func (c *Clock) Zones() []string {
@@ -161,6 +175,7 @@ func (c *Clock) Reorder(from, insertBefore int) error {
 
 type Reading struct {
 	Zone   string
+	Label  string
 	Clock  string
 	Offset string
 }
@@ -174,7 +189,7 @@ func (c *Clock) Readings(now time.Time) []Reading {
 		if err != nil {
 			continue
 		}
-		out = append(out, Reading{Zone: z, Clock: formatClock(now.In(loc), c.hour24), Offset: formatOffset(now.In(loc))})
+		out = append(out, Reading{Zone: z, Label: ShortLabel(z), Clock: formatClock(now.In(loc), c.hour24), Offset: formatOffset(now.In(loc))})
 	}
 	return out
 }

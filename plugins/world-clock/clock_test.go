@@ -18,6 +18,7 @@ func TestValidateZoneUsesIANA(t *testing.T) {
 func TestProposeAddRejectsDuplicates(t *testing.T) {
 	t.Parallel()
 	c := New()
+	c.Restore([]string{"UTC"})
 	if err := c.ProposeAdd("UTC"); err == nil {
 		t.Fatal("duplicate UTC accepted")
 	}
@@ -36,6 +37,7 @@ func TestProposeAddRejectsDuplicates(t *testing.T) {
 func TestRemoveWaitsForConfirmation(t *testing.T) {
 	t.Parallel()
 	c := New()
+	c.Restore([]string{"UTC"})
 	_ = c.ProposeAdd("Europe/Paris")
 	c.ConfirmAdd()
 	c.ProposeRemove("Europe/Paris")
@@ -45,6 +47,34 @@ func TestRemoveWaitsForConfirmation(t *testing.T) {
 	c.ConfirmRemove()
 	if got := c.Zones(); len(got) != 1 || got[0] != "UTC" {
 		t.Fatalf("zones = %v", got)
+	}
+}
+
+func TestDefaultZonesMatchNoctalia(t *testing.T) {
+	t.Parallel()
+	c := New()
+	got := c.Zones()
+	want := []string{"UTC", "America/New_York", "Europe/Berlin", "Asia/Tokyo"}
+	if len(got) != len(want) {
+		t.Fatalf("defaults = %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("defaults = %v", got)
+		}
+	}
+}
+
+func TestShortLabel(t *testing.T) {
+	t.Parallel()
+	if got := ShortLabel("America/New_York"); got != "New York" {
+		t.Fatalf("label = %q", got)
+	}
+	if got := ShortLabel("UTC"); got != "UTC" {
+		t.Fatalf("label = %q", got)
+	}
+	if r := New().Readings(time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)); r[1].Label != "New York" {
+		t.Fatalf("reading label = %+v", r[1])
 	}
 }
 

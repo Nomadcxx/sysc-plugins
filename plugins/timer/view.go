@@ -24,10 +24,11 @@ func TooltipTree(remaining string) *v1.Node {
 	}}
 }
 
-func PanelTree(remaining, duration string, running bool) *v1.Node {
+func PanelTree(remaining, duration string, running bool, progress float64) *v1.Node {
 	bar := BarTree(remaining, running)
 	return &v1.Node{Kind: v1.KindColumn, Gap: 8, Children: []*v1.Node{
 		{Kind: v1.KindText, Text: remaining, Tabular: true},
+		{Kind: v1.KindProgress, Value: progress},
 		{Kind: v1.KindTextInput, ID: "duration", Text: duration, Name: "Duration", Role: "textbox",
 			Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 		bar,

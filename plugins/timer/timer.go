@@ -182,3 +182,34 @@ func FormatMMSS(d time.Duration) string {
 	sec := int(d.Round(time.Second) / time.Second)
 	return fmt.Sprintf("%02d:%02d", sec/60, sec%60)
 }
+
+// FormatClock renders a duration as mm:ss, switching to h:mm:ss at an hour,
+// matching the noctalia timer's display rule.
+func FormatClock(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	sec := int(d.Round(time.Second) / time.Second)
+	if sec < 3600 {
+		return fmt.Sprintf("%02d:%02d", sec/60, sec%60)
+	}
+	return fmt.Sprintf("%d:%02d:%02d", sec/3600, (sec%3600)/60, sec%60)
+}
+
+// Progress reports remaining over the captured duration, clamped to one, for
+// the panel's progress bar. It is zero when no duration was captured.
+func (t *Timer) Progress() float64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.duration <= 0 {
+		return 0
+	}
+	p := float64(t.leftLocked(t.now())) / float64(t.duration)
+	if p < 0 {
+		return 0
+	}
+	if p > 1 {
+		return 1
+	}
+	return p
+}

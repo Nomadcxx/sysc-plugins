@@ -51,8 +51,8 @@ func run(in *os.File, out *os.File) error {
 	restore(ctx, c, tm)
 
 	publish := func() {
-		text := timer.FormatMMSS(tm.Remaining())
-		dur := formatDur(tm.Duration())
+		text := timer.FormatClock(tm.Remaining())
+		dur := timer.FormatClock(tm.Duration())
 		for id, v := range views {
 			v.rev++
 			views[id] = v
@@ -63,7 +63,7 @@ func run(in *os.File, out *os.File) error {
 			case v1.ViewTooltip:
 				root = timer.TooltipTree(text)
 			default:
-				root = timer.PanelTree(text, dur, tm.Running())
+				root = timer.PanelTree(text, dur, tm.Running(), tm.Progress())
 			}
 			_ = c.Snapshot(id, v.rev, root)
 		}
@@ -150,8 +150,4 @@ func restore(ctx context.Context, c *v1.Client, tm *timer.Timer) {
 		return
 	}
 	tm.Restore(time.Unix(unix, 0))
-}
-
-func formatDur(d time.Duration) string {
-	return timer.FormatMMSS(d)
 }

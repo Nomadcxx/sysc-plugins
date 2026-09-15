@@ -41,7 +41,10 @@ func PanelTree(readings []Reading, pendingAdd, pendingRemove, draft string) *v1.
 				Name: "Reorder " + r.Zone, Role: "button", DragType: "zone", Payload: r.Zone,
 				Events: []v1.EventKind{v1.EventPointer},
 			},
-			{Kind: v1.KindText, Text: r.Zone},
+			{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+				{Kind: v1.KindText, Text: r.Label},
+				{Kind: v1.KindText, Text: r.Zone},
+			}},
 			{Kind: v1.KindText, Key: "time:" + r.Zone, Text: r.Clock, Tabular: true},
 			{Kind: v1.KindText, Text: r.Offset},
 			{
