@@ -37,6 +37,18 @@ func TimePatch(readings []Reading) []v1.Replacement {
 	return out
 }
 
+func TooltipTree(first Reading) *v1.Node {
+	// Bar placements get a tooltip view beside the bar; the whole panel tree
+	// is illegal there (tooltips reject interactive nodes) and broke layout.
+	line := "World Clock"
+	if first.Clock != "" {
+		line = "World Clock · " + first.Clock + " " + first.Zone
+	}
+	return &v1.Node{Kind: v1.KindColumn, Children: []*v1.Node{
+		{Kind: v1.KindText, Text: line},
+	}}
+}
+
 func PanelTree(readings []Reading, pendingAdd, pendingRemove, draft string) *v1.Node {
 	rows := make([]*v1.Node, 0, len(readings)+4)
 	for i, r := range readings {

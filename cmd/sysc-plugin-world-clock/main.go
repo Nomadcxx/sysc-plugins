@@ -60,6 +60,8 @@ func run(in *os.File, out *os.File) error {
 			switch v.kind {
 			case v1.ViewBar:
 				_ = c.Snapshot(id, v.rev, worldclock.BarTree(first))
+			case v1.ViewTooltip:
+				_ = c.Snapshot(id, v.rev, worldclock.TooltipTree(first))
 			default:
 				_ = c.Snapshot(id, v.rev, worldclock.PanelTree(readings, clk.PendingAdd(), clk.PendingRemove(), draft))
 			}
