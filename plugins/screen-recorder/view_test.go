@@ -44,6 +44,35 @@ func TestPanelTreeElapsed(t *testing.T) {
 	if !strings.Contains(flatten(root), "01:12") {
 		t.Fatalf("elapsed missing: %q", flatten(root))
 	}
+	var recElapsed, replayElapsed *v1.Node
+	walk(root, func(n *v1.Node) {
+		if n.Key == "elapsed" {
+			recElapsed = n
+		}
+	})
+	if recElapsed == nil || recElapsed.Tone != v1.ToneError {
+		t.Fatalf("elapsed = %+v, want error while recording", recElapsed)
+	}
+	walk(PanelTree(Snapshot{Mode: ReplayActive, Elapsed: time.Second}, Config{}, time.Time{}), func(n *v1.Node) {
+		if n.Key == "elapsed" {
+			replayElapsed = n
+		}
+	})
+	if replayElapsed == nil || replayElapsed.Tone != v1.ToneAccent {
+		t.Fatalf("replay elapsed = %+v, want accent", replayElapsed)
+	}
+}
+
+func TestPanelTreeStopIsDestructiveWhileRecording(t *testing.T) {
+	t.Parallel()
+	live := childByID(PanelTree(Snapshot{Mode: Recording}, Config{}, time.Time{}), nodeStop)
+	if live == nil || live.Tone != v1.ToneError {
+		t.Fatalf("live stop = %#v, want the destructive chip", live)
+	}
+	idle := childByID(PanelTree(Snapshot{Mode: Idle}, Config{}, time.Time{}), nodeStop)
+	if idle == nil || idle.Tone == v1.ToneError {
+		t.Fatalf("idle stop = %#v, want no destructive chrome", idle)
+	}
 }
 
 func TestBarTreeStates(t *testing.T) {
@@ -53,65 +82,71 @@ func TestBarTreeStates(t *testing.T) {
 		icon     string
 		tone     v1.Tone
 		wantText string
+		save     bool
 	}{
-		{Idle, "camera", v1.ToneNormal, "RecordStop"},
-		{Recording, "camera", v1.ToneError, "RecordStop"},
-		{Adopted, "camera", v1.ToneError, "RecordStop"},
-		{Stopping, "camera", v1.ToneNormal, "RecordStop"},
-		{ReplayActive, "replay", v1.ToneNormal, "RecordStop"},
-		{Unavailable, "camera-off", v1.ToneError, "RecordStop"},
-		{Failed, "camera-off", v1.ToneError, "RecordStop"},
+		{Idle, "record", v1.ToneNormal, "", false},
+		{Recording, "stop", v1.ToneError, "00:00", false},
+		{Adopted, "stop", v1.ToneError, "00:00", false},
+		{Stopping, "stop", v1.ToneNormal, "", false},
+		{ReplayActive, "record", v1.ToneNormal, "", true},
+		{Unavailable, "camera-off", v1.ToneError, "", false},
+		{Failed, "camera-off", v1.ToneError, "", false},
 	}
 	for _, tc := range cases {
 		root := BarTree(Snapshot{Mode: tc.mode}, Config{})
 		if err := v1.Validate(root, v1.ViewBar); err != nil {
 			t.Fatalf("%s: %v", tc.mode, err)
 		}
-		if root.Kind != v1.KindRow || root.Gap != 8 {
-			t.Fatalf("%s root = kind %q gap %d", tc.mode, root.Kind, root.Gap)
+		if root.Kind != v1.KindRow {
+			t.Fatalf("%s root = kind %q", tc.mode, root.Kind)
 		}
-		cam := childByID(root, nodeCamera)
-		if cam == nil {
-			t.Fatalf("%s missing camera", tc.mode)
+		toggle := childByID(root, nodeToggle)
+		if toggle == nil {
+			t.Fatalf("%s missing toggle", tc.mode)
 		}
-		if cam.Icon != tc.icon {
-			t.Fatalf("%s camera icon = %q, want %q", tc.mode, cam.Icon, tc.icon)
+		if toggle.Icon != tc.icon {
+			t.Fatalf("%s toggle icon = %q, want %q", tc.mode, toggle.Icon, tc.icon)
 		}
-		if cam.Tone != tc.tone {
-			t.Fatalf("%s camera tone = %q, want %q", tc.mode, cam.Tone, tc.tone)
+		if toggle.Tone != tc.tone {
+			t.Fatalf("%s toggle tone = %q, want %q", tc.mode, toggle.Tone, tc.tone)
 		}
-		if cam.Name != "Open screen recorder" {
-			t.Fatalf("%s camera name = %q", tc.mode, cam.Name)
+		if toggle.Text != tc.wantText {
+			t.Fatalf("%s toggle text = %q, want %q", tc.mode, toggle.Text, tc.wantText)
 		}
-		rec := childByID(root, nodeRecord)
-		if rec == nil || rec.Text != "Record" || rec.Name != "Record" || rec.Tone != v1.ToneError {
-			t.Fatalf("%s record button missing or wrong: %#v", tc.mode, rec)
+		if toggle.Name != "Toggle recording" {
+			t.Fatalf("%s toggle name = %q", tc.mode, toggle.Name)
 		}
-		stop := childByID(root, nodeStop)
-		if stop == nil || stop.Text != "Stop" || stop.Name != "Stop" {
-			t.Fatalf("%s stop button missing or wrong: %#v", tc.mode, stop)
+		save := childByID(root, nodeSave)
+		if tc.save && save == nil {
+			t.Fatalf("%s missing save control", tc.mode)
 		}
-		if flatten(root) != tc.wantText {
-			t.Fatalf("%s flatten = %q, want %q", tc.mode, flatten(root), tc.wantText)
+		if !tc.save && save != nil {
+			t.Fatalf("%s has save control: %+v", tc.mode, save)
 		}
+	}
+}
+
+func TestBarTreeCarriesElapsedWhileRecording(t *testing.T) {
+	t.Parallel()
+	root := BarTree(Snapshot{Mode: Recording, Elapsed: 72 * time.Second}, Config{})
+	toggle := childByID(root, nodeToggle)
+	if toggle.Text != "01:12" || !toggle.Tabular {
+		t.Fatalf("toggle = %+v", toggle)
 	}
 }
 
 func TestBarTreeHidesWhenIdleAndConfigured(t *testing.T) {
 	t.Parallel()
-	root := BarTree(Snapshot{Mode: Idle}, Config{HideInactive: true})
-	if err := v1.Validate(root, v1.ViewBar); err != nil {
+	hidden := BarTree(Snapshot{Mode: Idle}, Config{HideInactive: true})
+	if len(hidden.Children) != 0 {
+		t.Fatalf("hide_inactive idle children = %d, want none", len(hidden.Children))
+	}
+	if err := v1.Validate(hidden, v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
-	if childByID(root, nodeCamera) == nil {
-		t.Fatal("hide_inactive idle omitted camera")
-	}
-	if childByID(root, nodeRecord) != nil || childByID(root, nodeStop) != nil {
-		t.Fatalf("hide_inactive idle still has record/stop: %q", flatten(root))
-	}
 	shown := BarTree(Snapshot{Mode: Recording}, Config{HideInactive: true})
-	if childByID(shown, nodeRecord) == nil || childByID(shown, nodeStop) == nil {
-		t.Fatalf("hide_inactive hid transport while recording: %q", flatten(shown))
+	if childByID(shown, nodeToggle) == nil {
+		t.Fatalf("hide_inactive hid the control while recording: %q", flatten(shown))
 	}
 }
 
@@ -129,11 +164,25 @@ func TestTooltipTreeIncludesFailureLog(t *testing.T) {
 
 func TestHandleInputButtons(t *testing.T) {
 	t.Parallel()
-	open, record, stop, replay, save := HandleInput(&v1.InputEvent{Node: nodeCamera, Event: v1.EventActivate}, Idle)
-	if !open || record || stop || replay || save {
-		t.Fatalf("camera activate = %v %v %v %v %v", open, record, stop, replay, save)
+	open, record, stop, replay, save := HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventActivate}, Idle)
+	if open || !record || stop || replay || save {
+		t.Fatalf("toggle idle = %v %v %v %v %v", open, record, stop, replay, save)
 	}
 
+	for _, mode := range []Mode{Recording, Adopted, Stopping} {
+		open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventActivate}, mode)
+		if open || record || !stop || replay || save {
+			t.Fatalf("toggle live in %s = %v %v %v %v %v", mode, open, record, stop, replay, save)
+		}
+	}
+	for _, mode := range []Mode{Unavailable, Failed, ReplayActive} {
+		_, record, _, _, _ = HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventActivate}, mode)
+		if record {
+			t.Fatalf("toggle recorded in %s", mode)
+		}
+	}
+
+	// The panel keeps explicit controls.
 	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeRecord, Event: v1.EventActivate}, Idle)
 	if open || !record || stop || replay || save {
 		t.Fatalf("record idle = %v %v %v %v %v", open, record, stop, replay, save)
@@ -142,22 +191,9 @@ func TestHandleInputButtons(t *testing.T) {
 	if open || record || stop || replay || save {
 		t.Fatalf("record while recording = %v %v %v %v %v", open, record, stop, replay, save)
 	}
-	for _, mode := range []Mode{Unavailable, Failed, Stopping, Adopted, ReplayActive} {
-		_, record, _, _, _ = HandleInput(&v1.InputEvent{Node: nodeRecord, Event: v1.EventActivate}, mode)
-		if record {
-			t.Fatalf("record live in %s", mode)
-		}
-	}
-
 	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeStop, Event: v1.EventActivate}, Recording)
 	if open || record || !stop || replay || save {
 		t.Fatalf("stop recording = %v %v %v %v %v", open, record, stop, replay, save)
-	}
-	for _, mode := range []Mode{Adopted, Stopping} {
-		_, _, stop, _, _ = HandleInput(&v1.InputEvent{Node: nodeStop, Event: v1.EventActivate}, mode)
-		if !stop {
-			t.Fatalf("stop inert in %s", mode)
-		}
 	}
 	for _, mode := range []Mode{Idle, Unavailable, Failed, ReplayActive} {
 		_, _, stop, _, _ = HandleInput(&v1.InputEvent{Node: nodeStop, Event: v1.EventActivate}, mode)
@@ -167,16 +203,12 @@ func TestHandleInputButtons(t *testing.T) {
 	}
 
 	for _, mode := range []Mode{Idle, Unavailable, Failed, Recording} {
-		open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeCamera, Event: v1.EventPointer, Button: v1.ButtonSecondary}, mode)
+		open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventPointer, Button: v1.ButtonSecondary}, mode)
 		if !open || record || stop || replay || save {
-			t.Fatalf("camera secondary in %s = %v %v %v %v %v", mode, open, record, stop, replay, save)
-		}
-		open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeRecord, Event: v1.EventPointer, Button: v1.ButtonSecondary}, mode)
-		if !open || record || stop || replay || save {
-			t.Fatalf("record secondary in %s = %v %v %v %v %v", mode, open, record, stop, replay, save)
+			t.Fatalf("toggle secondary in %s = %v %v %v %v %v", mode, open, record, stop, replay, save)
 		}
 	}
-	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeRecord, Event: v1.EventPointer, Button: v1.ButtonMiddle}, Idle)
+	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventPointer, Button: v1.ButtonMiddle}, Idle)
 	if open || record || stop || replay || save {
 		t.Fatalf("middle = %v %v %v %v %v", open, record, stop, replay, save)
 	}
@@ -220,4 +252,14 @@ func childByID(n *v1.Node, id string) *v1.Node {
 		}
 	}
 	return nil
+}
+
+func walk(n *v1.Node, fn func(*v1.Node)) {
+	if n == nil {
+		return
+	}
+	fn(n)
+	for _, c := range n.Children {
+		walk(c, fn)
+	}
 }

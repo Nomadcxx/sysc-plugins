@@ -204,16 +204,16 @@ func alive(pid int) bool {
 }
 
 func barCapturing(n *v1.Node) bool {
-	cam := findNode(n, "camera")
-	return cam != nil && cam.Icon == "camera" && cam.Tone == v1.ToneError
+	toggle := findNode(n, "toggle")
+	return toggle != nil && toggle.Icon == "stop" && toggle.Tone == v1.ToneError
 }
 
 func barFailed(n *v1.Node) bool {
-	cam := findNode(n, "camera")
-	return cam != nil && cam.Icon == "camera-off"
+	toggle := findNode(n, "toggle")
+	return toggle != nil && toggle.Icon == "camera-off"
 }
 
 func barIdle(n *v1.Node) bool {
-	cam := findNode(n, "camera")
-	return cam != nil && cam.Icon == "camera" && cam.Tone == v1.ToneNormal
+	toggle := findNode(n, "toggle")
+	return toggle != nil && toggle.Icon == "record" && toggle.Tone == v1.ToneNormal
 }

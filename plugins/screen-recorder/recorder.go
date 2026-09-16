@@ -350,6 +350,9 @@ func (r *Recorder) recover(own Ownership) {
 		return
 	}
 	r.proc = proc
+	// The adopted backend still writes to the -o path it was started with;
+	// restoring it lets a post-restart stop verify and publish the artifact.
+	r.dest = argValue(own.Args, "-o")
 	r.remember()
 	r.set(Snapshot{Mode: Adopted})
 }
@@ -564,4 +567,14 @@ func verifyArtifact(path string) error {
 		return fmt.Errorf("recorder: zero-byte artifact")
 	}
 	return nil
+}
+
+// argValue returns the value following flag in args, or "".
+func argValue(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }

@@ -2,6 +2,7 @@ package recorder
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -281,4 +282,58 @@ func TestRecorderReconfigureRebuildsNextCommand(t *testing.T) {
 	if !hasPair(args, "-f", "24") {
 		t.Fatalf("args = %v, want frame rate 24", args)
 	}
+}
+
+func TestRecoverRestoresTheRecordingDestination(t *testing.T) {
+	t.Parallel()
+	artifact := filepath.Join(t.TempDir(), "rec.mp4")
+	if err := os.WriteFile(artifact, []byte("mp4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A real process stands in for the adopted backend: the stop path sends
+	// it SIGINT, so the test process itself would die on its own PID.
+	backend := exec.Command("sleep", "30")
+	if err := backend.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = backend.Process.Kill() })
+	args := []string{"-w", "portal", "-o", artifact}
+	own := Ownership{PID: backend.Process.Pid, Exe: os.Args[0], Args: args}
+	scan := func() ([]ProcInfo, error) {
+		return []ProcInfo{{PID: own.PID, Exe: os.Args[0], Args: args}}, nil
+	}
+	rec := New(Config{}, Options{
+		Now:      func() time.Time { return time.Unix(1_000_000, 0) },
+		Scan:     scan,
+		LookPath: func(string) (string, error) { return os.Args[0], nil },
+	})
+	rec.Recover(own)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if rec.Snapshot().Mode == Adopted {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := rec.Snapshot().Mode; got != Adopted {
+		t.Fatalf("mode = %q, want adopted", got)
+	}
+	rec.ToggleRecord("DP-1")
+	// An adopted backend has no reap goroutine, so Stop waits out its whole
+	// SIGINT grace before giving up and killing it.
+	deadline = time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) {
+		snap := rec.Snapshot()
+		if snap.Mode == Idle {
+			if snap.Artifact != artifact {
+				t.Fatalf("artifact = %q, want %q", snap.Artifact, artifact)
+			}
+			return
+		}
+		if snap.Mode == Failed {
+			t.Fatalf("stop after adoption failed: %s", snap.Err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("stop after adoption never reached idle")
 }
