@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	"github.com/Nomadcxx/sysc-plugins/plugins/world-clock"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -20,7 +21,7 @@ func main() {
 
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(v1.Identity{ID: "org.sysc.world-clock", Name: "World Clock", Version: "1.0.0"}); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.world-clock", Name: "World Clock", Version: "1.0.0"})); err != nil {
 		return err
 	}
 	clk := worldclock.New()

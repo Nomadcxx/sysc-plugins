@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	"github.com/Nomadcxx/sysc-plugins/plugins/screen-recorder"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -19,7 +20,7 @@ func main() {
 
 func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(v1.Identity{ID: "org.sysc.screen-recorder", Name: "Screen Recorder", Version: "1.0.0"}); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.screen-recorder", Name: "Screen Recorder", Version: "1.0.0"})); err != nil {
 		return err
 	}
 
