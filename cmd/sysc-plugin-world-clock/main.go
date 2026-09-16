@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 	"github.com/Nomadcxx/sysc-plugins/plugins/world-clock"
+	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 func main() {

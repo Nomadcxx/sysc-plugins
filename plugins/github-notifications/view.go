@@ -67,6 +67,6 @@ func notificationRow(item Item) *v1.Node {
 				Text: "Read", Name: "Mark " + item.Title + " as read", Role: "button",
 				Events: []v1.EventKind{v1.EventActivate}},
 		}},
-		{Kind: v1.KindText, Text: fmt.Sprintf("%s · %s", item.Repo, item.ReasonLabel)},
+		{Kind: v1.KindText, Text: fmt.Sprintf("%s · %s", item.Repo, item.ReasonLabel), Tone: v1.ToneSubtle},
 	}}
 }

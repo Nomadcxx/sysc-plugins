@@ -2,19 +2,54 @@
   "schema": 1,
   "id": "org.sysc.calendar",
   "name": "Calendar",
-  "version": "0.1.0",
-  "protocol": {"major": 1, "minor": 0},
+  "version": "0.2.0",
+  "protocol": {
+    "major": 1,
+    "minor": 1
+  },
   "exec": "bin/sysc-plugin-calendar",
-  "capabilities": ["panels", "settings"],
-  "requires": {"commands": []},
-  "services": [{"id": "calendar"}],
-  "widgets": [{"id": "bar", "settings": []}],
-  "panels": [{"id": "panel", "width": 320, "height": 420, "placement": "attached"}],
+  "capabilities": [
+    "panels",
+    "settings"
+  ],
+  "requires": {
+    "commands": []
+  },
+  "services": [
+    {
+      "id": "calendar"
+    }
+  ],
+  "widgets": [
+    {
+      "id": "bar",
+      "settings": []
+    }
+  ],
+  "panels": [
+    {
+      "id": "panel",
+      "width": 320,
+      "height": 420,
+      "placement": "attached"
+    }
+  ],
   "settings": [
-    {"key": "week_start", "type": "select", "label": "Week starts on", "default": "monday",
+    {
+      "key": "week_start",
+      "type": "select",
+      "label": "Week starts on",
+      "default": "monday",
       "options": [
-        {"value": "monday", "label": "Monday"},
-        {"value": "sunday", "label": "Sunday"}
-      ]}
+        {
+          "value": "monday",
+          "label": "Monday"
+        },
+        {
+          "value": "sunday",
+          "label": "Sunday"
+        }
+      ]
+    }
   ]
 }

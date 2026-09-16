@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 	minidocker "github.com/Nomadcxx/sysc-plugins/plugins/mini-docker"
+	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 func main() {

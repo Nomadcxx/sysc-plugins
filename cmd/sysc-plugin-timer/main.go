@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 	"github.com/Nomadcxx/sysc-plugins/plugins/timer"
+	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 func main() {
@@ -19,11 +19,9 @@ func main() {
 
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
-	hello, err := c.Handshake(v1.Identity{ID: "org.sysc.timer", Name: "Timer", Version: "1.0.0"})
-	if err != nil {
+	if _, err := c.Handshake(v1.Identity{ID: "org.sysc.timer", Name: "Timer", Version: "1.1.0"}); err != nil {
 		return err
 	}
-	_ = hello
 	tm := timer.New(time.Now)
 	type view struct {
 		kind     v1.ViewKind
@@ -31,6 +29,7 @@ func run(in *os.File, out *os.File) error {
 		instance string
 	}
 	views := map[string]view{}
+	showWhenIdle := true
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -53,19 +52,49 @@ func run(in *os.File, out *os.File) error {
 	publish := func() {
 		text := timer.FormatClock(tm.Remaining())
 		dur := timer.FormatClock(tm.Duration())
+		state := tm.State()
 		for id, v := range views {
 			v.rev++
 			views[id] = v
 			var root *v1.Node
 			switch v.kind {
 			case v1.ViewBar:
-				root = timer.BarTree(text, tm.Running())
+				root = timer.BarTree(text, state, showWhenIdle)
 			case v1.ViewTooltip:
-				root = timer.TooltipTree(text)
+				root = timer.TooltipTree(text, state)
 			default:
-				root = timer.PanelTree(text, dur, tm.Running(), tm.Progress())
+				root = timer.PanelTree(text, state, tm.Progress(), dur)
 			}
 			_ = c.Snapshot(id, v.rev, root)
+		}
+	}
+
+	handleInput := func(ctx context.Context, c *v1.Client, tm *timer.Timer, m *v1.InputEvent) {
+		switch m.Node {
+		case "open":
+			// A click on the fired timer clears it; the user does not want
+			// another timer just yet.
+			if tm.Fired() {
+				tm.Reset()
+				save(ctx, c, tm)
+				return
+			}
+			_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+		case "start":
+			tm.Start()
+			save(ctx, c, tm)
+		case "pause":
+			tm.Pause()
+			save(ctx, c, tm)
+		case "reset":
+			tm.Reset()
+			save(ctx, c, tm)
+		case "duration":
+			if m.Event == v1.EventSubmit || m.Event == v1.EventChange {
+				if d, err := timer.ParseDuration(m.Text); err == nil {
+					tm.SetDuration(d)
+				}
+			}
 		}
 	}
 
@@ -94,34 +123,24 @@ func run(in *os.File, out *os.File) error {
 				handleInput(ctx, c, tm, m)
 				publish()
 			case *v1.SettingsChanged:
+				changed := false
 				if raw, ok := m.Values["default_duration"]; ok {
 					if s, ok := raw.(string); ok {
 						if d, err := timer.ParseDuration(s); err == nil && !tm.Running() {
 							tm.SetDuration(d)
-							publish()
+							changed = true
 						}
 					}
 				}
-			}
-		}
-	}
-}
-
-func handleInput(ctx context.Context, c *v1.Client, tm *timer.Timer, m *v1.InputEvent) {
-	switch m.Node {
-	case "start":
-		tm.Start()
-		save(ctx, c, tm)
-	case "pause":
-		tm.Pause()
-		save(ctx, c, tm)
-	case "reset":
-		tm.Reset()
-		save(ctx, c, tm)
-	case "duration":
-		if m.Event == v1.EventSubmit || m.Event == v1.EventChange {
-			if d, err := timer.ParseDuration(m.Text); err == nil {
-				tm.SetDuration(d)
+				if raw, ok := m.Values["show_when_idle"]; ok {
+					if b, ok := raw.(bool); ok {
+						showWhenIdle = b
+						changed = true
+					}
+				}
+				if changed {
+					publish()
+				}
 			}
 		}
 	}

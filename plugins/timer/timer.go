@@ -183,6 +183,42 @@ func FormatMMSS(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d", sec/60, sec%60)
 }
 
+// State names what the bar and panel should show. Noctalia's timer states
+// are IDLE, RUNNING, PAUSED, and NOTIFY; paused means time remains but the
+// countdown is stopped.
+type State string
+
+const (
+	StateIdle    State = "idle"
+	StateRunning State = "running"
+	StatePaused  State = "paused"
+	StateNotify  State = "notify"
+)
+
+// State classifies the timer for presentation.
+func (t *Timer) State() State {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch {
+	case t.fired:
+		return StateNotify
+	case t.running:
+		return StateRunning
+	case t.remaining < t.duration:
+		return StatePaused
+	default:
+		return StateIdle
+	}
+}
+
+// Fired reports that the countdown reached zero and the completion
+// notification went out; the shell clears the state on the next Reset.
+func (t *Timer) Fired() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.fired
+}
+
 // FormatClock renders a duration as mm:ss, switching to h:mm:ss at an hour,
 // matching the noctalia timer's display rule.
 func FormatClock(d time.Duration) string {

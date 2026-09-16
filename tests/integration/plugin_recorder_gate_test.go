@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 	"github.com/Nomadcxx/sysc-plugins/plugins/screen-recorder"
+	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 func TestPluginRecorderGateRecordArgsNotifyAndDisable(t *testing.T) {

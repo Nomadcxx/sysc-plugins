@@ -2,22 +2,75 @@
   "schema": 1,
   "id": "org.sysc.mini-docker",
   "name": "Mini Docker",
-  "version": "0.1.0",
-  "protocol": {"major": 1, "minor": 0},
+  "version": "0.2.0",
+  "protocol": {
+    "major": 1,
+    "minor": 1
+  },
   "exec": "bin/sysc-plugin-mini-docker",
-  "capabilities": ["notifications", "panels", "settings"],
-  "requires": {"commands": ["docker"]},
-  "services": [{"id": "mini-docker"}],
-  "widgets": [{"id": "bar", "settings": []}],
-  "panels": [{"id": "panel", "width": 720, "height": 560, "placement": "attached"}],
+  "capabilities": [
+    "notifications",
+    "panels",
+    "settings"
+  ],
+  "requires": {
+    "commands": [
+      "docker"
+    ]
+  },
+  "services": [
+    {
+      "id": "mini-docker"
+    }
+  ],
+  "widgets": [
+    {
+      "id": "bar",
+      "settings": []
+    }
+  ],
+  "panels": [
+    {
+      "id": "panel",
+      "width": 720,
+      "height": 560,
+      "placement": "attached"
+    }
+  ],
   "settings": [
-    {"key": "refresh_interval_seconds", "type": "int", "label": "Refresh interval (s)", "default": 5, "min": 1, "max": 30},
-    {"key": "show_count", "type": "bool", "label": "Show running count", "default": true},
-    {"key": "status_mode", "type": "select", "label": "Bar count mode", "default": "always",
+    {
+      "key": "refresh_interval_seconds",
+      "type": "int",
+      "label": "Refresh interval (s)",
+      "default": 5,
+      "min": 1,
+      "max": 30
+    },
+    {
+      "key": "show_count",
+      "type": "bool",
+      "label": "Show running count",
+      "default": true
+    },
+    {
+      "key": "status_mode",
+      "type": "select",
+      "label": "Bar count mode",
+      "default": "always",
       "options": [
-        {"value": "always", "label": "Always"},
-        {"value": "running_only", "label": "When containers run"},
-        {"value": "hidden", "label": "Hidden"}
-      ]}
+        {
+          "value": "always",
+          "label": "Always"
+        },
+        {
+          "value": "running_only",
+          "label": "When containers run"
+        },
+        {
+          "value": "hidden",
+          "label": "Hidden"
+        }
+      ]
+    }
   ]
 }

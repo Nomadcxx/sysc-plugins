@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 	githubnotifications "github.com/Nomadcxx/sysc-plugins/plugins/github-notifications"
+	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 const (

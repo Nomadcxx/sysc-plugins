@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 	"github.com/Nomadcxx/sysc-plugins/plugins/screen-recorder"
+	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 func main() {

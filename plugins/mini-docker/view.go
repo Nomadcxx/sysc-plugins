@@ -79,7 +79,7 @@ func PanelTree(available, loading bool, errMsg string, containers []Container) *
 func containerRow(c Container) *v1.Node {
 	row := &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
 		{Kind: v1.KindText, Text: c.Names + " · " + c.Status},
-		{Kind: v1.KindText, Text: c.Image},
+		{Kind: v1.KindText, Text: c.Image, Tone: v1.ToneSubtle},
 	}}
 	actions := &v1.Node{Kind: v1.KindRow, Gap: 4}
 	if c.Running() {

@@ -29,11 +29,11 @@ After `make install`, enable plugins from sysc-shell's Plugins manager panel
 |---|---|---|---|
 | Screen Recorder | `org.sysc.screen-recorder` | first sweep | extracted from sysc-shell |
 | Notes | `org.sysc.notes` | first sweep | extracted from sysc-shell |
-| Timer | `org.sysc.timer` | first sweep | extracted from sysc-shell + noctalia deltas |
+| Timer | `org.sysc.timer` | UI rebuild started | extracted from sysc-shell + noctalia deltas |
 | World Clock | `org.sysc.world-clock` | first sweep | extracted from sysc-shell + noctalia deltas |
 | Calendar | `org.sysc.calendar` | first sweep | port of the built-in clock-panel calendar |
-| GitHub Notifications | `org.sysc.github-notifications` | 0.1.0 | port of noctalia community plugin |
-| Mini Docker | `org.sysc.mini-docker` | 0.1.0 | port of noctalia community plugin |
+| GitHub Notifications | `org.sysc.github-notifications` | 0.2.0 | port of noctalia community plugin |
+| Mini Docker | `org.sysc.mini-docker` | 0.2.0 | port of noctalia community plugin |
 | Wallpaper Depth | `org.sysc.wallpaper-depth` | 0.1.0 stub | port of noctalia official plugin |
 
 "First sweep" means working but early: these plugins were generated before
@@ -42,6 +42,11 @@ visually extremely basic. The plan is to refactor them and rebuild their UIs
 against the noctalia plugins as prior art (layout, density, interaction
 patterns), now that iteration happens in this repo. The 0.1.0 ports are
 skeletons by design; wallpaper-depth is blocked on a shell wallpaper API.
+
+The protocol grew for this work: plugin/v1 minor 1 adds `subtle` and
+`accent` text tones (muted foreground and theme accent) and the host now
+honours node Height, so views can carry text hierarchy and fixed-height
+rows. The timer is the first rebuild; the rest follow its patterns.
 
 ## Adding a plugin
 

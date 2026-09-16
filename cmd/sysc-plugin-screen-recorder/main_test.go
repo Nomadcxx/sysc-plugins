@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 	"github.com/Nomadcxx/sysc-plugins/plugins/screen-recorder"
+	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 func TestMain(m *testing.M) {

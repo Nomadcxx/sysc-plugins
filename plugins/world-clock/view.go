@@ -43,7 +43,7 @@ func PanelTree(readings []Reading, pendingAdd, pendingRemove, draft string) *v1.
 			},
 			{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
 				{Kind: v1.KindText, Text: r.Label},
-				{Kind: v1.KindText, Text: r.Zone},
+				{Kind: v1.KindText, Text: r.Zone, Tone: v1.ToneSubtle},
 			}},
 			{Kind: v1.KindText, Key: "time:" + r.Zone, Text: r.Clock, Tabular: true},
 			{Kind: v1.KindText, Text: r.Offset},

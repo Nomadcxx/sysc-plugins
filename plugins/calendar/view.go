@@ -38,7 +38,7 @@ func PanelTree(header string, weekdays []string, weeks [][]Cell) *v1.Node {
 	weekdaysRow := &v1.Node{Kind: v1.KindRow, Gap: 2}
 	for _, d := range weekdays {
 		weekdaysRow.Children = append(weekdaysRow.Children, &v1.Node{
-			Kind: v1.KindText, Text: d, Width: dayCellWidth,
+			Kind: v1.KindText, Text: d, Width: dayCellWidth, Tone: v1.ToneSubtle,
 		})
 	}
 	col.Children = append(col.Children, weekdaysRow)
@@ -59,5 +59,10 @@ func dayNode(cell Cell) *v1.Node {
 			Name: "Today, back to current month", Role: "button", Tabular: true,
 			Width: dayCellWidth, Events: []v1.EventKind{v1.EventActivate}}
 	}
-	return &v1.Node{Kind: v1.KindText, Text: label, Tabular: true, Width: dayCellWidth}
+	tone := v1.ToneNormal
+	if !cell.InMonth {
+		// Days from the neighbouring months read as context, not content.
+		tone = v1.ToneSubtle
+	}
+	return &v1.Node{Kind: v1.KindText, Text: label, Tabular: true, Width: dayCellWidth, Tone: tone}
 }
