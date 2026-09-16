@@ -3,7 +3,7 @@ package githubnotifications
 import (
 	"testing"
 
-	"github.com/Nomadcxx/sysc-plugins/internal/wire"
+	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 func TestTreesValidate(t *testing.T) {

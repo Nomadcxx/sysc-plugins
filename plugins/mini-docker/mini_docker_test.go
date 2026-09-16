@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nomadcxx/sysc-plugins/internal/wire"
+	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 const psOutput = `{"ID":"a1","Names":"web","Image":"nginx:latest","State":"running","Status":"Up 2 hours"}

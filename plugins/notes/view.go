@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	v1 "github.com/Nomadcxx/sysc-plugins/internal/wire"
+	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 // Snapshot is the immutable view the trees render.

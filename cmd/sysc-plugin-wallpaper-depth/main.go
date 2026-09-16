@@ -7,7 +7,7 @@ import (
 	"context"
 	"os"
 
-	v1 "github.com/Nomadcxx/sysc-plugins/internal/wire"
+	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 	wallpaperdepth "github.com/Nomadcxx/sysc-plugins/plugins/wallpaper-depth"
 )
 

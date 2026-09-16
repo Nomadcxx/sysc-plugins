@@ -1,6 +1,6 @@
 package timer
 
-import v1 "github.com/Nomadcxx/sysc-plugins/internal/wire"
+import v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 
 func BarTree(remaining string, running bool) *v1.Node {
 	label := "Start"

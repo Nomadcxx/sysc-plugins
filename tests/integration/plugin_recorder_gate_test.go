@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nomadcxx/sysc-plugins/internal/wire"
+	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 	"github.com/Nomadcxx/sysc-plugins/plugins/screen-recorder"
 )
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	v1 "github.com/Nomadcxx/sysc-plugins/internal/wire"
+	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 const (

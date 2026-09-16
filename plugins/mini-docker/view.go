@@ -3,7 +3,7 @@ package minidocker
 import (
 	"strconv"
 
-	"github.com/Nomadcxx/sysc-plugins/internal/wire"
+	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 // BarTree renders the docker pill: a label, the running count per status

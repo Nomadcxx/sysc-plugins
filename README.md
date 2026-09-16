@@ -5,8 +5,11 @@ the Go-first native Wayland desktop shell for Niri.
 
 Each top-level directory under `plugins/` is a complete sysc-shell plugin:
 a `manifest.json` plus the source of a `bin/` executable that speaks the
-shell's plugin wire protocol (protocol v1). The protocol types are vendored
-under `internal/wire/` — see `internal/wire/README.md` for why.
+shell's plugin wire protocol. The protocol types come from
+[sysc-shell](https://github.com/Nomadcxx/sysc-shell)'s `plugin/v1` package,
+consumed as a normal Go module dependency (the shell's tree carries no
+Windows-reserved paths since the `aux_surface.go` rename, so the proxy
+serves it).
 
 ## Building
 
@@ -46,9 +49,9 @@ skeletons by design; wallpaper-depth is blocked on a shell wallpaper API.
    plugin; `go run ./tools/validate-manifests` enforces the schema).
 2. Implement the plugin as a library package in `plugins/<name>/` and a
    `main.go` under `cmd/sysc-plugin-<name>/` that handshakes via
-   `internal/wire`'s `Client` and serves its views.
+   `plugin/v1`'s `Client` and serves its views.
 3. Add the plugin to `PLUGINS` in the `Makefile` and to the table above.
-4. Validate every view tree with `wire.Validate(...)` in a test — the host
+4. Validate every view tree with `v1.Validate(...)` in a test — the host
    rejects invalid trees at render time.
 
 Notes the hard way taught us:
