@@ -36,8 +36,17 @@ func TestTimePatchTouchesOnlyTimeNodes(t *testing.T) {
 		t.Fatalf("replacements = %d", len(p))
 	}
 	for _, r := range p {
-		if r.Node.Kind != v1.KindText {
-			t.Fatalf("patched %s, want text", r.Node.Kind)
+		// The bar patch replaces a button (the whole control is clickable);
+		// the panel patches replace plain text.
+		want := v1.KindButton
+		if r.Key != "time" {
+			want = v1.KindText
+		}
+		if r.Node.Kind != want {
+			t.Fatalf("patched %s for %s, want %s", r.Node.Kind, r.Key, want)
+		}
+		if r.Key == "time" && r.Node.ID != "open" {
+			t.Fatalf("bar patch lost the open action: %+v", r.Node)
 		}
 	}
 }

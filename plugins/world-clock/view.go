@@ -7,19 +7,24 @@ import (
 )
 
 func BarTree(first Reading) *v1.Node {
-	return &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-		{Kind: v1.KindText, Key: "time", Text: first.Clock, Tabular: true},
-		{Kind: v1.KindButton, ID: "open", Text: first.Zone, Name: "Open world clock", Role: "button",
-			Events: []v1.EventKind{v1.EventActivate}},
-	}}
+	// One control carrying the time, the noctalia bar-widget shape: the
+	// whole thing opens the panel instead of a small zone chip beside dead
+	// text.
+	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{
+		Kind: v1.KindButton, ID: "open", Key: "time", Text: first.Clock,
+		Name: "Open world clock", Role: "button", Tabular: true,
+		Events: []v1.EventKind{v1.EventActivate},
+	}}}
 }
 
 func TimePatch(readings []Reading) []v1.Replacement {
 	out := make([]v1.Replacement, 0, len(readings)+1)
 	if len(readings) > 0 {
 		out = append(out, v1.Replacement{
-			Key:  "time",
-			Node: &v1.Node{Kind: v1.KindText, Key: "time", Text: readings[0].Clock, Tabular: true},
+			Key: "time",
+			Node: &v1.Node{Kind: v1.KindButton, ID: "open", Key: "time", Text: readings[0].Clock,
+				Name: "Open world clock", Role: "button", Tabular: true,
+				Events: []v1.EventKind{v1.EventActivate}},
 		})
 	}
 	for _, r := range readings {
