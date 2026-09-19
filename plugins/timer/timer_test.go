@@ -28,6 +28,27 @@ func TestParseDuration(t *testing.T) {
 	}
 }
 
+func TestParseDurationPositionalDigits(t *testing.T) {
+	t.Parallel()
+	// Noctalia's digit-block rule: 3-4 digits are mmss, 5-6 are hhmmss.
+	cases := map[string]time.Duration{
+		"130":   90 * time.Second,
+		"1030":  10*time.Minute + 30*time.Second,
+		"10300": time.Hour + 3*time.Minute,
+		"10000": time.Hour,
+	}
+	for in, want := range cases {
+		got, err := ParseDuration(in)
+		if err != nil || got != want {
+			t.Errorf("ParseDuration(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	// 7+ digits stay rejected.
+	if _, err := ParseDuration("1000000"); err == nil {
+		t.Error("7-digit input accepted")
+	}
+}
+
 func TestStartPauseResetAndNoNegative(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_700_000_000, 0)

@@ -36,6 +36,20 @@ func ParseDuration(s string) (time.Duration, error) {
 		if n < 0 {
 			return 0, fmt.Errorf("negative duration")
 		}
+		if len(s) > 6 {
+			return 0, fmt.Errorf("duration %q", s)
+		}
+		if len(s) >= 3 {
+			// Noctalia's digit-block rule: the last two digits are seconds,
+			// the pair before them minutes, the rest hours.
+			sec := n % 100
+			min := (n / 100) % 100
+			hrs := n / 10000
+			if sec > 59 || min > 59 {
+				return 0, fmt.Errorf("duration %q", s)
+			}
+			return time.Duration(hrs)*time.Hour + time.Duration(min)*time.Minute + time.Duration(sec)*time.Second, nil
+		}
 		return time.Duration(n) * time.Second, nil
 	}
 	if strings.Contains(s, ":") {
