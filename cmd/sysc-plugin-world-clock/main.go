@@ -132,6 +132,8 @@ func handle(ctx context.Context, c *v1.Client, clk *worldclock.Clock, draft *str
 		if m.Event == v1.EventSubmit {
 			_ = clk.ProposeAdd(strings.TrimSpace(*draft))
 		}
+	case m.Node == "add":
+		_ = clk.ProposeAdd(strings.TrimSpace(*draft))
 	case m.Node == "confirm-add":
 		clk.ConfirmAdd()
 		*draft = ""

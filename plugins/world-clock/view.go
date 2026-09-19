@@ -52,32 +52,38 @@ func TooltipTree(first Reading) *v1.Node {
 func PanelTree(readings []Reading, pendingAdd, pendingRemove, draft string) *v1.Node {
 	rows := make([]*v1.Node, 0, len(readings)+4)
 	for i, r := range readings {
-		rows = append(rows, &v1.Node{Kind: v1.KindRow, Gap: 8, Key: "row:" + r.Zone, Children: []*v1.Node{
-			{
-				Kind: v1.KindDragSource, ID: "drag:" + r.Zone, Key: "drag:" + r.Zone, Text: "=",
-				Name: "Reorder " + r.Zone, Role: "button", DragType: "zone", Payload: r.Zone,
-				Events: []v1.EventKind{v1.EventPointer},
-			},
-			{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
-				{Kind: v1.KindText, Text: r.Label},
-				{Kind: v1.KindText, Text: r.Zone, Tone: v1.ToneSubtle},
-			}},
-			{Kind: v1.KindText, Key: "time:" + r.Zone, Text: r.Clock, Tabular: true},
-			{Kind: v1.KindText, Text: r.Offset},
-			{
-				Kind: v1.KindButton, ID: "rm:" + r.Zone, Text: "Remove", Name: "Remove " + r.Zone, Role: "button",
-				Events: []v1.EventKind{v1.EventActivate},
-			},
-			{
-				Kind: v1.KindDropZone, ID: "drop:" + strconv.Itoa(i), Accept: []string{"zone"},
-				Events: []v1.EventKind{v1.EventDrop},
-			},
-		}})
+		rows = append(rows, &v1.Node{Kind: v1.KindRow, Gap: 8, Key: "row:" + r.Zone,
+			Fill: "card", Radius: 10, Padding: 8, Children: []*v1.Node{
+				{
+					Kind: v1.KindDragSource, ID: "drag:" + r.Zone, Key: "drag:" + r.Zone, Text: "=",
+					Name: "Reorder " + r.Zone, Role: "button", DragType: "zone", Payload: r.Zone,
+					Events: []v1.EventKind{v1.EventPointer},
+				},
+				{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+					{Kind: v1.KindText, Text: r.Label, Bold: true},
+					{Kind: v1.KindText, Text: r.Zone, Tone: v1.ToneSubtle},
+				}},
+				{Kind: v1.KindColumn, Gap: 2, PinEnd: true, Children: []*v1.Node{
+					{Kind: v1.KindText, Key: "time:" + r.Zone, Text: r.Clock, Tabular: true, Bold: true},
+					{Kind: v1.KindText, Text: r.Offset, Tone: v1.ToneSubtle},
+				}},
+				{
+					Kind: v1.KindButton, ID: "rm:" + r.Zone, Text: "Remove", Name: "Remove " + r.Zone, Role: "button",
+					Events: []v1.EventKind{v1.EventActivate},
+				},
+				{
+					Kind: v1.KindDropZone, ID: "drop:" + strconv.Itoa(i), Accept: []string{"zone"},
+					Events: []v1.EventKind{v1.EventDrop},
+				},
+			}})
 	}
 	rows = append(rows, &v1.Node{
 		Kind: v1.KindDropZone, ID: "drop:" + strconv.Itoa(len(readings)), Accept: []string{"zone"},
 		Events: []v1.EventKind{v1.EventDrop},
 	})
+	if len(readings) == 0 {
+		rows = append(rows, &v1.Node{Kind: v1.KindText, Text: "No zones — add a city", Tone: v1.ToneSubtle})
+	}
 	switch {
 	case pendingAdd != "":
 		rows = append(rows, &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
@@ -91,11 +97,15 @@ func PanelTree(readings []Reading, pendingAdd, pendingRemove, draft string) *v1.
 			{Kind: v1.KindButton, ID: "confirm-remove", Text: "Remove", Name: "Confirm remove", Role: "button", Events: []v1.EventKind{v1.EventActivate}},
 			{Kind: v1.KindButton, ID: "cancel", Text: "Cancel", Name: "Cancel", Role: "button", Events: []v1.EventKind{v1.EventActivate}},
 		}})
-	default:
-		rows = append(rows, &v1.Node{Kind: v1.KindTextInput, ID: "zone", Text: draft, Name: "Add a city", Role: "textbox",
-			Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}})
 	}
 	return &v1.Node{Kind: v1.KindColumn, Gap: 8, Children: []*v1.Node{
+		{Kind: v1.KindText, Text: "World Clock", Size: "title", Bold: true},
+		{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+			{Kind: v1.KindTextInput, ID: "zone", Text: draft, Name: "Add a city", Role: "textbox",
+				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
+			{Kind: v1.KindButton, ID: "add", Text: "Add", Name: "Add city", Role: "button", Fill: "accent",
+				Events: []v1.EventKind{v1.EventActivate}},
+		}},
 		{Kind: v1.KindList, Height: 240, Children: rows},
 	}}
 }
