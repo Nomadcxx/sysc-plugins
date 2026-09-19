@@ -17,6 +17,17 @@ func main() {
 	}
 }
 
+// uiState is the entry point's view state: which composer is open and what
+// the user has typed into its fields. The host owns the live text buffers;
+// these are the committed values the sends use.
+type uiState struct {
+	composer  kdeconnect.Composer
+	shareText string
+	shareFile string
+	smsNumber string
+	smsBody   string
+}
+
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
 	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.kdeconnect", Name: "Phone Connect", Version: "0.1.0"})); err != nil {
@@ -32,6 +43,7 @@ func run(in *os.File, out *os.File) error {
 	views := map[string]view{}
 	var snap kdeconnect.Snapshot
 	settings := kdeconnect.DefaultSettings()
+	ui := uiState{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -67,7 +79,7 @@ func run(in *os.File, out *os.File) error {
 			case v1.ViewTooltip:
 				root = kdeconnect.TooltipTree(snap)
 			default:
-				root = kdeconnect.PanelTree(snap, settings)
+				root = kdeconnect.PanelTree(snap, settings, ui.composer)
 			}
 			_ = c.Snapshot(id, v.rev, root)
 		}
@@ -93,7 +105,9 @@ func run(in *os.File, out *os.File) error {
 			case *v1.ViewResync:
 				publish(nil)
 			case *v1.InputEvent:
-				handleInput(ctx, c, svc, m)
+				if handleInput(ctx, c, svc, m, &ui, snap) {
+					publish(nil)
+				}
 			case *v1.SettingsChanged:
 				settings = settingsFrom(m.Values)
 				svc.Reconfigure(settings)
@@ -105,6 +119,87 @@ func run(in *os.File, out *os.File) error {
 	}
 }
 
+// handleInput routes one input event. It reports whether the panel tree
+// changed and needs a republish — toggles and sends do, typing does not.
+func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *v1.InputEvent, ui *uiState, snap kdeconnect.Snapshot) bool {
+	device := snap.SelectedID
+	switch {
+	case m.Node == "open":
+		_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+	case m.Node == "refresh":
+		svc.Refresh()
+	case strings.HasPrefix(m.Node, "select-"):
+		svc.SetSelected(strings.TrimPrefix(m.Node, "select-"))
+	case m.Node == "share":
+		return toggleComposer(ui, kdeconnect.ComposerShare)
+	case m.Node == "sms":
+		return toggleComposer(ui, kdeconnect.ComposerSMS)
+	case m.Node == "share-text":
+		if m.Event == v1.EventChange {
+			ui.shareText = m.Text
+			return false
+		}
+		// Submit sends the field's content, as a URL when it looks like one.
+		svc.Do(kdeconnect.Action{Kind: shareKindFor(ui.shareText), DeviceID: device, Arg: ui.shareText})
+		ui.composer = kdeconnect.ComposerNone
+		return true
+	case m.Node == "share-url-send":
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareURL, DeviceID: device, Arg: ui.shareText})
+		ui.composer = kdeconnect.ComposerNone
+		return true
+	case m.Node == "share-text-send":
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareText, DeviceID: device, Arg: ui.shareText})
+		ui.composer = kdeconnect.ComposerNone
+		return true
+	case m.Node == "share-file":
+		if m.Event == v1.EventChange {
+			ui.shareFile = m.Text
+			return false
+		}
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareFile, DeviceID: device, Arg: ui.shareFile})
+		ui.composer = kdeconnect.ComposerNone
+		return true
+	case m.Node == "share-file-send":
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareFile, DeviceID: device, Arg: ui.shareFile})
+		ui.composer = kdeconnect.ComposerNone
+		return true
+	case m.Node == "sms-number":
+		if m.Event == v1.EventChange {
+			ui.smsNumber = m.Text
+		}
+	case m.Node == "sms-body":
+		if m.Event == v1.EventChange {
+			ui.smsBody = m.Text
+		}
+	case m.Node == "sms-send":
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionSendSMS, DeviceID: device, Arg: ui.smsNumber, Arg2: ui.smsBody})
+		ui.composer = kdeconnect.ComposerNone
+		return true
+	case m.Node == "sms-app":
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionLaunchSMSApp, DeviceID: device})
+		ui.composer = kdeconnect.ComposerNone
+		return true
+	}
+	return false
+}
+
+func toggleComposer(ui *uiState, want kdeconnect.Composer) bool {
+	if ui.composer == want {
+		ui.composer = kdeconnect.ComposerNone
+	} else {
+		ui.composer = want
+	}
+	return true
+}
+
+// shareKindFor picks URL versus text sharing for a submitted share field.
+func shareKindFor(text string) kdeconnect.ActionKind {
+	if strings.HasPrefix(text, "http://") || strings.HasPrefix(text, "https://") {
+		return kdeconnect.ActionShareURL
+	}
+	return kdeconnect.ActionShareText
+}
+
 // notify surfaces one service event as a shell toast, the DMS plugin's
 // ToastService calls. A failed action raises the urgency.
 func notify(ctx context.Context, c *v1.Client, e kdeconnect.Event) {
@@ -113,17 +208,6 @@ func notify(ctx context.Context, c *v1.Client, e kdeconnect.Event) {
 		p.Urgency = v1.UrgencyCritical
 	}
 	_, _ = c.Call(ctx, v1.CallNotify, p)
-}
-
-func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *v1.InputEvent) {
-	switch {
-	case m.Node == "open":
-		_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
-	case m.Node == "refresh":
-		svc.Refresh()
-	case strings.HasPrefix(m.Node, "select-"):
-		svc.SetSelected(strings.TrimPrefix(m.Node, "select-"))
-	}
 }
 
 func settingsFrom(values map[string]any) kdeconnect.Settings {

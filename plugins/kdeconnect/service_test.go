@@ -15,6 +15,7 @@ import (
 // what it was asked.
 type fakeObject struct {
 	calls    []string
+	args     map[string][]any
 	ifaces   map[string]map[string]dbus.Variant
 	devices  []string
 	xml      string
@@ -25,6 +26,10 @@ type fakeObject struct {
 
 func (f *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Call {
 	f.calls = append(f.calls, method)
+	if f.args == nil {
+		f.args = map[string][]any{}
+	}
+	f.args[method] = args
 	if f.failWith != nil {
 		return &dbus.Call{Err: f.failWith}
 	}
@@ -55,6 +60,9 @@ func (f *fakeObject) asked(method string) bool {
 	}
 	return false
 }
+
+// calledArgs returns the arguments of the most recent call to method.
+func (f *fakeObject) calledArgs(method string) []any { return f.args[method] }
 
 // fakeBus hands out scripted objects and forwards injected signals to the
 // service's subscription.
@@ -141,6 +149,9 @@ func testBus() *fakeBus {
 				kdeDeviceIface + ".requestPairing": true, kdeDeviceIface + ".acceptPairing": true,
 				kdeDeviceIface + ".cancelPairing": true, kdeDeviceIface + ".unpair": true,
 				findMyPhoneIface + ".ring": true, pingIface + ".sendPing": true,
+				shareIface + ".shareUrl": true, shareIface + ".shareText": true, shareIface + ".shareFile": true,
+				clipboardIface + ".sendClipboard": true, sftpIface + ".startBrowsing": true,
+				smsIface + ".sendSms": true, smsIface + ".launchApp": true,
 			},
 		},
 		pluginPath("devA", "battery"): {
@@ -577,5 +588,90 @@ func TestIncomingPairingRequestEvent(t *testing.T) {
 	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventPairingRequest })
 	if e.DeviceName != "Galaxy Tab" || e.Message != "Pairing request from Galaxy Tab" || e.Detail != "Verification: 654321" {
 		t.Fatalf("pairing request event = %+v", e)
+	}
+}
+
+func TestShareSMSAndFileMarshalling(t *testing.T) {
+	bus := testBus()
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
+	dev := bus.objects[devicePath("devA")]
+
+	svc.Do(Action{Kind: ActionShareURL, DeviceID: "devA", Arg: "https://example.com"})
+	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "Shared with Pixel 10 Pro XL" })
+	if e.Err != nil {
+		t.Fatalf("share url event = %+v", e)
+	}
+	if args := dev.calledArgs(shareIface + ".shareUrl"); len(args) != 1 || args[0] != "https://example.com" {
+		t.Fatalf("shareUrl args = %v", args)
+	}
+
+	svc.Do(Action{Kind: ActionSendSMS, DeviceID: "devA", Arg: "+1 555 0100", Arg2: "hello"})
+	e = waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "SMS sent successfully" })
+	if e.Err != nil {
+		t.Fatalf("sms event = %+v", e)
+	}
+	// The daemon's sms plugin exposes sendSms(phoneNumber, messageBody).
+	smsArgs := dev.calledArgs(smsIface + ".sendSms")
+	if len(smsArgs) != 2 || smsArgs[0] != "+1 555 0100" || smsArgs[1] != "hello" {
+		t.Fatalf("sendSms args = %v, want the number and the body", smsArgs)
+	}
+
+	svc.Do(Action{Kind: ActionShareFile, DeviceID: "devA", Arg: "/home/me/photo.png"})
+	e = waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Detail == "photo.png" })
+	if e.Err != nil || e.Message != "Shared with Pixel 10 Pro XL" {
+		t.Fatalf("share file event = %+v", e)
+	}
+	if args := dev.calledArgs(shareIface + ".shareFile"); len(args) != 1 || args[0] != "/home/me/photo.png" {
+		t.Fatalf("shareFile args = %v", args)
+	}
+}
+
+func TestClipboardBrowseAndSMSAppActions(t *testing.T) {
+	bus := testBus()
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
+	dev := bus.objects[devicePath("devA")]
+
+	svc.Do(Action{Kind: ActionClipboard, DeviceID: "devA"})
+	e := waitForEvent(t, svc, func(e Event) bool {
+		return e.Kind == EventActionResult && e.Message == "Clipboard sent to Pixel 10 Pro XL"
+	})
+	if e.Err != nil || !dev.asked(clipboardIface+".sendClipboard") {
+		t.Fatalf("clipboard event = %+v", e)
+	}
+
+	svc.Do(Action{Kind: ActionBrowse, DeviceID: "devA"})
+	e = waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "Opening the file browser..." })
+	if e.Err != nil || !dev.asked(sftpIface+".startBrowsing") {
+		t.Fatalf("browse event = %+v", e)
+	}
+
+	svc.Do(Action{Kind: ActionLaunchSMSApp, DeviceID: "devA"})
+	e = waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "Opening the SMS app..." })
+	if e.Err != nil || !dev.asked(smsIface+".launchApp") {
+		t.Fatalf("sms app event = %+v", e)
+	}
+}
+
+func TestShareReceivedEvent(t *testing.T) {
+	bus := testBus()
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
+	bus.inject(t, &dbus.Signal{
+		Path: devicePath("devA"),
+		Name: shareIface + ".shareReceived",
+		Body: []any{"file:///home/me/photo.png"},
+	})
+
+	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventShareReceived })
+	if e.Message != "File received from Pixel 10 Pro XL" || e.Detail != "file:///home/me/photo.png" {
+		t.Fatalf("share received event = %+v", e)
 	}
 }

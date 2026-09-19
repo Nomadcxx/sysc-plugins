@@ -3,6 +3,7 @@ package kdeconnect
 import (
 	"errors"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -87,6 +88,13 @@ const (
 	ActionAcceptPair
 	ActionRejectPair
 	ActionUnpair
+	ActionShareURL
+	ActionShareText
+	ActionShareFile
+	ActionClipboard
+	ActionBrowse
+	ActionSendSMS
+	ActionLaunchSMSApp
 )
 
 // EventKind names a service event the entry point turns into a toast.
@@ -97,13 +105,19 @@ const (
 	EventPairingRequest EventKind = iota + 1
 	// EventActionResult reports an action's outcome.
 	EventActionResult
+	// EventShareReceived arrives when the device shares a file with us.
+	EventShareReceived
 )
 
 // Action is one device action request. Do delivers it to the service
-// goroutine, which performs the daemon call and emits the outcome.
+// goroutine, which performs the daemon call and emits the outcome. Arg
+// carries the URL, text, file path, or phone number the kind needs; Arg2
+// carries the SMS body.
 type Action struct {
 	Kind     ActionKind
 	DeviceID string
+	Arg      string
+	Arg2     string
 }
 
 // Event is one daemon-side occurrence worth surfacing: an incoming pairing
@@ -462,6 +476,7 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 		return
 	}
 	var method string
+	var args []any
 	switch a.Kind {
 	case ActionRing:
 		method = findMyPhoneIface + ".ring"
@@ -475,6 +490,23 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 		method = kdeDeviceIface + ".cancelPairing"
 	case ActionUnpair:
 		method = kdeDeviceIface + ".unpair"
+	case ActionShareURL:
+		method, args = shareIface+".shareUrl", []any{a.Arg}
+	case ActionShareText:
+		method, args = shareIface+".shareText", []any{a.Arg}
+	case ActionShareFile:
+		method, args = shareIface+".shareFile", []any{a.Arg}
+	case ActionClipboard:
+		method = clipboardIface + ".sendClipboard"
+	case ActionBrowse:
+		method = sftpIface + ".startBrowsing"
+	case ActionSendSMS:
+		// The daemon's sms plugin exposes sendSms(phoneNumber, messageBody);
+		// launchApp takes nothing. Verified against kdeconnect-kde's
+		// plugins/sms/smsplugin.cpp.
+		method, args = smsIface+".sendSms", []any{a.Arg, a.Arg2}
+	case ActionLaunchSMSApp:
+		method = smsIface + ".launchApp"
 	default:
 		st.emit(Event{
 			Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: displayName(dev),
@@ -483,7 +515,7 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 		})
 		return
 	}
-	call := bus.object(kdeService, devicePath(a.DeviceID)).Call(method, 0)
+	call := bus.object(kdeService, devicePath(a.DeviceID)).Call(method, 0, args...)
 	name := displayName(dev)
 	if call.Err != nil {
 		st.emit(Event{
@@ -498,8 +530,17 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 	}
 	st.emit(Event{
 		Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
-		Message: actionSuccessText(a.Kind, name),
+		Message: actionSuccessText(a.Kind, name), Detail: actionDetail(a),
 	})
+}
+
+// actionDetail is the extra toast body some actions carry, such as the file
+// being sent.
+func actionDetail(a Action) string {
+	if a.Kind == ActionShareFile && a.Arg != "" {
+		return path.Base(a.Arg)
+	}
+	return ""
 }
 
 // displayName prefers the device name and falls back to its id, which is
@@ -525,6 +566,16 @@ func actionSuccessText(kind ActionKind, name string) string {
 		return "Pairing request from " + name + " rejected"
 	case ActionUnpair:
 		return name + " unpaired"
+	case ActionShareURL, ActionShareText, ActionShareFile:
+		return "Shared with " + name
+	case ActionClipboard:
+		return "Clipboard sent to " + name
+	case ActionBrowse:
+		return "Opening the file browser..."
+	case ActionSendSMS:
+		return "SMS sent successfully"
+	case ActionLaunchSMSApp:
+		return "Opening the SMS app..."
 	}
 	return "Done"
 }
@@ -543,6 +594,16 @@ func actionFailureText(kind ActionKind, name string) string {
 		return "Failed to reject the pairing request from " + name
 	case ActionUnpair:
 		return "Failed to unpair " + name
+	case ActionShareURL, ActionShareText, ActionShareFile:
+		return "Failed to share with " + name
+	case ActionClipboard:
+		return "Failed to send the clipboard to " + name
+	case ActionBrowse:
+		return "Failed to open the file browser"
+	case ActionSendSMS:
+		return "Failed to send the SMS"
+	case ActionLaunchSMSApp:
+		return "Failed to launch the SMS app"
 	}
 	return "The action failed"
 }
@@ -606,6 +667,20 @@ func updateFromSignal(sig *dbus.Signal, bus daemonBus, st *daemonState) bool {
 			return false
 		}
 		st.fetchNotifications(bus, dev)
+		return true
+	case "shareReceived":
+		if dev == nil {
+			return false
+		}
+		url := ""
+		if len(sig.Body) > 0 {
+			url, _ = sig.Body[0].(string)
+		}
+		st.emit(Event{
+			Kind: EventShareReceived, DeviceID: dev.ID, DeviceName: displayName(dev),
+			Message: "File received from " + displayName(dev),
+			Detail:  url,
+		})
 		return true
 	case "PropertiesChanged":
 		if dev == nil || len(sig.Body) == 0 {

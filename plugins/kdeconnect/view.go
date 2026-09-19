@@ -84,9 +84,19 @@ func TooltipTree(snap Snapshot) *v1.Node {
 	}}
 }
 
+// Composer names the composer card the panel shows under the actions. The
+// entry point owns the state; the view only renders it.
+type Composer uint8
+
+const (
+	ComposerNone Composer = iota
+	ComposerShare
+	ComposerSMS
+)
+
 // PanelTree is the phone-connect panel: the daemon header over the state,
-// pairing, switcher, device, action, and info sections.
-func PanelTree(snap Snapshot, settings Settings) *v1.Node {
+// pairing, switcher, device, action, info, and composer sections.
+func PanelTree(snap Snapshot, settings Settings, composer Composer) *v1.Node {
 	col := &v1.Node{Kind: v1.KindColumn, Gap: 10, Children: []*v1.Node{headerTree(snap)}}
 	if !snap.Available {
 		col.Children = append(col.Children, stateCard(
@@ -119,6 +129,12 @@ func PanelTree(snap Snapshot, settings Settings) *v1.Node {
 		col.Children = append(col.Children,
 			actionRowTree(selected, settings),
 			infoRowsTree(selected))
+		switch composer {
+		case ComposerShare:
+			col.Children = append(col.Children, shareComposerTree())
+		case ComposerSMS:
+			col.Children = append(col.Children, smsComposerTree())
+		}
 	}
 	return col
 }
@@ -167,6 +183,52 @@ func stateCard(headline, hint string) *v1.Node {
 		Children: []*v1.Node{
 			{Kind: v1.KindText, Text: headline, Bold: true},
 			{Kind: v1.KindText, Text: hint, Tone: v1.ToneSubtle},
+		}}
+}
+
+// shareComposerTree is the share card: one URL-or-text field with its two
+// sends, and one file-path field, the DMS ShareDialog's contents.
+func shareComposerTree() *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 8,
+		Children: []*v1.Node{
+			{Kind: v1.KindText, Text: "Share", Bold: true},
+			{Kind: v1.KindTextInput, ID: "share-text", Name: "URL or text to share", Role: "textbox",
+				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
+			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+				{Kind: v1.KindButton, ID: "share-url-send", Text: "Send URL", Fill: "accent",
+					Name: "Share the URL with the device", Role: "button",
+					Events: []v1.EventKind{v1.EventActivate}},
+				{Kind: v1.KindButton, ID: "share-text-send", Text: "Send text",
+					Name: "Share the text with the device", Role: "button",
+					Events: []v1.EventKind{v1.EventActivate}},
+			}},
+			{Kind: v1.KindTextInput, ID: "share-file", Name: "File path to send", Role: "textbox",
+				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
+			{Kind: v1.KindButton, ID: "share-file-send", Text: "Send file",
+				Name: "Send the file to the device", Role: "button",
+				Events: []v1.EventKind{v1.EventActivate}},
+		}}
+}
+
+// smsComposerTree is the SMS card: number, multiline body, send, and the
+// launch-app escape hatch, the DMS SmsDialog's contents.
+func smsComposerTree() *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 8,
+		Children: []*v1.Node{
+			{Kind: v1.KindText, Text: "New message", Bold: true},
+			{Kind: v1.KindTextInput, ID: "sms-number", Name: "Phone number", Role: "textbox",
+				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
+			{Kind: v1.KindTextInput, ID: "sms-body", Name: "Message", Role: "textbox",
+				Multiline: true,
+				Events:    []v1.EventKind{v1.EventChange}},
+			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+				{Kind: v1.KindButton, ID: "sms-send", Text: "Send", Fill: "accent",
+					Name: "Send the message", Role: "button",
+					Events: []v1.EventKind{v1.EventActivate}},
+				{Kind: v1.KindButton, ID: "sms-app", Text: "Open app",
+					Name: "Open the SMS app on the device", Role: "button",
+					Events: []v1.EventKind{v1.EventActivate}},
+			}},
 		}}
 }
 
