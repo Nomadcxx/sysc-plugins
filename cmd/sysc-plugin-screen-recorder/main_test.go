@@ -54,7 +54,7 @@ func argAfter(flag string) string {
 	return ""
 }
 
-func TestPluginCameraOpensPanel(t *testing.T) {
+func TestPluginToggleOpensPanel(t *testing.T) {
 	h := startPlugin(t, recorder.Options{
 		Exe:      os.Args[0],
 		LookPath: func(string) (string, error) { return os.Args[0], nil },
@@ -62,8 +62,11 @@ func TestPluginCameraOpensPanel(t *testing.T) {
 		StopWait: 250 * time.Millisecond,
 	})
 	h.open("bar-a", v1.ViewBar, "DP-1")
-	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "camera") != nil })
-	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "camera", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
+	if err := h.send(&v1.InputEvent{
+		ViewID: "bar-a", Node: "toggle", Event: v1.EventPointer,
+		Button: v1.ButtonSecondary, Output: "DP-1",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	p := h.waitPanelOpen()
@@ -77,13 +80,13 @@ func TestPluginRightClickOpensPanelWhenUnavailable(t *testing.T) {
 		LookPath: func(string) (string, error) { return "", os.ErrNotExist },
 	})
 	h.open("bar-a", v1.ViewBar, "DP-1")
-	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "camera") != nil })
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
 	h.open("panel-a", v1.ViewPanel, "DP-1")
 	h.wait("panel-a", func(n *v1.Node) bool {
 		return n != nil && strings.Contains(treeText(n), "not installed")
 	})
 	if err := h.send(&v1.InputEvent{
-		ViewID: "bar-a", Node: "camera", Event: v1.EventPointer,
+		ViewID: "bar-a", Node: "toggle", Event: v1.EventPointer,
 		Button: v1.ButtonSecondary, Output: "DP-1",
 	}); err != nil {
 		t.Fatal(err)
@@ -138,8 +141,8 @@ func TestPluginSettingsRebuildAndNotifyAndShutdown(t *testing.T) {
 	})
 	h.open("bar-a", v1.ViewBar, "DP-1")
 	h.open("bar-b", v1.ViewBar, "HDMI-1")
-	h.wait("bar-a", func(n *v1.Node) bool { return strings.Contains(treeText(n), "Record") })
-	h.wait("bar-b", func(n *v1.Node) bool { return strings.Contains(treeText(n), "Record") })
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
+	h.wait("bar-b", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
 
 	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: map[string]any{
 		"directory": h.dir, "frame_rate": 30.0,
@@ -147,13 +150,13 @@ func TestPluginSettingsRebuildAndNotifyAndShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "record", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 		t.Fatal(err)
 	}
 	h.wait("bar-a", barCapturing)
 	h.wait("bar-b", barCapturing)
 
-	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "stop", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 		t.Fatal(err)
 	}
 	h.wait("bar-a", barIdle)
@@ -179,8 +182,8 @@ func TestPluginFailureNotifyIncludesLogs(t *testing.T) {
 		StopWait: 250 * time.Millisecond,
 	})
 	h.open("bar-a", v1.ViewBar, "DP-1")
-	h.wait("bar-a", func(n *v1.Node) bool { return strings.Contains(treeText(n), "Record") })
-	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "record", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
+	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 		t.Fatal(err)
 	}
 	h.wait("bar-a", barFailed)
@@ -396,18 +399,18 @@ func findNode(n *v1.Node, id string) *v1.Node {
 }
 
 func barCapturing(n *v1.Node) bool {
-	cam := findNode(n, "camera")
-	return cam != nil && cam.Icon == "camera" && cam.Tone == v1.ToneError
+	tog := findNode(n, "toggle")
+	return tog != nil && tog.Icon == "stop" && tog.Tone == v1.ToneError
 }
 
 func barFailed(n *v1.Node) bool {
-	cam := findNode(n, "camera")
-	return cam != nil && cam.Icon == "camera-off"
+	tog := findNode(n, "toggle")
+	return tog != nil && tog.Icon == "camera-off"
 }
 
 func barIdle(n *v1.Node) bool {
-	cam := findNode(n, "camera")
-	return cam != nil && cam.Icon == "camera" && cam.Tone == v1.ToneNormal
+	tog := findNode(n, "toggle")
+	return tog != nil && tog.Icon == "record" && tog.Tone == v1.ToneNormal
 }
 
 func TestPluginHideInactive(t *testing.T) {
@@ -422,6 +425,6 @@ func TestPluginHideInactive(t *testing.T) {
 	}
 	h.open("bar-a", v1.ViewBar, "DP-1")
 	h.wait("bar-a", func(n *v1.Node) bool {
-		return n != nil && n.Kind == v1.KindRow && len(n.Children) == 1 && findNode(n, "camera") != nil
+		return n != nil && n.Kind == v1.KindRow && len(n.Children) == 0
 	})
 }
