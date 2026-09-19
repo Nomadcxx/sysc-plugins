@@ -51,19 +51,21 @@ func run(in *os.File, out *os.File) error {
 	restore(ctx, c, tm)
 
 	publish := func() {
-		text := timer.FormatClock(tm.Remaining())
-		state := tm.State()
+		// One read for the whole frame: the bar and the panel have to agree
+		// about the phase even when a tick rolls it over mid-publish.
+		now := tm.View()
+		text := timer.FormatClock(now.Remaining)
 		for id, v := range views {
 			v.rev++
 			views[id] = v
 			var root *v1.Node
 			switch v.kind {
 			case v1.ViewBar:
-				root = timer.BarTree(text, state, showWhenIdle)
+				root = timer.BarTree(text, now.State, showWhenIdle)
 			case v1.ViewTooltip:
-				root = timer.TooltipTree(text, state)
+				root = timer.TooltipTree(text, now.State)
 			default:
-				root = timer.PanelTree(text, state, tm.Progress(), tm.Mode(), tm.Completed(), tm.SessionsBeforeLong())
+				root = timer.PanelTree(text, now.State, now.Progress, now.Mode, now.Completed, now.Sessions)
 			}
 			_ = c.Snapshot(id, v.rev, root)
 		}
@@ -200,16 +202,15 @@ func run(in *os.File, out *os.File) error {
 }
 
 func save(ctx context.Context, c *v1.Client, tm *timer.Session) {
-	if deadline, ok := tm.Deadline(); ok {
-		raw, _ := json.Marshal(deadline.Unix())
-		_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "deadline", Value: raw})
+	raw, err := json.Marshal(tm.Snapshot())
+	if err != nil {
 		return
 	}
-	_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "deadline", Value: json.RawMessage("null")})
+	_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "session", Value: raw})
 }
 
 func restore(ctx context.Context, c *v1.Client, tm *timer.Session) {
-	reply, err := c.Call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "deadline"})
+	reply, err := c.Call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "session"})
 	if err != nil || !reply.OK {
 		return
 	}
@@ -217,9 +218,9 @@ func restore(ctx context.Context, c *v1.Client, tm *timer.Session) {
 	if err := json.Unmarshal(reply.Result, &result); err != nil || !result.Found {
 		return
 	}
-	var unix int64
-	if err := json.Unmarshal(result.Value, &unix); err != nil || unix == 0 {
+	var snap timer.Snapshot
+	if err := json.Unmarshal(result.Value, &snap); err != nil {
 		return
 	}
-	tm.Restore(time.Unix(unix, 0))
+	tm.RestoreSnapshot(snap)
 }

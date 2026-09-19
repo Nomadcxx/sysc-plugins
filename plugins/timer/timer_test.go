@@ -97,9 +97,14 @@ func TestRestoreDeadline(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	tm := New(func() time.Time { return now })
 	deadline := now.Add(30 * time.Second)
-	tm.Restore(deadline)
+	tm.Restore(deadline, 2*time.Minute)
 	if !tm.Running() || tm.Remaining() != 30*time.Second {
 		t.Fatalf("restore remaining=%v running=%v", tm.Remaining(), tm.Running())
+	}
+	// The phase it belongs to survives, so the ring comes back a quarter
+	// left rather than full.
+	if tm.Duration() != 2*time.Minute {
+		t.Fatalf("restore duration = %v, want the phase length", tm.Duration())
 	}
 }
 

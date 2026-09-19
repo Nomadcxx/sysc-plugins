@@ -147,11 +147,21 @@ func (t *Timer) Duration() time.Duration {
 }
 
 // Restore resumes a countdown that was saved as an absolute deadline.
-func (t *Timer) Restore(deadline time.Time) {
+// Restore resumes a countdown that was still running when the process
+// stopped. duration is the full length of the phase the deadline belongs
+// to, so progress stays true across a restart rather than snapping back to
+// a full ring; a duration that cannot hold what is left falls back to it.
+func (t *Timer) Restore(deadline time.Time, duration time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
 	left := deadline.Sub(now)
+	if duration < left {
+		duration = left
+	}
+	if duration > 0 {
+		t.duration = duration
+	}
 	if left <= 0 {
 		t.remaining = 0
 		t.running = false
@@ -159,7 +169,6 @@ func (t *Timer) Restore(deadline time.Time) {
 		return
 	}
 	t.remaining = left
-	t.duration = left
 	t.running = true
 	t.origin = now
 	t.fired = false

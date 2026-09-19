@@ -30,7 +30,7 @@ type Session struct {
 }
 
 func NewSession(now func() time.Time) *Session {
-	return &Session{
+	s := &Session{
 		mode:     ModeWork,
 		work:     25 * time.Minute,
 		short:    5 * time.Minute,
@@ -38,6 +38,11 @@ func NewSession(now func() time.Time) *Session {
 		sessions: 4,
 		timer:    New(now),
 	}
+	// The countdown carries its own default length, so the opening work
+	// phase has to be pushed into it; otherwise a session that is never
+	// configured counts the bare timer's five minutes under a Work label.
+	s.timer.SetDuration(s.work)
+	return s
 }
 
 func (s *Session) Mode() Mode {
@@ -155,7 +160,71 @@ func (s *Session) Reset()                   { s.timer.Reset() }
 func (s *Session) Deadline() (time.Time, bool) {
 	return s.timer.Deadline()
 }
-func (s *Session) Restore(deadline time.Time) { s.timer.Restore(deadline) }
+
+// Snapshot is the part of a session that has to outlive the process. The
+// deadline alone is not enough: without the phase and the tally a restart
+// resumes a break under a Work label and counts it as a finished pomodoro.
+type Snapshot struct {
+	Mode      Mode  `json:"mode"`
+	Completed int   `json:"completed"`
+	Duration  int64 `json:"duration_seconds,omitempty"`
+	Deadline  int64 `json:"deadline,omitempty"`
+}
+
+func (s *Session) Snapshot() Snapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snap := Snapshot{Mode: s.mode, Completed: s.completed}
+	if deadline, ok := s.timer.Deadline(); ok {
+		snap.Deadline = deadline.Unix()
+		snap.Duration = int64(s.timer.Duration() / time.Second)
+	}
+	return snap
+}
+
+// RestoreSnapshot puts a saved session back. A countdown that was running
+// resumes against its own phase length; anything else opens on the phase
+// the settings ask for, which arrive after this call.
+func (s *Session) RestoreSnapshot(snap Snapshot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch snap.Mode {
+	case ModeWork, ModeShort, ModeLong:
+		s.mode = snap.Mode
+	}
+	if snap.Completed > 0 {
+		s.completed = snap.Completed
+	}
+	if snap.Deadline > 0 {
+		s.timer.Restore(time.Unix(snap.Deadline, 0), time.Duration(snap.Duration)*time.Second)
+		return
+	}
+	s.timer.SetDuration(s.duration(s.mode))
+}
+
+// View is everything one frame needs, read under a single lock so a
+// publish racing a phase change cannot mix the two sides of it.
+type View struct {
+	Remaining time.Duration
+	State     State
+	Progress  float64
+	Mode      Mode
+	Completed int
+	Sessions  int
+}
+
+func (s *Session) View() View {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return View{
+		Remaining: s.timer.Remaining(),
+		State:     s.timer.State(),
+		Progress:  s.timer.Progress(),
+		Mode:      s.mode,
+		Completed: s.completed,
+		Sessions:  s.sessions,
+	}
+}
 
 func (s *Session) duration(m Mode) time.Duration {
 	switch m {
