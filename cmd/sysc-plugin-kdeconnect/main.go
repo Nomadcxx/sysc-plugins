@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 
@@ -48,7 +49,14 @@ func run(in *os.File, out *os.File) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Restore the saved device choice before any view can render, so the
+	// first snapshot already carries it.
+	if saved := restoreSelection(ctx, c); saved != "" {
+		svc.SetSelected(saved)
+	}
+
 	incoming := make(chan v1.Message, 8)
+	var lastAvailable *bool
 	go func() {
 		for {
 			msg, err := c.Recv()
@@ -92,6 +100,16 @@ func run(in *os.File, out *os.File) error {
 		case s := <-svc.Updates():
 			delta := kdeconnect.PanelDelta(snap, s)
 			snap = s
+			if lastAvailable == nil || *lastAvailable != snap.Available {
+				status := v1.PluginStatus{State: v1.StatusOK}
+				if !snap.Available {
+					status.State = v1.StatusError
+					status.Message = "KDE Connect daemon unreachable"
+				}
+				_ = c.Send(&status)
+				available := snap.Available
+				lastAvailable = &available
+			}
 			publish(delta)
 		case msg := <-incoming:
 			switch m := msg.(type) {
@@ -129,7 +147,9 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 	case m.Node == "refresh":
 		svc.Refresh()
 	case strings.HasPrefix(m.Node, "select-"):
-		svc.SetSelected(strings.TrimPrefix(m.Node, "select-"))
+		id := strings.TrimPrefix(m.Node, "select-")
+		svc.SetSelected(id)
+		saveSelection(ctx, c, id)
 	case m.Node == "share":
 		return toggleComposer(ui, kdeconnect.ComposerShare)
 	case m.Node == "sms":
@@ -208,6 +228,33 @@ func notify(ctx context.Context, c *v1.Client, e kdeconnect.Event) {
 		p.Urgency = v1.UrgencyCritical
 	}
 	_, _ = c.Call(ctx, v1.CallNotify, p)
+}
+
+// restoreSelection reads the saved device choice from the plugin state.
+func restoreSelection(ctx context.Context, c *v1.Client) string {
+	reply, err := c.Call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "selected_device_id"})
+	if err != nil || !reply.OK {
+		return ""
+	}
+	var result v1.StateGetResult
+	if err := json.Unmarshal(reply.Result, &result); err != nil || !result.Found {
+		return ""
+	}
+	var id string
+	if err := json.Unmarshal(result.Value, &id); err != nil {
+		return ""
+	}
+	return id
+}
+
+// saveSelection writes the device choice the user picked. Auto-selection
+// never writes: the saved choice is the user's alone.
+func saveSelection(ctx context.Context, c *v1.Client, id string) {
+	raw, err := json.Marshal(id)
+	if err != nil {
+		return
+	}
+	_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "selected_device_id", Value: raw})
 }
 
 func settingsFrom(values map[string]any) kdeconnect.Settings {
