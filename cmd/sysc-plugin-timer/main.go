@@ -20,7 +20,7 @@ func main() {
 
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.timer", Name: "Timer", Version: "1.1.0"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.timer", Name: "Timer", Version: "1.2.0"})); err != nil {
 		return err
 	}
 	tm := timer.New(time.Now)
@@ -97,8 +97,12 @@ func run(in *os.File, out *os.File) error {
 			save(ctx, c, tm)
 		case "duration":
 			if m.Event == v1.EventSubmit || m.Event == v1.EventChange {
-				if d, err := timer.ParseDuration(m.Text); err == nil {
-					tm.SetDuration(d)
+				// The input is disabled while counting; drop stragglers so a
+				// live edit cannot skew the progress bar or reset a pause.
+				if st := tm.State(); st != timer.StateRunning && st != timer.StatePaused {
+					if d, err := timer.ParseDuration(m.Text); err == nil {
+						tm.SetDuration(d)
+					}
 				}
 			}
 		}
