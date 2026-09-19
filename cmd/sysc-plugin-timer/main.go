@@ -82,8 +82,13 @@ func run(in *os.File, out *os.File) error {
 			}
 			_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 		case "start":
+			paused := tm.State() == timer.StatePaused
 			tm.Start()
 			save(ctx, c, tm)
+			if !paused {
+				// Noctalia closes the panel on start; the bar carries the count.
+				_, _ = c.Call(ctx, v1.CallPanelClose, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+			}
 		case "pause":
 			tm.Pause()
 			save(ctx, c, tm)

@@ -59,6 +59,9 @@ func TestPanelTreeTracksState(t *testing.T) {
 		switch {
 		case c.ID == "duration":
 			hasInput = true
+			if c.Disabled {
+				t.Fatal("idle duration field is disabled")
+			}
 		case c.Kind == "progress":
 			hasProgress = true
 		case c.Tone == v1.ToneSubtle:
@@ -76,18 +79,33 @@ func TestPanelTreeTracksState(t *testing.T) {
 	if !hasInput || !hasProgress || !hasHint {
 		t.Fatalf("idle panel missing parts: input=%v progress=%v hint=%v", hasInput, hasProgress, hasHint)
 	}
-	if reset == nil || reset.Tone != v1.ToneError {
+	if big := idle.Children[0]; big.Size != "display" || !big.Bold || !big.CenterX {
+		t.Fatalf("idle time = %+v, want display-size bold centred", big)
+	}
+	if reset == nil || reset.Tone != v1.ToneError || reset.Fill != "error" {
 		t.Fatalf("reset = %+v, want the destructive chip", reset)
 	}
-	if start == nil || start.Text != "Start" {
+	if start == nil || start.Text != "Start" || start.Fill != "accent" {
 		t.Fatalf("start = %+v", start)
 	}
 
 	running := PanelTree("04:12", StateRunning, 0.5, "5m")
+	var runningInput, runningToggle *v1.Node
 	for _, c := range running.Children {
 		if c.ID == "duration" {
-			t.Fatal("duration field stayed visible while running")
+			runningInput = c
 		}
+		for _, b := range c.Children {
+			if b.ID == "pause" {
+				runningToggle = b
+			}
+		}
+	}
+	if runningInput == nil || !runningInput.Disabled {
+		t.Fatalf("running duration field = %+v, want disabled", runningInput)
+	}
+	if runningToggle == nil || runningToggle.Text != "Pause" || runningToggle.Fill != "soft" {
+		t.Fatalf("running toggle = %+v", runningToggle)
 	}
 	if big := running.Children[0]; big.Tone != v1.ToneAccent {
 		t.Fatalf("running time tone = %v", big.Tone)

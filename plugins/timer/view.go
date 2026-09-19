@@ -46,8 +46,9 @@ func TooltipTree(remaining string, state State) *v1.Node {
 }
 
 // PanelTree is the noctalia timer panel: the big remaining time over a
-// progress meter, the duration field while idle, and reset plus start or
-// pause controls. The reset paints as the destructive chip.
+// progress meter, the duration field, and reset plus start or pause controls.
+// The field stays visible while the countdown runs, greyed out, so the panel
+// does not reflow; the reset paints as the destructive chip.
 func PanelTree(remaining string, state State, progress float64, duration string) *v1.Node {
 	tone := v1.ToneNormal
 	switch state {
@@ -58,43 +59,38 @@ func PanelTree(remaining string, state State, progress float64, duration string)
 	}
 
 	col := &v1.Node{Kind: v1.KindColumn, Gap: 10, Children: []*v1.Node{
-		{Kind: v1.KindText, Text: remaining, Tabular: true, Tone: tone, Height: 36},
+		{Kind: v1.KindText, Text: remaining, Tabular: true, Tone: tone,
+			Size: "display", Bold: true, CenterX: true, Height: 48},
 		{Kind: v1.KindProgress, Value: progress},
 	}}
 
-	if state == StateIdle {
-		col.Children = append(col.Children,
-			&v1.Node{Kind: v1.KindTextInput, ID: "duration", Text: duration, Name: "Duration", Role: "textbox",
-				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}})
-	}
+	toggle := v1.Node{Kind: v1.KindButton, ID: "start", Name: "Start timer", Role: "button",
+		Fill: "accent", Events: []v1.EventKind{v1.EventActivate}}
+	reset := v1.Node{Kind: v1.KindButton, ID: "reset", Text: "Reset", Name: "Reset timer", Role: "button",
+		Tone: v1.ToneError, Fill: "error", Events: []v1.EventKind{v1.EventActivate}}
+	input := v1.Node{Kind: v1.KindTextInput, ID: "duration", Text: duration, Name: "Duration", Role: "textbox",
+		Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}}
 
-	controls := []*v1.Node{
-		{Kind: v1.KindButton, ID: "reset", Text: "Reset", Name: "Reset timer", Role: "button",
-			Tone: v1.ToneError, Events: []v1.EventKind{v1.EventActivate}},
-	}
 	switch state {
 	case StateRunning:
-		controls = append(controls,
-			&v1.Node{Kind: v1.KindButton, ID: "pause", Text: "Pause", Name: "Pause timer", Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}})
+		toggle.ID, toggle.Text, toggle.Name, toggle.Fill = "pause", "Pause", "Pause timer", "soft"
+		input.Disabled = true
+		col.Children = append(col.Children, &input, &v1.Node{Kind: v1.KindRow, Gap: 8,
+			Children: []*v1.Node{&reset, &toggle}})
 	case StatePaused:
-		controls = append(controls,
-			&v1.Node{Kind: v1.KindButton, ID: "start", Text: "Resume", Name: "Resume timer", Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}})
-	case StateNotify:
-		controls = append(controls,
-			&v1.Node{Kind: v1.KindButton, ID: "start", Text: "Clear", Name: "Clear fired timer", Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}})
+		toggle.Text, toggle.Name, toggle.Fill = "Resume", "Resume timer", "soft"
+		input.Disabled = true
+		col.Children = append(col.Children, &input, &v1.Node{Kind: v1.KindRow, Gap: 8,
+			Children: []*v1.Node{&reset, &toggle}})
 	default:
-		controls = append(controls,
-			&v1.Node{Kind: v1.KindButton, ID: "start", Text: "Start", Name: "Start timer", Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}})
+		toggle.Text, toggle.Name = "Start", "Start timer"
+		col.Children = append(col.Children, &input, &v1.Node{Kind: v1.KindRow, Gap: 8,
+			Children: []*v1.Node{&reset, &toggle}})
 	}
-	col.Children = append(col.Children, &v1.Node{Kind: v1.KindRow, Gap: 8, Children: controls})
 
 	if state == StateIdle {
-		col.Children = append(col.Children, &v1.Node{
-			Kind: v1.KindText, Text: "90 · 5m · m:ss · 1h30m", Tone: v1.ToneSubtle})
+		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText,
+			Text: "90 · 5m · 1030 = 10:30 · 1h30m", Tone: v1.ToneSubtle, Size: "caption", CenterX: true})
 	}
 	return col
 }
