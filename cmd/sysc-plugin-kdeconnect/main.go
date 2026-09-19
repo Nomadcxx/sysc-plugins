@@ -49,12 +49,8 @@ func run(in *os.File, out *os.File) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Restore the saved device choice before any view can render, so the
-	// first snapshot already carries it.
-	if saved := restoreSelection(ctx, c); saved != "" {
-		svc.SetSelected(saved)
-	}
-
+	// The reader must run before any host call: a Call blocks until its
+	// reply is decoded, so without the reader it would deadlock here.
 	incoming := make(chan v1.Message, 8)
 	var lastAvailable *bool
 	go func() {
@@ -67,6 +63,12 @@ func run(in *os.File, out *os.File) error {
 			incoming <- msg
 		}
 	}()
+
+	// Restore the saved device choice before any view can render, so the
+	// first snapshot already carries it.
+	if saved := restoreSelection(ctx, c); saved != "" {
+		svc.SetSelected(saved)
+	}
 
 	// publish pushes the current snapshot into every open view. A non-nil
 	// delta patches the panel views instead of resending them; a patch the
