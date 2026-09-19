@@ -28,8 +28,10 @@ fontTools via the existing `internal/render/icons/build.py`.
 - Plugin id `org.sysc.kdeconnect`, name **Phone Connect** (DMS parity), dir `plugins/kdeconnect/`,
   entry `cmd/sysc-plugin-kdeconnect`. Makefile gains `sysc-plugin-kdeconnect:kdeconnect`.
 - `protocol {major:1, minor:2}` — the minor-2 presentation fields (fills, radius, bold, size
-  rungs, disabled, center_x/pin_end) are in the pinned sysc-shell
-  (`v0.0.0-20260916001919`) validator; no go.mod bump is needed.
+  rungs, disabled, center_x/pin_end) landed in sysc-shell `cc684ee`; the repo pin moves to
+  `v0.0.0-20260916042624-cc684ee8c131` (that commit) in the plugin work, recorded here per the
+  pinning rule. Icon names are strings on the wire, so the new glyphs need no compile-time pin
+  — only a shell with the extended catalogue at runtime.
 - Capabilities: `notifications` (pairing requests, action feedback, incoming shares),
   `panels`, `settings`, `state`.
 - `requires.commands: ["kdeconnect-cli"]` — `kdeconnectd` is not on PATH on most distros
