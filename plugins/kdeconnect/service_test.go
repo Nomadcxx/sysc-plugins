@@ -19,6 +19,7 @@ type fakeObject struct {
 	devices  []string
 	xml      string
 	notifs   int
+	actions  map[string]bool
 	failWith error
 }
 
@@ -26,6 +27,9 @@ func (f *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Ca
 	f.calls = append(f.calls, method)
 	if f.failWith != nil {
 		return &dbus.Call{Err: f.failWith}
+	}
+	if f.actions[method] {
+		return &dbus.Call{}
 	}
 	switch method {
 	case getAllMethod:
@@ -130,9 +134,14 @@ func testBus() *fakeBus {
 		devicePath("devA"): {
 			ifaces: map[string]map[string]dbus.Variant{
 				kdeDeviceIface: deviceProps("Pixel 10 Pro XL", "phone", true, true,
-					[]string{"kdeconnect_battery", "connectivity_report", "notifications"}),
+					[]string{"kdeconnect_battery", "connectivity_report", "notifications", "findmyphone", "ping"}),
 			},
 			xml: `<node><interface name="other"/><node name="notifications"/></node>`,
+			actions: map[string]bool{
+				kdeDeviceIface + ".requestPairing": true, kdeDeviceIface + ".acceptPairing": true,
+				kdeDeviceIface + ".cancelPairing": true, kdeDeviceIface + ".unpair": true,
+				findMyPhoneIface + ".ring": true, pingIface + ".sendPing": true,
+			},
 		},
 		pluginPath("devA", "battery"): {
 			ifaces: map[string]map[string]dbus.Variant{
@@ -148,6 +157,10 @@ func testBus() *fakeBus {
 		devicePath("devB"): {
 			ifaces: map[string]map[string]dbus.Variant{
 				kdeDeviceIface: deviceProps("Galaxy Tab", "tablet", true, true, []string{"kdeconnect_battery"}),
+			},
+			actions: map[string]bool{
+				kdeDeviceIface + ".requestPairing": true, kdeDeviceIface + ".acceptPairing": true,
+				kdeDeviceIface + ".cancelPairing": true, kdeDeviceIface + ".unpair": true,
 			},
 		},
 		pluginPath("devB", "battery"): {
@@ -461,5 +474,108 @@ func TestNotificationCountShapes(t *testing.T) {
 	}
 	if got := notificationCount(struct{}{}); got != 1 {
 		t.Fatalf("lone value counted as %d", got)
+	}
+}
+
+func waitForEvent(t *testing.T, svc *Service, want func(Event) bool) Event {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case e := <-svc.Events():
+			if want(e) {
+				return e
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the wanted event")
+		}
+	}
+}
+
+func TestPairingActionCallsAndEmits(t *testing.T) {
+	bus := testBus()
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
+	svc.Do(Action{Kind: ActionPair, DeviceID: "devA"})
+	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.DeviceID == "devA" })
+	if e.Err != nil || e.Message != "Pairing request sent to Pixel 10 Pro XL" {
+		t.Fatalf("pair event = %+v", e)
+	}
+	if !bus.objects[devicePath("devA")].asked(kdeDeviceIface + ".requestPairing") {
+		t.Fatal("requestPairing never called")
+	}
+}
+
+func TestActionOnMissingDeviceEmitsFailure(t *testing.T) {
+	bus := testBus()
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
+	svc.Do(Action{Kind: ActionUnpair, DeviceID: "devZ"})
+	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.DeviceID == "devZ" })
+	if e.Err == nil {
+		t.Fatalf("missing-device action = %+v", e)
+	}
+}
+
+func TestRingAction(t *testing.T) {
+	bus := testBus()
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
+	svc.Do(Action{Kind: ActionRing, DeviceID: "devA"})
+	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult })
+	if e.Err != nil || e.Message != "Ringing Pixel 10 Pro XL..." {
+		t.Fatalf("ring event = %+v", e)
+	}
+	if !bus.objects[devicePath("devA")].asked(findMyPhoneIface + ".ring") {
+		t.Fatal("ring never called")
+	}
+}
+
+func TestAcceptPairingRefreshesImmediately(t *testing.T) {
+	bus := testBus()
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
+	daemon := bus.objects[kdeDaemonPath]
+	before := len(daemon.calls)
+	svc.Do(Action{Kind: ActionAcceptPair, DeviceID: "devA"})
+	e := waitForEvent(t, svc, func(e Event) bool {
+		return e.Kind == EventActionResult && e.Message == "Pixel 10 Pro XL paired"
+	})
+	if e.Err != nil {
+		t.Fatalf("accept event = %+v", e)
+	}
+	if !bus.objects[devicePath("devA")].asked(kdeDeviceIface + ".acceptPairing") {
+		t.Fatal("acceptPairing never called")
+	}
+	if len(daemon.calls) <= before {
+		t.Fatal("accept did not re-read the device list")
+	}
+}
+
+func TestIncomingPairingRequestEvent(t *testing.T) {
+	bus := testBus()
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
+	bus.objects[devicePath("devB")].ifaces[kdeDeviceIface]["isPairRequestedByPeer"] = dbus.MakeVariant(true)
+	bus.objects[devicePath("devB")].ifaces[kdeDeviceIface]["verificationKey"] = dbus.MakeVariant("654321")
+	bus.inject(t, &dbus.Signal{
+		Path: devicePath("devB"),
+		Name: kdeDeviceIface + ".pairStateChanged",
+		Body: []any{true},
+	})
+
+	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventPairingRequest })
+	if e.DeviceName != "Galaxy Tab" || e.Message != "Pairing request from Galaxy Tab" || e.Detail != "Verification: 654321" {
+		t.Fatalf("pairing request event = %+v", e)
 	}
 }

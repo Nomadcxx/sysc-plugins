@@ -77,12 +77,55 @@ func DefaultSettings() Settings {
 	return Settings{RefreshSeconds: 30, EnableClipboard: true, ShowDeviceCard: true}
 }
 
+// ActionKind names a device action the panel can drive.
+type ActionKind uint8
+
+const (
+	ActionRing ActionKind = iota + 1
+	ActionPing
+	ActionPair
+	ActionAcceptPair
+	ActionRejectPair
+	ActionUnpair
+)
+
+// EventKind names a service event the entry point turns into a toast.
+type EventKind uint8
+
+const (
+	// EventPairingRequest arrives when a device asks to pair.
+	EventPairingRequest EventKind = iota + 1
+	// EventActionResult reports an action's outcome.
+	EventActionResult
+)
+
+// Action is one device action request. Do delivers it to the service
+// goroutine, which performs the daemon call and emits the outcome.
+type Action struct {
+	Kind     ActionKind
+	DeviceID string
+}
+
+// Event is one daemon-side occurrence worth surfacing: an incoming pairing
+// request or an action's result. Message is the toast title, Detail the
+// optional body, and Err marks a failure.
+type Event struct {
+	Kind       EventKind
+	DeviceID   string
+	DeviceName string
+	Message    string
+	Detail     string
+	Err        error
+}
+
 // Service publishes daemon snapshots on Updates.
 type Service struct {
 	connect  func() (daemonBus, error)
 	settings Settings
 
 	updates   chan Snapshot
+	events    chan Event
+	actions   chan Action
 	configure chan Settings
 	refresh   chan struct{}
 	selectReq chan string
@@ -98,6 +141,8 @@ func newService(connect func() (daemonBus, error)) *Service {
 		connect:   connect,
 		settings:  DefaultSettings(),
 		updates:   make(chan Snapshot, 1),
+		events:    make(chan Event, 16),
+		actions:   make(chan Action, 8),
 		configure: make(chan Settings, 1),
 		refresh:   make(chan struct{}, 1),
 		selectReq: make(chan string, 1),
@@ -110,6 +155,14 @@ func newService(connect func() (daemonBus, error)) *Service {
 
 // Updates streams snapshots, one value buffered, latest wins.
 func (s *Service) Updates() <-chan Snapshot { return s.updates }
+
+// Events streams pairing requests and action outcomes. It never blocks the
+// service: a saturated channel drops the event.
+func (s *Service) Events() <-chan Event { return s.events }
+
+// Do performs a device action. The request is dropped when the service
+// already has a queue of them.
+func (s *Service) Do(a Action) { offer(s.actions, a) }
 
 // Reconfigure applies new settings.
 func (s *Service) Reconfigure(settings Settings) { offer(s.configure, settings) }
@@ -179,7 +232,7 @@ func (s *Service) serve(bus daemonBus) error {
 	}
 	bus.signal(signals)
 
-	st := &daemonState{devices: map[string]*Device{}, exported: map[string]bool{}}
+	st := &daemonState{devices: map[string]*Device{}, exported: map[string]bool{}, events: s.events}
 	saved := ""
 	ticker := time.NewTicker(tickInterval(s.settings.RefreshSeconds))
 	defer ticker.Stop()
@@ -203,6 +256,8 @@ func (s *Service) serve(bus daemonBus) error {
 		case <-s.refresh:
 			_ = st.reconcile(bus)
 			publish()
+		case a := <-s.actions:
+			st.performAction(bus, a)
 		case set := <-s.configure:
 			s.settings = set
 			ticker.Reset(tickInterval(set.RefreshSeconds))
@@ -242,6 +297,15 @@ type daemonState struct {
 	announced     string
 	exported      map[string]bool
 	lastReconcile time.Time
+	events        chan<- Event
+}
+
+// emit delivers an event without ever blocking the serve loop.
+func (st *daemonState) emit(e Event) {
+	select {
+	case st.events <- e:
+	default:
+	}
 }
 
 // reconcile re-reads the daemon's device list and every device's state. It
@@ -250,6 +314,12 @@ func (st *daemonState) reconcile(bus daemonBus) error {
 	if !st.lastReconcile.IsZero() && time.Since(st.lastReconcile) < minRefreshGap {
 		return nil
 	}
+	return st.reconcileNow(bus)
+}
+
+// reconcileNow re-reads the device list regardless of the refresh gap; the
+// action work uses it so a pairing result shows immediately.
+func (st *daemonState) reconcileNow(bus daemonBus) error {
 	st.lastReconcile = time.Now()
 
 	obj := bus.object(kdeService, kdeDaemonPath)
@@ -294,6 +364,7 @@ func (st *daemonState) fetchDevice(bus daemonBus, id string) {
 		dev = newDevice(id)
 		st.devices[id] = dev
 	}
+	wasRequestedByPeer := dev.PairRequestedByPeer
 	if name := strOf(props["name"]); name != "" {
 		dev.Name = name
 	}
@@ -304,6 +375,18 @@ func (st *daemonState) fetchDevice(bus daemonBus, id string) {
 	dev.PairRequestedByPeer = boolOf(props["isPairRequestedByPeer"])
 	dev.VerificationKey = strOf(props["verificationKey"])
 	dev.SupportedPlugins = stringListOf(props["supportedPlugins"])
+	if dev.PairRequestedByPeer && !wasRequestedByPeer {
+		e := Event{
+			Kind:       EventPairingRequest,
+			DeviceID:   dev.ID,
+			DeviceName: displayName(dev),
+			Message:    "Pairing request from " + displayName(dev),
+		}
+		if dev.VerificationKey != "" {
+			e.Detail = "Verification: " + dev.VerificationKey
+		}
+		st.emit(e)
+	}
 	if dev.Reachable && dev.Paired {
 		st.fetchBattery(bus, dev)
 		st.fetchConnectivity(bus, dev)
@@ -363,6 +446,105 @@ func (st *daemonState) fetchNotifications(bus daemonBus, dev *Device) {
 	}
 	dev.NotificationCount = notificationCount(call.Body[0])
 	dev.NotificationsKnown = true
+}
+
+// performAction drives one panel action against the daemon and reports the
+// outcome. Pairing actions re-read the device list immediately so the panel
+// reflects the new state without waiting for the next signal.
+func (st *daemonState) performAction(bus daemonBus, a Action) {
+	dev := st.devices[a.DeviceID]
+	if dev == nil {
+		st.emit(Event{
+			Kind: EventActionResult, DeviceID: a.DeviceID,
+			Message: actionFailureText(a.Kind, "device"),
+			Err:     errors.New("kdeconnect: device is no longer available"),
+		})
+		return
+	}
+	var method string
+	switch a.Kind {
+	case ActionRing:
+		method = findMyPhoneIface + ".ring"
+	case ActionPing:
+		method = pingIface + ".sendPing"
+	case ActionPair:
+		method = kdeDeviceIface + ".requestPairing"
+	case ActionAcceptPair:
+		method = kdeDeviceIface + ".acceptPairing"
+	case ActionRejectPair:
+		method = kdeDeviceIface + ".cancelPairing"
+	case ActionUnpair:
+		method = kdeDeviceIface + ".unpair"
+	default:
+		st.emit(Event{
+			Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: displayName(dev),
+			Message: "Unsupported action",
+			Err:     fmt.Errorf("kdeconnect: unsupported action %d", a.Kind),
+		})
+		return
+	}
+	call := bus.object(kdeService, devicePath(a.DeviceID)).Call(method, 0)
+	name := displayName(dev)
+	if call.Err != nil {
+		st.emit(Event{
+			Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
+			Message: actionFailureText(a.Kind, name), Err: call.Err,
+		})
+		return
+	}
+	switch a.Kind {
+	case ActionPair, ActionAcceptPair, ActionRejectPair, ActionUnpair:
+		_ = st.reconcileNow(bus)
+	}
+	st.emit(Event{
+		Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
+		Message: actionSuccessText(a.Kind, name),
+	})
+}
+
+// displayName prefers the device name and falls back to its id, which is
+// all a fresh device has before its first property read.
+func displayName(dev *Device) string {
+	if dev.Name != "" {
+		return dev.Name
+	}
+	return dev.ID
+}
+
+func actionSuccessText(kind ActionKind, name string) string {
+	switch kind {
+	case ActionRing:
+		return "Ringing " + name + "..."
+	case ActionPing:
+		return "Ping sent to " + name
+	case ActionPair:
+		return "Pairing request sent to " + name
+	case ActionAcceptPair:
+		return name + " paired"
+	case ActionRejectPair:
+		return "Pairing request from " + name + " rejected"
+	case ActionUnpair:
+		return name + " unpaired"
+	}
+	return "Done"
+}
+
+func actionFailureText(kind ActionKind, name string) string {
+	switch kind {
+	case ActionRing:
+		return "Failed to ring " + name
+	case ActionPing:
+		return "Failed to ping " + name
+	case ActionPair:
+		return "Pairing with " + name + " failed"
+	case ActionAcceptPair:
+		return "Failed to accept pairing with " + name
+	case ActionRejectPair:
+		return "Failed to reject the pairing request from " + name
+	case ActionUnpair:
+		return "Failed to unpair " + name
+	}
+	return "The action failed"
 }
 
 // updateFromSignal applies one daemon signal and reports whether the state

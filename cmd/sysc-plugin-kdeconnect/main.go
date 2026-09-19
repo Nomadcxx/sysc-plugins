@@ -99,8 +99,20 @@ func run(in *os.File, out *os.File) error {
 				svc.Reconfigure(settings)
 				publish(nil)
 			}
+		case e := <-svc.Events():
+			notify(ctx, c, e)
 		}
 	}
+}
+
+// notify surfaces one service event as a shell toast, the DMS plugin's
+// ToastService calls. A failed action raises the urgency.
+func notify(ctx context.Context, c *v1.Client, e kdeconnect.Event) {
+	p := v1.NotifyParams{Summary: e.Message, Body: e.Detail, Urgency: v1.UrgencyNormal}
+	if e.Err != nil {
+		p.Urgency = v1.UrgencyCritical
+	}
+	_, _ = c.Call(ctx, v1.CallNotify, p)
 }
 
 func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *v1.InputEvent) {
