@@ -60,9 +60,12 @@ func BarTree(snap Snapshot) *v1.Node {
 	}}}
 }
 
-// TooltipTree names the backend and the selected device's state.
+// TooltipTree names the backend, the selected device's state, and — when
+// the daemon announced one — the daemon's identity, the DMS settings
+// status card's information on the plugin's own surface.
 func TooltipTree(snap Snapshot) *v1.Node {
 	detail := "unavailable"
+	announced := ""
 	if snap.Available {
 		if dev := selectedDevice(snap); dev != nil {
 			detail = deviceStatus(dev)
@@ -77,11 +80,19 @@ func TooltipTree(snap Snapshot) *v1.Node {
 		} else {
 			detail = "no device selected"
 		}
+		if snap.AnnouncedName != "" || snap.SelfID != "" {
+			announced = fmt.Sprintf("announced as %s (%s)", snap.AnnouncedName, snap.SelfID)
+		}
 	}
-	return &v1.Node{Kind: v1.KindColumn, Children: []*v1.Node{
+	children := []*v1.Node{
 		{Kind: v1.KindText, Text: "Phone Connect"},
 		{Kind: v1.KindText, Text: detail, Size: "caption", Tone: v1.ToneSubtle},
-	}}
+	}
+	if announced != "" {
+		children = append(children, &v1.Node{
+			Kind: v1.KindText, Text: announced, Size: "caption", Tone: v1.ToneSubtle})
+	}
+	return &v1.Node{Kind: v1.KindColumn, Children: children}
 }
 
 // Composer names the composer card the panel shows under the actions. The

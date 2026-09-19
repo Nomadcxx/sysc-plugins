@@ -14,14 +14,16 @@ import (
 // goes through Call, so the fake dispatches on the method name and records
 // what it was asked.
 type fakeObject struct {
-	calls    []string
-	args     map[string][]any
-	ifaces   map[string]map[string]dbus.Variant
-	devices  []string
-	xml      string
-	notifs   int
-	actions  map[string]bool
-	failWith error
+	calls     []string
+	args      map[string][]any
+	ifaces    map[string]map[string]dbus.Variant
+	devices   []string
+	announced string
+	selfID    string
+	xml       string
+	notifs    int
+	actions   map[string]bool
+	failWith  error
 }
 
 func (f *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Call {
@@ -42,6 +44,10 @@ func (f *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Ca
 		return &dbus.Call{Body: []any{f.ifaces[iface]}}
 	case kdeDaemonIface + ".devices":
 		return &dbus.Call{Body: []any{f.devices}}
+	case kdeDaemonIface + ".announcedName":
+		return &dbus.Call{Body: []any{f.announced}}
+	case kdeDaemonIface + ".selfId":
+		return &dbus.Call{Body: []any{f.selfID}}
 	case introspectIface + ".Introspect":
 		return &dbus.Call{Body: []any{f.xml}}
 	case notificationsIface + "." + notificationsMember:
@@ -134,10 +140,10 @@ func connectivityProps(networkType string, strength int32) map[string]dbus.Varia
 func testBus() *fakeBus {
 	return &fakeBus{objects: map[dbus.ObjectPath]*fakeObject{
 		kdeDaemonPath: {
-			ifaces: map[string]map[string]dbus.Variant{
-				kdeDaemonIface: {"announcedName": dbus.MakeVariant("My Desktop")},
-			},
-			devices: []string{"devA", "devB"},
+			ifaces:    map[string]map[string]dbus.Variant{},
+			devices:   []string{"devA", "devB"},
+			announced: "My Desktop",
+			selfID:    "deadbeef01",
 		},
 		devicePath("devA"): {
 			ifaces: map[string]map[string]dbus.Variant{
@@ -227,6 +233,9 @@ func TestConnectDiscoversDevicesAndReadings(t *testing.T) {
 	})
 	if snap.AnnouncedName != "My Desktop" {
 		t.Fatalf("announcedName = %q", snap.AnnouncedName)
+	}
+	if snap.SelfID != "deadbeef01" {
+		t.Fatalf("selfId = %q", snap.SelfID)
 	}
 	if snap.Devices[0].Name != "Galaxy Tab" || snap.Devices[1].Name != "Pixel 10 Pro XL" {
 		t.Fatalf("devices are not sorted by name: %q, %q", snap.Devices[0].Name, snap.Devices[1].Name)

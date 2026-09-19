@@ -62,6 +62,7 @@ type Snapshot struct {
 	Available     bool
 	BackendName   string
 	AnnouncedName string
+	SelfID        string
 	Devices       []Device
 	SelectedID    string
 }
@@ -252,7 +253,7 @@ func (s *Service) serve(bus daemonBus) error {
 	defer ticker.Stop()
 
 	publish := func() {
-		s.push(buildSnapshot(true, st.announced, st.devices, &saved))
+		s.push(buildSnapshot(true, st.announced, st.selfID, st.devices, &saved))
 	}
 
 	if err := st.reconcile(bus); err != nil {
@@ -309,6 +310,7 @@ func tickInterval(seconds float64) time.Duration {
 type daemonState struct {
 	devices       map[string]*Device
 	announced     string
+	selfID        string
 	exported      map[string]bool
 	lastReconcile time.Time
 	events        chan<- Event
@@ -337,8 +339,14 @@ func (st *daemonState) reconcileNow(bus daemonBus) error {
 	st.lastReconcile = time.Now()
 
 	obj := bus.object(kdeService, kdeDaemonPath)
-	if props, err := getAllProps(obj, kdeDaemonIface); err == nil {
-		st.announced = strOf(props["announcedName"])
+	// announcedName and selfId are Qt property getters, exposed as DBus
+	// methods on the daemon interface; the property dictionary does not
+	// carry them (the live smoke against a real daemon proved it).
+	if call := obj.Call(kdeDaemonIface+".announcedName", 0); call.Err == nil && len(call.Body) > 0 {
+		st.announced, _ = call.Body[0].(string)
+	}
+	if call := obj.Call(kdeDaemonIface+".selfId", 0); call.Err == nil && len(call.Body) > 0 {
+		st.selfID, _ = call.Body[0].(string)
 	}
 	call := obj.Call(kdeDaemonIface+".devices", 0, false, false)
 	if call.Err != nil {
@@ -705,8 +713,8 @@ func updateFromSignal(sig *dbus.Signal, bus daemonBus, st *daemonState) bool {
 }
 
 // buildSnapshot sorts the live model by name and resolves the selection.
-func buildSnapshot(available bool, announced string, devices map[string]*Device, saved *string) Snapshot {
-	snap := Snapshot{Available: available, BackendName: "KDE Connect", AnnouncedName: announced}
+func buildSnapshot(available bool, announced, selfID string, devices map[string]*Device, saved *string) Snapshot {
+	snap := Snapshot{Available: available, BackendName: "KDE Connect", AnnouncedName: announced, SelfID: selfID}
 	if !available {
 		return snap
 	}
