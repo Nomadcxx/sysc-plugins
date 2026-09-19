@@ -1,6 +1,7 @@
 package timer
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -50,50 +51,99 @@ func TestBarTreeToneFollowsState(t *testing.T) {
 	}
 }
 
-func TestPanelTreeTracksState(t *testing.T) {
+func TestPanelTreeIsThePomodoroLayout(t *testing.T) {
 	t.Parallel()
-	idle := PanelTree("05:00", StateIdle, 1.0, "5m")
-	var hasInput, hasProgress, hasHint bool
-	var reset, start *v1.Node
+	idle := PanelTree("25:00", StateIdle, 1.0, ModeWork, 0, 4)
+	if idle.Padding != 16 {
+		t.Fatalf("root padding = %d, want 16", idle.Padding)
+	}
+	var gauge, header, subtitle, modeText, footer *v1.Node
+	var toggle, reset *v1.Node
+	pills := map[string]*v1.Node{}
 	for _, c := range idle.Children {
 		switch {
-		case c.ID == "duration":
-			hasInput = true
-			if c.Disabled {
-				t.Fatal("idle duration field is disabled")
-			}
-		case c.Kind == "progress":
-			hasProgress = true
-		case c.Tone == v1.ToneSubtle:
-			hasHint = true
+		case c.Kind == v1.KindGauge:
+			gauge = c
+		case c.Kind == v1.KindColumn && c.Fill == "card":
+			footer = c
+		case c.Kind == v1.KindRow && c.PinEnd:
+			header = c
+		case c.Text == "Work":
+			modeText = c
+		case strings.HasPrefix(c.Text, "Focus session"):
+			subtitle = c
 		}
 		for _, b := range c.Children {
-			if b.ID == "reset" {
+			switch {
+			case b.ID == "start" || b.ID == "pause":
+				toggle = b
+			case b.ID == "reset":
 				reset = b
-			}
-			if b.ID == "start" {
-				start = b
+			case strings.HasPrefix(b.ID, "mode-"):
+				pills[b.ID] = b
 			}
 		}
 	}
-	if !hasInput || !hasProgress || !hasHint {
-		t.Fatalf("idle panel missing parts: input=%v progress=%v hint=%v", hasInput, hasProgress, hasHint)
+	if header == nil {
+		t.Fatal("panel has no header row")
 	}
-	if big := idle.Children[0]; big.Size != "display" || !big.Bold || !big.CenterX {
-		t.Fatalf("idle time = %+v, want display-size bold centred", big)
+	var title *v1.Node
+	var close *v1.Node
+	for _, c := range header.Children {
+		if c.Text == "Pomodoro Timer" {
+			title = c
+		}
+		if c.ID == "close" {
+			close = c
+		}
 	}
-	if reset == nil || reset.Tone != v1.ToneError || reset.Fill != "error" {
-		t.Fatalf("reset = %+v, want the destructive chip", reset)
+	if title == nil || title.Size != "title" || !title.Bold {
+		t.Fatalf("header title = %+v, want bold title size", title)
 	}
-	if start == nil || start.Text != "Start" || start.Fill != "accent" {
-		t.Fatalf("start = %+v", start)
+	if close == nil {
+		t.Fatal("header has no close control")
+	}
+	if subtitle == nil || subtitle.Tone != v1.ToneSubtle || subtitle.Size != "caption" || !subtitle.CenterX {
+		t.Fatalf("subtitle = %+v", subtitle)
+	}
+	if !strings.Contains(subtitle.Text, "0 completed") {
+		t.Fatalf("subtitle = %q, want the session tally", subtitle.Text)
+	}
+	if gauge == nil || gauge.Height != 160 || gauge.ValueText != "25:00" || gauge.Value != 0 {
+		t.Fatalf("gauge = %+v", gauge)
+	}
+	if modeText == nil || modeText.Text != "Work" || !modeText.CenterX {
+		t.Fatalf("mode label = %+v", modeText)
+	}
+	if toggle == nil || toggle.Text != "Start" || toggle.Fill != "accent" {
+		t.Fatalf("toggle = %+v", toggle)
+	}
+	if reset == nil || reset.Fill != "soft" {
+		t.Fatalf("reset = %+v", reset)
+	}
+	if pills["mode-work"] == nil || pills["mode-work"].Fill != "accent" {
+		t.Fatalf("work pill = %+v", pills["mode-work"])
+	}
+	if pills["mode-short"] == nil || pills["mode-short"].Fill != "chip" {
+		t.Fatalf("short pill = %+v", pills["mode-short"])
+	}
+	if pills["mode-long"] == nil || pills["mode-long"].Fill != "chip" {
+		t.Fatalf("long pill = %+v", pills["mode-long"])
+	}
+	if footer == nil || footer.Radius != 10 {
+		t.Fatalf("footer = %+v", footer)
+	}
+	footerText := treeText(footer)
+	if !strings.Contains(footerText, "0 pomodoros completed") ||
+		!strings.Contains(footerText, "Next long break after 4 more") {
+		t.Fatalf("footer text = %q", footerText)
 	}
 
-	running := PanelTree("04:12", StateRunning, 0.5, "5m")
-	var runningInput, runningToggle *v1.Node
+	running := PanelTree("04:12", StateRunning, 0.5, ModeWork, 1, 4)
+	var runningToggle, runningGauge *v1.Node
 	for _, c := range running.Children {
-		if c.ID == "duration" {
-			runningInput = c
+		if c.Kind == v1.KindGauge {
+			runningGauge = c
 		}
 		for _, b := range c.Children {
 			if b.ID == "pause" {
@@ -101,19 +151,20 @@ func TestPanelTreeTracksState(t *testing.T) {
 			}
 		}
 	}
-	if runningInput == nil || !runningInput.Disabled {
-		t.Fatalf("running duration field = %+v, want disabled", runningInput)
-	}
 	if runningToggle == nil || runningToggle.Text != "Pause" || runningToggle.Fill != "soft" {
 		t.Fatalf("running toggle = %+v", runningToggle)
 	}
-	if big := running.Children[0]; big.Tone != v1.ToneAccent {
-		t.Fatalf("running time tone = %v", big.Tone)
+	if runningGauge == nil || runningGauge.Value != 0.5 || runningGauge.ValueText != "04:12" {
+		t.Fatalf("running gauge = %+v", runningGauge)
 	}
 
-	notify := PanelTree("00:00", StateNotify, 0, "5m")
-	if notify.Children[0].Tone != v1.ToneError {
-		t.Fatalf("notify time tone = %v", notify.Children[0].Tone)
+	paused := PanelTree("04:12", StatePaused, 0.5, ModeShort, 1, 4)
+	for _, c := range paused.Children {
+		for _, b := range c.Children {
+			if b.ID == "start" && (b.Text != "Resume" || b.Fill != "soft") {
+				t.Fatalf("paused toggle = %+v", b)
+			}
+		}
 	}
 }
 
@@ -129,8 +180,11 @@ func TestTreesValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, state := range []State{StateIdle, StateRunning, StatePaused, StateNotify} {
-		if err := v1.Validate(PanelTree("04:12", state, 0.5, "5m"), v1.ViewPanel); err != nil {
-			t.Fatalf("panel %s: %v", state, err)
+		for _, mode := range []Mode{ModeWork, ModeShort, ModeLong} {
+			panel := PanelTree("04:12", state, 0.5, mode, 1, 4)
+			if err := v1.Validate(panel, v1.ViewPanel); err != nil {
+				t.Fatalf("panel %s/%s: %v", state, mode, err)
+			}
 		}
 	}
 }
@@ -180,4 +234,15 @@ func TestFormatClockSwitchesToHours(t *testing.T) {
 	if got := FormatClock(-time.Second); got != "00:00" {
 		t.Fatalf("negative = %q", got)
 	}
+}
+
+func treeText(n *v1.Node) string {
+	if n == nil {
+		return ""
+	}
+	out := n.Text
+	for _, c := range n.Children {
+		out += " " + treeText(c)
+	}
+	return out
 }

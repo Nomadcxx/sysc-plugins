@@ -1,17 +1,22 @@
 {
   "schema": 1,
   "id": "org.sysc.timer",
-  "name": "Timer",
-  "version": "1.2.0",
-  "protocol": {"major": 1, "minor": 2},
+  "name": "Pomodoro Timer",
+  "version": "1.3.0",
+  "protocol": {"major": 1, "minor": 3},
   "exec": "bin/sysc-plugin-timer",
   "capabilities": ["notifications", "panels", "settings", "state"],
   "requires": {"commands": []},
   "services": [{"id": "timer"}],
   "widgets": [{"id": "bar", "settings": []}],
-  "panels": [{"id": "panel", "width": 320, "height": 280, "placement": "attached"}],
+  "panels": [{"id": "panel", "width": 360, "height": 480, "placement": "attached"}],
   "settings": [
-    {"key": "default_duration", "type": "string", "label": "Default duration", "default": "5m"},
+    {"key": "work_duration", "type": "int", "label": "Work length (min)", "default": 25, "min": 1, "max": 90},
+    {"key": "short_break_duration", "type": "int", "label": "Short break (min)", "default": 5, "min": 1, "max": 30},
+    {"key": "long_break_duration", "type": "int", "label": "Long break (min)", "default": 15, "min": 5, "max": 60},
+    {"key": "sessions_before_long_break", "type": "int", "label": "Sessions before long break", "default": 4, "min": 1, "max": 12},
+    {"key": "auto_start_breaks", "type": "bool", "label": "Auto-start breaks", "default": false},
+    {"key": "auto_start_work", "type": "bool", "label": "Auto-start work", "default": false},
     {"key": "show_when_idle", "type": "bool", "label": "Show time when idle", "default": true}
   ]
 }

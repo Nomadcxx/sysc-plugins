@@ -1,4 +1,4 @@
-// Command sysc-plugin-timer is the Timer reference plugin.
+// Command sysc-plugin-timer is the Pomodoro timer plugin.
 package main
 
 import (
@@ -20,10 +20,10 @@ func main() {
 
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.timer", Name: "Timer", Version: "1.2.0"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.timer", Name: "Timer", Version: "1.3.0"})); err != nil {
 		return err
 	}
-	tm := timer.New(time.Now)
+	tm := timer.NewSession(time.Now)
 	type view struct {
 		kind     v1.ViewKind
 		rev      uint64
@@ -52,7 +52,6 @@ func run(in *os.File, out *os.File) error {
 
 	publish := func() {
 		text := timer.FormatClock(tm.Remaining())
-		dur := timer.FormatClock(tm.Duration())
 		state := tm.State()
 		for id, v := range views {
 			v.rev++
@@ -64,23 +63,25 @@ func run(in *os.File, out *os.File) error {
 			case v1.ViewTooltip:
 				root = timer.TooltipTree(text, state)
 			default:
-				root = timer.PanelTree(text, state, tm.Progress(), dur)
+				root = timer.PanelTree(text, state, tm.Progress(), tm.Mode(), tm.Completed(), tm.SessionsBeforeLong())
 			}
 			_ = c.Snapshot(id, v.rev, root)
 		}
 	}
 
-	handleInput := func(ctx context.Context, c *v1.Client, tm *timer.Timer, m *v1.InputEvent) {
+	handleInput := func(ctx context.Context, c *v1.Client, tm *timer.Session, m *v1.InputEvent) {
 		switch m.Node {
 		case "open":
 			// A click on the fired timer clears it; the user does not want
-			// another timer just yet.
+			// another session just yet.
 			if tm.Fired() {
 				tm.Reset()
 				save(ctx, c, tm)
 				return
 			}
 			_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+		case "close":
+			_, _ = c.Call(ctx, v1.CallPanelClose, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 		case "start":
 			paused := tm.State() == timer.StatePaused
 			tm.Start()
@@ -95,17 +96,23 @@ func run(in *os.File, out *os.File) error {
 		case "reset":
 			tm.Reset()
 			save(ctx, c, tm)
-		case "duration":
-			if m.Event == v1.EventSubmit || m.Event == v1.EventChange {
-				// The input is disabled while counting; drop stragglers so a
-				// live edit cannot skew the progress bar or reset a pause.
-				if st := tm.State(); st != timer.StateRunning && st != timer.StatePaused {
-					if d, err := timer.ParseDuration(m.Text); err == nil {
-						tm.SetDuration(d)
-					}
-				}
-			}
+		case "mode-work":
+			tm.SetMode(timer.ModeWork)
+			save(ctx, c, tm)
+		case "mode-short":
+			tm.SetMode(timer.ModeShort)
+			save(ctx, c, tm)
+		case "mode-long":
+			tm.SetMode(timer.ModeLong)
+			save(ctx, c, tm)
 		}
+	}
+
+	minutes := func(raw any) time.Duration {
+		if f, ok := raw.(float64); ok {
+			return time.Duration(int(f)) * time.Minute
+		}
+		return 0
 	}
 
 	for {
@@ -113,9 +120,17 @@ func run(in *os.File, out *os.File) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticks.C:
+			prev := tm.Mode()
 			_, done := tm.Tick()
 			if done {
-				_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{Summary: "Timer", Body: "Done", Urgency: v1.UrgencyNormal})
+				body := "Break over — back to work"
+				if prev == timer.ModeWork {
+					body = "Work complete — time for a break"
+					if tm.Mode() == timer.ModeLong {
+						body = "Work complete — time for a long break"
+					}
+				}
+				_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{Summary: "Pomodoro", Body: body, Urgency: v1.UrgencyNormal})
 			}
 			if tm.Running() || done {
 				publish()
@@ -134,12 +149,40 @@ func run(in *os.File, out *os.File) error {
 				publish()
 			case *v1.SettingsChanged:
 				changed := false
-				if raw, ok := m.Values["default_duration"]; ok {
-					if s, ok := raw.(string); ok {
-						if d, err := timer.ParseDuration(s); err == nil && !tm.Running() {
-							tm.SetDuration(d)
-							changed = true
-						}
+				if raw, ok := m.Values["work_duration"]; ok {
+					if d := minutes(raw); d > 0 {
+						tm.SetDurations(d, 0, 0)
+						changed = true
+					}
+				}
+				if raw, ok := m.Values["short_break_duration"]; ok {
+					if d := minutes(raw); d > 0 {
+						tm.SetDurations(0, d, 0)
+						changed = true
+					}
+				}
+				if raw, ok := m.Values["long_break_duration"]; ok {
+					if d := minutes(raw); d > 0 {
+						tm.SetDurations(0, 0, d)
+						changed = true
+					}
+				}
+				if raw, ok := m.Values["sessions_before_long_break"]; ok {
+					if f, ok := raw.(float64); ok {
+						tm.SetSessions(int(f))
+						changed = true
+					}
+				}
+				if raw, ok := m.Values["auto_start_work"]; ok {
+					if b, ok := raw.(bool); ok {
+						tm.SetAutoWork(b)
+						changed = true
+					}
+				}
+				if raw, ok := m.Values["auto_start_breaks"]; ok {
+					if b, ok := raw.(bool); ok {
+						tm.SetAutoBreak(b)
+						changed = true
 					}
 				}
 				if raw, ok := m.Values["show_when_idle"]; ok {
@@ -156,7 +199,7 @@ func run(in *os.File, out *os.File) error {
 	}
 }
 
-func save(ctx context.Context, c *v1.Client, tm *timer.Timer) {
+func save(ctx context.Context, c *v1.Client, tm *timer.Session) {
 	if deadline, ok := tm.Deadline(); ok {
 		raw, _ := json.Marshal(deadline.Unix())
 		_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "deadline", Value: raw})
@@ -165,7 +208,7 @@ func save(ctx context.Context, c *v1.Client, tm *timer.Timer) {
 	_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "deadline", Value: json.RawMessage("null")})
 }
 
-func restore(ctx context.Context, c *v1.Client, tm *timer.Timer) {
+func restore(ctx context.Context, c *v1.Client, tm *timer.Session) {
 	reply, err := c.Call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "deadline"})
 	if err != nil || !reply.OK {
 		return
