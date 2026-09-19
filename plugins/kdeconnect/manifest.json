@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "org.sysc.kdeconnect",
+  "name": "Phone Connect",
+  "version": "0.1.0",
+  "protocol": {"major": 1, "minor": 2},
+  "exec": "bin/sysc-plugin-kdeconnect",
+  "capabilities": ["notifications", "panels", "settings", "state"],
+  "requires": {"commands": ["kdeconnect-cli"]},
+  "services": [{"id": "kdeconnect"}],
+  "widgets": [{"id": "bar", "settings": []}],
+  "panels": [{"id": "panel", "width": 400, "height": 520, "placement": "attached"}],
+  "settings": [
+    {"key": "refresh_seconds", "type": "float", "label": "Refresh interval (seconds)", "default": 30, "min": 5, "max": 300},
+    {"key": "enable_clipboard_action", "type": "bool", "label": "Show send-clipboard action", "default": true},
+    {"key": "show_device_card", "type": "bool", "label": "Show device card", "default": true}
+  ]
+}

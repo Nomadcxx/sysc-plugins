@@ -6,7 +6,8 @@ PLUGINS := \
 	sysc-plugin-calendar:calendar \
 	sysc-plugin-github-notifications:github-notifications \
 	sysc-plugin-mini-docker:mini-docker \
-	sysc-plugin-wallpaper-depth:wallpaper-depth
+	sysc-plugin-wallpaper-depth:wallpaper-depth \
+	sysc-plugin-kdeconnect:kdeconnect
 
 USER_PLUGIN_ROOT := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/sysc-shell/plugins
 
