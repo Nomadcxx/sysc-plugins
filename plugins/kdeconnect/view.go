@@ -121,9 +121,7 @@ type Drafts struct {
 func PanelTree(snap Snapshot, settings Settings, composer Composer, drafts Drafts) *v1.Node {
 	col := &v1.Node{Kind: v1.KindColumn, Gap: 10, Children: []*v1.Node{headerTree(snap)}}
 	if !snap.Available {
-		col.Children = append(col.Children, stateCard(
-			"KDE Connect daemon unreachable",
-			"Install and start kdeconnectd, then refresh."))
+		col.Children = append(col.Children, unavailableCard())
 		return col
 	}
 	if len(snap.Devices) == 0 {
@@ -205,6 +203,16 @@ func stateCard(headline, hint string) *v1.Node {
 		Children: []*v1.Node{
 			{Kind: v1.KindText, Text: headline, Bold: true},
 			{Kind: v1.KindText, Text: hint, Tone: v1.ToneSubtle},
+		}}
+}
+
+// unavailableCard is the DMS UnavailableMessage: an error-styled card that
+// names the problem and the fix.
+func unavailableCard() *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, Fill: "error-container", Radius: 12, Padding: 14, Gap: 4,
+		Children: []*v1.Node{
+			{Kind: v1.KindText, Text: "Phone Connect Not Available", Bold: true, Tone: v1.ToneError},
+			{Kind: v1.KindText, Text: "Start kdeconnectd to use this plugin.", Tone: v1.ToneError},
 		}}
 }
 
@@ -503,7 +511,7 @@ func infoRowsTree(dev *Device) *v1.Node {
 	}
 	if dev.NetworkKnown && dev.NetworkType != "" {
 		col.Children = append(col.Children,
-			infoRow("info-network", "network", "Network Type", dev.NetworkType, v1.ToneNormal))
+			infoRow("info-network", "network", "Network Type", networkTypeLabel(dev.NetworkType), v1.ToneNormal))
 	}
 	if row := notificationRowNode(dev); row != nil {
 		col.Children = append(col.Children, row)
@@ -531,15 +539,15 @@ func notificationRowNode(dev *Device) *v1.Node {
 		strconv.Itoa(dev.NotificationCount), v1.ToneNormal)
 }
 
-// infoRow is one reading row: the icon and label leading, the value pinned
-// right, keyed so a reading delta can patch it.
+// infoRow is one reading row: the leading icon beside a stacked label over
+// value, the DMS InfoRow shape, keyed so a reading delta can patch it.
 func infoRow(key, icon, label, value string, tone v1.Tone) *v1.Node {
-	return &v1.Node{Key: key, Kind: v1.KindRow, Gap: 10, PinEnd: true, Children: []*v1.Node{
-		{Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
-			{Kind: v1.KindIcon, Icon: icon},
-			{Kind: v1.KindText, Text: label},
+	return &v1.Node{Key: key, Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
+		{Kind: v1.KindIcon, Icon: icon},
+		{Kind: v1.KindColumn, Gap: 1, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: label, Size: "caption", Tone: v1.ToneSubtle},
+			{Kind: v1.KindText, Text: value, Tone: tone},
 		}},
-		{Kind: v1.KindText, Text: value, Tone: tone},
 	}}
 }
 
@@ -578,7 +586,29 @@ func strengthLabel(strength int) string {
 	case strength == 1:
 		return "Weak"
 	}
-	return "None"
+	return "No Signal"
+}
+
+// networkTypeLabel maps the daemon's raw cellular network type onto the
+// reference shell's friendly labels, capitalising whatever is unknown.
+func networkTypeLabel(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "N/A"
+	}
+	switch strings.ToUpper(trimmed) {
+	case "NR", "5G", "5G_NR", "5G NR":
+		return "5G"
+	case "LTE", "4G":
+		return "LTE"
+	case "LTE_CA", "LTE+", "4G+", "4G_CA":
+		return "LTE+"
+	case "HSPA", "HSDPA", "HSUPA", "HSPAP", "UMTS", "WCDMA", "3G":
+		return "3G"
+	case "EDGE", "GPRS", "GSM", "2G":
+		return "2G"
+	}
+	return strings.ToUpper(trimmed[:1]) + trimmed[1:]
 }
 
 func deviceStatus(dev *Device) string {

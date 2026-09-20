@@ -95,10 +95,10 @@ func TestPanelTreeHeaderCounts(t *testing.T) {
 func TestPanelTreeUnavailableAndEmptyStates(t *testing.T) {
 	t.Parallel()
 	down := PanelTree(Snapshot{}, testSettings(), ComposerNone, Drafts{})
-	if len(down.Children) != 2 || down.Children[1].Fill != "card" {
+	if len(down.Children) != 2 || down.Children[1].Fill != "error-container" {
 		t.Fatalf("unavailable panel = %+v", down)
 	}
-	if text := down.Children[1].Children[0].Text; text != "KDE Connect daemon unreachable" {
+	if text := down.Children[1].Children[0].Text; text != "Phone Connect Not Available" {
 		t.Fatalf("unavailable headline = %q", text)
 	}
 
@@ -353,17 +353,45 @@ func TestInfoRowsAndBatteryIcons(t *testing.T) {
 	if rows == nil {
 		t.Fatal("info rows missing")
 	}
-	if rows.Children[0].Children[1].Text != "98%" {
-		t.Fatalf("battery value = %+v", rows.Children[0])
+	// Stacked layout: value is the second text of the label column.
+	if got := rows.Children[0].Children[1].Children[1].Text; got != "98%" {
+		t.Fatalf("battery value = %q", got)
 	}
-	if got := rows.Children[1].Children[1].Text; got != "Weak" {
+	if got := rows.Children[1].Children[1].Children[1].Text; got != "Weak" {
 		t.Fatalf("signal value = %q", got)
 	}
-	if got := rows.Children[2].Children[1].Text; got != "LTE" {
+	if got := rows.Children[2].Children[1].Children[1].Text; got != "LTE" {
 		t.Fatalf("network value = %q", got)
 	}
-	if got := rows.Children[3].Children[1].Text; got != "3" {
+	if got := rows.Children[3].Children[1].Children[1].Text; got != "3" {
 		t.Fatalf("notification value = %q", got)
+	}
+}
+
+func TestNetworkTypeAndStrengthLabels(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"NR":       "5G",
+		"5G":       "5G",
+		"5G_NR":    "5G",
+		"LTE":      "LTE",
+		"4G":       "LTE",
+		"LTE_CA":   "LTE+",
+		"LTE+":     "LTE+",
+		"HSPAP":    "3G",
+		"UMTS":     "3G",
+		"EDGE":     "2G",
+		"GPRS":     "2G",
+		"td-scdma": "Td-scdma",
+		"":         "N/A",
+	}
+	for raw, want := range cases {
+		if got := networkTypeLabel(raw); got != want {
+			t.Fatalf("networkTypeLabel(%q) = %q, want %q", raw, got, want)
+		}
+	}
+	if got := strengthLabel(0); got != "No Signal" {
+		t.Fatalf("strength 0 = %q, want No Signal", got)
 	}
 }
 

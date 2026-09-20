@@ -262,8 +262,21 @@ func (s *Service) serve(bus daemonBus) error {
 
 	st := &daemonState{svc: s, devices: map[string]*Device{}, exported: map[string]bool{}, events: s.events}
 	saved := ""
-	ticker := time.NewTicker(tickInterval(s.settings.RefreshSeconds))
-	defer ticker.Stop()
+	// A zero or negative interval disables the automatic ticker entirely,
+	// the DMS stateUpdateInterval slider's off position; only manual
+	// refreshes reconcile then.
+	interval := tickInterval(s.settings.RefreshSeconds)
+	var ticker *time.Ticker
+	var tickC <-chan time.Time
+	if interval > 0 {
+		ticker = time.NewTicker(interval)
+		tickC = ticker.C
+		defer func() {
+			if ticker != nil {
+				ticker.Stop()
+			}
+		}()
+	}
 
 	publish := func() {
 		s.push(buildSnapshot(true, st.announced, st.selfID, st.devices, &saved))
@@ -278,7 +291,7 @@ func (s *Service) serve(bus daemonBus) error {
 		select {
 		case <-s.stop:
 			return errStopped
-		case <-ticker.C:
+		case <-tickC:
 			_ = st.reconcile(bus)
 			publish()
 		case <-s.refresh:
@@ -288,7 +301,16 @@ func (s *Service) serve(bus daemonBus) error {
 			st.performAction(bus, a)
 		case set := <-s.configure:
 			s.settings = set
-			ticker.Reset(tickInterval(set.RefreshSeconds))
+			interval = tickInterval(set.RefreshSeconds)
+			if ticker != nil {
+				ticker.Stop()
+				ticker = nil
+				tickC = nil
+			}
+			if interval > 0 {
+				ticker = time.NewTicker(interval)
+				tickC = ticker.C
+			}
 		case id := <-s.selectReq:
 			saved = id
 			publish()
@@ -311,8 +333,14 @@ func (s *Service) serve(bus daemonBus) error {
 	}
 }
 
+// tickInterval resolves the settings value into a ticker interval. Zero or
+// less disables the ticker; sub-five-second values clamp to five so a
+// mistyped setting cannot hammer the daemon.
 func tickInterval(seconds float64) time.Duration {
-	if seconds < 5 {
+	switch {
+	case seconds <= 0:
+		return 0
+	case seconds < 5:
 		return 5 * time.Second
 	}
 	return time.Duration(seconds * float64(time.Second))

@@ -51,6 +51,7 @@ func run(in *os.File, out *os.File) error {
 	// reply is decoded, so without the reader it would deadlock here.
 	incoming := make(chan v1.Message, 8)
 	var lastAvailable *bool
+	busy := false
 	go func() {
 		for {
 			msg, err := c.Recv()
@@ -100,6 +101,15 @@ func run(in *os.File, out *os.File) error {
 		case s := <-svc.Updates():
 			delta := kdeconnect.PanelDelta(snap, s)
 			snap = s
+			if busy {
+				// The manual refresh's snapshot arrived; report the worker
+				// idle again unless the daemon went away, which reports its
+				// own error status below.
+				busy = false
+				if snap.Available {
+					_ = c.Send(&v1.PluginStatus{State: v1.StatusOK})
+				}
+			}
 			if lastAvailable == nil || *lastAvailable != snap.Available {
 				status := v1.PluginStatus{State: v1.StatusOK}
 				if !snap.Available {
@@ -129,7 +139,7 @@ func run(in *os.File, out *os.File) error {
 			case *v1.ViewResync:
 				publish(nil)
 			case *v1.InputEvent:
-				if handleInput(ctx, c, svc, m, &ui, snap) {
+				if handleInput(ctx, c, svc, m, &ui, snap, &busy) {
 					publish(nil)
 				}
 			case *v1.SettingsChanged:
@@ -146,12 +156,16 @@ func run(in *os.File, out *os.File) error {
 // handleInput routes one input event. It reports whether the panel tree
 // changed and needs a republish — toggles, sends, and composer typing (the
 // send gating moves with the draft) do.
-func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *v1.InputEvent, ui *uiState, snap kdeconnect.Snapshot) bool {
+func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *v1.InputEvent, ui *uiState, snap kdeconnect.Snapshot, busy *bool) bool {
 	device := snap.SelectedID
 	switch {
 	case m.Node == "open":
 		_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 	case m.Node == "refresh":
+		// The manager shows the busy state while the reconcile runs; the
+		// next snapshot reports idle again.
+		_ = c.Send(&v1.PluginStatus{State: v1.StatusBusy, Message: "Refreshing devices"})
+		*busy = true
 		svc.Refresh()
 	case strings.HasPrefix(m.Node, "select-"):
 		id := strings.TrimPrefix(m.Node, "select-")
