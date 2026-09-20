@@ -2,7 +2,9 @@ package kdeconnect
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
+	"strings"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -105,9 +107,18 @@ const (
 	ComposerSMS
 )
 
+// Drafts carries the composer field values the entry point tracks, so the
+// view can gate the send buttons the way the DMS dialogs do.
+type Drafts struct {
+	ShareText string
+	ShareFile string
+	SmsNumber string
+	SmsBody   string
+}
+
 // PanelTree is the phone-connect panel: the daemon header over the state,
 // pairing, switcher, device, action, info, and composer sections.
-func PanelTree(snap Snapshot, settings Settings, composer Composer) *v1.Node {
+func PanelTree(snap Snapshot, settings Settings, composer Composer, drafts Drafts) *v1.Node {
 	col := &v1.Node{Kind: v1.KindColumn, Gap: 10, Children: []*v1.Node{headerTree(snap)}}
 	if !snap.Available {
 		col.Children = append(col.Children, stateCard(
@@ -117,8 +128,8 @@ func PanelTree(snap Snapshot, settings Settings, composer Composer) *v1.Node {
 	}
 	if len(snap.Devices) == 0 {
 		col.Children = append(col.Children, stateCard(
-			"No devices",
-			"Pair this desktop from the KDE Connect app on your phone."))
+			"No devices found",
+			"Make sure the KDE Connect app is running and the devices are paired."))
 		return col
 	}
 	selected := selectedDevice(snap)
@@ -142,9 +153,9 @@ func PanelTree(snap Snapshot, settings Settings, composer Composer) *v1.Node {
 			infoRowsTree(selected))
 		switch composer {
 		case ComposerShare:
-			col.Children = append(col.Children, shareComposerTree())
+			col.Children = append(col.Children, shareComposerTree(drafts))
 		case ComposerSMS:
-			col.Children = append(col.Children, smsComposerTree())
+			col.Children = append(col.Children, smsComposerTree(drafts))
 		}
 	}
 	return col
@@ -198,50 +209,85 @@ func stateCard(headline, hint string) *v1.Node {
 }
 
 // shareComposerTree is the share card: one URL-or-text field with its two
-// sends, and one file-path field, the DMS ShareDialog's contents.
-func shareComposerTree() *v1.Node {
+// sends and one file-path field, the DMS ShareDialog's contents, with the
+// same send gating — URI only for a valid URI, text only when non-empty.
+func shareComposerTree(drafts Drafts) *v1.Node {
 	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 8,
 		Children: []*v1.Node{
-			{Kind: v1.KindText, Text: "Share", Bold: true},
+			composerHeader("Share", "share", "share-close"),
 			{Kind: v1.KindTextInput, ID: "share-text", Name: "URL or text to share", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-				{Kind: v1.KindButton, ID: "share-url-send", Text: "Send URL", Fill: "accent",
-					Name: "Share the URL with the device", Role: "button",
-					Events: []v1.EventKind{v1.EventActivate}},
-				{Kind: v1.KindButton, ID: "share-text-send", Text: "Send text",
-					Name: "Share the text with the device", Role: "button",
-					Events: []v1.EventKind{v1.EventActivate}},
+				gatedButton("share-url-send", "Send URL", "Share the URL with the device",
+					isURILike(drafts.ShareText)),
+				gatedButton("share-text-send", "Send text", "Share the text with the device",
+					strings.TrimSpace(drafts.ShareText) != ""),
 			}},
 			{Kind: v1.KindTextInput, ID: "share-file", Name: "File path to send", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
-			{Kind: v1.KindButton, ID: "share-file-send", Text: "Send file",
-				Name: "Send the file to the device", Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}},
+			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+				gatedButton("share-file-send", "Send file", "Send the file to the device",
+					drafts.ShareFile != ""),
+			}},
 		}}
 }
 
-// smsComposerTree is the SMS card: number, multiline body, send, and the
-// launch-app escape hatch, the DMS SmsDialog's contents.
-func smsComposerTree() *v1.Node {
+// smsComposerTree is the SMS card: number and single-line body with send
+// gated on both, plus the launch-app escape hatch, the DMS SmsDialog.
+func smsComposerTree(drafts Drafts) *v1.Node {
 	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 8,
 		Children: []*v1.Node{
-			{Kind: v1.KindText, Text: "New message", Bold: true},
+			composerHeader("New message", "sms", "sms-close"),
 			{Kind: v1.KindTextInput, ID: "sms-number", Name: "Phone number", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindTextInput, ID: "sms-body", Name: "Message", Role: "textbox",
-				Multiline: true,
-				Events:    []v1.EventKind{v1.EventChange}},
+				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-				{Kind: v1.KindButton, ID: "sms-send", Text: "Send", Fill: "accent",
-					Name: "Send the message", Role: "button",
-					Events: []v1.EventKind{v1.EventActivate}},
+				gatedButton("sms-send", "Send", "Send the message",
+					drafts.SmsNumber != "" && drafts.SmsBody != ""),
 				{Kind: v1.KindButton, ID: "sms-app", Text: "Open app",
 					Name: "Open the SMS app on the device", Role: "button",
 					Events: []v1.EventKind{v1.EventActivate}},
 			}},
 		}}
 }
+
+// composerHeader is a composer title row with a right-pinned close button.
+func composerHeader(title, icon, closeID string) *v1.Node {
+	return &v1.Node{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
+		{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+			{Kind: v1.KindIcon, Icon: icon},
+			{Kind: v1.KindText, Text: title, Bold: true},
+		}},
+		{Kind: v1.KindButton, ID: closeID, Icon: "close",
+			Name: "Close the composer", Role: "button",
+			Events: []v1.EventKind{v1.EventActivate}},
+	}}
+}
+
+// gatedButton is a send button that sits disabled while its draft is not
+// sendable, the DMS dialogs' enablement.
+func gatedButton(id, text, name string, enabled bool) *v1.Node {
+	b := &v1.Node{Kind: v1.KindButton, ID: id, Text: text, Fill: "accent",
+		Name: name, Role: "button",
+		Events: []v1.EventKind{v1.EventActivate}}
+	if !enabled {
+		b.Disabled = true
+	}
+	return b
+}
+
+// isURILike reports whether the text carries a URI scheme and no spaces,
+// the reference dialog's URI gate in reduced form.
+func isURILike(text string) bool {
+	value := strings.TrimSpace(text)
+	if value == "" || !uriScheme.MatchString(value) {
+		return false
+	}
+	return !strings.ContainsAny(value, " \t")
+}
+
+var uriScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:`)
 
 // pairingCard covers an incoming pairing request (verification key plus
 // accept and reject) and an outgoing one (waiting plus cancel).

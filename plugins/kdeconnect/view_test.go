@@ -85,7 +85,7 @@ func TestTooltipTreeTracksState(t *testing.T) {
 
 func TestPanelTreeHeaderCounts(t *testing.T) {
 	t.Parallel()
-	header := PanelTree(pairedSnap(), testSettings(), ComposerNone).Children[0]
+	header := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{}).Children[0]
 	texts := headerTexts(header)
 	if len(texts) != 2 || texts[0] != "KDE Connect" || texts[1] != "2 connected • 2 paired" {
 		t.Fatalf("header texts = %v", texts)
@@ -94,7 +94,7 @@ func TestPanelTreeHeaderCounts(t *testing.T) {
 
 func TestPanelTreeUnavailableAndEmptyStates(t *testing.T) {
 	t.Parallel()
-	down := PanelTree(Snapshot{}, testSettings(), ComposerNone)
+	down := PanelTree(Snapshot{}, testSettings(), ComposerNone, Drafts{})
 	if len(down.Children) != 2 || down.Children[1].Fill != "card" {
 		t.Fatalf("unavailable panel = %+v", down)
 	}
@@ -102,15 +102,15 @@ func TestPanelTreeUnavailableAndEmptyStates(t *testing.T) {
 		t.Fatalf("unavailable headline = %q", text)
 	}
 
-	empty := PanelTree(Snapshot{Available: true}, testSettings(), ComposerNone)
+	empty := PanelTree(Snapshot{Available: true}, testSettings(), ComposerNone, Drafts{})
 	if len(empty.Children) != 2 || empty.Children[1].Fill != "card" {
 		t.Fatalf("empty panel = %+v", empty)
 	}
-	if text := empty.Children[1].Children[0].Text; text != "No devices" {
+	if text := empty.Children[1].Children[0].Text; text != "No devices found" {
 		t.Fatalf("empty headline = %q", text)
 	}
 
-	populated := PanelTree(pairedSnap(), testSettings(), ComposerNone)
+	populated := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
 	if len(populated.Children) <= 1 {
 		t.Fatal("populated panel has no device sections")
 	}
@@ -118,7 +118,7 @@ func TestPanelTreeUnavailableAndEmptyStates(t *testing.T) {
 
 func TestHeaderRefreshControlPinsRight(t *testing.T) {
 	t.Parallel()
-	header := PanelTree(pairedSnap(), testSettings(), ComposerNone).Children[0]
+	header := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{}).Children[0]
 	if !header.PinEnd {
 		t.Fatal("header row is not a pin-end row")
 	}
@@ -132,12 +132,12 @@ func TestPanelTreeSwitcherOnlyWhenMultipleDevices(t *testing.T) {
 	t.Parallel()
 	solo := pairedSnap()
 	solo.Devices = solo.Devices[:1]
-	soloPanel := PanelTree(solo, testSettings(), ComposerNone)
+	soloPanel := PanelTree(solo, testSettings(), ComposerNone, Drafts{})
 	if findButton(soloPanel, "select-devA") != nil {
 		t.Fatal("switcher row for the selected device itself")
 	}
 
-	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone)
+	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
 	if findButton(panel, "select-devB") == nil {
 		t.Fatal("switcher card for the tablet missing")
 	}
@@ -148,7 +148,7 @@ func TestDeviceCardChipsAndStatus(t *testing.T) {
 	chips := pairedSnap()
 	chips.Devices[1].NetworkKnown = true
 	chips.Devices[1].NetworkStrength = 3
-	card := deviceCard(PanelTree(chips, testSettings(), ComposerNone), "Galaxy Tab")
+	card := deviceCard(PanelTree(chips, testSettings(), ComposerNone, Drafts{}), "Galaxy Tab")
 	if card == nil {
 		t.Fatal("tablet card missing")
 	}
@@ -161,19 +161,19 @@ func TestDeviceCardChipsAndStatus(t *testing.T) {
 
 	offline := pairedSnap()
 	offline.Devices[1].Reachable = false
-	offlineCard := deviceCard(PanelTree(offline, testSettings(), ComposerNone), "Galaxy Tab")
+	offlineCard := deviceCard(PanelTree(offline, testSettings(), ComposerNone, Drafts{}), "Galaxy Tab")
 	if offlineCard == nil || !contains(allTexts(offlineCard), "Offline") {
 		t.Fatal("offline status missing")
 	}
 
 	pairing := pairedSnap()
 	pairing.Devices[1].PairRequested = true
-	pairCard := deviceCard(PanelTree(pairing, testSettings(), ComposerNone), "Galaxy Tab")
+	pairCard := deviceCard(PanelTree(pairing, testSettings(), ComposerNone, Drafts{}), "Galaxy Tab")
 	if pairCard == nil || !contains(allTexts(pairCard), "Pairing...") {
 		t.Fatal("pairing-in-progress status missing")
 	}
 
-	connected := deviceCard(PanelTree(pairedSnap(), testSettings(), ComposerNone), "Galaxy Tab")
+	connected := deviceCard(PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{}), "Galaxy Tab")
 	if contains(allTexts(connected), "Offline") || contains(allTexts(connected), "Not paired") {
 		t.Fatalf("connected card grew a status line: %v", allTexts(connected))
 	}
@@ -181,21 +181,21 @@ func TestDeviceCardChipsAndStatus(t *testing.T) {
 
 func TestDeviceCardPairingActionsPerCard(t *testing.T) {
 	t.Parallel()
-	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone)
+	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
 	if findButton(panel, "pair-devB") != nil || findButton(panel, "accept-devB") != nil {
 		t.Fatal("pairing actions on a paired, reachable card")
 	}
 
 	unpaired := pairedSnap()
 	unpaired.Devices[1].Paired = false
-	if findButton(PanelTree(unpaired, testSettings(), ComposerNone), "pair-devB") == nil {
+	if findButton(PanelTree(unpaired, testSettings(), ComposerNone, Drafts{}), "pair-devB") == nil {
 		t.Fatal("request-pairing action missing on an unpaired card")
 	}
 
 	incoming := pairedSnap()
 	incoming.Devices[1].PairRequestedByPeer = true
 	incoming.Devices[1].VerificationKey = "999999"
-	inPanel := PanelTree(incoming, testSettings(), ComposerNone)
+	inPanel := PanelTree(incoming, testSettings(), ComposerNone, Drafts{})
 	if findButton(inPanel, "accept-devB") == nil || findButton(inPanel, "reject-devB") == nil {
 		t.Fatal("accept/reject actions missing on the requesting card")
 	}
@@ -260,7 +260,7 @@ func TestPanelTreeUnpairedDeviceShowsRequestCard(t *testing.T) {
 	t.Parallel()
 	snap := pairedSnap()
 	snap.Devices[0].Paired = false
-	panel := PanelTree(snap, testSettings(), ComposerNone)
+	panel := PanelTree(snap, testSettings(), ComposerNone, Drafts{})
 	if len(panel.Children) != 2 {
 		t.Fatalf("unpaired panel sections = %d, want header + card", len(panel.Children))
 	}
@@ -278,7 +278,7 @@ func TestPanelTreePairingRequestShowsVerificationAndActions(t *testing.T) {
 	incoming := pairedSnap()
 	incoming.Devices[0].PairRequestedByPeer = true
 	incoming.Devices[0].VerificationKey = "123456"
-	panel := PanelTree(incoming, testSettings(), ComposerNone)
+	panel := PanelTree(incoming, testSettings(), ComposerNone, Drafts{})
 	card := panel.Children[1]
 	hint := cardText(card)
 	if hint == nil || *hint != "Verification: 123456" {
@@ -293,7 +293,7 @@ func TestPanelTreePairingRequestShowsVerificationAndActions(t *testing.T) {
 
 	outgoing := pairedSnap()
 	outgoing.Devices[0].PairRequested = true
-	outCard := PanelTree(outgoing, testSettings(), ComposerNone).Children[1]
+	outCard := PanelTree(outgoing, testSettings(), ComposerNone, Drafts{}).Children[1]
 	if findButton(outCard, "pair-cancel") == nil || findButton(outCard, "pair-accept") != nil {
 		t.Fatalf("outgoing card actions = %+v", outCard)
 	}
@@ -301,7 +301,7 @@ func TestPanelTreePairingRequestShowsVerificationAndActions(t *testing.T) {
 
 func TestActionRowGating(t *testing.T) {
 	t.Parallel()
-	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone)
+	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
 	actions := findSection(panel, func(n *v1.Node) bool {
 		return n.Kind == v1.KindRow && len(n.Children) == 6 && n.Children[0].ID == "ring"
 	})
@@ -316,7 +316,7 @@ func TestActionRowGating(t *testing.T) {
 
 	noClipboard := testSettings()
 	noClipboard.EnableClipboard = false
-	trimmed := findSection(PanelTree(pairedSnap(), noClipboard, ComposerNone), func(n *v1.Node) bool {
+	trimmed := findSection(PanelTree(pairedSnap(), noClipboard, ComposerNone, Drafts{}), func(n *v1.Node) bool {
 		return n.Kind == v1.KindRow && len(n.Children) == 6 && n.Children[0].ID == "ring"
 	})
 	if !trimmed.Children[3].Disabled {
@@ -325,7 +325,7 @@ func TestActionRowGating(t *testing.T) {
 
 	offline := pairedSnap()
 	offline.Devices[0].Reachable = false
-	for _, b := range findSection(PanelTree(offline, testSettings(), ComposerNone), func(n *v1.Node) bool {
+	for _, b := range findSection(PanelTree(offline, testSettings(), ComposerNone, Drafts{}), func(n *v1.Node) bool {
 		return n.Kind == v1.KindRow && len(n.Children) == 6 && n.Children[0].ID == "ring"
 	}).Children {
 		if !b.Disabled {
@@ -335,7 +335,7 @@ func TestActionRowGating(t *testing.T) {
 
 	uncapable := pairedSnap()
 	uncapable.Devices[0].SupportedPlugins = nil
-	for _, b := range findSection(PanelTree(uncapable, testSettings(), ComposerNone), func(n *v1.Node) bool {
+	for _, b := range findSection(PanelTree(uncapable, testSettings(), ComposerNone, Drafts{}), func(n *v1.Node) bool {
 		return n.Kind == v1.KindRow && len(n.Children) == 6 && n.Children[0].ID == "ring"
 	}).Children {
 		if !b.Disabled {
@@ -346,7 +346,7 @@ func TestActionRowGating(t *testing.T) {
 
 func TestInfoRowsAndBatteryIcons(t *testing.T) {
 	t.Parallel()
-	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone)
+	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
 	rows := findSection(panel, func(n *v1.Node) bool {
 		return n.Kind == v1.KindColumn && len(n.Children) == 4 && n.Children[0].Key == "info-battery"
 	})
@@ -471,10 +471,10 @@ func TestTreesValidate(t *testing.T) {
 		pairedSnap(),
 	}
 	// Composer variants validate too.
-	if err := v1.Validate(PanelTree(pairedSnap(), testSettings(), ComposerShare), v1.ViewPanel); err != nil {
+	if err := v1.Validate(PanelTree(pairedSnap(), testSettings(), ComposerShare, Drafts{}), v1.ViewPanel); err != nil {
 		t.Fatal(err)
 	}
-	if err := v1.Validate(PanelTree(pairedSnap(), testSettings(), ComposerSMS), v1.ViewPanel); err != nil {
+	if err := v1.Validate(PanelTree(pairedSnap(), testSettings(), ComposerSMS, Drafts{}), v1.ViewPanel); err != nil {
 		t.Fatal(err)
 	}
 	incoming := pairedSnap()
@@ -502,7 +502,7 @@ func TestTreesValidate(t *testing.T) {
 	states = append(states, bare)
 
 	for i, snap := range states {
-		if err := v1.Validate(PanelTree(snap, testSettings(), ComposerNone), v1.ViewPanel); err != nil {
+		if err := v1.Validate(PanelTree(snap, testSettings(), ComposerNone, Drafts{}), v1.ViewPanel); err != nil {
 			t.Fatalf("panel state %d: %v", i, err)
 		}
 	}
@@ -510,33 +510,101 @@ func TestTreesValidate(t *testing.T) {
 
 func TestPanelTreeComposers(t *testing.T) {
 	t.Parallel()
-	none := PanelTree(pairedSnap(), testSettings(), ComposerNone)
+	none := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
 	if findInput(none, "share-text") != nil || findInput(none, "sms-number") != nil {
 		t.Fatal("composer closed by default")
 	}
 
-	share := PanelTree(pairedSnap(), testSettings(), ComposerShare)
+	share := PanelTree(pairedSnap(), testSettings(), ComposerShare, Drafts{})
 	if findInput(share, "share-text") == nil || findInput(share, "share-file") == nil {
 		t.Fatal("share composer inputs missing")
 	}
-	if findButton(share, "share-url-send") == nil || findButton(share, "share-text-send") == nil ||
-		findButton(share, "share-file-send") == nil {
-		t.Fatal("share composer buttons missing")
+	if findButton(share, "share-close") == nil {
+		t.Fatal("share composer close button missing")
 	}
 	if findInput(share, "sms-number") != nil {
 		t.Fatal("sms composer visible with share open")
 	}
 
-	sms := PanelTree(pairedSnap(), testSettings(), ComposerSMS)
+	sms := PanelTree(pairedSnap(), testSettings(), ComposerSMS, Drafts{})
 	body := findInput(sms, "sms-body")
-	if body == nil || !body.Multiline {
-		t.Fatal("sms body missing or not multiline")
+	if body == nil || body.Multiline {
+		t.Fatal("sms body missing or multiline; the DMS dialog is single-line")
 	}
-	if findButton(sms, "sms-send") == nil || findButton(sms, "sms-app") == nil {
-		t.Fatal("sms composer buttons missing")
+	if findButton(sms, "sms-close") == nil {
+		t.Fatal("sms composer close button missing")
 	}
 	if findInput(sms, "share-text") != nil {
 		t.Fatal("share composer visible with sms open")
+	}
+}
+
+func TestShareComposerSendGating(t *testing.T) {
+	t.Parallel()
+	empty := PanelTree(pairedSnap(), testSettings(), ComposerShare, Drafts{})
+	if b := findButton(empty, "share-url-send"); !b.Disabled {
+		t.Fatal("send URL enabled with no draft")
+	}
+	if b := findButton(empty, "share-text-send"); !b.Disabled {
+		t.Fatal("send text enabled with no draft")
+	}
+	if b := findButton(empty, "share-file-send"); !b.Disabled {
+		t.Fatal("send file enabled with no draft")
+	}
+
+	urlDraft := PanelTree(pairedSnap(), testSettings(), ComposerShare, Drafts{ShareText: "https://example.com"})
+	if b := findButton(urlDraft, "share-url-send"); b.Disabled {
+		t.Fatal("send URL disabled for a valid URI")
+	}
+	if b := findButton(urlDraft, "share-text-send"); b.Disabled {
+		t.Fatal("send text disabled for a non-empty draft")
+	}
+
+	textDraft := PanelTree(pairedSnap(), testSettings(), ComposerShare, Drafts{ShareText: "just words here"})
+	if b := findButton(textDraft, "share-url-send"); !b.Disabled {
+		t.Fatal("send URL enabled for prose")
+	}
+	if b := findButton(textDraft, "share-text-send"); b.Disabled {
+		t.Fatal("send text disabled for prose")
+	}
+
+	fileDraft := PanelTree(pairedSnap(), testSettings(), ComposerShare, Drafts{ShareFile: "/home/me/photo.png"})
+	if b := findButton(fileDraft, "share-file-send"); b.Disabled {
+		t.Fatal("send file disabled with a path")
+	}
+}
+
+func TestSMSComposerSendGating(t *testing.T) {
+	t.Parallel()
+	empty := PanelTree(pairedSnap(), testSettings(), ComposerSMS, Drafts{})
+	if b := findButton(empty, "sms-send"); !b.Disabled {
+		t.Fatal("send enabled with empty fields")
+	}
+	half := PanelTree(pairedSnap(), testSettings(), ComposerSMS, Drafts{SmsNumber: "+1 555"})
+	if b := findButton(half, "sms-send"); !b.Disabled {
+		t.Fatal("send enabled with an empty body")
+	}
+	ready := PanelTree(pairedSnap(), testSettings(), ComposerSMS, Drafts{SmsNumber: "+1 555", SmsBody: "hi"})
+	if b := findButton(ready, "sms-send"); b.Disabled {
+		t.Fatal("send disabled with both fields")
+	}
+}
+
+func TestIsURILike(t *testing.T) {
+	t.Parallel()
+	cases := map[string]bool{
+		"https://example.com": true,
+		"mailto:someone@x":    true,
+		"custom+scheme:rest":  true,
+		"just words here":     false,
+		"noscheme":            false,
+		"":                    false,
+		"http://x with space": false,
+	}
+	for in, want := range cases {
+		if got := isURILike(in); got != want {
+			t.Fatalf("isURILike(%q) = %v, want %v", in, got, want)
+		}
 	}
 }
 

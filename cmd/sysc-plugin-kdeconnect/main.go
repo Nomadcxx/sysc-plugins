@@ -20,13 +20,11 @@ func main() {
 
 // uiState is the entry point's view state: which composer is open and what
 // the user has typed into its fields. The host owns the live text buffers;
-// these are the committed values the sends use.
+// these are the committed values the sends use and the disabled states key
+// off.
 type uiState struct {
-	composer  kdeconnect.Composer
-	shareText string
-	shareFile string
-	smsNumber string
-	smsBody   string
+	composer kdeconnect.Composer
+	drafts   kdeconnect.Drafts
 }
 
 func run(in *os.File, out *os.File) error {
@@ -89,7 +87,7 @@ func run(in *os.File, out *os.File) error {
 			case v1.ViewTooltip:
 				root = kdeconnect.TooltipTree(snap)
 			default:
-				root = kdeconnect.PanelTree(snap, settings, ui.composer)
+				root = kdeconnect.PanelTree(snap, settings, ui.composer, ui.drafts)
 			}
 			_ = c.Snapshot(id, v.rev, root)
 		}
@@ -146,7 +144,8 @@ func run(in *os.File, out *os.File) error {
 }
 
 // handleInput routes one input event. It reports whether the panel tree
-// changed and needs a republish — toggles and sends do, typing does not.
+// changed and needs a republish — toggles, sends, and composer typing (the
+// send gating moves with the draft) do.
 func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *v1.InputEvent, ui *uiState, snap kdeconnect.Snapshot) bool {
 	device := snap.SelectedID
 	switch {
@@ -172,46 +171,58 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 		return toggleComposer(ui, kdeconnect.ComposerShare)
 	case m.Node == "sms":
 		return toggleComposer(ui, kdeconnect.ComposerSMS)
-	case m.Node == "share-text":
-		if m.Event == v1.EventChange {
-			ui.shareText = m.Text
-			return false
-		}
-		// Submit sends the field's content, as a URL when it looks like one.
-		svc.Do(kdeconnect.Action{Kind: shareKindFor(ui.shareText), DeviceID: device, Arg: ui.shareText})
+	case m.Node == "share-close" || m.Node == "sms-close":
 		ui.composer = kdeconnect.ComposerNone
 		return true
+	case m.Node == "share-text":
+		ui.drafts.ShareText = m.Text
+		if m.Event == v1.EventSubmit {
+			// Submit sends the field's content, as a URL when it looks like one.
+			svc.Do(kdeconnect.Action{Kind: shareKindFor(ui.drafts.ShareText), DeviceID: device, Arg: ui.drafts.ShareText})
+			ui.composer = kdeconnect.ComposerNone
+		}
+		// Typing moves the send gating, so the panel republishes either way.
+		return true
 	case m.Node == "share-url-send":
-		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareURL, DeviceID: device, Arg: ui.shareText})
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareURL, DeviceID: device, Arg: ui.drafts.ShareText})
 		ui.composer = kdeconnect.ComposerNone
 		return true
 	case m.Node == "share-text-send":
-		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareText, DeviceID: device, Arg: ui.shareText})
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareText, DeviceID: device, Arg: ui.drafts.ShareText})
 		ui.composer = kdeconnect.ComposerNone
 		return true
 	case m.Node == "share-file":
-		if m.Event == v1.EventChange {
-			ui.shareFile = m.Text
-			return false
+		ui.drafts.ShareFile = m.Text
+		if m.Event == v1.EventSubmit {
+			svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareFile, DeviceID: device, Arg: ui.drafts.ShareFile})
+			ui.composer = kdeconnect.ComposerNone
 		}
-		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareFile, DeviceID: device, Arg: ui.shareFile})
-		ui.composer = kdeconnect.ComposerNone
 		return true
 	case m.Node == "share-file-send":
-		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareFile, DeviceID: device, Arg: ui.shareFile})
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareFile, DeviceID: device, Arg: ui.drafts.ShareFile})
 		ui.composer = kdeconnect.ComposerNone
 		return true
 	case m.Node == "sms-number":
-		if m.Event == v1.EventChange {
-			ui.smsNumber = m.Text
+		ui.drafts.SmsNumber = m.Text
+		if m.Event == v1.EventSubmit {
+			// Enter on the number field just moves on; the body field is next.
+			return true
 		}
+		return true
 	case m.Node == "sms-body":
-		if m.Event == v1.EventChange {
-			ui.smsBody = m.Text
+		ui.drafts.SmsBody = m.Text
+		if m.Event == v1.EventSubmit && ui.drafts.SmsNumber != "" && ui.drafts.SmsBody != "" {
+			svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionSendSMS, DeviceID: device, Arg: ui.drafts.SmsNumber, Arg2: ui.drafts.SmsBody})
+			ui.composer = kdeconnect.ComposerNone
+			ui.drafts.SmsNumber = ""
+			ui.drafts.SmsBody = ""
 		}
+		return true
 	case m.Node == "sms-send":
-		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionSendSMS, DeviceID: device, Arg: ui.smsNumber, Arg2: ui.smsBody})
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionSendSMS, DeviceID: device, Arg: ui.drafts.SmsNumber, Arg2: ui.drafts.SmsBody})
 		ui.composer = kdeconnect.ComposerNone
+		ui.drafts.SmsNumber = ""
+		ui.drafts.SmsBody = ""
 		return true
 	case m.Node == "sms-app":
 		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionLaunchSMSApp, DeviceID: device})
