@@ -133,28 +133,127 @@ func TestPanelTreeSwitcherOnlyWhenMultipleDevices(t *testing.T) {
 	solo := pairedSnap()
 	solo.Devices = solo.Devices[:1]
 	soloPanel := PanelTree(solo, testSettings(), ComposerNone)
-	for _, section := range soloPanel.Children {
-		for _, row := range section.Children {
-			if row.Kind == v1.KindRow && row.PinEnd && len(row.Children) == 2 {
-				if button := row.Children[1]; button.ID == "select-devA" {
-					t.Fatal("switcher row for the selected device itself")
-				}
-			}
-		}
+	if findButton(soloPanel, "select-devA") != nil {
+		t.Fatal("switcher row for the selected device itself")
 	}
 
 	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone)
-	var switchRows int
-	for _, section := range panel.Children {
-		for _, row := range section.Children {
-			if row.Kind == v1.KindRow && len(row.Children) == 2 && row.Children[1].ID == "select-devB" {
-				switchRows++
-			}
+	if findButton(panel, "select-devB") == nil {
+		t.Fatal("switcher card for the tablet missing")
+	}
+}
+
+func TestDeviceCardChipsAndStatus(t *testing.T) {
+	t.Parallel()
+	chips := pairedSnap()
+	chips.Devices[1].NetworkKnown = true
+	chips.Devices[1].NetworkStrength = 3
+	card := deviceCard(PanelTree(chips, testSettings(), ComposerNone), "Galaxy Tab")
+	if card == nil {
+		t.Fatal("tablet card missing")
+	}
+	if !contains(allTexts(card), "55%") {
+		t.Fatalf("battery chip missing: %v", allTexts(card))
+	}
+	if !walkFindNode(card, func(n *v1.Node) bool { return n.Kind == v1.KindIcon && n.Icon == "network" }) {
+		t.Fatal("network chip icon missing")
+	}
+
+	offline := pairedSnap()
+	offline.Devices[1].Reachable = false
+	offlineCard := deviceCard(PanelTree(offline, testSettings(), ComposerNone), "Galaxy Tab")
+	if offlineCard == nil || !contains(allTexts(offlineCard), "Offline") {
+		t.Fatal("offline status missing")
+	}
+
+	pairing := pairedSnap()
+	pairing.Devices[1].PairRequested = true
+	pairCard := deviceCard(PanelTree(pairing, testSettings(), ComposerNone), "Galaxy Tab")
+	if pairCard == nil || !contains(allTexts(pairCard), "Pairing...") {
+		t.Fatal("pairing-in-progress status missing")
+	}
+
+	connected := deviceCard(PanelTree(pairedSnap(), testSettings(), ComposerNone), "Galaxy Tab")
+	if contains(allTexts(connected), "Offline") || contains(allTexts(connected), "Not paired") {
+		t.Fatalf("connected card grew a status line: %v", allTexts(connected))
+	}
+}
+
+func TestDeviceCardPairingActionsPerCard(t *testing.T) {
+	t.Parallel()
+	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone)
+	if findButton(panel, "pair-devB") != nil || findButton(panel, "accept-devB") != nil {
+		t.Fatal("pairing actions on a paired, reachable card")
+	}
+
+	unpaired := pairedSnap()
+	unpaired.Devices[1].Paired = false
+	if findButton(PanelTree(unpaired, testSettings(), ComposerNone), "pair-devB") == nil {
+		t.Fatal("request-pairing action missing on an unpaired card")
+	}
+
+	incoming := pairedSnap()
+	incoming.Devices[1].PairRequestedByPeer = true
+	incoming.Devices[1].VerificationKey = "999999"
+	inPanel := PanelTree(incoming, testSettings(), ComposerNone)
+	if findButton(inPanel, "accept-devB") == nil || findButton(inPanel, "reject-devB") == nil {
+		t.Fatal("accept/reject actions missing on the requesting card")
+	}
+	if findButton(inPanel, "pair-devB") != nil {
+		t.Fatal("request-pairing offered while a request is incoming")
+	}
+}
+
+// deviceCard finds the deepest filled card column whose subtree names the
+// device.
+func deviceCard(n *v1.Node, name string) *v1.Node {
+	if n == nil {
+		return nil
+	}
+	for _, c := range n.Children {
+		if card := deviceCard(c, name); card != nil {
+			return card
 		}
 	}
-	if switchRows != 1 {
-		t.Fatalf("switcher rows for the tablet = %d, want 1", switchRows)
+	if n.Kind == v1.KindColumn && n.Fill == "card" && contains(allTexts(n), name) {
+		return n
 	}
+	return nil
+}
+
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func allTexts(n *v1.Node) []string {
+	var texts []string
+	walkFindNode(n, func(x *v1.Node) bool {
+		if x.Kind == v1.KindText {
+			texts = append(texts, x.Text)
+		}
+		return false
+	})
+	return texts
+}
+
+func walkFindNode(n *v1.Node, ok func(*v1.Node) bool) bool {
+	if n == nil {
+		return false
+	}
+	if ok(n) {
+		return true
+	}
+	for _, c := range n.Children {
+		if walkFindNode(c, ok) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPanelTreeUnpairedDeviceShowsRequestCard(t *testing.T) {

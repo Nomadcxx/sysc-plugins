@@ -302,24 +302,91 @@ func switcherTree(snap Snapshot, selected *Device) *v1.Node {
 		if dev.ID == selected.ID {
 			continue
 		}
-		col.Children = append(col.Children, &v1.Node{
-			Kind: v1.KindRow, Fill: "card", Radius: 10, Padding: 10, Gap: 10,
-			PinEnd: true, Children: []*v1.Node{
-				{Kind: v1.KindColumn, Children: []*v1.Node{
-					{Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
-						{Kind: v1.KindIcon, Icon: deviceIcon(dev)},
-						{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
-							{Kind: v1.KindText, Text: dev.Name, Bold: true},
-							{Kind: v1.KindText, Text: deviceStatus(dev), Size: "caption", Tone: v1.ToneSubtle},
-						}},
-					}},
-				}},
-				{Kind: v1.KindButton, ID: "select-" + dev.ID, Text: "Use",
-					Name: "Switch to " + dev.Name, Role: "button",
-					Events: []v1.EventKind{v1.EventActivate}},
-			}})
+		col.Children = append(col.Children, switcherCardTree(dev))
 	}
 	return col
+}
+
+// switcherCardTree renders one switcher card, the DMS DeviceCard: the type
+// icon, name, status line, battery and network chips, and — always, not
+// only for the selected device — the pairing actions.
+func switcherCardTree(dev *Device) *v1.Node {
+	header := &v1.Node{Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
+		{Kind: v1.KindIcon, Icon: deviceIcon(dev)},
+		{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: dev.Name, Bold: true},
+			{Kind: v1.KindText, Text: cardStatus(dev), Size: "caption",
+				Tone: cardStatusTone(dev)},
+		}},
+	}}
+
+	chips := []*v1.Node{}
+	if dev.BatteryKnown && dev.BatteryCharge >= 0 {
+		chips = append(chips,
+			&v1.Node{Kind: v1.KindIcon, Icon: batteryIconName(dev)},
+			&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d%%", dev.BatteryCharge), Size: "caption"})
+	}
+	if dev.NetworkKnown && dev.NetworkStrength >= 0 {
+		chips = append(chips, &v1.Node{Kind: v1.KindIcon, Icon: "network"})
+	}
+	if len(chips) > 0 {
+		// Two children make the header a pin-end row: the chips column sits
+		// at the card's right edge, the DMS card's status row.
+		header = &v1.Node{Kind: v1.KindRow, Gap: 10, PinEnd: true, Children: []*v1.Node{
+			header, {Kind: v1.KindColumn, Gap: 2, Children: chips}}}
+	}
+
+	// The select affordance leads the action row; pairing actions follow on
+	// the cards they apply to.
+	actions := []*v1.Node{{
+		Kind: v1.KindButton, ID: "select-" + dev.ID, Text: "Use",
+		Name: "Switch to " + dev.Name, Role: "button",
+		Events: []v1.EventKind{v1.EventActivate},
+	}}
+	switch {
+	case dev.PairRequestedByPeer:
+		actions = append(actions,
+			&v1.Node{Kind: v1.KindButton, ID: "accept-" + dev.ID, Text: "Accept", Fill: "accent",
+				Name: "Accept pairing with " + dev.Name, Role: "button",
+				Events: []v1.EventKind{v1.EventActivate}},
+			&v1.Node{Kind: v1.KindButton, ID: "reject-" + dev.ID, Text: "Reject", Fill: "error-container",
+				Name: "Reject pairing with " + dev.Name, Role: "button",
+				Events: []v1.EventKind{v1.EventActivate}})
+	case dev.Reachable && !dev.Paired:
+		actions = append(actions,
+			&v1.Node{Kind: v1.KindButton, ID: "pair-" + dev.ID, Text: "Request pairing", Fill: "accent",
+				Name: "Request pairing with " + dev.Name, Role: "button",
+				Events: []v1.EventKind{v1.EventActivate}})
+	}
+
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 10, Padding: 10, Gap: 8,
+		Children: []*v1.Node{
+			header,
+			{Kind: v1.KindRow, Gap: 8, Children: actions},
+		}}
+}
+
+// cardStatus is the DMS DeviceCard's status line: pairing states first, the
+// empty string when the device is simply connected.
+func cardStatus(dev *Device) string {
+	switch {
+	case dev.PairRequestedByPeer:
+		return "Pairing requested"
+	case dev.PairRequested:
+		return "Pairing..."
+	case !dev.Paired:
+		return "Not paired"
+	case !dev.Reachable:
+		return "Offline"
+	}
+	return ""
+}
+
+func cardStatusTone(dev *Device) v1.Tone {
+	if dev.PairRequestedByPeer || dev.PairRequested {
+		return v1.ToneAccent
+	}
+	return v1.ToneSubtle
 }
 
 // deviceCardTree is the main device card: type icon, name, status, and the

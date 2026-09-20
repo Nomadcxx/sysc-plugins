@@ -158,6 +158,16 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 		id := strings.TrimPrefix(m.Node, "select-")
 		svc.SetSelected(id)
 		saveSelection(ctx, c, id)
+	case m.Node == "pair":
+		// The selected device's request card; the per-card buttons use the
+		// prefixed forms below.
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionPair, DeviceID: device})
+	case strings.HasPrefix(m.Node, "accept-"):
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionAcceptPair, DeviceID: strings.TrimPrefix(m.Node, "accept-")})
+	case strings.HasPrefix(m.Node, "reject-"):
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionRejectPair, DeviceID: strings.TrimPrefix(m.Node, "reject-")})
+	case strings.HasPrefix(m.Node, "pair-"):
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionPair, DeviceID: strings.TrimPrefix(m.Node, "pair-")})
 	case m.Node == "share":
 		return toggleComposer(ui, kdeconnect.ComposerShare)
 	case m.Node == "sms":
