@@ -63,6 +63,14 @@ func TestBarTreeShowsBatteryForSelectedDevice(t *testing.T) {
 	if got := BarTree(unknown).Children[0].Text; got != "" {
 		t.Fatalf("unknown battery label = %q, want icon only", got)
 	}
+	// An unreachable selected device reads as offline even with the daemon
+	// up, the reference pill's behaviour.
+	offline := pairedSnap()
+	offline.Devices[0].Reachable = false
+	offlinePill := BarTree(offline).Children[0]
+	if offlinePill.Icon != "phonelink-off" || offlinePill.Text != "" {
+		t.Fatalf("offline pill = %q %q", offlinePill.Icon, offlinePill.Text)
+	}
 }
 
 func TestTooltipTreeTracksState(t *testing.T) {

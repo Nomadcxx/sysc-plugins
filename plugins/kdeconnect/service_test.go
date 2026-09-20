@@ -237,8 +237,9 @@ func TestConnectDiscoversDevicesAndReadings(t *testing.T) {
 	if snap.SelfID != "deadbeef01" {
 		t.Fatalf("selfId = %q", snap.SelfID)
 	}
-	if snap.Devices[0].Name != "Galaxy Tab" || snap.Devices[1].Name != "Pixel 10 Pro XL" {
-		t.Fatalf("devices are not sorted by name: %q, %q", snap.Devices[0].Name, snap.Devices[1].Name)
+	// The daemon's own device order is preserved, not sorted by name.
+	if snap.Devices[0].Name != "Pixel 10 Pro XL" || snap.Devices[1].Name != "Galaxy Tab" {
+		t.Fatalf("devices are not in daemon order: %q, %q", snap.Devices[0].Name, snap.Devices[1].Name)
 	}
 	pixel := deviceByName(snap, "Pixel 10 Pro XL")
 	if pixel == nil {
@@ -271,18 +272,18 @@ func TestSavedSelectionKeptWhileReachable(t *testing.T) {
 	defer svc.Close()
 
 	initial := waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
-	pixel := deviceByName(initial, "Pixel 10 Pro XL")
-	if pixel == nil {
-		t.Fatal("pixel missing")
+	tab := deviceByName(initial, "Galaxy Tab")
+	if tab == nil {
+		t.Fatal("tab missing")
 	}
-	// Auto-select picked the first reachable device; the saved choice
-	// switches the panel to the pixel and survives the next publish.
-	if initial.SelectedID == pixel.ID {
-		t.Fatalf("auto-select already chose the pixel: %q", initial.SelectedID)
+	// Auto-select picks the daemon's first reachable device; the saved
+	// choice moves the panel to the tablet and survives the next publish.
+	if initial.SelectedID == tab.ID {
+		t.Fatalf("auto-select already chose the tablet: %q", initial.SelectedID)
 	}
-	svc.SetSelected(pixel.ID)
-	snap := waitForSnapshot(t, svc, func(s Snapshot) bool { return s.SelectedID == pixel.ID })
-	if snap.SelectedID != pixel.ID {
+	svc.SetSelected(tab.ID)
+	snap := waitForSnapshot(t, svc, func(s Snapshot) bool { return s.SelectedID == tab.ID })
+	if snap.SelectedID != tab.ID {
 		t.Fatalf("saved selection lost: %q", snap.SelectedID)
 	}
 }
@@ -637,6 +638,8 @@ func TestLocalFileURL(t *testing.T) {
 	cases := map[string]string{
 		"/home/me/photo.png":           "file:///home/me/photo.png",
 		"/home/me/my photos/pic 1.jpg": "file:///home/me/my%20photos/pic%201.jpg",
+		"/home/me/photo (1).png":       "file:///home/me/photo%20(1).png",
+		"/home/me/rock&roll.png":       "file:///home/me/rock%26roll.png",
 		"file:///already/a%20url.png":  "file:///already/a%20url.png",
 		"":                             "",
 		"relative/path.txt":            "",

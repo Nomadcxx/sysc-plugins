@@ -45,14 +45,21 @@ func selectedDevice(snap Snapshot) *Device {
 }
 
 // BarTree is the bar pill: the offline glyph with N/A while the daemon is
-// unreachable, the phone glyph with the battery percent once a device is
-// known. The whole control opens the panel.
+// unreachable, and — matching the reference pill — the offline glyph again
+// whenever the selected device is not reachable, with the percent only for
+// a connected, reporting device. The whole control opens the panel.
 func BarTree(snap Snapshot) *v1.Node {
 	icon, label := "phonelink-off", "N/A"
 	if snap.Available {
 		icon, label = "smartphone", ""
-		if dev := selectedDevice(snap); dev != nil && dev.BatteryKnown && dev.BatteryCharge >= 0 {
-			label = fmt.Sprintf("%d%%", dev.BatteryCharge)
+		if dev := selectedDevice(snap); dev != nil {
+			if dev.Reachable {
+				if dev.BatteryKnown && dev.BatteryCharge >= 0 {
+					label = fmt.Sprintf("%d%%", dev.BatteryCharge)
+				}
+			} else {
+				icon = "phonelink-off"
+			}
 		}
 	}
 	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{
@@ -532,9 +539,8 @@ func batteryRowNode(dev *Device) *v1.Node {
 }
 
 func notificationRowNode(dev *Device) *v1.Node {
-	if !dev.NotificationsKnown {
-		return nil
-	}
+	// The reference row renders unconditionally with a zero default, even
+	// when the count is unknown.
 	return infoRow("info-notifications", "notifications", "Notifications",
 		strconv.Itoa(dev.NotificationCount), v1.ToneNormal)
 }

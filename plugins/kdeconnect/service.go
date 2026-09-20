@@ -3,10 +3,8 @@ package kdeconnect
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"os/exec"
 	"path"
-	"sort"
 	"strings"
 	"time"
 
@@ -279,7 +277,7 @@ func (s *Service) serve(bus daemonBus) error {
 	}
 
 	publish := func() {
-		s.push(buildSnapshot(true, st.announced, st.selfID, st.devices, &saved))
+		s.push(buildSnapshot(true, st.announced, st.selfID, st.order, st.devices, &saved))
 	}
 
 	if err := st.reconcile(bus); err != nil {
@@ -295,7 +293,9 @@ func (s *Service) serve(bus daemonBus) error {
 			_ = st.reconcile(bus)
 			publish()
 		case <-s.refresh:
-			_ = st.reconcile(bus)
+			// A manual refresh always runs; the shared rate limit is for the
+			// signal-driven reconciles only.
+			_ = st.reconcileNow(bus)
 			publish()
 		case a := <-s.actions:
 			st.performAction(bus, a)
@@ -349,7 +349,10 @@ func tickInterval(seconds float64) time.Duration {
 // daemonState is the live device model one serve cycle owns. It mutates on
 // the serve goroutine only; snapshots are built from it and published.
 type daemonState struct {
-	svc           *Service
+	svc *Service
+	// order preserves the daemon's device ordering; the map alone would
+	// randomise every publish.
+	order         []string
 	devices       map[string]*Device
 	announced     string
 	selfID        string
@@ -398,11 +401,13 @@ func (st *daemonState) reconcileNow(bus daemonBus) error {
 		return nil
 	}
 	seen := make(map[string]bool, len(call.Body))
+	st.order = st.order[:0]
 	for _, id := range stringList(call.Body[0]) {
 		if id == "" || seen[id] {
 			continue
 		}
 		seen[id] = true
+		st.order = append(st.order, id)
 		if _, ok := st.devices[id]; !ok {
 			st.devices[id] = newDevice(id)
 		}
@@ -616,8 +621,10 @@ func actionDetail(a Action) string {
 }
 
 // localFileURL converts an absolute path into a file:// URI with every path
-// segment percent-encoded, the reference shell's localFileUrl. A path that
-// is already a file URL passes through; anything else is rejected.
+// segment percent-encoded exactly like the reference shell's
+// encodeURIComponent per segment (unreserved set plus !'()*), the same
+// encoding its file shares ride on. A path that is already a file URL
+// passes through; anything else is rejected.
 func localFileURL(p string) string {
 	if p == "" {
 		return ""
@@ -630,9 +637,27 @@ func localFileURL(p string) string {
 	}
 	segments := strings.Split(p, "/")
 	for i, segment := range segments {
-		segments[i] = url.PathEscape(segment)
+		segments[i] = encodeURIComponent(segment)
 	}
 	return "file://" + strings.Join(segments, "/")
+}
+
+// encodeURIComponent matches JavaScript's encodeURIComponent: it leaves
+// A-Z a-z 0-9 - _ . ! ~ * ' ( ) bare and percent-encodes everything else.
+func encodeURIComponent(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
+			c == '-', c == '_', c == '.', c == '~',
+			c == '!', c == '\'', c == '(', c == ')', c == '*':
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }
 
 // displayName prefers the device name and falls back to its id, which is
@@ -712,6 +737,7 @@ func updateFromSignal(sig *dbus.Signal, bus daemonBus, st *daemonState) bool {
 		}
 		if _, ok := st.devices[id]; !ok {
 			st.devices[id] = newDevice(id)
+			st.order = append(st.order, id)
 		}
 		st.fetchDevice(bus, id)
 		return true
@@ -719,6 +745,12 @@ func updateFromSignal(sig *dbus.Signal, bus daemonBus, st *daemonState) bool {
 		id, _ := sig.Body[0].(string)
 		if _, ok := st.devices[id]; ok {
 			delete(st.devices, id)
+			for i, ordered := range st.order {
+				if ordered == id {
+					st.order = append(st.order[:i], st.order[i+1:]...)
+					break
+				}
+			}
 			return true
 		}
 		return false
@@ -796,26 +828,18 @@ func updateFromSignal(sig *dbus.Signal, bus daemonBus, st *daemonState) bool {
 	return false
 }
 
-// buildSnapshot sorts the live model by name and resolves the selection.
-func buildSnapshot(available bool, announced, selfID string, devices map[string]*Device, saved *string) Snapshot {
+// buildSnapshot assembles the live model in the daemon's own device order
+// and resolves the selection.
+func buildSnapshot(available bool, announced, selfID string, order []string, devices map[string]*Device, saved *string) Snapshot {
 	snap := Snapshot{Available: available, BackendName: "KDE Connect", AnnouncedName: announced, SelfID: selfID}
 	if !available {
 		return snap
 	}
-	ids := make([]string, 0, len(devices))
-	for id := range devices {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool {
-		ni, nj := devices[ids[i]].Name, devices[ids[j]].Name
-		if ni != nj {
-			return ni < nj
+	snap.Devices = make([]Device, 0, len(order))
+	for _, id := range order {
+		if dev, ok := devices[id]; ok {
+			snap.Devices = append(snap.Devices, *dev)
 		}
-		return ids[i] < ids[j]
-	})
-	snap.Devices = make([]Device, 0, len(ids))
-	for _, id := range ids {
-		snap.Devices = append(snap.Devices, *devices[id])
 	}
 	snap.SelectedID = resolveSelection(snap.Devices, *saved)
 	return snap
