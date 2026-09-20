@@ -119,6 +119,12 @@ func run(in *os.File, out *os.File) error {
 				return nil
 			case *v1.ViewOpen:
 				views[m.ViewID] = view{kind: m.View}
+				if m.View == v1.ViewPanel {
+					// Opening the panel re-reads the daemon first, so the
+					// device state is fresh, the reference shell's behaviour
+					// on popout open.
+					svc.Refresh()
+				}
 				publish(nil)
 			case *v1.ViewClose:
 				delete(views, m.ViewID)
