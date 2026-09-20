@@ -2,3 +2,6 @@ bin/
 plugins/*/bin/
 *.test
 /dist/
+.commandcode/
+.worktrees/
+command-code-session-*
