@@ -151,4 +151,54 @@ service.go/daemon.go/view.go/main.go, plus the live headless-daemon smoke
 - Battery read 59% with charging flag; battery unknown on the stale entry.
 - Plugin gating correct: `kdeconnect_battery`, `kdeconnect_findmyphone`, `kdeconnect_sms`
   etc. all resolve through the prefix rule.
-- `announcedName` empty — the trigger for gap 1.
+- `announcedName` empty — the trigger for gap 1 (fixed in sysc-431; the live smoke now
+  reads `announced="archPC"`).
+
+## Second pass (post-ledger, current tree)
+
+A re-diff of the implemented state against the reference found eight further
+divergences — two of which contradict this report's own matches table. All are
+bd sysc-464–sysc-471.
+
+1. **Bar pill offline state (sysc-464).** DMS shows `phonelink_off` and hides the
+   percent whenever the selected device is unreachable (DankKDEConnect.qml:804), even
+   with the daemon up. I show the smartphone glyph and percent whenever `Available`.
+2. **Device ordering (sysc-465).** DMS preserves the daemon's `deviceIds` order
+   (KDEConnectService.qml:313); I sort by name. This changes card order *and* which
+   device the auto-select "first device" fallback picks — so the matches-table row
+   above is only approximately true.
+3. **Notifications row visibility (sysc-466).** DMS renders the row unconditionally
+   (`value ?? 0`, KDEConnectDetailContent.qml:761); I hide it until
+   `NotificationsKnown`.
+4. **Manual refresh rate limiting (sysc-467).** My `reconcile` applies the shared
+   one-second gap to manual refreshes, so a second click inside a second is
+   swallowed; DMS manual refresh always runs.
+5. **Tap-to-ping on the device display (sysc-468).** DMS's PhoneDisplay sends a ping
+   when tapped (KDEConnectDetailContent.qml:560). My device card is a static column:
+   the wire has no clickable container and buttons take no children, so this needs a
+   wire capability or an accepted deviation.
+6. **Pairing-request toast refiring (sysc-469, decision).** DMS re-toasts on *every*
+   device fetch while a request pends (the emission sits outside its changed-guard,
+   KDEConnectService.qml:382) — arguably a bug. I fire once on the rising edge.
+   Deliberate, but divergent.
+7. **Strength-3 icon (sysc-470, decision).** DMS deliberately renders a 2-bar glyph
+   for strength 3 ("3 bars usually translates to 2 out of 3"); I render a literal
+   3-bar.
+8. **URI segment encoding (sysc-471).** `url.PathEscape` percent-encodes `!'()*`;
+   DMS's per-segment `encodeURIComponent` leaves them bare. Diverges only for exotic
+   filenames.
+
+### Architectural divergences that will not close
+
+- **Reactivity vs snapshots.** DMS's QML rebinds; my plugin republishes snapshots and
+  keyed patches. Composer typing republishes the whole panel per keystroke (within
+  the update budget) where DMS updates only the gated state. Mechanically different,
+  observably similar.
+- **Event delivery.** Quickshell signals are all delivered; my events channel is
+  buffered at sixteen with drop-on-full. A toast storm can lose events.
+- **Surfaces.** My tooltip (announcement line, device status) is an *addition* — DMS
+  carries that information in its settings status card, not on the bar. The matches
+  table should be read with that caveat.
+- **Deliberate improvements, recorded as divergences:** rising-edge pairing toasts
+  (6), literal strength icons (7), SMS exit-status checking where DMS fires detached
+  blindly.
