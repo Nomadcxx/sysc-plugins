@@ -33,6 +33,7 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-19-aiusage-design.md` | design | AI usage plugin design, grown to visual parity on wire minor 4. |
 | `2026-09-19-aiusage-implementation.md` | plan | AI usage plugin implementation plan. |
 | `2026-09-19-kdeconnect-phone-connect.md` | design + plan | KDE Connect (Phone Connect) plugin design and P1–P8 implementation plan. |
+| `2026-09-19-kdeconnect-parity-audit-report.md` | audit | The DMS parity audit and UI walk (sysc-431–478 evidence) that drove Phase 0 and the gap-fill plan. |
 | `2026-09-20-pomodoro-audit.md` | audit | Pomodoro plugin audit against the reference. |
 | `2026-09-20-pomodoro-handover.md` | handover | Pomodoro work handover. |
 | `2026-09-21-kdeconnect-gap-fill-plan.md` | plan | Plan D — the post-wire-minor-5/6 gap fill for the KDE Connect plugin (icons, tap-to-ping, recent images, mockup, resize, focus, charging fill, live gate). Audited 2026-09-21; amendments applied. |
@@ -42,4 +43,4 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 
 | Branch | Holds |
 |---|---|
-| `feat/kdeconnect` | `2026-09-19-kdeconnect-parity-audit-report.md` — the DMS parity audit and UI walk (sysc-431–478 evidence). Register it here in the same commit that merges the branch. |
+| *(none — every document is on `main`)* | |

@@ -35,6 +35,7 @@ After `make install`, enable plugins from sysc-shell's Plugins manager panel
 | GitHub Notifications | `org.sysc.github-notifications` | 0.2.0 | port of noctalia community plugin |
 | Mini Docker | `org.sysc.mini-docker` | 0.2.0 | port of noctalia community plugin |
 | Wallpaper Depth | `org.sysc.wallpaper-depth` | 0.1.0 stub | port of noctalia official plugin |
+| Phone Connect | `org.sysc.kdeconnect` | 0.1.0 skeleton | port of DMS DankKDEConnect |
 
 "First sweep" means working but early: these plugins were generated before
 much of the shell's plugin infrastructure existed, and their views are
@@ -77,4 +78,8 @@ Notes the hard way taught us:
 Plugins marked "port of noctalia ..." are Go rewrites of behavior originally
 implemented by [noctalia-dev](https://github.com/noctalia-dev) for Noctalia v5
 (`plugin.toml` + Luau), under the MIT license. sysc-shell does not claim
-runtime compatibility with Noctalia; only behavior is ported.
+runtime compatibility with Noctalia; only behavior is ported. Plugins marked
+"port of DMS ..." are Go rewrites of behavior originally implemented by
+Avenge Media for DankMaterialShell's DankKDEConnect plugin
+(dms-plugin-registry #386), under the MIT license; runtime compatibility
+with DMS is not claimed or preserved.
