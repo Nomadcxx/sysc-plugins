@@ -600,7 +600,7 @@ func TestIncomingPairingRequestEvent(t *testing.T) {
 	}
 }
 
-func TestShareSMSAndFileMarshalling(t *testing.T) {
+func TestShareAndFileMarshalling(t *testing.T) {
 	bus := testBus()
 	svc := newService(singleConnect(bus))
 	defer svc.Close()
@@ -617,24 +617,67 @@ func TestShareSMSAndFileMarshalling(t *testing.T) {
 		t.Fatalf("shareUrl args = %v", args)
 	}
 
-	svc.Do(Action{Kind: ActionSendSMS, DeviceID: "devA", Arg: "+1 555 0100", Arg2: "hello"})
-	e = waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "SMS sent successfully" })
-	if e.Err != nil {
-		t.Fatalf("sms event = %+v", e)
-	}
-	// The daemon's sms plugin exposes sendSms(phoneNumber, messageBody).
-	smsArgs := dev.calledArgs(smsIface + ".sendSms")
-	if len(smsArgs) != 2 || smsArgs[0] != "+1 555 0100" || smsArgs[1] != "hello" {
-		t.Fatalf("sendSms args = %v, want the number and the body", smsArgs)
-	}
-
 	svc.Do(Action{Kind: ActionShareFile, DeviceID: "devA", Arg: "/home/me/photo.png"})
 	e = waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Detail == "photo.png" })
 	if e.Err != nil || e.Message != "Shared with Pixel 10 Pro XL" {
 		t.Fatalf("share file event = %+v", e)
 	}
-	if args := dev.calledArgs(shareIface + ".shareFile"); len(args) != 1 || args[0] != "/home/me/photo.png" {
-		t.Fatalf("shareFile args = %v", args)
+	if args := dev.calledArgs(shareIface + ".shareFile"); len(args) != 0 {
+		t.Fatalf("shareFile called %v; file shares ride shareUrl", args)
+	}
+	// The fake records the latest call per method: the file share's URI is
+	// the current shareUrl argument.
+	if args := dev.calledArgs(shareIface + ".shareUrl"); len(args) != 1 || args[0] != "file:///home/me/photo.png" {
+		t.Fatalf("share url file args = %v", args)
+	}
+}
+
+func TestLocalFileURL(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"/home/me/photo.png":           "file:///home/me/photo.png",
+		"/home/me/my photos/pic 1.jpg": "file:///home/me/my%20photos/pic%201.jpg",
+		"file:///already/a%20url.png":  "file:///already/a%20url.png",
+		"":                             "",
+		"relative/path.txt":            "",
+	}
+	for in, want := range cases {
+		if got := localFileURL(in); got != want {
+			t.Fatalf("localFileURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSMSSendGoesThroughTheCLITransport(t *testing.T) {
+	bus := testBus()
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
+
+	var gotDevice, gotNumber, gotBody string
+	var fail error
+	svc.smsSender = func(deviceID, number, body string) error {
+		gotDevice, gotNumber, gotBody = deviceID, number, body
+		return fail
+	}
+
+	svc.Do(Action{Kind: ActionSendSMS, DeviceID: "devA", Arg: "+1 555 0100", Arg2: "hello"})
+	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "SMS sent successfully" })
+	if e.Err != nil {
+		t.Fatalf("sms event = %+v", e)
+	}
+	if gotDevice != "devA" || gotNumber != "+1 555 0100" || gotBody != "hello" {
+		t.Fatalf("cli transport args = %q %q %q", gotDevice, gotNumber, gotBody)
+	}
+
+	fail = errors.New("kdeconnect-cli exited nonzero")
+	svc.Do(Action{Kind: ActionSendSMS, DeviceID: "devA", Arg: "+1 555 0100", Arg2: "hello"})
+	e = waitForEvent(t, svc, func(e Event) bool {
+		return e.Kind == EventActionResult && e.Message == "Failed to send the SMS"
+	})
+	if e.Err == nil {
+		t.Fatalf("cli failure not surfaced: %+v", e)
 	}
 }
 

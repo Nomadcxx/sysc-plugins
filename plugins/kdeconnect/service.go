@@ -3,6 +3,8 @@ package kdeconnect
 import (
 	"errors"
 	"fmt"
+	"net/url"
+	"os/exec"
 	"path"
 	"sort"
 	"strings"
@@ -135,8 +137,9 @@ type Event struct {
 
 // Service publishes daemon snapshots on Updates.
 type Service struct {
-	connect  func() (daemonBus, error)
-	settings Settings
+	connect   func() (daemonBus, error)
+	smsSender func(deviceID, number, body string) error
+	settings  Settings
 
 	updates   chan Snapshot
 	events    chan Event
@@ -154,6 +157,7 @@ func New() *Service { return newService(connectDaemon) }
 func newService(connect func() (daemonBus, error)) *Service {
 	s := &Service{
 		connect:   connect,
+		smsSender: sendSMSViaCLI,
 		settings:  DefaultSettings(),
 		updates:   make(chan Snapshot, 1),
 		events:    make(chan Event, 16),
@@ -166,6 +170,15 @@ func newService(connect func() (daemonBus, error)) *Service {
 	}
 	go s.run()
 	return s
+}
+
+// sendSMSViaCLI mirrors the reference shell's transport: SMS goes through
+// kdeconnect-cli, not the daemon's sms DBus method, which has never worked
+// reliably on the kdeconnect backend. Arguments are passed as separate exec
+// arguments, never through a shell.
+func sendSMSViaCLI(deviceID, number, body string) error {
+	return exec.Command("kdeconnect-cli",
+		"-d", deviceID, "--send-sms", body, "--destination", number).Run()
 }
 
 // Updates streams snapshots, one value buffered, latest wins.
@@ -247,7 +260,7 @@ func (s *Service) serve(bus daemonBus) error {
 	}
 	bus.signal(signals)
 
-	st := &daemonState{devices: map[string]*Device{}, exported: map[string]bool{}, events: s.events}
+	st := &daemonState{svc: s, devices: map[string]*Device{}, exported: map[string]bool{}, events: s.events}
 	saved := ""
 	ticker := time.NewTicker(tickInterval(s.settings.RefreshSeconds))
 	defer ticker.Stop()
@@ -308,6 +321,7 @@ func tickInterval(seconds float64) time.Duration {
 // daemonState is the live device model one serve cycle owns. It mutates on
 // the serve goroutine only; snapshots are built from it and published.
 type daemonState struct {
+	svc           *Service
 	devices       map[string]*Device
 	announced     string
 	selfID        string
@@ -483,6 +497,23 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 		})
 		return
 	}
+	name := displayName(dev)
+	// SMS travels through the CLI (see sendSMSViaCLI), never the daemon's
+	// sms DBus method.
+	if a.Kind == ActionSendSMS {
+		if err := st.svc.smsSender(a.DeviceID, a.Arg, a.Arg2); err != nil {
+			st.emit(Event{
+				Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
+				Message: actionFailureText(a.Kind, name), Err: err,
+			})
+			return
+		}
+		st.emit(Event{
+			Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
+			Message: actionSuccessText(a.Kind, name),
+		})
+		return
+	}
 	var method string
 	var args []any
 	switch a.Kind {
@@ -503,16 +534,22 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 	case ActionShareText:
 		method, args = shareIface+".shareText", []any{a.Arg}
 	case ActionShareFile:
-		method, args = shareIface+".shareFile", []any{a.Arg}
+		// DMS routes file shares through shareUrl with a file:// URI; the
+		// daemon's shareFile method is never used by it.
+		fileURL := localFileURL(a.Arg)
+		if fileURL == "" {
+			st.emit(Event{
+				Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: displayName(dev),
+				Message: actionFailureText(a.Kind, displayName(dev)),
+				Err:     errors.New("kdeconnect: invalid file path " + a.Arg),
+			})
+			return
+		}
+		method, args = shareIface+".shareUrl", []any{fileURL}
 	case ActionClipboard:
 		method = clipboardIface + ".sendClipboard"
 	case ActionBrowse:
 		method = sftpIface + ".startBrowsing"
-	case ActionSendSMS:
-		// The daemon's sms plugin exposes sendSms(phoneNumber, messageBody);
-		// launchApp takes nothing. Verified against kdeconnect-kde's
-		// plugins/sms/smsplugin.cpp.
-		method, args = smsIface+".sendSms", []any{a.Arg, a.Arg2}
 	case ActionLaunchSMSApp:
 		method = smsIface + ".launchApp"
 	default:
@@ -524,7 +561,6 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 		return
 	}
 	call := bus.object(kdeService, devicePath(a.DeviceID)).Call(method, 0, args...)
-	name := displayName(dev)
 	if call.Err != nil {
 		st.emit(Event{
 			Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
@@ -549,6 +585,26 @@ func actionDetail(a Action) string {
 		return path.Base(a.Arg)
 	}
 	return ""
+}
+
+// localFileURL converts an absolute path into a file:// URI with every path
+// segment percent-encoded, the reference shell's localFileUrl. A path that
+// is already a file URL passes through; anything else is rejected.
+func localFileURL(p string) string {
+	if p == "" {
+		return ""
+	}
+	if strings.HasPrefix(p, "file://") {
+		return p
+	}
+	if !strings.HasPrefix(p, "/") {
+		return ""
+	}
+	segments := strings.Split(p, "/")
+	for i, segment := range segments {
+		segments[i] = url.PathEscape(segment)
+	}
+	return "file://" + strings.Join(segments, "/")
 }
 
 // displayName prefers the device name and falls back to its id, which is
