@@ -12,21 +12,25 @@ Ollama, MiniMax, and Synthetic, with desktop alerts at threshold.
 **Architecture:** One Go plugin process. Six in-process collectors behind a `Collector`
 interface normalize every vendor's data into one `Window` model; a serial fetch loop with
 backoff publishes immutable `Report` snapshots; bar and panel are pure view-tree builders
-over the snapshot. One sysc-shell side task: the `ai-usage` icon glyph — the radial dial
-needs no protocol work, because the wire already carries a `gauge` kind mapped onto
-`ui.KindRadialGauge` (audit B3).
+over the snapshot. Two sysc-shell side tasks: the `ai-usage` icon glyph (S1), and wire
+**minor 4** (S2) — the visual-parity surface that carries what the references render:
+hover tooltips, history sparklines, list rhythm separators, semantic shapes, and the
+gauge's dimmed/absent state. Every minor-4 addition maps 1:1 onto a renderer the shell
+already ships (`ui.Node.Tooltip`, `KindGraph`/`paintGraph`, `KindSeparator`, `ui.Shape`,
+`ui.Node.Absent`) — plumbing, not new rendering; the parity plan's argument, one minor
+further.
 
-**Tech Stack:** Go 1.26, `plugin/v1` (JSONL, wire minor 3 — the go.mod pin
-`v0.0.0-20260919230303-ec98abffd13e` already carries the minor-2 presentation fields and
-the `gauge` kind, and the host advertises `{1,3}`), `net/http` + `encoding/json` only —
-no external commands (`requires.commands: []`, unlike every prior art which shells to
-curl/python/CLIs).
+**Tech Stack:** Go 1.26, `plugin/v1` (JSONL, wire minor 4 — the go.mod pin
+`v0.0.0-20260919230303-ec98abffd13e` carries minor 3; S2 extends it), `net/http` +
+`encoding/json` only — no external commands (`requires.commands: []`, unlike every
+prior art which shells to curl/python/CLIs).
 
-**Repos:** `~/sysc-shell` (Task S1: icon glyph only) and `~/sysc-plugins` (Tasks P1–P8:
-the plugin). `Validate` rejects unknown kinds (audit I6), so the plugin still builds a
-degrade tree for pre-minor-3 hosts: after `Handshake` it scans `HostHello.Supported`
-itself (the v1 client hardcodes `{1,0}` and never inspects it — audit M1) and swaps
-`gauge` for `progress` + text.
+**Repos:** `~/sysc-shell` (Tasks S1–S2: icon glyph, wire minor 4) and `~/sysc-plugins`
+(Tasks P1–P8: the plugin). `Validate` rejects unknown kinds and fields (audit I6), so
+the builder serves three trees keyed off `HostHello.Supported` (scanned plugin-side —
+the v1 client hardcodes `{1,0}` and never inspects it, audit M1): minor 4 (full parity),
+minor 3 (gauge, no tooltips/graph/separator/shape/absent), minor ≤ 2 (meter fallback).
+Degradation is for old hosts only — it is never an excuse to cut a wanted visual.
 
 ---
 
@@ -37,13 +41,14 @@ itself (the v1 client hardcodes `{1,0}` and never inspects it — audit M1) and 
 | D1 | Tool scope v1 | claude, codex, commandcode, ollama, minimax, synthetic | user; each has a proven path (research §7.2 + local repo report) |
 | D2 | Data sources | Claude via OAuth usage endpoint; Codex via session-file snapshots; others via direct APIs | user; DankClaudeUsage (endpoint = server-authoritative, zero pricing tables), codex-usage (local-only honesty) |
 | D3 | Token/cost analytics | **out** of v1 — non-goal | user; DankClaudeUsage delegates it to ccusage; AIOC carries it as a separate heavy engine |
-| D4 | Protocol | declare wire minor 3; the go.mod pin already carries it (`ec98abffd13e`) | user; parity + kdeconnect plans set the two-repo precedent; audit B3/M6 found the gauge kind already shipped |
+| D4 | Protocol | declare wire **minor 4**: `tooltip` field, `graph` kind + `values`, `separator` kind, `shape` field, gauge `absent` — all mapped onto existing shell renderers | user directive: parity over stretching; the parity plan's minor-2 move, continued |
+| D4b | Visual stance | design from what the references render, then grow the vocabulary; degrade trees exist for old hosts, not to cut features | user, 2026-09-20: "work from what we want… genuine parity… so be it" |
 | D5 | Bar | one chip per widget instance (vendor pinned or auto) | user; matches timer/world-clock pills; ai-usagebar's provider_limit churn skipped |
 | D6 | Panel | master/detail, 750×430 attached | user; the owner's own ai-usagebar renderer |
-| D7 | Radial dials | bar (22px, sysmon-style) + panel hero, via the existing `gauge` wire kind | user; `ui.KindRadialGauge` is painted by the shell **and already on the wire** (`plugin/v1` `KindGauge` → Convert → `paintRadialGauge`, 22×22 in `internal/shell/metricwidget.go`; audit B3) |
+| D7 | Radial dials | bar (22px, sysmon-style) + panel hero, via the existing `gauge` wire kind, with `absent` dim-state (minor 4) | user; `ui.KindRadialGauge` painted by the shell and on the wire since minor 3 (audit B3); `Absent` exists on `ui.Node` and in `paintGraph`'s contract |
 | D8 | Icon | extend the catalogue (`ai-usage`) | user; kdeconnect precedent (font build via `internal/render/icons/build.py`) |
 | D9 | Alerts | `notify` + in-panel notices; 85/95 settings + fixed 99 depleted; 5% hysteresis; persisted dedupe | user; local plugin's levels/hysteresis, AIOC's dedupe-key lessons, and the local repo's own handover note ("alerts do not survive restart") closed via `state.set` |
-| D10 | History | record-only JSONL (meaningful percents only, 2000 cap, lazy trim — shape in §4); no chart in v1 | user; AIOC `record_history`, adapted per-window |
+| D10 | History | record-only JSONL (meaningful percents only, 2000 cap, lazy trim — shape in §4); rendered as a `graph` sparkline + trend in the detail pane | user; AIOC `record_history`, adapted per-window; codex-usage's chart, percent-only |
 | D11 | Refresh | 300 s default, 60–3600 range; per-collector floors (Claude 180 s at scheduler level + 150 s cross-instance cache guard) | user; DankClaudeUsage's 429 discipline |
 | D12 | Collectors | in-process Go, no subprocess; collector→renderer seam kept as a package boundary | research §9.11; opentracker proves the shape in Go |
 
@@ -58,10 +63,14 @@ one table entry + one fixture later).
 Also accepted simplifications, named so they read as decisions rather than drift
 (audit D/INFO): single chip ⇒ no `+N` overflow marker and no pinned-first sorting;
 in-process collectors ⇒ no refused-start counter; the four-kind provider error taxonomy
-collapses to NeedsSetup/Fault; the bar drops ai-usagebar's quota-over-elapsed dual
-mini-bars (the radial carries the story); `extras` defaults to `none`, unlike
-ai-usagebar's countdown-default — deliberate restraint; no plan-change guard on record
-cards (single-account v1).
+collapses to NeedsSetup/Fault; `extras` defaults to `none`, unlike ai-usagebar's
+countdown-default — deliberate restraint; no plan-change guard on record cards
+(single-account v1); no `warning`/`success` wire tones — the shell theme has no such
+palette tokens (verified) and the primary reference uses the theme's secondary/accent
+for the mid band; mid-band = `accent`. Animation lives shell-side if ever (meter/gauge
+easing is host rendering, not wire); token-quantity charts stay out with the analytics
+non-goal, but the **percent-history sparkline is in** via `graph` (D10's data finally
+renders).
 
 ---
 
@@ -73,7 +82,7 @@ cards (single-account v1).
   "id": "org.sysc.aiusage",
   "name": "AI Usage",
   "version": "0.1.0",
-  "protocol": {"major": 1, "minor": 3},
+  "protocol": {"major": 1, "minor": 4},
   "exec": "bin/sysc-plugin-aiusage",
   "capabilities": ["notifications", "panels", "settings", "state"],
   "requires": {"commands": []},
@@ -184,7 +193,8 @@ renders "Waiting for fresh data" keeping the last percents, never 0% (codex-usag
   — to `$XDG_CACHE_HOME/sysc-shell/plugins/aiusage/history.jsonl` (0600). Skip rows
   with `HasPercent == false` or `WindowMinutes == 0` (AIOC's `pct > 0` rule, adapted
   per provider-window rather than per provider). Lazy trim only when the file exceeds
-  2× the 2000-line cap; no v1 view reads it.
+  2× the 2000-line cap; the detail pane's history card reads the last 30 headline
+  percents of the selected provider (oldest first) for its `graph` sparkline.
 - **Backoff:** consecutive failures per collector double its wait (`interval · 2^n`,
   cap 15 min), cleared on success. Scheduled rounds skip backing-off collectors;
   **manual refresh (panel button) and settings-change refresh override backoff**
@@ -209,24 +219,25 @@ ids, default `auto`), `visualization` select (`radial` default · `meter` · `no
 `both`), `show_name` bool (false). Mirrors the sysmon/ai-usagebar vocabulary (D6 of the
 local plugin's settings design).
 
-Tree (minor-3 host): `row[button(activate — ID/Name/Role/Events, Icon = ai-usage
-glyph, childless) | gauge 22×22 (Value = headline fraction, ValueText = "NN")] +
-text percent (Tabular) + optional countdown (Tabular, subtle) + optional pace
-("↑3"/"↓3", subtle)`. The button is what makes the pill open the panel — both house
-plugins do exactly this (timer's bar button → `panel.open` on activate; audit B2: the
-host owns no pill click). "Absent" is a builder decision, not a wire field (audit M2):
-with no data the builder swaps the gauge node for `text "--"` (Tabular, subtle) — same
-node count, no wire change. Meter fallback (pre-minor-3 host): the gauge becomes
-`progress (Value, Height 5)` beside the same texts. `auto` ranks providers by severity →
-percent → lexical id and takes the first; a pinned vendor with no live read leaves the
-capsule **empty rather than holding a number nothing is refreshing** (ai-usagebar).
+Tree (minor-4 host, full parity): `row[button(activate — ID/Name/Role/Events, Icon =
+ai-usage glyph, childless, Tooltip = "provider · window NN% · resets in Xh Ym" — the
+AIOC pill tooltip) | gauge 22×22 (Value = headline fraction, ValueText = "NN",
+Absent = no live read — reserves its box and paints nothing, the dimmed-ring state
+codex-usage dims to 0.35)] + text percent (Tabular) + optional countdown (Tabular,
+subtle) + optional pace ("↑3"/"↓3", subtle)`; beneath the row, when window bounds are
+known, a `progress` strip (Height 3) showing window-elapsed — ai-usagebar's
+quota-over-elapsed pairing, with the radial carrying quota. The button is what makes
+the pill open the panel — both house plugins do exactly this (timer's bar button →
+`panel.open` on activate; audit B2: the host owns no pill click). Meter fallback
+(pre-minor-3 host): the gauge becomes `progress (Value, Height 5)`, `absent` renders
+as `text "--"`. `auto` ranks providers by severity → percent → lexical id and takes
+the first; a pinned vendor with no live read leaves the capsule **empty rather than
+holding a number nothing is refreshing** (ai-usagebar).
 
 Invariants: a state transition never adds/removes nodes — recolor in place
 (`tone`: normal → `accent` at warn → `error` at critical/depleted; node-count-stability
 test ported from ai-usagebar's `bar_test`). Every interactive node carries
-ID + Name + Role + a non-empty legal `Events` list (audit I4). The bar drops
-ai-usagebar's dual quota-over-elapsed mini-bars deliberately — the radial carries the
-story (audit finding 8).
+ID + Name + Role + a non-empty legal `Events` list (audit I4).
 
 Pace = `UsedPercent − elapsedPercent`, where `elapsedPercent = (now − (ResetsAt −
 WindowMinutes)) / WindowMinutes`, clamped to [0, 100] with pace suppressed outside the
@@ -237,23 +248,34 @@ rendered only when `WindowMinutes > 0` and `ResetsAt` known.
 
 **List pane** (~290 px, `column` of rows; buttons are childless, so rows follow the
 world-clock pattern — audit B1): each row is a `row` container keyed `provider-<id>`
-(`Key`, `fill: card`, `radius`) holding [glyph icon (error tone only when the *read*
-failed) | childless `button` carrying the provider name (activate → select) |
-`column` of second-line text (plan / "Needs setup" / "Stale · Nm" / "No data yet") |
-pin-end `column`: headline percent (fixed `Width` per digit-count, `Tabular`) over a
-`progress` meter (Height 5), max 2 windows]. Sorted severity → percent; NeedsSetup
-rows **kept** (their instruction is the point); NoData rows kept as "No data yet"
-(same philosophy); disabled/untracked providers absent. Selecting a row is an
-`activate` event on its name button → plugin sets `selected` state → detail pane
-re-renders (ai-usagebar's key'd rows + selection).
+(`Key`, `fill: card`, `shape: card`) holding [monogram disc — a `column` with
+`shape: circle`, `fill: accent`, one centered letter of the provider id (provider
+identity without 6 new font glyphs; catalogue glyphs can replace it later) |
+childless `button` carrying the provider name (activate → select, Tooltip =
+"NN% · resets in Xh Ym") | `column` of second-line text (plan / "Needs setup" /
+"Stale · Nm" / "No data yet") | pin-end `column`: headline percent (fixed `Width`
+per digit-count, `Tabular`) over a `progress` meter (Height 5), max 2 windows].
+**Structural severity** (ai-usagebar `severityOf`): the percent text escalates
+`size` caption → body → title with `bold`, and its meter `Height` 5 → 7, as severity
+climbs. Rows are separated by a `separator` node (the rhythm line ai-usagebar draws).
+Selected row's `fill` steps up `card` → `chip` (the selection tint; the wire has no
+alpha borders — AIOC's `primary/0.55` outline collapses to the stronger fill).
+Sorted severity → percent; NeedsSetup rows **kept** (their instruction is the point);
+NoData rows kept as "No data yet" (same philosophy); disabled/untracked providers
+absent. Selecting a row is an `activate` event on its name button → plugin sets
+`selected` state → detail pane re-renders (ai-usagebar's key'd rows + selection).
 
-**Detail pane** (`column`): provider header (glyph, name, plan chip); freshness row
-("Updated 4m ago · 12:40", subtle; stale variant in error tone); **hero gauge**
-(64×64, headline window: Value, ValueText "NN%"; no-data ⇒ the §5 dash swap;
+**Detail pane** (`column`): provider header (monogram disc, name, plan chip); freshness
+row ("Updated 4m ago · 12:40", subtle; stale variant in error tone); **hero gauge**
+(64×64, headline window: Value, ValueText "NN%", Absent when no live read — dim state;
 `progress` + display-size text fallback on pre-minor-3 hosts) beside the headline
 window's card; exhausted-quota notice when any window ≥ 100 ("Quota exhausted ·
-renews Sun 4:23 PM", error tone); then one **window card** per window
-(`fill: card`, `radius` — minor 2):
+renews Sun 4:23 PM", error tone); **history card** (`fill: card`): a `graph`
+(Height 40, `values` = last 30 recorded headline percents of this provider, oldest
+first — exactly what D10's history file records) with a trend caption "↑ 4pts this
+week / ↓ / flat" (last-two-snapshot delta, AIOC's rule) — the sparkline AIOC renders
+and codex-usage charts, fed by data we already keep; then one **window card** per
+window (`fill: card`, `shape: card`):
 
 ```
 row: Label (bold) ......................... percent "82%" (Tabular, tone ramp)
@@ -320,17 +342,37 @@ Key resolution order per provider: pasted setting → env var (`OLLAMA_API_KEY`,
 wins (local plugin). Unlike the Luau original there is **no managed key file**: the
 host owns settings persistence; clearing a field deletes it with no plugin-side residue.
 
-## 9. sysc-shell side task
+## 9. sysc-shell side tasks
 
 - **S1 — icon catalogue:** add `ai-usage` glyph (brain/sparkle form factor, matching
   the stroke weight of `ghost`/`schedule`) via `internal/render/icons/build.py`;
   `IconNames()` grows accordingly. `[a-z0-9-]` identifier, no underscores.
+- **S2 — wire minor 4, the visual-parity surface.** Each addition maps onto a
+  renderer the shell already ships (`ui.Node.Tooltip` tree.go:264, `KindGraph` +
+  `Values` tree.go:155 + `paintGraph` paint.go:777, `KindSeparator`, `ui.Shape`
+  tree.go:376, `ui.Node.Absent`):
+  - `tooltip` string field, legal on every node (≤ 256 bytes), → `ui.Node.Tooltip`.
+    Hover affordance the references all have (AIOC pill tooltip; ai-usagebar row
+    tooltips); the shell already paints tooltips for its own features.
+  - `graph` node kind with `values` array (2–64 entries, finite, each 0–1 normalized,
+    oldest first) and optional `absent`; non-interactive, `height` honoured, legal in
+    bar and panel views → `ui.KindGraph`. Powers the history sparkline.
+  - `separator` node kind, no fields, container-legal, panel-only → `ui.KindSeparator`.
+  - `shape` field on containers and buttons: `circle | stadium | small | medium |
+    large | card | panel` → `ui.Shape` (monogram discs, pill chips, cards with the
+    shell's own corner language).
+  - `absent` bool, gauge-only (and graph) → `ui.Node.Absent` ("reserves its space,
+    paints nothing" — the dimmed-ring state). Replaces the builder dash-swap for
+    minor-4 hosts.
+  - Validation: unknown values diagnosable (`unknown shape %q`), `values` length and
+    finiteness bounds, `absent` rejected on other kinds, `separator` takes no
+    children; ceilings unchanged.
+  - Host advertises `Supported: [{1,3}, {1,4}]` (supervisor.go:201 — the grant is the
+    intersection, so old plugins keep working); Convert gains the `graph`/`separator`
+    cases and copies the new fields. No new rendering anywhere.
 
-No protocol work: the dial ships — `plugin/v1` already has `KindGauge` (`value`,
-`value_text`, `icon`, …) mapped 1:1 by Convert onto `ui.KindRadialGauge`, validated
-(0–1, finite, `value_text` length-capped), and the host advertises `Supported: [{1,3}]`
-(audit B3). Two small CI gaps in `~/sysc-plugins` close alongside the plugin
-(audit M4/M5): `tools/validate-manifests` learns the concrete `visible_when` shape
+Two small CI gaps in `~/sysc-plugins` close alongside the plugin (audit M4/M5):
+`tools/validate-manifests` learns the concrete `visible_when` shape
 (`{"key", "equals"}` with the key required to be a declared setting) and runs its
 settings checks over `widgets[].settings` too.
 
@@ -370,10 +412,12 @@ settings checks over `widgets[].settings` too.
   rollover + the unknown-reset sentinel (fake clock), retainLastGood guards,
   codex tail-scan (truncated line, 140 KB padding, newest-by-event-timestamp,
   premium skip).
-- View tests: `v1.Validate` on every report state for **both builders** (gauge tree
-  and pre-minor-3 fallback — `Validate` is minor-blind, so the builder pair is the
-  axis; audit M3); node-count stability across Fresh→Fault; panel tree budgets
-  (≤ 1024 nodes, depth ≤ 16); scrub pass over hostile strings.
+- View tests: `v1.Validate` on every report state for **all three builder variants**
+  (minor-4 full tree, minor-3, meter fallback — `Validate` is minor-blind, so the
+  builder triple is the axis; audit M3); node-count stability across Fresh→Fault;
+  minor-4 field validation (values bounds/finiteness, shape enum, tooltip cap,
+  absent placement); panel tree budgets (≤ 1024 nodes, depth ≤ 16); scrub pass over
+  hostile strings.
 - `go run ./tools/validate-manifests` (with the §9 validator extensions); manifest
   schema check runs over `widgets[].settings` too.
 - `make build test vet validate` green; race suite.
@@ -390,7 +434,9 @@ settings checks over `widgets[].settings` too.
   not a blank bar.
 - **Codex snapshot drift** (field renames upstream) — byte pre-filter + strict field
   validation ⇒ drift yields NoData with a stated reason, never a stale percent.
-- **Icon ordering** — S1 must reach the user's shell before the plugin renders
-  `ai-usage`; until then an unknown icon name fails host conversion, so the plugin
+- **Deploy ordering** — S1+S2 must reach the user's shell before the plugin declares
+  minor 4; until then an unknown icon name fails host conversion, so the plugin
   probes once (first rejected snapshot) and sticks to the `speed` glyph fallback for
-  the process lifetime.
+  the process lifetime, and the builder serves the minor-3 tree whenever
+  `Supported` lacks `{1,4}`. Out-of-order deploys degrade visibly and meter, never
+  blank.
