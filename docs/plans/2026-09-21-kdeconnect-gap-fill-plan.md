@@ -333,10 +333,15 @@ progress the glide; the pill gets the level fill as a progress child of the pill
       Screenshot each into the handover.
 - [ ] **Step 3: Write the completion handover** — commit hashes, gate output, live
       observations, and the deviation ledger below as accepted deviations.
-- [ ] **Step 4: Close the bd items** in the sysc-shell tracker: sysc-478, 468, 445, 447,
-      430, then the sysc-420 epic — after resolving or explicitly deferring `sysc-469`
-      (pairing toast dedupe) and `sysc-470` (strength-3 icon), which are open epic
-      dependencies outside this plan's scope.
+- [ ] **Step 4: Resolve the two decision tickets** (owner-ruled 2026-09-21, folded into
+      this task because both block the sysc-420 epic):
+      - `sysc-469` — **keep the dedupe.** Fire once on the pairing-request rising edge;
+        DMS's refire on every fetch is arguably a bug. Record in the deviation ledger.
+      - `sysc-470` — **match DMS's 3→2-bar mapping.** DMS's rationale is deliberate and
+        documented (a 3-bar glyph reads as 2-of-3 next to 4/5-bar glyphs); parity is the
+        goal. One-line change in the strength-icon mapping plus a test row.
+- [ ] **Step 5: Close the bd items** in the sysc-shell tracker: sysc-478, 468, 445, 447,
+      469, 470, 430, then the sysc-420 epic.
 
 ---
 
@@ -350,6 +355,6 @@ progress the glide; the pill gets the level fill as a progress child of the pill
 | Offline mockup dimming | The host does not dim image nodes; the status line carries offline state. |
 | Warning tone for pairing statuses | The wire has no warning tone (audit wire gap); accent stays. |
 | Charging tint collapse: error/accent only | The wire has no warning/success fills and progress cannot carry `Fill`; DMS's three-tint mapping collapses to `Tone` error below 20, accent otherwise. |
-| sysc-469 (pairing toast dedupe) and sysc-470 (strength-3 icon) deferred | Open epic-420 dependencies outside this plan's scope; resolve or defer explicitly before closing the epic. |
+| Pairing-request toast fires once on the rising edge (sysc-469 ruled) | DMS re-toasts on every device fetch while a request pends — arguably a bug; the dedupe is the better behaviour. |
 | Header border, hover states, dialog open/close animation | Host-owned chrome; the wire deliberately carries none. |
 | MPRIS player section, Valent backend, keyboard shortcuts, i18n | Separate ledger items (sysc-444, 443, 449, 448); not this plan's scope. |
