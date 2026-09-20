@@ -189,6 +189,33 @@ func TestDeviceCardChipsAndStatus(t *testing.T) {
 	}
 }
 
+func TestDeviceCardTapToPing(t *testing.T) {
+	t.Parallel()
+	card := findButton(PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{}), "device-ping")
+	if card == nil {
+		t.Fatal("device-ping button card missing")
+	}
+	if card.Fill != "card" || card.Radius != 12 || card.Padding != 14 {
+		t.Fatalf("device card chrome = fill=%q radius=%d padding=%d, want card/12/14",
+			card.Fill, card.Radius, card.Padding)
+	}
+	if len(card.Events) != 1 || card.Events[0] != v1.EventActivate {
+		t.Fatalf("device card events = %v, want [activate]", card.Events)
+	}
+	if len(card.Children) != 4 {
+		t.Fatalf("device card children = %d, want 4 (icon, name, status, battery)", len(card.Children))
+	}
+	wantKinds := []v1.NodeKind{v1.KindIcon, v1.KindText, v1.KindText, v1.KindProgress}
+	for i, want := range wantKinds {
+		if card.Children[i].Kind != want {
+			t.Fatalf("child %d kind = %q, want %q", i, card.Children[i].Kind, want)
+		}
+	}
+	if card.Children[1].Text != "Pixel 10 Pro XL" {
+		t.Fatalf("name child text = %q, want Pixel 10 Pro XL", card.Children[1].Text)
+	}
+}
+
 func TestDeviceCardPairingActionsPerCard(t *testing.T) {
 	t.Parallel()
 	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
@@ -367,7 +394,7 @@ func TestActionRowGating(t *testing.T) {
 	t.Parallel()
 	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
 	actions := findSection(panel, func(n *v1.Node) bool {
-		return n.Kind == v1.KindRow && len(n.Children) == 6 && n.Children[0].ID == "ring"
+		return n.Kind == v1.KindRow && len(n.Children) == 5 && n.Children[0].ID == "ring"
 	})
 	if actions == nil {
 		t.Fatal("action row missing")
@@ -381,16 +408,16 @@ func TestActionRowGating(t *testing.T) {
 	noClipboard := testSettings()
 	noClipboard.EnableClipboard = false
 	trimmed := findSection(PanelTree(pairedSnap(), noClipboard, ComposerNone, Drafts{}), func(n *v1.Node) bool {
-		return n.Kind == v1.KindRow && len(n.Children) == 6 && n.Children[0].ID == "ring"
+		return n.Kind == v1.KindRow && len(n.Children) == 5 && n.Children[0].ID == "ring"
 	})
-	if !trimmed.Children[3].Disabled {
+	if !trimmed.Children[2].Disabled {
 		t.Fatal("clipboard action enabled with the setting off")
 	}
 
 	offline := pairedSnap()
 	offline.Devices[0].Reachable = false
 	for _, b := range findSection(PanelTree(offline, testSettings(), ComposerNone, Drafts{}), func(n *v1.Node) bool {
-		return n.Kind == v1.KindRow && len(n.Children) == 6 && n.Children[0].ID == "ring"
+		return n.Kind == v1.KindRow && len(n.Children) == 5 && n.Children[0].ID == "ring"
 	}).Children {
 		if !b.Disabled {
 			t.Fatalf("%s enabled while offline", b.ID)
@@ -400,11 +427,26 @@ func TestActionRowGating(t *testing.T) {
 	uncapable := pairedSnap()
 	uncapable.Devices[0].SupportedPlugins = nil
 	for _, b := range findSection(PanelTree(uncapable, testSettings(), ComposerNone, Drafts{}), func(n *v1.Node) bool {
-		return n.Kind == v1.KindRow && len(n.Children) == 6 && n.Children[0].ID == "ring"
+		return n.Kind == v1.KindRow && len(n.Children) == 5 && n.Children[0].ID == "ring"
 	}).Children {
 		if !b.Disabled {
 			t.Fatalf("%s enabled without capabilities", b.ID)
 		}
+	}
+}
+
+func TestActionRowRestoresPingWithoutTheCard(t *testing.T) {
+	t.Parallel()
+	plain := testSettings()
+	plain.ShowDeviceCard = false
+	actions := findSection(PanelTree(pairedSnap(), plain, ComposerNone, Drafts{}), func(n *v1.Node) bool {
+		return n.Kind == v1.KindRow && len(n.Children) == 6 && n.Children[0].ID == "ring"
+	})
+	if actions == nil {
+		t.Fatal("action row without the device card missing")
+	}
+	if ping := actions.Children[1]; ping.ID != "ping" || ping.Disabled {
+		t.Fatalf("ping button = %+v, want enabled at index 1", ping)
 	}
 }
 

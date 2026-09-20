@@ -453,8 +453,9 @@ func cardStatusTone(dev *Device) v1.Tone {
 }
 
 // deviceCardTree is the main device card: type icon, name, status, and the
-// battery meter. Task 4 swaps the icon for the wire's image kind once the
-// mockup assets land.
+// battery meter. Tapping the card pings the device (sysc-468), so the card
+// itself is a button; the action-row ping button hides while the card
+// handles it.
 func deviceCardTree(dev *Device) *v1.Node {
 	children := []*v1.Node{
 		{Kind: v1.KindIcon, Icon: deviceIcon(dev), CenterX: true},
@@ -464,7 +465,10 @@ func deviceCardTree(dev *Device) *v1.Node {
 	if progress := batteryProgressNode(dev); progress != nil {
 		children = append(children, progress)
 	}
-	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 6,
+	return &v1.Node{Kind: v1.KindButton, ID: "device-ping",
+		Name: "Tap to ping " + dev.Name, Role: "button",
+		Events: []v1.EventKind{v1.EventActivate},
+		Fill:   "card", Radius: 12, Padding: 14, Gap: 6,
 		Children: children}
 }
 
@@ -480,13 +484,20 @@ func batteryProgressNode(dev *Device) *v1.Node {
 		Width: 180, CenterX: true}
 }
 
-// actionRowTree is one row of capability-gated action buttons.
+// actionRowTree is one row of capability-gated action buttons. The device
+// card handles ping while it is shown, so this row omits its own ping
+// button in that case (sysc-468); hiding the card restores it.
 func actionRowTree(dev *Device, settings Settings) *v1.Node {
-	return &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+	children := []*v1.Node{
 		actionButton("ring", "phone-in-talk", "Ring the device",
 			dev.Reachable && hasPlugin(dev, "findmyphone")),
-		actionButton("ping", "notifications-active", "Ping the device",
-			dev.Reachable && hasPlugin(dev, "ping")),
+	}
+	if !settings.ShowDeviceCard {
+		children = append(children,
+			actionButton("ping", "notifications-active", "Ping the device",
+				dev.Reachable && hasPlugin(dev, "ping")))
+	}
+	children = append(children,
 		actionButton("browse", "folder-open", "Browse the device files",
 			dev.Reachable && hasPlugin(dev, "sftp")),
 		actionButton("clipboard", "content-paste", "Send the clipboard",
@@ -495,7 +506,8 @@ func actionRowTree(dev *Device, settings Settings) *v1.Node {
 			dev.Reachable && hasPlugin(dev, "share")),
 		actionButton("sms", "sms", "Send a text message",
 			dev.Reachable && hasPlugin(dev, "sms")),
-	}}
+	)
+	return &v1.Node{Kind: v1.KindRow, Gap: 8, Children: children}
 }
 
 func actionButton(id, icon, name string, enabled bool) *v1.Node {

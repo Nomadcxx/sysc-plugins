@@ -181,6 +181,8 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionRejectPair, DeviceID: strings.TrimPrefix(m.Node, "reject-")})
 	case strings.HasPrefix(m.Node, "pair-"):
 		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionPair, DeviceID: strings.TrimPrefix(m.Node, "pair-")})
+	case m.Node == "device-ping" || m.Node == "ping":
+		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionPing, DeviceID: device})
 	case m.Node == "share":
 		return toggleComposer(ui, kdeconnect.ComposerShare)
 	case m.Node == "sms":
