@@ -1,2 +1,4 @@
 github.com/Nomadcxx/sysc-shell v0.0.0-20260919185221-8602bfa185f5 h1:xWV6b+noygl/4f+rfOmuscZX8XDI8evss+2vjxF/WDM=
 github.com/Nomadcxx/sysc-shell v0.0.0-20260919185221-8602bfa185f5/go.mod h1:tS+D9JFcx+Py4YtyipVJuWzq67fgKHziGUOLLTN4rcY=
+github.com/Nomadcxx/sysc-shell v0.0.0-20260919230303-ec98abffd13e h1:aAVMEfqUU9fldS8n1G4W9ndiFTd+2zSbtM78uReNvX4=
+github.com/Nomadcxx/sysc-shell v0.0.0-20260919230303-ec98abffd13e/go.mod h1:tS+D9JFcx+Py4YtyipVJuWzq67fgKHziGUOLLTN4rcY=

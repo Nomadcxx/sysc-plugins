@@ -2,7 +2,7 @@
   "schema": 1,
   "id": "org.sysc.timer",
   "name": "Pomodoro Timer",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "protocol": {"major": 1, "minor": 3},
   "exec": "bin/sysc-plugin-timer",
   "capabilities": ["notifications", "panels", "settings", "state"],
@@ -17,6 +17,7 @@
     {"key": "sessions_before_long_break", "type": "int", "label": "Sessions before long break", "default": 4, "min": 1, "max": 12},
     {"key": "auto_start_breaks", "type": "bool", "label": "Auto-start breaks", "default": false},
     {"key": "auto_start_work", "type": "bool", "label": "Auto-start work", "default": false},
-    {"key": "show_when_idle", "type": "bool", "label": "Show time when idle", "default": true}
+    {"key": "show_when_idle", "type": "bool", "label": "Show time when idle", "default": true},
+    {"key": "sound", "type": "bool", "label": "Play a sound on phase changes", "default": true}
   ]
 }

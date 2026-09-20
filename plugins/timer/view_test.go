@@ -109,16 +109,21 @@ func TestPanelTreeIsThePomodoroLayout(t *testing.T) {
 	if !strings.Contains(subtitle.Text, "0 completed") {
 		t.Fatalf("subtitle = %q, want the session tally", subtitle.Text)
 	}
-	if gauge == nil || gauge.Height != 160 || gauge.ValueText != "25:00" || gauge.Value != 0 {
+	if gauge == nil || gauge.Height != 184 || gauge.ValueText != "25:00" || gauge.Value != 0 {
 		t.Fatalf("gauge = %+v", gauge)
 	}
 	if modeText == nil || modeText.Text != "Work" || !modeText.CenterX {
 		t.Fatalf("mode label = %+v", modeText)
 	}
-	if toggle == nil || toggle.Text != "Start" || toggle.Fill != "accent" {
+	// The transport is icon-only: a glyph, a circular hit target, and no
+	// label competing with the ring above it.
+	if toggle == nil || toggle.Icon != "play_arrow" || toggle.Text != "" || toggle.Fill != "accent" {
 		t.Fatalf("toggle = %+v", toggle)
 	}
-	if reset == nil || reset.Fill != "soft" {
+	if toggle.Width != transportSize || toggle.Radius != transportSize/2 {
+		t.Fatalf("toggle is not a circular control: %+v", toggle)
+	}
+	if reset == nil || reset.Icon != "restart_alt" || reset.Fill != "soft" {
 		t.Fatalf("reset = %+v", reset)
 	}
 	if pills["mode-work"] == nil || pills["mode-work"].Fill != "accent" {
@@ -130,7 +135,7 @@ func TestPanelTreeIsThePomodoroLayout(t *testing.T) {
 	if pills["mode-long"] == nil || pills["mode-long"].Fill != "chip" {
 		t.Fatalf("long pill = %+v", pills["mode-long"])
 	}
-	if footer == nil || footer.Radius != 10 {
+	if footer == nil || footer.Radius != 12 {
 		t.Fatalf("footer = %+v", footer)
 	}
 	footerText := treeText(footer)
@@ -151,7 +156,9 @@ func TestPanelTreeIsThePomodoroLayout(t *testing.T) {
 			}
 		}
 	}
-	if runningToggle == nil || runningToggle.Text != "Pause" || runningToggle.Fill != "soft" {
+	// The primary control keeps the accent in every state: it is the one
+	// action the panel is for, and the glyph alone says which way it runs.
+	if runningToggle == nil || runningToggle.Icon != "pause" || runningToggle.Fill != "accent" {
 		t.Fatalf("running toggle = %+v", runningToggle)
 	}
 	if runningGauge == nil || runningGauge.Value != 0.5 || runningGauge.ValueText != "04:12" {
@@ -161,7 +168,7 @@ func TestPanelTreeIsThePomodoroLayout(t *testing.T) {
 	paused := PanelTree("04:12", StatePaused, 0.5, ModeShort, 1, 4)
 	for _, c := range paused.Children {
 		for _, b := range c.Children {
-			if b.ID == "start" && (b.Text != "Resume" || b.Fill != "soft") {
+			if b.ID == "start" && (b.Icon != "play_arrow" || b.Name != "Resume timer") {
 				t.Fatalf("paused toggle = %+v", b)
 			}
 		}

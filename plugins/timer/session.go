@@ -126,12 +126,30 @@ func (s *Session) Tick() (time.Duration, bool) {
 	if !done {
 		return remaining, false
 	}
+	s.advanceLocked(true)
+	return remaining, true
+}
+
+// Skip ends the current phase early. An unfinished work phase does not
+// count towards the tally: the cadence tracks pomodoros seen through, not
+// ones abandoned.
+func (s *Session) Skip() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.advanceLocked(false)
+}
+
+// advanceLocked rolls on to the next phase. earned says whether a work
+// phase that just ended should be counted.
+func (s *Session) advanceLocked(earned bool) {
 	var next Mode
 	var auto bool
 	if s.mode == ModeWork {
-		s.completed++
+		if earned {
+			s.completed++
+		}
 		next = ModeShort
-		if s.completed%s.sessions == 0 {
+		if s.completed%s.sessions == 0 && s.completed > 0 {
 			next = ModeLong
 		}
 		auto = s.autoBreak
@@ -145,7 +163,6 @@ func (s *Session) Tick() (time.Duration, bool) {
 	if auto {
 		s.timer.Start()
 	}
-	return remaining, true
 }
 
 func (s *Session) Remaining() time.Duration { return s.timer.Remaining() }

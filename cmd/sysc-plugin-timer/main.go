@@ -20,7 +20,7 @@ func main() {
 
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.timer", Name: "Timer", Version: "1.3.0"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.timer", Name: "Pomodoro Timer", Version: "1.4.0"})); err != nil {
 		return err
 	}
 	tm := timer.NewSession(time.Now)
@@ -31,6 +31,7 @@ func run(in *os.File, out *os.File) error {
 	}
 	views := map[string]view{}
 	showWhenIdle := true
+	playSound := true
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -85,18 +86,20 @@ func run(in *os.File, out *os.File) error {
 		case "close":
 			_, _ = c.Call(ctx, v1.CallPanelClose, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 		case "start":
-			paused := tm.State() == timer.StatePaused
+			// The panel stays open. It carries the ring, the phase pills and
+			// the transport, so closing it on start takes the controls away
+			// at the moment they start mattering -- and the shell's own open
+			// call is a toggle, which a close issued from here races.
 			tm.Start()
 			save(ctx, c, tm)
-			if !paused {
-				// Noctalia closes the panel on start; the bar carries the count.
-				_, _ = c.Call(ctx, v1.CallPanelClose, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
-			}
 		case "pause":
 			tm.Pause()
 			save(ctx, c, tm)
 		case "reset":
 			tm.Reset()
+			save(ctx, c, tm)
+		case "skip":
+			tm.Skip()
 			save(ctx, c, tm)
 		case "mode-work":
 			tm.SetMode(timer.ModeWork)
@@ -126,11 +129,16 @@ func run(in *os.File, out *os.File) error {
 			_, done := tm.Tick()
 			if done {
 				body := "Break over — back to work"
+				sound := timer.SoundBreakDone
 				if prev == timer.ModeWork {
 					body = "Work complete — time for a break"
 					if tm.Mode() == timer.ModeLong {
 						body = "Work complete — time for a long break"
 					}
+					sound = timer.SoundWorkDone
+				}
+				if playSound {
+					timer.Play(sound)
 				}
 				_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{Summary: "Pomodoro", Body: body, Urgency: v1.UrgencyNormal})
 			}
@@ -191,6 +199,11 @@ func run(in *os.File, out *os.File) error {
 					if b, ok := raw.(bool); ok {
 						showWhenIdle = b
 						changed = true
+					}
+				}
+				if raw, ok := m.Values["sound"]; ok {
+					if b, ok := raw.(bool); ok {
+						playSound = b
 					}
 				}
 				if changed {
