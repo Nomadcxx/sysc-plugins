@@ -309,6 +309,60 @@ func TestPanelTreePairingRequestShowsVerificationAndActions(t *testing.T) {
 	}
 }
 
+func TestPairingCardIcons(t *testing.T) {
+	t.Parallel()
+	incoming := pairedSnap()
+	incoming.Devices[0].PairRequestedByPeer = true
+	incoming.Devices[0].VerificationKey = "123456"
+	card := PanelTree(incoming, testSettings(), ComposerNone, Drafts{}).Children[1]
+	if b := findButton(card, "pair-accept"); b == nil || b.Icon != "check" {
+		t.Fatalf("pair-accept icon = %q, want check", iconOf(b))
+	}
+	if b := findButton(card, "pair-reject"); b == nil || b.Icon != "close" {
+		t.Fatalf("pair-reject icon = %q, want close", iconOf(b))
+	}
+
+	outgoing := pairedSnap()
+	outgoing.Devices[0].PairRequested = true
+	outCard := PanelTree(outgoing, testSettings(), ComposerNone, Drafts{}).Children[1]
+	if b := findButton(outCard, "pair-cancel"); b == nil || b.Icon != "close" {
+		t.Fatalf("pair-cancel icon = %q, want close", iconOf(b))
+	}
+}
+
+func TestPairingUnpairedCardIcon(t *testing.T) {
+	t.Parallel()
+	snap := pairedSnap()
+	snap.Devices[0].Paired = false
+	card := PanelTree(snap, testSettings(), ComposerNone, Drafts{}).Children[1]
+	if b := findButton(card, "pair"); b == nil || b.Icon != "link" {
+		t.Fatalf("pair icon = %q, want link", iconOf(b))
+	}
+}
+
+func TestPairingComposerSendIcons(t *testing.T) {
+	t.Parallel()
+	share := PanelTree(pairedSnap(), testSettings(), ComposerShare, Drafts{ShareText: "https://example.com", ShareFile: "/tmp/x"})
+	for _, id := range []string{"share-url-send", "share-text-send", "share-file-send"} {
+		if b := findButton(share, id); b == nil || b.Icon != "send" {
+			t.Fatalf("%s icon = %q, want send", id, iconOf(b))
+		}
+	}
+	sms := PanelTree(pairedSnap(), testSettings(), ComposerSMS, Drafts{SmsNumber: "+1", SmsBody: "hi"})
+	if b := findButton(sms, "sms-send"); b == nil || b.Icon != "send" {
+		t.Fatalf("sms-send icon = %q, want send", iconOf(b))
+	}
+}
+
+// iconOf returns the button's icon or a placeholder when missing, so a
+// nil button still prints as something readable.
+func iconOf(b *v1.Node) string {
+	if b == nil {
+		return "<missing>"
+	}
+	return b.Icon
+}
+
 func TestActionRowGating(t *testing.T) {
 	t.Parallel()
 	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})

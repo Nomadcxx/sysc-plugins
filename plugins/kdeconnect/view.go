@@ -233,15 +233,15 @@ func shareComposerTree(drafts Drafts) *v1.Node {
 			{Kind: v1.KindTextInput, ID: "share-text", Name: "URL or text to share", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-				gatedButton("share-url-send", "Send URL", "Share the URL with the device",
+				gatedButton("share-url-send", "send", "Send URL", "Share the URL with the device",
 					isURILike(drafts.ShareText)),
-				gatedButton("share-text-send", "Send text", "Share the text with the device",
+				gatedButton("share-text-send", "send", "Send text", "Share the text with the device",
 					strings.TrimSpace(drafts.ShareText) != ""),
 			}},
 			{Kind: v1.KindTextInput, ID: "share-file", Name: "File path to send", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-				gatedButton("share-file-send", "Send file", "Send the file to the device",
+				gatedButton("share-file-send", "send", "Send file", "Send the file to the device",
 					drafts.ShareFile != ""),
 			}},
 		}}
@@ -258,7 +258,7 @@ func smsComposerTree(drafts Drafts) *v1.Node {
 			{Kind: v1.KindTextInput, ID: "sms-body", Name: "Message", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-				gatedButton("sms-send", "Send", "Send the message",
+				gatedButton("sms-send", "send", "Send", "Send the message",
 					drafts.SmsNumber != "" && drafts.SmsBody != ""),
 				{Kind: v1.KindButton, ID: "sms-app", Text: "Open app",
 					Name: "Open the SMS app on the device", Role: "button",
@@ -281,9 +281,11 @@ func composerHeader(title, icon, closeID string) *v1.Node {
 }
 
 // gatedButton is a send button that sits disabled while its draft is not
-// sendable, the DMS dialogs' enablement.
-func gatedButton(id, text, name string, enabled bool) *v1.Node {
-	b := &v1.Node{Kind: v1.KindButton, ID: id, Text: text, Fill: "accent",
+// sendable, the DMS dialogs' enablement. Setting Icon and Text together
+// relies on the host converter synthesising [icon, text] children for the
+// button (sysc-shell internal/plugin/view.go, the KindButton branch).
+func gatedButton(id, icon, text, name string, enabled bool) *v1.Node {
+	b := &v1.Node{Kind: v1.KindButton, ID: id, Icon: icon, Text: text, Fill: "accent",
 		Name: name, Role: "button",
 		Events: []v1.EventKind{v1.EventActivate}}
 	if !enabled {
@@ -309,7 +311,7 @@ var uriScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:`)
 func pairingCard(dev *Device) *v1.Node {
 	hint := "Pairing request sent. Accept it on the device."
 	actions := []*v1.Node{{
-		Kind: v1.KindButton, ID: "pair-cancel", Text: "Cancel", Fill: "error-container",
+		Kind: v1.KindButton, ID: "pair-cancel", Icon: "close", Text: "Cancel", Fill: "error-container",
 		Name: "Cancel the pairing request", Role: "button",
 		Events: []v1.EventKind{v1.EventActivate},
 	}}
@@ -319,10 +321,10 @@ func pairingCard(dev *Device) *v1.Node {
 			hint = "Verification: " + dev.VerificationKey
 		}
 		actions = []*v1.Node{
-			{Kind: v1.KindButton, ID: "pair-accept", Text: "Accept", Fill: "accent",
+			{Kind: v1.KindButton, ID: "pair-accept", Icon: "check", Text: "Accept", Fill: "accent",
 				Name: "Accept the pairing request", Role: "button",
 				Events: []v1.EventKind{v1.EventActivate}},
-			{Kind: v1.KindButton, ID: "pair-reject", Text: "Reject", Fill: "error-container",
+			{Kind: v1.KindButton, ID: "pair-reject", Icon: "close", Text: "Reject", Fill: "error-container",
 				Name: "Reject the pairing request", Role: "button",
 				Events: []v1.EventKind{v1.EventActivate}},
 		}
@@ -349,7 +351,7 @@ func unpairedCard(dev *Device) *v1.Node {
 					{Kind: v1.KindText, Text: "Not paired", Size: "caption", Tone: v1.ToneSubtle},
 				}},
 			}},
-			{Kind: v1.KindButton, ID: "pair", Text: "Request pairing", Fill: "accent",
+			{Kind: v1.KindButton, ID: "pair", Icon: "link", Text: "Request pairing", Fill: "accent",
 				Name: "Request pairing with the device", Role: "button",
 				Events: []v1.EventKind{v1.EventActivate}},
 		}}
