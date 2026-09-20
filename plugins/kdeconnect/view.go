@@ -451,8 +451,8 @@ func cardStatusTone(dev *Device) v1.Tone {
 }
 
 // deviceCardTree is the main device card: type icon, name, status, and the
-// battery meter. The wire has no image kind, so the DMS phone mockup is a
-// card with the device glyph — the honest approximation.
+// battery meter. Task 4 swaps the icon for the wire's image kind once the
+// mockup assets land.
 func deviceCardTree(dev *Device) *v1.Node {
 	children := []*v1.Node{
 		{Kind: v1.KindIcon, Icon: deviceIcon(dev), CenterX: true},

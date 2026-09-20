@@ -1,5 +1,5 @@
-github.com/Nomadcxx/sysc-shell v0.0.0-20260919230303-ec98abffd13e h1:aAVMEfqUU9fldS8n1G4W9ndiFTd+2zSbtM78uReNvX4=
-github.com/Nomadcxx/sysc-shell v0.0.0-20260919230303-ec98abffd13e/go.mod h1:tS+D9JFcx+Py4YtyipVJuWzq67fgKHziGUOLLTN4rcY=
+github.com/Nomadcxx/sysc-shell v0.0.0-20260920172831-70f495ebb798 h1:uQRfD9ZqvqtN9sfCug0SjI4+ZoGrvhrCmIoWvAmTjPM=
+github.com/Nomadcxx/sysc-shell v0.0.0-20260920172831-70f495ebb798/go.mod h1:tS+D9JFcx+Py4YtyipVJuWzq67fgKHziGUOLLTN4rcY=
 github.com/godbus/dbus/v5 v5.2.2 h1:TUR3TgtSVDmjiXOgAAyaZbYmIeP3DPkld3jgKGV8mXQ=
 github.com/godbus/dbus/v5 v5.2.2/go.mod h1:3AAv2+hPq5rdnr5txxxRwiGjPXamgoIHgz9FPBfOp3c=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=

@@ -3,7 +3,7 @@
   "id": "org.sysc.kdeconnect",
   "name": "Phone Connect",
   "version": "0.1.0",
-  "protocol": {"major": 1, "minor": 2},
+  "protocol": {"major": 1, "minor": 6},
   "exec": "bin/sysc-plugin-kdeconnect",
   "capabilities": ["notifications", "panels", "settings", "state"],
   "requires": {"commands": ["kdeconnect-cli"]},
