@@ -35,8 +35,8 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-19-kdeconnect-phone-connect.md` | design + plan | KDE Connect (Phone Connect) plugin design and P1–P8 implementation plan. |
 | `2026-09-20-pomodoro-audit.md` | audit | Pomodoro plugin audit against the reference. |
 | `2026-09-20-pomodoro-handover.md` | handover | Pomodoro work handover. |
-| `2026-09-21-kdeconnect-gap-fill-plan.md` | plan | Plan D — the post-wire-minor-5/6 gap fill for the KDE Connect plugin (icons, tap-to-ping, recent images, mockup, resize, focus, charging fill, live gate). |
-| `2026-09-21-kdeconnect-gap-fill-audit-handover.md` | handover | Commission for the independent audit of Plan D; drop it once the audit report is landed. |
+| `2026-09-21-kdeconnect-gap-fill-plan.md` | plan | Plan D — the post-wire-minor-5/6 gap fill for the KDE Connect plugin (icons, tap-to-ping, recent images, mockup, resize, focus, charging fill, live gate). Audited 2026-09-21; amendments applied. |
+| `2026-09-21-kdeconnect-gap-fill-audit-report.md` | audit | Independent audit of Plan D: verdict, claims table, primed-finding dispositions, diff-level amendments, merge-order go/no-go. |
 
 ## Documents on branches
 
