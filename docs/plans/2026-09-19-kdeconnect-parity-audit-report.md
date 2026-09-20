@@ -202,3 +202,39 @@ bd sysc-464–sysc-471.
 - **Deliberate improvements, recorded as divergences:** rising-edge pairing toasts
   (6), literal strength icons (7), SMS exit-status checking where DMS fires detached
   blindly.
+
+## UI walk: designed vs exists
+
+An element-by-element comparison of the DMS popout against the panel the plugin
+actually renders. Items are "exists in name or function but does not match the
+reference" unless noted. Actionable items are bd sysc-472–sysc-478; the rest are
+wire or host limitations recorded here so they are not silently dropped.
+
+| DMS element (reference) | Mine today | Verdict |
+|---|---|---|
+| Header: active-device type icon in a 42px primary-tinted circle, serviceName bold, counts in primary @0.8, border 1px | Static `devices` glyph, no chip, title + accent counts, no border | **sysc-472** (icon+chip); border is a wire gap |
+| Header: swap_horiz button reveals the switcher on demand; refresh icon swaps to a spinner while refreshing | No swap button — switcher always on with 2+ devices; refresh is static | **sysc-473** (toggle), **sysc-474** (busy) |
+| Switcher lists ALL cards; the selected one is pill-styled, primary-tinted, with a 200ms radius animation | Selected device omitted from the switcher entirely; no selection styling | **sysc-473** |
+| DeviceCard (switcher mode): primary tint on select/hover, icon colours by reachability, warning-coloured pairing statuses, battery+network chips right | Card matches on structure, chips, five statuses; accent instead of warning; no hover | Closest match in the panel; warning tone is a wire gap |
+| Pairing rows: Accept/Reject with check/close icons, Request pairing with link icon | Text-only buttons, same ids and gating | **sysc-478** |
+| UnavailableMessage: error icon + centred title/hint on errorPressed background | error-container fill, left-aligned, no icon | **sysc-477** |
+| EmptyState: two centred lines | Left-aligned state card | **sysc-477** |
+| Main container: PhoneDisplay mockup (type-sized 135–260px, custom image, offline dimming, tap = ping) | Icon in a card; explicit ping button | sysc-445/446 (mockup needs image support), sysc-468 (tap) |
+| Action row centred inside the info card; ping hidden while the placeholder handles it | Left-aligned panel-level row, ping always present | **sysc-475** |
+| Info grid: two columns when the placeholder is off | Always one column | **sysc-476** |
+| InfoRow: 28px primary icon, stacked label/value | Stacked label/value, host-coloured icon | Close |
+| Popout width: 400px + type-based placeholder width (up to 525) | Manifest-fixed 400 panel | Wire gap: panels cannot resize per state |
+| Cards: 1px borders (primary/outline blends) | Fills only | Wire gap: no border field |
+| Pairing status colour: Theme.warning | ToneAccent | Wire gap: no warning tone |
+| Bar pill: charge-level fill + bolt overlay while charging | Charging glyph only | sysc-447 |
+| Dialogs: animated open/close, Escape, forceActiveFocus on open | Static cards with close buttons | Animations/focus are host-owned |
+| Recent images grid, MPRIS player, Valent | Absent | sysc-445/446, sysc-444, sysc-443 |
+| Buttons pair icon+label | Text-only | **sysc-478** |
+
+### Matches confirmed at the UI level
+
+Panel order (header → states → switcher → device → actions → info → composers),
+the counts line, five device statuses, chips, pairing gating rules, clipboard
+setting gate, capability-disabled actions, composer fields and gating, offline
+pill behaviour, and the error-styled unavailable card all correspond to the
+reference after the second-pass fixes.
