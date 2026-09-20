@@ -381,7 +381,7 @@ func switcherCardTree(dev *Device) *v1.Node {
 			&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d%%", dev.BatteryCharge), Size: "caption"})
 	}
 	if dev.NetworkKnown && dev.NetworkStrength >= 0 {
-		chips = append(chips, &v1.Node{Kind: v1.KindIcon, Icon: "network"})
+		chips = append(chips, &v1.Node{Kind: v1.KindIcon, Icon: networkStrengthIcon(dev.NetworkStrength)})
 	}
 	if len(chips) > 0 {
 		// Two children make the header a pin-end row: the chips column sits
@@ -507,11 +507,11 @@ func infoRowsTree(dev *Device) *v1.Node {
 	}
 	if dev.NetworkKnown && dev.NetworkStrength >= 0 {
 		col.Children = append(col.Children,
-			infoRow("info-signal", "network", "Signal Strength", strengthLabel(dev.NetworkStrength), v1.ToneNormal))
+			infoRow("info-signal", networkStrengthIcon(dev.NetworkStrength), "Signal Strength", strengthLabel(dev.NetworkStrength), v1.ToneNormal))
 	}
 	if dev.NetworkKnown && dev.NetworkType != "" {
 		col.Children = append(col.Children,
-			infoRow("info-network", "network", "Network Type", networkTypeLabel(dev.NetworkType), v1.ToneNormal))
+			infoRow("info-network", networkTypeIcon(dev.NetworkType), "Network Type", networkTypeLabel(dev.NetworkType), v1.ToneNormal))
 	}
 	if row := notificationRowNode(dev); row != nil {
 		col.Children = append(col.Children, row)
@@ -551,8 +551,9 @@ func infoRow(key, icon, label, value string, tone v1.Tone) *v1.Node {
 	}}
 }
 
-// batteryIconName picks the level glyph, the charging variant when the
-// battery is charging, and the critical glyph at the bottom of the range.
+// batteryIconName follows the reference shell's breakpoints: charging icons
+// at 90/60/40/20, level icons at 95/80/65/50/35/20/10, and the critical
+// glyph below ten.
 func batteryIconName(dev *Device) string {
 	charge := dev.BatteryCharge
 	if charge < 0 {
@@ -561,17 +562,70 @@ func batteryIconName(dev *Device) string {
 	if charge > 100 {
 		charge = 100
 	}
-	if charge <= 5 && !dev.BatteryCharging {
-		return "battery-critical"
-	}
-	level := charge * 7 / 100
-	if level > 6 {
-		level = 6
-	}
 	if dev.BatteryCharging {
-		return "battery-charging-" + strconv.Itoa(level)
+		switch {
+		case charge >= 90:
+			return "battery-charging-6"
+		case charge >= 60:
+			return "battery-charging-4"
+		case charge >= 40:
+			return "battery-charging-3"
+		case charge >= 20:
+			return "battery-charging-2"
+		}
+		return "battery-charging-1"
 	}
-	return "battery-" + strconv.Itoa(level)
+	switch {
+	case charge < 10:
+		return "battery-critical"
+	case charge >= 95:
+		return "battery-6"
+	case charge >= 80:
+		return "battery-5"
+	case charge >= 65:
+		return "battery-4"
+	case charge >= 50:
+		return "battery-3"
+	case charge >= 35:
+		return "battery-2"
+	case charge >= 20:
+		return "battery-1"
+	}
+	return "battery-0"
+}
+
+// networkStrengthIcon picks the signal bar for the reported strength.
+func networkStrengthIcon(strength int) string {
+	switch {
+	case strength >= 4:
+		return "signal-cellular-4-bar"
+	case strength == 3:
+		return "signal-cellular-3-bar"
+	case strength == 2:
+		return "signal-cellular-2-bar"
+	case strength == 1:
+		return "signal-cellular-1-bar"
+	}
+	return "signal-cellular-null"
+}
+
+// networkTypeIcon picks the generation glyph for the raw network type; an
+// empty type reads as no signal, the reference shell's nodata fallback.
+func networkTypeIcon(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return "signal-cellular-null"
+	}
+	switch networkTypeLabel(raw) {
+	case "5G":
+		return "5g"
+	case "LTE", "LTE+":
+		return "4g-mobiledata"
+	case "3G":
+		return "3g-mobiledata"
+	case "2G":
+		return "g-mobiledata"
+	}
+	return "signal-cellular-4-bar"
 }
 
 // strengthLabel reads like the reference shell's connectivity labels.

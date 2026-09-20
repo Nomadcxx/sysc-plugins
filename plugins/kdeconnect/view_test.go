@@ -155,7 +155,9 @@ func TestDeviceCardChipsAndStatus(t *testing.T) {
 	if !contains(allTexts(card), "55%") {
 		t.Fatalf("battery chip missing: %v", allTexts(card))
 	}
-	if !walkFindNode(card, func(n *v1.Node) bool { return n.Kind == v1.KindIcon && n.Icon == "network" }) {
+	if !walkFindNode(card, func(n *v1.Node) bool {
+		return n.Kind == v1.KindIcon && n.Icon == "signal-cellular-3-bar"
+	}) {
 		t.Fatal("network chip icon missing")
 	}
 
@@ -401,11 +403,16 @@ func TestBatteryIconNameBands(t *testing.T) {
 		charge int
 		icon   string
 	}{
-		{3, "battery-critical"},
+		{5, "battery-critical"},
+		{9, "battery-critical"},
 		{10, "battery-0"},
-		{15, "battery-1"},
+		{15, "battery-0"},
+		{20, "battery-1"},
+		{35, "battery-2"},
 		{50, "battery-3"},
-		{98, "battery-6"},
+		{65, "battery-4"},
+		{80, "battery-5"},
+		{95, "battery-6"},
 		{100, "battery-6"},
 	}
 	for _, tc := range cases {
@@ -414,9 +421,53 @@ func TestBatteryIconNameBands(t *testing.T) {
 			t.Fatalf("charge %d icon = %q, want %q", tc.charge, got, tc.icon)
 		}
 	}
-	charging := &Device{BatteryKnown: true, BatteryCharge: 98, BatteryCharging: true}
-	if got := batteryIconName(charging); got != "battery-charging-6" {
-		t.Fatalf("charging icon = %q", got)
+	chargingCases := []struct {
+		charge int
+		icon   string
+	}{
+		{98, "battery-charging-6"},
+		{90, "battery-charging-6"},
+		{70, "battery-charging-4"},
+		{45, "battery-charging-3"},
+		{25, "battery-charging-2"},
+		{10, "battery-charging-1"},
+	}
+	for _, tc := range chargingCases {
+		dev := &Device{BatteryKnown: true, BatteryCharge: tc.charge, BatteryCharging: true}
+		if got := batteryIconName(dev); got != tc.icon {
+			t.Fatalf("charging %d icon = %q, want %q", tc.charge, got, tc.icon)
+		}
+	}
+}
+
+func TestNetworkStrengthAndTypeIcons(t *testing.T) {
+	t.Parallel()
+	strengths := map[int]string{
+		0: "signal-cellular-null",
+		1: "signal-cellular-1-bar",
+		2: "signal-cellular-2-bar",
+		3: "signal-cellular-3-bar",
+		4: "signal-cellular-4-bar",
+		5: "signal-cellular-4-bar",
+	}
+	for strength, want := range strengths {
+		if got := networkStrengthIcon(strength); got != want {
+			t.Fatalf("strength %d icon = %q, want %q", strength, got, want)
+		}
+	}
+	types := map[string]string{
+		"NR":    "5g",
+		"LTE":   "4g-mobiledata",
+		"LTE+":  "4g-mobiledata",
+		"HSPAP": "3g-mobiledata",
+		"EDGE":  "g-mobiledata",
+		"":      "signal-cellular-null",
+		"other": "signal-cellular-4-bar",
+	}
+	for raw, want := range types {
+		if got := networkTypeIcon(raw); got != want {
+			t.Fatalf("type %q icon = %q, want %q", raw, got, want)
+		}
 	}
 }
 
