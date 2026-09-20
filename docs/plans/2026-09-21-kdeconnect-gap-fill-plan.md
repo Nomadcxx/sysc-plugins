@@ -2,9 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Status:** Ready. Execution is gated on two merges: `feat/kdeconnect` (carrying Phase 0,
-sysc-472/473/475/476/477 and the plugin half of 474) into this repo, and sysc-shell
-`feature/wire-minor-5` (Designs A/B/C, minor five and six) into sysc-shell `main`.
+**Status:** Ready, audited (`2026-09-21-kdeconnect-gap-fill-audit-report.md` — executable after
+the amendments below, which are applied). Execution is gated on two merges: `feat/kdeconnect`
+(carrying Phase 0, sysc-472/473/475/476/477 and the plugin half of 474) into this repo, and
+sysc-shell `feature/wire-minor-5` (Designs A/B/C, minor five and six) **plus
+`feature/kdeconnect-icons`** (the kdeconnect glyph catalogue) into sysc-shell `main`.
 
 **Goal:** Close the remaining DMS parity gaps in `plugins/kdeconnect` that the plugin wire
 could not express before: icon-led buttons, tap-to-ping, the recent-images grid, the device
@@ -48,9 +50,15 @@ branch merges — register it in `docs/plans/README.md` in the same commit that 
 
 - [ ] **Step 1: Merge `feat/kdeconnect` into this repo's `main`** (Phase 0 included), then
       cut the implementation branch: `git checkout -b feat/kdeconnect-gap-fill`.
-- [ ] **Step 2: Merge sysc-shell `feature/wire-minor-5` into sysc-shell `main`**, then bump
-      the pin: `go get github.com/Nomadcxx/sysc-shell@<merge-commit> && go mod tidy`.
+- [ ] **Step 2: Merge sysc-shell `feature/wire-minor-5` and `feature/kdeconnect-icons` into
+      sysc-shell `main`**, then bump the pin:
+      `go get github.com/Nomadcxx/sysc-shell@<merge-commit> && go mod tidy`.
       The pin moves off `v0.0.0-20260916042624-cc684ee8c131` (minor 2) per the pinning rule.
+      The icon branch (`3c9dd81`) carries the kdeconnect glyph catalogue (`smartphone`,
+      `battery-*`, `phone-in-talk`, `folder-open`, `content-paste`, `share`, `sms`,
+      `notifications-active`, `refresh`, the network glyphs); without it `iconNode` rejects
+      every kdeconnect view — including the Phase 0 views already on `feat/kdeconnect` —
+      while the plugin-side gates still pass, masking the breakage.
 - [ ] **Step 3: Bump the manifest protocol** to `{"major": 1, "minor": 6}` — the plugin will
       send minor-5 fields (image, stroke) and the minor-6 `animate` flag. The host's
       handshake checks the major only, but the manifest should not lie about what the view
@@ -81,15 +89,13 @@ DMS's `DankKDEActionButton` pairs icon and label. Today `gatedButton`
       `close`, `link`, and that the composer send buttons (`share-*-send`, `sms-send`)
       carry `send`. Run `go test ./plugins/kdeconnect/ -run TestPairing -count=1`;
       expected: FAIL (icons empty).
-- [ ] **Step 2: Implement.** First check whether the host co-renders a button's own
-      `Icon` beside its `Text` (sysc-shell `paintChrome` draws children *instead of* the
-      label when children exist — `internal/render/paint.go:1122-1140`). If direct
-      `Icon`+`Text` co-renders, set both fields on the existing nodes. If not, use the
-      Design-A-proven form: the button keeps its `ID`/`Fill`/`Events` and gains two
-      non-interactive children, `{Kind: KindIcon, Icon: ...}` and
-      `{Kind: KindText, Text: ...}` (button children are legal since minor 5; the host
-      lays them out and hit-routes to the button — proven by sysc-shell's
-      `TestHitRoutesButtonChildrenToTheButton`).
+- [ ] **Step 2: Implement.** Set `Icon` on the button alongside `Text` — the converter already
+      synthesizes `[KindIcon, KindText]` children and clears `Text` when both are present
+      (sysc-shell `internal/plugin/view.go`, button branch), so no explicit children are needed.
+      Extend `gatedButton` to `gatedButton(id, icon, text, name string, enabled bool)` and update
+      its four call sites (`share-url-send`, `share-text-send`, `share-file-send`, `sms-send`).
+      The pairing buttons are built inline, not via `gatedButton`; give their literals `Icon`
+      values `check`, `close`, `close`, `link`.
       Extend `gatedButton` to `gatedButton(id, icon, text, name string, enabled bool)`.
 - [ ] **Step 3: Run the view tests.** `go test ./plugins/kdeconnect/ -count=1`. Expected: PASS.
 - [ ] **Step 4: Commit** `feat(kdeconnect): pair icons with button labels (sysc-478)`.
@@ -116,14 +122,18 @@ DMS's `PhoneDisplay` pings when tapped. The device card (`deviceCardTree`,
 - [ ] **Step 2: Implement the card.** Wrap the existing children in the button node. Keep
       `Fill: "card"`, `Radius: 12`, `Padding: 14` on the button itself (chrome paints the
       button's own fill; children paint inside).
-- [ ] **Step 3: Route the action.** In `handleInput`, map `"device-ping"` to
-      `kdeconnect.Action{Kind: kdeconnect.ActionPing, ...}` exactly as the existing
-      `"ping"` button ID maps. The distinct ID avoids colliding with the action-row
-      button's node ID in `PanelDelta` keyed patches.
+- [ ] **Step 3: Route the action.** In `handleInput`, add routing for `"device-ping"` **and**
+      `"ping"` — no ping routing exists today (`handleInput` has no ping/ring/browse/clipboard
+      cases; the action-row ping button is currently dead). Map both to
+      `kdeconnect.Action{Kind: kdeconnect.ActionPing, ...}`. The distinct ID keeps input events
+      distinguishable: the host stamps `plugin:<view>:<nodeID>` from `Action = ID`, so duplicate
+      IDs would make the two buttons indistinguishable (`PanelDelta` replacements match `Key`,
+      not `ID`).
 - [ ] **Step 4: Hide the redundant ping button.** In `actionRowTree`, include the ping
       button only when the device card is not shown (`!settings.ShowDeviceCard`), matching
-      DMS ("ping hidden while the placeholder handles it"). Update the Phase 0 view test
-      that asserted ping always visible.
+      DMS ("ping hidden while the placeholder handles it"). Update `TestActionRowGating`
+      (`view_test.go:312`), which asserts the action row has exactly six children with
+      `Children[0].ID == "ring"`; with ping hidden the row has five.
 - [ ] **Step 5: Run the view tests and gates.** `go test ./plugins/kdeconnect/ -count=1`.
 - [ ] **Step 6: Commit** `feat(kdeconnect): tap the device display to ping (sysc-468)`.
 
@@ -137,7 +147,8 @@ files into a local cache and hands the host those paths.
 **Files:**
 - Modify: `plugins/kdeconnect/manifest.json` (three settings)
 - Modify: `plugins/kdeconnect/service.go` (Settings, Snapshot, scan, thumbnails, actions)
-- Modify: `plugins/kdeconnect/daemon.go` (sftp mount + mount point, beside `startBrowsing` :37)
+- Modify: `plugins/kdeconnect/daemon.go` (sftp interface) and
+  `plugins/kdeconnect/service.go` (mount call beside `startBrowsing` :585)
 - Modify: `plugins/kdeconnect/view.go` (`recentImagesTree`)
 - Modify: `cmd/sysc-plugin-kdeconnect/main.go` (action routing)
 - Test: `plugins/kdeconnect/service_test.go`, `plugins/kdeconnect/view_test.go`
@@ -157,9 +168,9 @@ files into a local cache and hands the host those paths.
 - [ ] **Step 1: Manifest settings.** `recent_images_path` (string, default ""),
       `max_recent_images` (float, default 6, min 1, max 12), `scan_subdirectories`
       (bool, default false). Extend `Settings` and `DefaultSettings` to match.
-- [ ] **Step 2: Write the failing scan test.** `scanRecentImages(root string, max int,
-      sub bool) ([]string, error)`: rejects a root that is not under the SFTP mount
-      point, runs `find <root> -maxdepth <1|2> \( -iname '*.png' -o -iname '*.jpg'
+- [ ] **Step 2: Write the failing scan test.** `scanRecentImages(root, mountPoint string,
+      max int, sub bool) ([]string, error)`: rejects a root that is not under `mountPoint`,
+      runs `find <root> -maxdepth <1|2> \( -iname '*.png' -o -iname '*.jpg'
       -o -iname '*.jpeg' \) -printf '%T@ %p\n'`, sorts descending by mtime, caps at
       `max`. Test against a temp dir with mixed-age files of all four extensions plus a
       nested file (depth gate). Run; expected: FAIL (undefined).
@@ -175,15 +186,18 @@ files into a local cache and hands the host those paths.
       changes re-thumbnail and stale entries harmless.
 - [ ] **Step 6: Wire the service.** In the refresh path, when
       `settings.RecentImagesPath != ""` and the selected device is reachable with the
-      `sftp` plugin: ensure the SFTP mount (extend the `daemon.go` sftp seam beside
-      `startBrowsing` — mount call + mount-point property, the DMS
+      `sftp` plugin: ensure the SFTP mount (extend the seam at `service.go:585`,
+      `ActionBrowse` → `sftpIface.startBrowsing`, with a `mountPoint()` call on
+      `…device.sftp` — a method, not a property;
+      `docs/plans/2026-09-19-kdeconnect-phone-connect.md:61,258` — the DMS
       `KDEConnectService` sftp flow), scan, thumbnail, fill `Snapshot.RecentImages`,
       and keep the `ID → Source` map for action routing. Failures degrade to an empty
       grid, never an unavailable panel.
 - [ ] **Step 7: Write the failing view test.** `recentImagesTree` renders a card titled
       "Recent" containing rows of three per-image columns: `KindImage` with
       `Path: thumb`, `ImageSize: 96`, `ID: "recent-<ID>"`, plus a button row
-      (`recent-open-<ID>` icon `folder-open`, `recent-share-<ID>` icon `share`).
+      (`recent-open-<ID>` icon `folder-open`, `recent-share-<ID>` icon `share` — both ride
+      the Task 0 icon-branch merge; the material name `folder_open` is a different glyph).
       Hidden entirely when `RecentImages` is empty. Run; expected: FAIL.
 - [ ] **Step 8: Implement the view** and route the two action prefixes in `handleInput`
       (`xdg-open` via `os/exec` for open — plugin-side, as DMS does; `ActionShareURL`
@@ -246,7 +260,8 @@ the panel at 400; minor 5's `panel.resize` retargets the open panel.
       loop (track the last sent width; send after the panel publish). The host bounds the
       request to 64–4096 (525 is fine), replies *requested*, and the compositor's
       configure completes it — the plugin must not wait on the reply beyond the call
-      returning.
+      returning. Treat the call as best-effort: ignore a failure reply — the panel can
+      close between publish and call, and `resizePanel` errors when no panel is open.
 - [ ] **Step 3: Run the main tests and gates.**
 - [ ] **Step 4: Commit** `feat(kdeconnect): resize the panel with the device type`.
 
@@ -285,20 +300,22 @@ progress the glide; the pill gets the level fill as a progress child of the pill
 - Test: `plugins/kdeconnect/view_test.go`
 
 **Interfaces:**
-- Produces: `batteryProgressNode` sets `Animate: true` (`Key: "battery-progress"` is
+- Produces: `batteryProgressNode` sets `Animate: true` (  `Key: "battery-progress"` is
   already present — minor 6 requires the key and the host validator enforces it). While
   charging, the bar pill button gains a first child
-  `KindProgress{Key: "kdeconnect-pill", Value: level, Animate: true, Fill: <tint>}` with
-  the tint mapped `<20 → error, <60 → warning, else success`, followed by the existing
-  icon+label row.
+  `KindProgress{Key: "kdeconnect-pill", Value: level, Animate: true, Tone: <tone>}` with
+  the tone mapped `<20 → error, else accent` (the wire has no warning/success fills, and
+  progress cannot carry `Fill` — `fillAllowed` is container/button), followed by the
+  existing icon+label row.
 
 - [ ] **Step 1: Write the failing test** — progress carries `Animate`; the charging pill
       carries the progress child with the right tint per level; the idle pill is
       unchanged. Run; expected: FAIL.
 - [ ] **Step 2: Implement.** If the button-child layout fights the pill's shape (children
       stack where the pill needs an overlay), fall back to the audit's static
-      approximation — tint the button's own `Fill` by level while charging — and record
-      the fallback in the deviation ledger. Decide by rendering, not by hope.
+      approximation — set the button's own `Tone` (`error` below 20, else `accent`) while
+      charging — and record the fallback in the deviation ledger. Decide by rendering,
+      not by hope.
 - [ ] **Step 3: Run the view tests and gates.**
 - [ ] **Step 4: Commit** `feat(kdeconnect): animated charging fill (sysc-447)`.
 
@@ -317,7 +334,9 @@ progress the glide; the pill gets the level fill as a progress child of the pill
 - [ ] **Step 3: Write the completion handover** — commit hashes, gate output, live
       observations, and the deviation ledger below as accepted deviations.
 - [ ] **Step 4: Close the bd items** in the sysc-shell tracker: sysc-478, 468, 445, 447,
-      430, then the sysc-420 epic.
+      430, then the sysc-420 epic — after resolving or explicitly deferring `sysc-469`
+      (pairing toast dedupe) and `sysc-470` (strength-3 icon), which are open epic
+      dependencies outside this plan's scope.
 
 ---
 
@@ -330,5 +349,7 @@ progress the glide; the pill gets the level fill as a progress child of the pill
 | Per-device recent-images path, custom device images, type overrides | The settings schema is flat; per-device map settings are a wire gap. Single global settings ship instead. |
 | Offline mockup dimming | The host does not dim image nodes; the status line carries offline state. |
 | Warning tone for pairing statuses | The wire has no warning tone (audit wire gap); accent stays. |
+| Charging tint collapse: error/accent only | The wire has no warning/success fills and progress cannot carry `Fill`; DMS's three-tint mapping collapses to `Tone` error below 20, accent otherwise. |
+| sysc-469 (pairing toast dedupe) and sysc-470 (strength-3 icon) deferred | Open epic-420 dependencies outside this plan's scope; resolve or defer explicitly before closing the epic. |
 | Header border, hover states, dialog open/close animation | Host-owned chrome; the wire deliberately carries none. |
 | MPRIS player section, Valent backend, keyboard shortcuts, i18n | Separate ledger items (sysc-444, 443, 449, 448); not this plan's scope. |
