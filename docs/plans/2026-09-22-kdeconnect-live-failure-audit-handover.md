@@ -35,6 +35,7 @@ matrix was then abandoned after the first three observations:
 | O1 | The bar pill glyph "looks like some kind of lowercase a" — should look like a phone | FAIL |
 | O2 | The panel opens only on right-click | FAIL |
 | O3 | The panel shows almost no styling, no features, no PNGs — just a "Request pairing" option | FAIL |
+| O4 | The panel is far too narrow in width | FAIL |
 
 Owner's overall verdict: an extremely and largely unusable first pass.
 
@@ -91,6 +92,16 @@ Deployed state at time of failure:
   `mountPoint()` may yield an empty mount point), live `PanelDelta`, and the offline state were
   never exercised because the panel never got past the unpaired card. The audit report must not
   let these be claimed as tested.
+- **F7 — the panel width is the manifest's 400, and the widening task was never built.** The
+  manifest declares `panels: panel 400x520 attached`, and Plan D Task 5 (dynamic width via
+  `panel.resize`, 400 base / 525 for large device types) was explicitly out of scope for this
+  round — Tasks 5–7 are unimplemented. So O4 has two separable questions: (a) is 400
+  intrinsically too narrow for the content the plugin now renders (device card, a five-button
+  action row, the info grid, and a recent-images grid of three 96px cells per row), in which
+  case the fix is a manifest default change; and (b) does the host's `panel.resize` path
+  (Design B, `CallPanelResize`, bounds 64–4096) work live, which Task 5 was meant to prove.
+  The gap analysis should measure the content's natural width against 400; the redesign plan
+  should decide manifest-default versus resize-on-open.
 
 One nuance the plan must carry: **the owner has not seen the paired-device UI at all.** The
 unpaired card is all that rendered. Separate "broken selection hid everything" from "the paired
@@ -143,7 +154,7 @@ table — but the three symptoms are blocking and land first.
 
 ## 5. Report format
 
-1. **Verdict** — root causes for O1/O2/O3, and go/no-go for the redesign plan.
+1. **Verdict** — root causes for O1/O2/O3/O4, and go/no-go for the redesign plan.
 2. **Root-cause table** — per symptom: mechanism, path:line evidence, fix locus, confidence.
 3. **F1–F6 dispositions** — confirmed / refuted / evolved, each with evidence.
 4. **Gap table** — from workstream 2.
