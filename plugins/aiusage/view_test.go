@@ -112,19 +112,6 @@ func TestBarTreeValidatesAcrossStatesAndHosts(t *testing.T) {
 	}
 }
 
-func TestBarTreeElapsedStripGatesOnHostMinor(t *testing.T) {
-	t.Parallel()
-
-	cfg := viewConfig()
-	empty := Report{} // no provider: bounds unknown, the strip cannot speak
-	if tree := BarTree(empty, DefaultInstance(), cfg, 7, viewNow); !treeHasAbsentMeter(tree) {
-		t.Fatal("minor-7 host: the elapsed strip should reserve its slot via absent")
-	}
-	if tree := BarTree(empty, DefaultInstance(), cfg, 6, viewNow); treeHasAbsentMeter(tree) {
-		t.Fatal("minor-6 host: the strip falls back to a zero value, not absent")
-	}
-}
-
 func treeHasAbsentMeter(n *v1.Node) bool {
 	if n == nil {
 		return false

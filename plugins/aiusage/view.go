@@ -179,30 +179,9 @@ func BarTree(r Report, inst Instance, cfg Config, hostMinor int, now time.Time) 
 		row.Children = append(row.Children, &v1.Node{Kind: v1.KindText, Text: pace, Tone: v1.ToneSubtle})
 	}
 
-	// The quota-over-elapsed pairing: a thin strip beneath the pill showing
-	// how far through the headline window the clock is. Unknown bounds are
-	// honest absence on minor-7 hosts (reserve the slot, paint nothing); a
-	// zero strip is the pre-7 fallback.
-	col := &v1.Node{Kind: v1.KindColumn, Gap: 2}
-	col.Children = append(col.Children, row)
-	if inst.Visualization != "none" {
-		elapsed, known := 0.0, false
-		if p != nil {
-			if h := Headline(p.Windows); h != nil {
-				if e, ok := ElapsedPercent(*h, now); ok {
-					elapsed, known = e/100, true
-				}
-			}
-		}
-		strip := &v1.Node{Kind: v1.KindProgress, Height: 3, MaxWidth: 120}
-		if known {
-			strip.Value = elapsed
-		} else if hostMinor >= 7 {
-			strip.Absent = true
-		}
-		col.Children = append(col.Children, strip)
-	}
-	return col
+	// The bar root must be a row (the host converter requires it), so the
+	// quota-over-elapsed stack is panel-only; the pill is the row itself.
+	return row
 }
 
 // gaugeOrMeter is the visualization slot: a radial gauge on minor-3-plus
