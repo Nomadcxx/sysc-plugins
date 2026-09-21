@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -328,6 +330,131 @@ func TestBarTreeValidate(t *testing.T) {
 	}
 	if !activates {
 		t.Fatalf("open button events = %v", btn.Events)
+	}
+}
+
+func TestPanelListScrollsAndCaps(t *testing.T) {
+	// Rows live in a scrolled list; past the cap the panel still validates
+	// instead of blowing past MaxNodes and being silently dropped.
+	var containers []Container
+	for i := 0; i < 300; i++ {
+		id := fmt.Sprintf("c%03d", i)
+		containers = append(containers, Container{ID: id, Names: id, Image: "img", State: "running", Status: "Up"})
+	}
+	panel := PanelTree(true, false, "", "", "", containers)
+	if err := v1.Validate(panel, v1.ViewPanel); err != nil {
+		t.Fatalf("300 containers: %v", err)
+	}
+	var list *v1.Node
+	walkNodes(panel, func(n *v1.Node) {
+		if n.Kind == v1.KindList {
+			list = n
+		}
+	})
+	if list == nil {
+		t.Fatal("panel has no list; container rows cannot scroll")
+	}
+	if len(list.Children) != maxPanelRows {
+		t.Fatalf("list rows = %d, want %d", len(list.Children), maxPanelRows)
+	}
+	more := false
+	walkNodes(panel, func(n *v1.Node) {
+		if n.Text == fmt.Sprintf("+%d more", len(containers)-maxPanelRows) {
+			more = true
+		}
+	})
+	if !more {
+		t.Fatalf("no +%d more line", len(containers)-maxPanelRows)
+	}
+	// A handful of containers must not gain the cap line.
+	small := PanelTree(true, false, "", "", "", containers[:3])
+	walkNodes(small, func(n *v1.Node) {
+		if strings.HasPrefix(n.Text, "+") {
+			t.Fatalf("unexpected overflow line %q with 3 containers", n.Text)
+		}
+	})
+}
+
+func TestTooltipTreeIsReadOnlyColumn(t *testing.T) {
+	// The tooltip view rejects interactive nodes; the old shape published the
+	// bar's button there and the host silently dropped the view.
+	tip := TooltipTree("2 containers running")
+	if err := v1.Validate(tip, v1.ViewTooltip); err != nil {
+		t.Fatal(err)
+	}
+	if tip.Kind != v1.KindColumn || len(tip.Children) != 1 || tip.Children[0].Text != "2 containers running" {
+		t.Fatalf("tooltip tree = %+v", tip)
+	}
+}
+
+func TestPanelOrdersRunningFirstWithAccentState(t *testing.T) {
+	containers := []Container{
+		{ID: "b2", Names: "db", Image: "postgres:16", State: "exited", Status: "Exited (0)"},
+		{ID: "a1", Names: "web", Image: "nginx:latest", State: "running", Status: "Up 2 hours"},
+		{ID: "c3", Names: "cache", Image: "redis:7", State: "exited", Status: "Exited (137)"},
+		{ID: "d4", Names: "api", Image: "api:1", State: "running", Status: "Up 5 hours"},
+	}
+	panel := PanelTree(true, false, "", "", "", containers)
+	var list *v1.Node
+	walkNodes(panel, func(n *v1.Node) {
+		if n.Kind == v1.KindList {
+			list = n
+		}
+	})
+	if list == nil {
+		t.Fatal("no list")
+	}
+	// Running containers surface first (stable within each group); exited
+	// ones must not bury the actionable rows.
+	var names []string
+	for _, row := range list.Children {
+		names = append(names, row.Children[0].Text)
+	}
+	want := []string{"web · Up 2 hours", "api · Up 5 hours", "db · Exited (0)", "cache · Exited (137)"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("row order = %v, want %v", names, want)
+	}
+	for _, row := range list.Children {
+		running := strings.Contains(row.Children[0].Text, "Up ")
+		tone := row.Children[0].Tone
+		if running && tone != v1.ToneAccent {
+			t.Fatalf("running row %q tone = %q, want accent", row.Children[0].Text, tone)
+		}
+		if !running && tone != v1.ToneNormal {
+			t.Fatalf("stopped row %q tone = %q, want normal", row.Children[0].Text, tone)
+		}
+	}
+}
+
+func TestPanelCraftPass(t *testing.T) {
+	panel := PanelTree(true, false, "", "", "", nil)
+	if panel.Padding != 16 {
+		t.Fatalf("panel padding = %d, want 16 (timer precedent)", panel.Padding)
+	}
+	header := panel.Children[0]
+	if !header.PinEnd {
+		t.Fatal("header row must right-pin the refresh button")
+	}
+	title := header.Children[0]
+	if !title.Bold || title.Size != "title" {
+		t.Fatalf("title Bold=%v Size=%q, want bold title", title.Bold, title.Size)
+	}
+}
+
+func TestBarTreeCountIsTabular(t *testing.T) {
+	var buttons []*v1.Node
+	walkNodes(BarTree("docker 12", false), func(n *v1.Node) {
+		if n.Kind == v1.KindButton {
+			buttons = append(buttons, n)
+		}
+	})
+	if len(buttons) != 1 {
+		t.Fatalf("bar buttons = %d, want 1", len(buttons))
+	}
+	// The running count changes every refresh; tabular figures keep the
+	// pill from wobbling in width.
+	if !buttons[0].Tabular {
+		t.Fatal("bar count must be Tabular")
 	}
 }
 

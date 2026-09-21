@@ -67,7 +67,7 @@ func run(in *os.File, out *os.File) error {
 	publish := func() {
 		mu.Lock()
 		defer mu.Unlock()
-		containers, available, loading, errMsg := session.Snapshot()
+		containers, available, loading, listErr, actErr, actingID := session.Snapshot()
 		running := session.RunningCount()
 		barText := minidocker.BarLabel(settings.showCount, settings.statusMode, running, available)
 		tooltip := minidocker.TooltipText(running, available)
@@ -77,11 +77,11 @@ func run(in *os.File, out *os.File) error {
 			var root *v1.Node
 			switch v.kind {
 			case v1.ViewBar:
-				root = minidocker.BarTree(barText)
+				root = minidocker.BarTree(barText, !available)
 			case v1.ViewTooltip:
-				root = minidocker.BarTree(tooltip)
+				root = minidocker.TooltipTree(tooltip)
 			default:
-				root = minidocker.PanelTree(available, loading, errMsg, containers)
+				root = minidocker.PanelTree(available, loading, listErr, actErr, actingID, containers)
 			}
 			_ = c.Snapshot(id, v.rev, root)
 		}

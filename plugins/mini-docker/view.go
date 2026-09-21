@@ -1,6 +1,8 @@
 package minidocker
 
 import (
+	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -18,7 +20,7 @@ func BarTree(label string, unavailable bool) *v1.Node {
 	}
 	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{
 		Kind: v1.KindButton, ID: "open", Text: label, Tone: tone,
-		Name: "Open mini docker", Role: "button",
+		Name: "Open mini docker", Role: "button", Tabular: true,
 		Events: []v1.EventKind{v1.EventActivate},
 	}}}
 }
@@ -53,15 +55,23 @@ func TooltipText(running int, available bool) string {
 	return strconv.Itoa(running) + " containers running"
 }
 
+// TooltipTree renders the bar tooltip. Tooltip views reject interactive
+// nodes, so this is a plain column — never the bar's button tree.
+func TooltipTree(text string) *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, Children: []*v1.Node{
+		{Kind: v1.KindText, Text: text},
+	}}
+}
+
 // PanelTree lists containers with lifecycle buttons; start is offered only
 // for stopped containers, stop and restart only for running ones. actErr
 // (the last failed action) outranks listErr: it is what the user just did,
 // and the action's own refresh must not have erased it. A container with an
 // action in flight gets its buttons disabled - no silent double-fires.
 func PanelTree(available, loading bool, listErr, actErr, actingID string, containers []Container) *v1.Node {
-	col := &v1.Node{Kind: v1.KindColumn, Gap: 8, Children: []*v1.Node{
-		{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: "Docker containers"},
+	col := &v1.Node{Kind: v1.KindColumn, Gap: 8, Padding: 16, Children: []*v1.Node{
+		{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: "Docker containers", Size: "title", Bold: true},
 			{Kind: v1.KindButton, ID: "refresh", Text: "Refresh", Name: "Refresh containers", Role: "button",
 				Events: []v1.EventKind{v1.EventActivate}},
 		}},
@@ -86,15 +96,43 @@ func PanelTree(available, loading bool, listErr, actErr, actingID string, contai
 		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: "No containers"})
 		return col
 	}
-	for _, c := range containers {
-		col.Children = append(col.Children, containerRow(c, actingID))
+	// Running containers surface first; exited ones must not bury the
+	// actionable rows. Stable keeps each group in docker's own order.
+	sorted := slices.Clone(containers)
+	slices.SortStableFunc(sorted, func(a, b Container) int {
+		if a.Running() != b.Running() {
+			if a.Running() {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	})
+	rows := sorted
+	list := &v1.Node{Kind: v1.KindList, Height: 400, Gap: 8}
+	if len(rows) > maxPanelRows {
+		rows = rows[:maxPanelRows]
+		col.Children = append(col.Children,
+			&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("+%d more", len(containers)-maxPanelRows), Tone: v1.ToneSubtle})
 	}
+	for _, c := range rows {
+		list.Children = append(list.Children, containerRow(c, actingID))
+	}
+	col.Children = append(col.Children, list)
 	return col
 }
 
+// maxPanelRows keeps the worst-case tree (6 nodes per row) inside the
+// host's MaxNodes budget of 1024; the overflow is summarized in a footer.
+const maxPanelRows = 150
+
 func containerRow(c Container, actingID string) *v1.Node {
+	tone := v1.ToneNormal
+	if c.Running() {
+		tone = v1.ToneAccent
+	}
 	row := &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
-		{Kind: v1.KindText, Text: c.Names + " · " + c.Status},
+		{Kind: v1.KindText, Text: c.Names + " · " + c.Status, Tone: tone},
 		{Kind: v1.KindText, Text: c.Image, Tone: v1.ToneSubtle},
 	}}
 	disabled := c.ID == actingID
