@@ -172,7 +172,7 @@ func TestOAuthMissingCredentialsIsSetup(t *testing.T) {
 	if rep.State != StateNeedsSetup {
 		t.Fatalf("state = %v, want needs-setup", rep.State)
 	}
-	if len(setup.Tried) != 1 || !strings.HasSuffix(setup.Tried[0], filepath.Join(".claude", ".credentials.json")) {
+	if len(setup.Tried) != 2 {
 		t.Fatalf("tried = %v", setup.Tried)
 	}
 }

@@ -2,6 +2,7 @@ package aiusage
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -227,6 +228,62 @@ func monogram(id string) *v1.Node {
 	}
 }
 
+// fleetRollup summarizes the tracked fleet the way AIOC's header does:
+// average load across timed quota windows (balance and informational
+// placeholders are excluded so they cannot dilute the average), the peak
+// provider as a jump link, the at-risk count, and the next reset anywhere.
+func fleetRollup(r Report, cfg Config, now time.Time) *v1.Node {
+	var total float64
+	timed := 0
+	atRisk := 0
+	var peak *ProviderReport
+	peakPct := -1.0
+	var nextReset time.Time
+	for i := range r.Providers {
+		p := &r.Providers[i]
+		if p.State != StateFresh || p.Stale {
+			continue
+		}
+		h := Headline(p.Windows)
+		if h == nil || !h.HasPercent || h.WindowMinutes <= 0 {
+			continue
+		}
+		total += h.UsedPercent
+		timed++
+		if h.UsedPercent >= float64(cfg.Warn) {
+			atRisk++
+		}
+		if peak == nil || h.UsedPercent > peakPct {
+			peak, peakPct = p, h.UsedPercent
+		}
+		if !h.ResetsAt.IsZero() && (nextReset.IsZero() || h.ResetsAt.Before(nextReset)) {
+			nextReset = h.ResetsAt
+		}
+	}
+	if timed == 0 {
+		return nil
+	}
+	row := &v1.Node{Kind: v1.KindRow, Gap: 8, Fill: "card", Shape: "card", Padding: 8, Key: "fleet-rollup"}
+	row.Children = append(row.Children,
+		&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Avg %v%%", math.Round(total/float64(timed))), Bold: true})
+	if peak != nil {
+		row.Children = append(row.Children, &v1.Node{
+			Kind: v1.KindButton, ID: "peak:" + peak.ID,
+			Text: fmt.Sprintf("Peak %s %v%%", peak.Name, peakPct),
+			Name: "Jump to " + peak.Name + ", the most loaded provider", Role: "button",
+			Events: []v1.EventKind{v1.EventActivate}})
+	}
+	row.Children = append(row.Children,
+		&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d at risk", atRisk), Tone: v1.ToneSubtle, Size: "caption"})
+	if !nextReset.IsZero() {
+		if cd := FormatCountdown(nextReset, now); cd != "" {
+			row.Children = append(row.Children,
+				&v1.Node{Kind: v1.KindText, Text: "next reset " + cd, Tone: v1.ToneSubtle, Size: "caption", Tabular: true})
+		}
+	}
+	return row
+}
+
 // PanelTree builds the master/detail panel: provider rows on the left,
 // the selected provider's detail on the right.
 func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor int, now time.Time) *v1.Node {
@@ -240,6 +297,11 @@ func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor 
 				Disabled: r.Loading, Tooltip: "Fetch every tracked provider now",
 				Events: []v1.EventKind{v1.EventActivate}},
 		}})
+	// The fleet rollup: average load across timed quota windows, the peak
+	// provider as a jump link, at-risk count, and the next reset anywhere.
+	if rollup := fleetRollup(r, cfg, now); rollup != nil {
+		list.Children = append(list.Children, rollup)
+	}
 
 	providers := make([]ProviderReport, len(r.Providers))
 	copy(providers, r.Providers)
@@ -533,10 +595,16 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 				Tone: v1.ToneSubtle, Size: "caption"})
 	}
 
-	// The honesty footer.
-	pane.Children = append(pane.Children,
-		&v1.Node{Kind: v1.KindText, Tone: v1.ToneSubtle, Size: "caption",
-			Text: "Quota windows · last local snapshot per provider · not billing figures"})
+	// The honesty footer, with the history export beside it.
+	footer := &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+		{Kind: v1.KindText, Tone: v1.ToneSubtle, Size: "caption",
+			Text: "Quota windows · last local snapshot per provider · not billing figures"},
+		{Kind: v1.KindButton, ID: "export", Text: "Export CSV",
+			Name: "Export usage history as CSV", Role: "button",
+			Tooltip: "Write the recorded percents to a CSV file in your downloads folder",
+			Events:  []v1.EventKind{v1.EventActivate}},
+	}}
+	pane.Children = append(pane.Children, footer)
 	return pane
 }
 

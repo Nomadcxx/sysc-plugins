@@ -57,18 +57,40 @@ func FixThresholds(warn, crit int) (int, int) {
 	return warn, crit
 }
 
+// AlertConfig is the alert settings surface: the global ladder, per-provider
+// warn overrides, which windows alert, and how loudly.
+type AlertConfig struct {
+	Warn int
+	Crit int
+	// PerProvider overrides the warn threshold per provider id (AIOC's
+	// `provider:percent` overrides). Critical stays global.
+	PerProvider map[string]int
+	// Scope selects which windows alert: "all" (default) or "primary".
+	Scope string
+	// Cooldown suppresses re-firing for this long across windows — including
+	// rollovers. Zero means the default: once per window per level.
+	Cooldown time.Duration
+}
+
 // CheckAlerts walks every fresh window and returns the notices to deliver,
 // updating the ledger in place. Faulty, stale, and setup-less providers
 // never alert — an unreachable provider is not a full one.
-func CheckAlerts(r Report, warn, crit int, led Ledger, now time.Time) []Notice {
-	warn, crit = FixThresholds(warn, crit)
+func CheckAlerts(r Report, ac AlertConfig, led Ledger, now time.Time) []Notice {
 	var out []Notice
 	for _, p := range r.Providers {
 		if p.State != StateFresh || p.Stale {
 			continue
 		}
+		warn := ac.Warn
+		if override, ok := ac.PerProvider[p.ID]; ok {
+			warn = override
+		}
+		warn, crit := FixThresholds(warn, ac.Crit)
 		for _, w := range p.Windows {
 			if !w.HasPercent {
+				continue
+			}
+			if ac.Scope == "primary" && w.Key != "primary" {
 				continue
 			}
 			reset := int64(0)
@@ -90,9 +112,15 @@ func CheckAlerts(r Report, warn, crit int, led Ledger, now time.Time) []Notice {
 					delete(led, key) // re-arm on a meaningful fall
 				case w.UsedPercent >= float64(lvl.threshold):
 					// An absent record never blocks; a stored one blocks only
-					// when it covers this window (same or unknown reset).
-					if rec, ok := led[key]; ok && rec.matches(reset) {
-						continue // already reported for this window
+					// when it covers this window (same or unknown reset) —
+					// and never inside the cooldown window.
+					if rec, ok := led[key]; ok {
+						if rec.matches(reset) {
+							continue // already reported for this window
+						}
+						if ac.Cooldown > 0 && now.Unix()-rec.FiredAt < int64(ac.Cooldown.Seconds()) {
+							continue // too soon after the last notice
+						}
 					}
 					led[key] = AlertRec{ResetsAt: reset, FiredAt: now.Unix()}
 					out = append(out, p.notice(w, lvl.name, lvl.level, now))

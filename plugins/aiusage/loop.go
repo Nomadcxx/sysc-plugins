@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,6 +29,15 @@ type Config struct {
 	Warn      int
 	Crit      int
 	HostMinor int // negotiated at handshake; views consume it
+
+	// Alert surface: per-provider warn overrides ("provider:percent" CSV),
+	// which windows alert, and the re-fire cooldown.
+	AlertPerProvider map[string]int
+	AlertScope       string        // "all" | "primary"
+	AlertCooldown    time.Duration // 0 = once per window per level
+
+	// History keeps this many lines per trim cycle (500 / 2000 / 10000).
+	HistoryRetention int
 }
 
 // historyCap is the steady-state line budget; the file is trimmed only when
@@ -349,21 +359,60 @@ func (l *Loop) appendHistory(r Report) {
 	l.trimHistory()
 }
 
-// trimHistory keeps the file at the cap once it doubles over.
+// trimHistory keeps the file at the retention once it doubles over.
 func (l *Loop) trimHistory() {
+	retention := l.cfg.HistoryRetention
+	if retention <= 0 {
+		retention = historyCap
+	}
 	raw, err := os.ReadFile(l.historyPath)
 	if err != nil {
 		return
 	}
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-	if len(lines) <= 2*historyCap {
+	if len(lines) <= 2*retention {
 		return
 	}
-	kept := strings.Join(lines[len(lines)-historyCap:], "\n") + "\n"
+	kept := strings.Join(lines[len(lines)-retention:], "\n") + "\n"
 	tmp := l.historyPath + ".tmp"
 	if os.WriteFile(tmp, []byte(kept), 0o600) == nil {
 		_ = os.Rename(tmp, l.historyPath)
 	}
+}
+
+// ExportCSV writes the whole history as timestamp,provider,window,percent
+// rows into dir (default: the download directory), returning the path.
+// Malformed lines drop individually instead of aborting the export.
+func (l *Loop) ExportCSV(dir string) (string, error) {
+	raw, err := os.ReadFile(l.historyPath)
+	if err != nil {
+		return "", err
+	}
+	if dir == "" {
+		dir = os.Getenv("XDG_DOWNLOAD_DIR")
+	}
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, "Downloads")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	out := filepath.Join(dir, "aiusage-history-"+time.Now().Format("20060102-150405")+".csv")
+	var b strings.Builder
+	b.WriteString("timestamp_iso,timestamp_epoch,provider,window,percent\n")
+	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		var h historyLine
+		if json.Unmarshal([]byte(line), &h) != nil || h.Provider == "" {
+			continue // a bad line drops one record, not the export
+		}
+		b.WriteString(fmt.Sprintf("%s,%d,%s,%s,%v\n",
+			time.Unix(h.TS, 0).UTC().Format(time.RFC3339), h.TS, h.Provider, h.Window, h.Pct))
+	}
+	if err := os.WriteFile(out, []byte(b.String()), 0o600); err != nil {
+		return "", err
+	}
+	return out, nil
 }
 
 // History returns the provider's last n recorded primary-window percents,

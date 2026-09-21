@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -53,22 +54,58 @@ type tokenCand struct {
 // credentials reads the on-disk OAuth token. The path is recorded so the
 // setup card can name exactly what was looked for and where.
 func (c *oauthUsageCollector) credentials() ([]tokenCand, *ErrSetup) {
-	path := filepath.Join(c.env.home(), ".claude", ".credentials.json")
-	tried := &ErrSetup{Tried: []string{path}}
-	raw, err := os.ReadFile(path)
-	if err != nil {
+	tried := &ErrSetup{Tried: nil}
+	var tokens []tokenCand
+
+	// Source 1: the CLI's own store.
+	claudePath := filepath.Join(c.env.home(), ".claude", ".credentials.json")
+	tried.Tried = append(tried.Tried, claudePath)
+	if raw, err := os.ReadFile(claudePath); err == nil {
+		var file struct {
+			ClaudeAiOauth struct {
+				AccessToken string `json:"accessToken"`
+				ExpiresAt   int64  `json:"expiresAt"` // epoch ms
+			} `json:"claudeAiOauth"`
+		}
+		if json.Unmarshal(raw, &file) == nil && file.ClaudeAiOauth.AccessToken != "" {
+			tokens = append(tokens, tokenCand{
+				expiresAtMS: file.ClaudeAiOauth.ExpiresAt,
+				token:       file.ClaudeAiOauth.AccessToken,
+			})
+		}
+	}
+
+	// Source 2: the opencode client's Anthropic OAuth token — either
+	// client's token serves the same endpoint, so switching tools no longer
+	// stales the widget (the DankClaudeUsage multi-source rule).
+	opencodePath := c.env.getenv("OPENCODE_AUTH")
+	if opencodePath == "" {
+		dataDir := c.env.getenv("XDG_DATA_HOME")
+		if dataDir == "" {
+			dataDir = filepath.Join(c.env.home(), ".local", "share")
+		}
+		opencodePath = filepath.Join(dataDir, "opencode", "auth.json")
+	}
+	tried.Tried = append(tried.Tried, opencodePath)
+	if raw, err := os.ReadFile(opencodePath); err == nil {
+		var file struct {
+			Anthropic struct {
+				Type    string `json:"type"`
+				Access  string `json:"access"`
+				Expires int64  `json:"expires"` // epoch s, unlike the CLI's ms
+			} `json:"anthropic"`
+		}
+		if json.Unmarshal(raw, &file) == nil && file.Anthropic.Type == "oauth" && file.Anthropic.Access != "" {
+			tokens = append(tokens, tokenCand{
+				expiresAtMS: file.Anthropic.Expires * 1000,
+				token:       file.Anthropic.Access,
+			})
+		}
+	}
+
+	if len(tokens) == 0 {
 		return nil, tried
 	}
-	var file struct {
-		ClaudeAiOauth struct {
-			AccessToken string `json:"accessToken"`
-			ExpiresAt   int64  `json:"expiresAt"`
-		} `json:"claudeAiOauth"`
-	}
-	if err := json.Unmarshal(raw, &file); err != nil || file.ClaudeAiOauth.AccessToken == "" {
-		return nil, tried
-	}
-	tokens := []tokenCand{{expiresAtMS: file.ClaudeAiOauth.ExpiresAt, token: file.ClaudeAiOauth.AccessToken}}
 	// Non-expired first, freshest expiry first; expired candidates stay as a
 	// best-effort fallback — a token past its nominal expiry still serves.
 	nowMS := c.env.now().UnixMilli()
@@ -92,9 +129,10 @@ func (c *oauthUsageCollector) Fetch(ctx context.Context) (ProviderReport, error)
 	}
 	var lastErr string
 	for _, cand := range tokens {
-		windows, msg := c.tryToken(ctx, cand.token)
+		windows, credits, msg := c.tryToken(ctx, cand.token)
 		if msg == "" {
 			rep.Windows = windows
+			rep.Credits = credits
 			rep.State = StateFresh
 			return rep, nil
 		}
@@ -107,44 +145,66 @@ func (c *oauthUsageCollector) Fetch(ctx context.Context) (ProviderReport, error)
 
 // tryToken issues the usage request with one credential. An empty message
 // means success; anything else is the scrubbed reason the attempt failed.
-func (c *oauthUsageCollector) tryToken(ctx context.Context, token string) ([]Window, string) {
+// On success it returns the windows and the extra-usage credit balance.
+func (c *oauthUsageCollector) tryToken(ctx context.Context, token string) ([]Window, *float64, string) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api/oauth/usage", nil)
 	if err != nil {
-		return nil, "usage request: " + err.Error()
+		return nil, nil, "usage request: " + err.Error()
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
 	req.Header.Set("User-Agent", "claude-code/"+c.version)
 	resp, err := c.env.httpClient().Do(req)
 	if err != nil {
-		return nil, "usage endpoint unreachable: " + err.Error()
+		return nil, nil, "usage endpoint unreachable: " + err.Error()
 	}
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode == 401 || resp.StatusCode == 403:
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Sprintf("sign-in expired — run the sign-in flow (HTTP %d)", resp.StatusCode)
+		return nil, nil, fmt.Sprintf("sign-in expired — run the sign-in flow (HTTP %d)", resp.StatusCode)
 	case resp.StatusCode == 429:
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, "the usage endpoint rate limited the request (HTTP 429)"
+		return nil, nil, "the usage endpoint rate limited the request (HTTP 429)"
 	case resp.StatusCode >= 500:
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Sprintf("usage endpoint error (HTTP %d)", resp.StatusCode)
+		return nil, nil, fmt.Sprintf("usage endpoint error (HTTP %d)", resp.StatusCode)
 	case resp.StatusCode != 200:
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Sprintf("usage endpoint returned HTTP %d", resp.StatusCode)
+		return nil, nil, fmt.Sprintf("usage endpoint returned HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, "usage response: " + err.Error()
+		return nil, nil, "usage response: " + err.Error()
 	}
 	windows, ok := parseOAuthWindows(body)
 	if !ok {
-		return nil, "usage response was not a quota body (an error page is not usage)"
+		return nil, nil, "usage response was not a quota body (an error page is not usage)"
 	}
-	return windows, ""
+	return windows, credits(body), ""
+}
+
+// credits reads the extra-usage block: remaining prepaid credits when the
+// feature is enabled and the limit is positive, nil otherwise.
+func credits(body []byte) *float64 {
+	var wire oauthWire
+	if json.Unmarshal(body, &wire) != nil || wire.ExtraUsage == nil || !wire.ExtraUsage.IsEnabled {
+		return nil
+	}
+	if wire.ExtraUsage.MonthlyLimit <= 0 {
+		return nil
+	}
+	var used float64
+	if wire.ExtraUsage.UsedCredits != nil {
+		used = *wire.ExtraUsage.UsedCredits
+	}
+	remaining := wire.ExtraUsage.MonthlyLimit - used
+	if remaining < 0 {
+		remaining = 0
+	}
+	return &remaining
 }
 
 // oauthWire is the endpoint's response: either the newer canonical limits
@@ -164,6 +224,13 @@ type oauthWire struct {
 		Utilization *float64 `json:"utilization"`
 		ResetsAt    string   `json:"resets_at"`
 	} `json:"seven_day"`
+	// ExtraUsage is the prepaid-credits block the endpoint carries beside
+	// the subscription windows; the balance is worth a row when enabled.
+	ExtraUsage *struct {
+		IsEnabled    bool     `json:"is_enabled"`
+		MonthlyLimit float64  `json:"monthly_limit"`
+		UsedCredits  *float64 `json:"used_credits"`
+	} `json:"extra_usage"`
 }
 
 // parseOAuthWindows turns a valid quota body into windows. A valid body is
@@ -233,12 +300,22 @@ func windowFromUtilization(key string, minutes int, utilization float64, resetsA
 	return w
 }
 
+// claudeVersion is probed once per process: rebuilding collectors on
+// settings changes must not fork a subprocess every time.
+var claudeVersionOnce struct {
+	once    sync.Once
+	version string
+}
+
 // probeCLIVersion asks an installed CLI its version for the User-Agent the
 // endpoint expects. Best-effort: any failure keeps the literal fallback.
 func probeCLIVersion(command string) string {
-	out, err := exec.Command(command, "--version").Output()
-	if err != nil {
-		return ""
-	}
-	return regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`).FindString(strings.TrimSpace(string(out)))
+	claudeVersionOnce.once.Do(func() {
+		out, err := exec.Command(command, "--version").Output()
+		if err != nil {
+			return
+		}
+		claudeVersionOnce.version = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`).FindString(strings.TrimSpace(string(out)))
+	})
+	return claudeVersionOnce.version
 }

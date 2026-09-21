@@ -293,3 +293,119 @@ func TestMinimaxKeyRejectedFault(t *testing.T) {
 		t.Fatalf("message = %q", rep.Err)
 	}
 }
+
+func TestCopilotQuotaSnapshots(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth, gotEditor, gotAPIVer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotEditor = r.Header.Get("Editor-Version")
+		gotAPIVer = r.Header.Get("X-Github-Api-Version")
+		if r.URL.Path != "/copilot_internal/user" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		w.Write([]byte(`{"login":"octocat","copilot_plan":"individual","access_type_sku":"copilot_pro",
+			"quota_reset_date_utc":"2026-10-01T00:00:00Z","token_based_billing":true,
+			"quota_snapshots":{
+				"premium_interactions":{"percent_remaining":62,"overage_count":0},
+				"chat":{"unlimited":true,"entitlement":0},
+				"completions":{"entitlement":300,"remaining":120,"overage_count":2}
+			}}`))
+	}))
+	defer srv.Close()
+
+	c := &copilotCollector{env: directEnv("", func(name string) string {
+		if name == "GITHUB_TOKEN" {
+			return "gh-token"
+		}
+		return ""
+	}, nil), base: srv.URL, gh: func() string { return "" }}
+
+	rep, err := c.Fetch(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.State != StateFresh || rep.ID != "copilot" {
+		t.Fatalf("report = %+v", rep)
+	}
+	if gotAuth != "token gh-token" || gotEditor == "" || gotAPIVer == "" {
+		t.Fatalf("headers = %q / %q / %q", gotAuth, gotEditor, gotAPIVer)
+	}
+	// Premium: 100 − 62 remaining = 38% used.
+	if rep.Windows[0].Key != "primary" || rep.Windows[0].UsedPercent != 38 {
+		t.Fatalf("premium = %+v", rep.Windows[0])
+	}
+	if !strings.Contains(rep.Windows[0].Label, "AI credits") {
+		t.Fatalf("premium label = %q, want the token-billing variant", rep.Windows[0].Label)
+	}
+	// Unlimited-with-zero-entitlement chat is dropped; completions use the
+	// entitlement math: (300−120)/300 = 60%.
+	if len(rep.Windows) != 2 {
+		t.Fatalf("windows = %d, want premium + completions", len(rep.Windows))
+	}
+	if rep.Windows[1].UsedPercent != 60 || !strings.Contains(rep.Windows[1].DisplayValue, "+2 overage") {
+		t.Fatalf("completions = %+v", rep.Windows[1])
+	}
+	if rep.Plan != "Pro" || !strings.Contains(rep.Account, "octocat") {
+		t.Fatalf("plan/account = %q / %q", rep.Plan, rep.Account)
+	}
+}
+
+func TestCopilotMissingTokenIsSetup(t *testing.T) {
+	t.Parallel()
+
+	c := &copilotCollector{env: directEnv("", func(string) string { return "" }, nil),
+		base: "https://unused.invalid", gh: func() string { return "" }}
+	rep, err := c.Fetch(t.Context())
+	var setup *ErrSetup
+	if !asSetup(err, &setup) {
+		t.Fatalf("err = %v, want ErrSetup", err)
+	}
+	if len(setup.Tried) < 3 {
+		t.Fatalf("tried = %v", setup.Tried)
+	}
+	if rep.State != StateNeedsSetup {
+		t.Fatalf("state = %v", rep.State)
+	}
+}
+
+func TestExportCSV(t *testing.T) {
+	t.Parallel()
+
+	env, _ := loopEnv()
+	fc := &fakeCollector{id: "alpha", rep: freshRep("alpha")}
+	cache, history := loopPaths(t)
+	l := NewLoop(testRegistry(fc), testConfig(), env, cache, history)
+	l.Round(t.Context(), false)
+
+	outDir := t.TempDir()
+	path, err := l.ExportCSV(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "timestamp_iso,") {
+		t.Fatalf("csv = %q", lines)
+	}
+	if !strings.Contains(lines[1], "alpha,primary,40") {
+		t.Fatalf("csv row = %q", lines[1])
+	}
+
+	// A torn history line drops one record instead of aborting.
+	if err := os.WriteFile(history, []byte(`{"ts":1,"provider":"alpha","window":"primary","pct":10}`+"\nGARBAGE\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, err = l.ExportCSV(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(path)
+	if got := strings.Count(string(raw), "\n"); got != 2 {
+		t.Fatalf("loss-resilient export = %d lines, want header + the one valid record", got)
+	}
+}

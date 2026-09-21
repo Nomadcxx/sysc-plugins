@@ -22,6 +22,7 @@
             {"value": "claude", "label": "Claude"},
             {"value": "codex", "label": "Codex"},
             {"value": "commandcode", "label": "Command Code"},
+            {"value": "copilot", "label": "Copilot"},
             {"value": "minimax", "label": "MiniMax"},
             {"value": "ollama", "label": "Ollama"},
             {"value": "synthetic", "label": "Synthetic"}
@@ -73,6 +74,7 @@
     {"key": "track_claude", "type": "bool", "label": "Track Claude", "default": true},
     {"key": "track_codex", "type": "bool", "label": "Track Codex", "default": true},
     {"key": "track_commandcode", "type": "bool", "label": "Track Command Code", "default": true},
+    {"key": "track_copilot", "type": "bool", "label": "Track Copilot", "default": false},
     {"key": "track_ollama", "type": "bool", "label": "Track Ollama", "default": false},
     {"key": "track_minimax", "type": "bool", "label": "Track MiniMax", "default": false},
     {"key": "track_synthetic", "type": "bool", "label": "Track Synthetic", "default": false},
@@ -123,6 +125,48 @@
       "min": 51,
       "max": 99,
       "visible_when": {"key": "alerts_enabled", "equals": true}
+    },
+    {
+      "key": "alert_thresholds",
+      "type": "string",
+      "label": "Per-provider warn overrides",
+      "default": "",
+      "visible_when": {"key": "alerts_enabled", "equals": true}
+    },
+    {
+      "key": "alert_window_scope",
+      "type": "select",
+      "label": "Alert windows",
+      "default": "all",
+      "visible_when": {"key": "alerts_enabled", "equals": true},
+      "options": [
+        {"value": "all", "label": "All windows"},
+        {"value": "primary", "label": "Primary window only"}
+      ]
+    },
+    {
+      "key": "alert_cooldown",
+      "type": "select",
+      "label": "Re-alert cooldown",
+      "default": "0",
+      "visible_when": {"key": "alerts_enabled", "equals": true},
+      "options": [
+        {"value": "0", "label": "Once per window"},
+        {"value": "60", "label": "Every hour"},
+        {"value": "360", "label": "Every 6 hours"},
+        {"value": "1440", "label": "Once a day"}
+      ]
+    },
+    {
+      "key": "history_retention",
+      "type": "select",
+      "label": "History retention (lines)",
+      "default": "2000",
+      "options": [
+        {"value": "500", "label": "500"},
+        {"value": "2000", "label": "2000"},
+        {"value": "10000", "label": "10000"}
+      ]
     }
   ]
 }

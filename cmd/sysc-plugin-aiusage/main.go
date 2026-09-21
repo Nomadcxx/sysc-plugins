@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,7 +110,13 @@ func run(in, out *os.File) error {
 		loop.SetLoading(true)
 		rep := loop.Round(ctx, force)
 		loop.SetLoading(false)
-		for _, n := range aiusage.CheckAlerts(rep, cfg.Warn, cfg.Crit, ledger, time.Now()) {
+		ac := aiusage.AlertConfig{
+			Warn: cfg.Warn, Crit: cfg.Crit,
+			PerProvider: cfg.AlertPerProvider,
+			Scope:       cfg.AlertScope,
+			Cooldown:    cfg.AlertCooldown,
+		}
+		for _, n := range aiusage.CheckAlerts(rep, ac, ledger, time.Now()) {
 			urgency := v1.UrgencyNormal
 			if n.Critical {
 				urgency = v1.UrgencyCritical
@@ -183,6 +190,20 @@ func run(in, out *os.File) error {
 					// Floors hold on a manual refresh: backoff is overridden
 					// by Force, the rate-limit discipline is not.
 					round(false)
+				case m.Node == "export":
+					if path, err := loop.ExportCSV(""); err == nil {
+						_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{
+							Summary: "Usage history exported",
+							Body:    path,
+						})
+					} else {
+						_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{
+							Summary: "Export failed", Body: err.Error(), Urgency: v1.UrgencyCritical})
+					}
+				case strings.HasPrefix(m.Node, "peak:"):
+					// The fleet rollup's jump link selects the peak provider.
+					selected = strings.TrimPrefix(m.Node, "peak:")
+					publish()
 				case strings.HasPrefix(m.Node, "retry:"):
 					// Retry re-arms exactly the failed collector — the
 					// zeroed next-due makes it due, the others keep theirs.
@@ -232,6 +253,7 @@ func registry() aiusage.Registry {
 		"claude":      aiusage.NewOAuthUsage,
 		"codex":       aiusage.NewSnapshot,
 		"commandcode": aiusage.NewCommandCode,
+		"copilot":     aiusage.NewCopilot,
 		"minimax":     aiusage.NewMinimax,
 		"ollama":      aiusage.NewOllama,
 		"synthetic":   aiusage.NewSynthetic,
@@ -261,13 +283,36 @@ func resolveConfig(values map[string]any, minor int) aiusage.Config {
 	// The nudge is applied once here so views and alerts agree on the
 	// thresholds the settings commit to.
 	warn, crit := aiusage.FixThresholds(i("warn_threshold", 85), i("critical_threshold", 95))
+	// Per-provider warn overrides arrive as a "provider:percent" CSV.
+	perProvider := map[string]int{}
+	for _, entry := range strings.Split(s("alert_thresholds"), ",") {
+		parts := strings.SplitN(strings.TrimSpace(entry), ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		var pct int
+		if _, err := fmt.Sscanf(parts[1], "%d", &pct); err == nil && parts[0] != "" {
+			perProvider[parts[0]] = pct
+		}
+	}
+	cooldown := 0
+	switch s("alert_cooldown") {
+	case "60":
+		cooldown = 60
+	case "360":
+		cooldown = 360
+	case "1440":
+		cooldown = 1440
+	}
+	retention := i("history_retention", 2000)
 	return aiusage.Config{
 		Track: map[string]bool{
 			"claude":      b("track_claude", true),
 			"codex":       b("track_codex", true),
 			"commandcode": b("track_commandcode", true),
-			"ollama":      b("track_ollama", false),
+			"copilot":     b("track_copilot", false),
 			"minimax":     b("track_minimax", false),
+			"ollama":      b("track_ollama", false),
 			"synthetic":   b("track_synthetic", false),
 		},
 		Keys: map[string]string{
@@ -275,10 +320,14 @@ func resolveConfig(values map[string]any, minor int) aiusage.Config {
 			"minimax":   s("minimax_api_key"),
 			"synthetic": s("synthetic_api_key"),
 		},
-		Refresh:   time.Duration(i("refresh_interval", 300)) * time.Second,
-		Warn:      warn,
-		Crit:      crit,
-		HostMinor: minor,
+		Refresh:          time.Duration(i("refresh_interval", 300)) * time.Second,
+		Warn:             warn,
+		Crit:             crit,
+		HostMinor:        minor,
+		AlertPerProvider: perProvider,
+		AlertScope:       s("alert_window_scope"),
+		AlertCooldown:    time.Duration(cooldown) * time.Minute,
+		HistoryRetention: retention,
 	}
 }
 
