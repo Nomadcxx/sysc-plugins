@@ -238,7 +238,7 @@ func (f *failStartCLI) Start(context.Context, string) error {
 	return nil
 }
 
-func (f *failStartCLI) Stop(context.Context, string) error   { return nil }
+func (f *failStartCLI) Stop(context.Context, string) error    { return nil }
 func (f *failStartCLI) Restart(context.Context, string) error { return nil }
 
 // slowActionCLI makes any action take delay, so a test can observe the
@@ -287,24 +287,51 @@ func TestBarTreeUnavailableTone(t *testing.T) {
 	}
 }
 
+// show_count is gone (D1): it duplicated status_mode. The mode labels are
+// honest now - "Never" really means no count, not a hidden pill.
 func TestBarLabelModes(t *testing.T) {
-	if got := BarLabel(true, "always", 3, true); got != "docker 3" {
+	if got := BarLabel("always", 3, true); got != "docker 3" {
 		t.Fatalf("always = %q", got)
 	}
-	if got := BarLabel(false, "always", 3, true); got != "docker" {
-		t.Fatalf("no count = %q", got)
-	}
-	if got := BarLabel(true, "running_only", 0, true); got != "docker" {
+	if got := BarLabel("running_only", 0, true); got != "docker" {
 		t.Fatalf("running_only zero = %q", got)
 	}
-	if got := BarLabel(true, "running_only", 2, true); got != "docker 2" {
+	if got := BarLabel("running_only", 2, true); got != "docker 2" {
 		t.Fatalf("running_only = %q", got)
 	}
-	if got := BarLabel(true, "hidden", 5, true); got != "docker" {
+	if got := BarLabel("hidden", 5, true); got != "docker" {
 		t.Fatalf("hidden = %q", got)
 	}
-	if got := BarLabel(true, "always", 0, false); got != "docker" {
+	if got := BarLabel("always", 0, false); got != "docker" {
 		t.Fatalf("unavailable = %q", got)
+	}
+}
+
+// Action node IDs minted by actionButton are "verb:containerID"; the ID is
+// echoed into a docker argv, so it must survive a strict allow-list before
+// dispatch.
+func TestParseAction(t *testing.T) {
+	cases := []struct {
+		node, action, id string
+		ok               bool
+	}{
+		{"start:abc123def456", "start", "abc123def456", true},
+		{"stop:abc123def456", "stop", "abc123def456", true},
+		{"restart:abc123def456", "restart", "abc123def456", true},
+		{"open", "", "", false},
+		{"refresh", "", "", false},
+		{"start:", "", "", false},
+		{"start", "", "", false},
+		{"start:bad id", "", "", false},
+		{"start:;rm -rf /", "", "", false},
+		{"start:-lead", "", "", false},
+	}
+	for _, tc := range cases {
+		action, id, ok := ParseAction(tc.node)
+		if ok != tc.ok || action != tc.action || id != tc.id {
+			t.Errorf("ParseAction(%q) = %q, %q, %v; want %q, %q, %v",
+				tc.node, action, id, ok, tc.action, tc.id, tc.ok)
+		}
 	}
 }
 

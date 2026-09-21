@@ -9,7 +9,6 @@
   },
   "exec": "bin/sysc-plugin-mini-docker",
   "capabilities": [
-    "notifications",
     "panels",
     "settings"
   ],
@@ -47,12 +46,6 @@
       "max": 30
     },
     {
-      "key": "show_count",
-      "type": "bool",
-      "label": "Show running count",
-      "default": true
-    },
-    {
       "key": "status_mode",
       "type": "select",
       "label": "Bar count mode",
@@ -64,11 +57,11 @@
         },
         {
           "value": "running_only",
-          "label": "When containers run"
+          "label": "When running"
         },
         {
           "value": "hidden",
-          "label": "Hidden"
+          "label": "Never"
         }
       ]
     }

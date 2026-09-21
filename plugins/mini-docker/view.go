@@ -2,8 +2,10 @@ package minidocker
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -26,7 +28,8 @@ func BarTree(label string, unavailable bool) *v1.Node {
 }
 
 // BarLabel computes the bar text for the current settings and snapshot.
-func BarLabel(showCount bool, statusMode string, running int, available bool) string {
+// show_count was folded into status_mode: one setting, honest labels.
+func BarLabel(statusMode string, running int, available bool) string {
 	if !available {
 		return "docker"
 	}
@@ -38,10 +41,7 @@ func BarLabel(showCount bool, statusMode string, running int, available bool) st
 			return "docker"
 		}
 	}
-	if showCount {
-		return "docker " + strconv.Itoa(running)
-	}
-	return "docker"
+	return "docker " + strconv.Itoa(running)
 }
 
 // TooltipText computes the bar tooltip.
@@ -154,4 +154,34 @@ func containerRow(c Container, actingID string) *v1.Node {
 func actionButton(id, label, name string, disabled bool) *v1.Node {
 	return &v1.Node{Kind: v1.KindButton, ID: id, Text: label, Name: name, Role: "button",
 		Disabled: disabled, Events: []v1.EventKind{v1.EventActivate}}
+}
+
+// actionPrefixes drives ParseAction; each entry pairs a node-ID prefix with
+// the docker action it dispatches.
+var actionPrefixes = []struct {
+	prefix, action string
+}{
+	{"start:", "start"},
+	{"stop:", "stop"},
+	{"restart:", "restart"},
+}
+
+// idRE allow-lists the container ID half of an action node ID before it is
+// echoed into a docker argv. Docker IDs are hex, but the widest honest
+// contract is plain identifier characters.
+var idRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// ParseAction splits an action node ID ("start:<id>") into its verb and
+// container ID, rejecting anything that should never reach an argv.
+func ParseAction(node string) (action, id string, ok bool) {
+	for _, p := range actionPrefixes {
+		if strings.HasPrefix(node, p.prefix) {
+			id = node[len(p.prefix):]
+			if idRE.MatchString(id) {
+				return p.action, id, true
+			}
+			return "", "", false
+		}
+	}
+	return "", "", false
 }

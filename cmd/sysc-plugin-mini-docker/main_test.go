@@ -127,7 +127,6 @@ func TestRunConcurrentTraffic(t *testing.T) {
 		h.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
 			Values: map[string]any{
 				"refresh_interval_seconds": 1.0,
-				"show_count":               i%2 == 0,
 				"status_mode":              []string{"always", "running_only", "hidden"}[i%3],
 			}})
 		h.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "v1",
@@ -227,7 +226,7 @@ func TestRefreshClickDoesNotBlockMainLoop(t *testing.T) {
 	// refresh inline on the main loop the commit waits out the full delay.
 	h.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "v1", Node: "refresh", Event: v1.EventActivate})
 	h.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
-		Values: map[string]any{"status_mode": "hidden", "show_count": false}})
+		Values: map[string]any{"status_mode": "hidden"}})
 
 	if !waitFor(canary.Load, delay-300*time.Millisecond) {
 		t.Fatal("settings commit was blocked behind the in-flight refresh")
@@ -241,5 +240,24 @@ func TestRefreshClickDoesNotBlockMainLoop(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("run did not exit after host.shutdown")
+	}
+}
+
+// The handshake fallback only fires when the manifest is not beside the
+// binary (go run, tests); this pins it to the manifest so a version bump
+// cannot silently drift the two.
+func TestHandshakeFallbackMatchesManifest(t *testing.T) {
+	raw, err := os.ReadFile("../../plugins/mini-docker/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if fallbackVersion != m.Version {
+		t.Fatalf("handshake fallback %q != manifest version %q", fallbackVersion, m.Version)
 	}
 }

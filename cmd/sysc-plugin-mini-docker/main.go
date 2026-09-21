@@ -13,6 +13,10 @@ import (
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
+// fallbackVersion backs the handshake when the manifest is unreadable (go
+// run, tests); TestHandshakeFallbackMatchesManifest pins it to the manifest.
+const fallbackVersion = "0.2.0"
+
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {
 		os.Exit(1)
@@ -25,7 +29,7 @@ var newSession = func() *minidocker.Session { return minidocker.NewSession(minid
 
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.mini-docker", Name: "Mini Docker", Version: "0.1.0"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.mini-docker", Name: "Mini Docker", Version: fallbackVersion})); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -33,17 +37,15 @@ func run(in *os.File, out *os.File) error {
 
 	session := newSession()
 	type view struct {
-		kind     v1.ViewKind
-		rev      uint64
-		instance string
+		kind v1.ViewKind
+		rev  uint64
 	}
 	views := map[string]view{}
 
 	settings := struct {
 		interval   time.Duration
-		showCount  bool
 		statusMode string
-	}{interval: 5 * time.Second, showCount: true, statusMode: "always"}
+	}{interval: 5 * time.Second, statusMode: "always"}
 
 	// mu guards views and settings. publish runs from the poller and from
 	// action goroutines, so every access to this shared state goes through
@@ -69,7 +71,7 @@ func run(in *os.File, out *os.File) error {
 		defer mu.Unlock()
 		containers, available, loading, listErr, actErr, actingID := session.Snapshot()
 		running := session.RunningCount()
-		barText := minidocker.BarLabel(settings.showCount, settings.statusMode, running, available)
+		barText := minidocker.BarLabel(settings.statusMode, running, available)
 		tooltip := minidocker.TooltipText(running, available)
 		for id, v := range views {
 			v.rev++
@@ -125,7 +127,7 @@ func run(in *os.File, out *os.File) error {
 				return nil
 			case *v1.ViewOpen:
 				mu.Lock()
-				views[msg.ViewID] = view{kind: msg.View, instance: msg.Instance}
+				views[msg.ViewID] = view{kind: msg.View}
 				mu.Unlock()
 				publish()
 			case *v1.ViewClose:
@@ -135,18 +137,22 @@ func run(in *os.File, out *os.File) error {
 			case *v1.InputEvent:
 				switch {
 				case msg.Node == "open":
-				_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: msg.Output, Instance: msg.ViewID})
-			case msg.Node == "refresh":
-				select {
-				case refresh <- struct{}{}:
+					_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: msg.Output, Instance: msg.ViewID})
+				case msg.Node == "refresh":
+					select {
+					case refresh <- struct{}{}:
+					default:
+					}
 				default:
-				}
-				case len(msg.Node) > 6 && msg.Node[:6] == "start:":
-					go func(id string) { session.Act(ctx, "start", id); publish() }(msg.Node[6:])
-				case len(msg.Node) > 5 && msg.Node[:5] == "stop:":
-					go func(id string) { session.Act(ctx, "stop", id); publish() }(msg.Node[5:])
-				case len(msg.Node) > 8 && msg.Node[:8] == "restart:":
-					go func(id string) { session.Act(ctx, "restart", id); publish() }(msg.Node[8:])
+					// The container ID was minted by our own views, but it
+					// is echoed into a docker argv, so ParseAction
+					// re-validates it before dispatch.
+					if action, id, ok := minidocker.ParseAction(msg.Node); ok {
+						go func() {
+							session.Act(ctx, action, id)
+							publish()
+						}()
+					}
 				}
 			case *v1.SettingsChanged:
 				changed := false
@@ -154,12 +160,6 @@ func run(in *os.File, out *os.File) error {
 				if raw, ok := msg.Values["refresh_interval_seconds"]; ok {
 					if f, ok := raw.(float64); ok && f >= 1 && f <= 30 {
 						settings.interval = time.Duration(f) * time.Second
-					}
-				}
-				if raw, ok := msg.Values["show_count"]; ok {
-					if b, ok := raw.(bool); ok {
-						settings.showCount = b
-						changed = true
 					}
 				}
 				if raw, ok := msg.Values["status_mode"]; ok {
