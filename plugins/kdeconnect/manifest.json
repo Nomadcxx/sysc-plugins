@@ -13,6 +13,9 @@
   "settings": [
     {"key": "refresh_seconds", "type": "float", "label": "Refresh interval (seconds)", "default": 30, "min": 0, "max": 300},
     {"key": "enable_clipboard_action", "type": "bool", "label": "Show send-clipboard action", "default": true},
-    {"key": "show_device_card", "type": "bool", "label": "Show device card", "default": true}
+    {"key": "show_device_card", "type": "bool", "label": "Show device card", "default": true},
+    {"key": "recent_images_path", "type": "string", "label": "Recent images path (relative to SFTP mount)", "default": ""},
+    {"key": "max_recent_images", "type": "float", "label": "Recent images to show", "default": 6, "min": 1, "max": 12},
+    {"key": "scan_subdirectories", "type": "bool", "label": "Scan recent-images subdirectories", "default": false}
   ]
 }

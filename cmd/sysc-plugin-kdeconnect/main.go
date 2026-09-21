@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"strings"
 
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
@@ -244,8 +245,34 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionLaunchSMSApp, DeviceID: device})
 		ui.composer = kdeconnect.ComposerNone
 		return true
+	case strings.HasPrefix(m.Node, "recent-open-"):
+		// Opening runs plugin-side, as the reference shell's recent images
+		// do: xdg-open the file on the mount, no daemon round trip.
+		if img := recentImage(snap, strings.TrimPrefix(m.Node, "recent-open-")); img != nil {
+			_ = exec.Command("xdg-open", img.Source).Start()
+		}
+		return true
+	case strings.HasPrefix(m.Node, "recent-share-"):
+		// The file-share action already rides shareUrl with a file:// URI
+		// (see performAction), the DMS recent-images share path.
+		if img := recentImage(snap, strings.TrimPrefix(m.Node, "recent-share-")); img != nil {
+			svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareFile, DeviceID: device, Arg: img.Source})
+		}
+		return true
 	}
 	return false
+}
+
+// recentImage resolves a grid entry by its wire ID; an ID the current
+// snapshot no longer carries (the grid moved between render and tap)
+// resolves to nothing and the tap is dropped.
+func recentImage(snap kdeconnect.Snapshot, id string) *kdeconnect.RecentImage {
+	for i := range snap.RecentImages {
+		if snap.RecentImages[i].ID == id {
+			return &snap.RecentImages[i]
+		}
+	}
+	return nil
 }
 
 func toggleComposer(ui *uiState, want kdeconnect.Composer) bool {
@@ -312,6 +339,15 @@ func settingsFrom(values map[string]any) kdeconnect.Settings {
 	}
 	if raw, ok := values["show_device_card"].(bool); ok {
 		s.ShowDeviceCard = raw
+	}
+	if raw, ok := values["recent_images_path"].(string); ok {
+		s.RecentImagesPath = raw
+	}
+	if raw, ok := values["max_recent_images"].(float64); ok {
+		s.MaxRecentImages = int(raw)
+	}
+	if raw, ok := values["scan_subdirectories"].(bool); ok {
+		s.ScanSubdirectories = raw
 	}
 	return s
 }

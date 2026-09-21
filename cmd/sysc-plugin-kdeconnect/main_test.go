@@ -12,10 +12,16 @@ func TestSettingsFromAppliesKnownKeys(t *testing.T) {
 		"refresh_seconds":         float64(60),
 		"enable_clipboard_action": false,
 		"show_device_card":        false,
+		"recent_images_path":      "DCIM/Camera",
+		"max_recent_images":       float64(9),
+		"scan_subdirectories":     true,
 		"unknown":                 "ignored",
 	})
 	if s.RefreshSeconds != 60 || s.EnableClipboard || s.ShowDeviceCard {
 		t.Fatalf("settings = %+v", s)
+	}
+	if s.RecentImagesPath != "DCIM/Camera" || s.MaxRecentImages != 9 || !s.ScanSubdirectories {
+		t.Fatalf("recent-image settings = %+v", s)
 	}
 }
 

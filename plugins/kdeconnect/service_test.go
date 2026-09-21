@@ -3,6 +3,11 @@ package kdeconnect
 import (
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +29,8 @@ type fakeObject struct {
 	notifs    int
 	actions   map[string]bool
 	failWith  error
+	// mountPoint is the sftp object's mountPoint() reply.
+	mountPoint string
 }
 
 func (f *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Call {
@@ -53,6 +60,8 @@ func (f *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Ca
 	case notificationsIface + "." + notificationsMember:
 		body := make([]any, f.notifs)
 		return &dbus.Call{Body: []any{body}}
+	case sftpIface + ".mountPoint":
+		return &dbus.Call{Body: []any{f.mountPoint}}
 	default:
 		return &dbus.Call{Err: fmt.Errorf("fake: unexpected method %s", method)}
 	}
@@ -728,5 +737,353 @@ func TestShareReceivedEvent(t *testing.T) {
 	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventShareReceived })
 	if e.Message != "File received from Pixel 10 Pro XL" || e.Detail != "file:///home/me/photo.png" {
 		t.Fatalf("share received event = %+v", e)
+	}
+}
+
+// writeTouch is a tiny helper that writes a file with a forced mtime so the
+// scan's mtime ordering is reproducible without depending on real time.
+func writeTouch(t *testing.T, path string, mtime time.Time, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatalf("chtimes %s: %v", path, err)
+	}
+}
+
+func TestScanRecentImagesRejectsRootOutsideMount(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	other := t.TempDir()
+	if _, err := scanRecentImages(filepath.Join(other, "DCIM"), mount, 6, false); err == nil {
+		t.Fatal("scan accepted a root outside the SFTP mount")
+	}
+}
+
+func TestScanRecentImagesSortsByMTimeDescAndCapsAtMax(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	root := filepath.Join(mount, "DCIM", "Camera")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	writeTouch(t, filepath.Join(root, "old.png"), base.Add(-72*time.Hour), "old")
+	writeTouch(t, filepath.Join(root, "new.jpg"), base.Add(-1*time.Hour), "new")
+	writeTouch(t, filepath.Join(root, "mid.jpeg"), base.Add(-24*time.Hour), "mid")
+	// webp is dropped by the scan (host cannot decode it; sysc-shell
+	// decodableExtensions covers png/xpm/jpg/jpeg/gif/bmp only).
+	writeTouch(t, filepath.Join(root, "ignored.webp"), base, "ignored")
+
+	got, err := scanRecentImages(root, mount, 6, false)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	want := []string{"new.jpg", "mid.jpeg", "old.png"}
+	if len(got) != len(want) {
+		t.Fatalf("scan returned %d entries, want %d: %v", len(got), len(want), got)
+	}
+	for i, name := range want {
+		if filepath.Base(got[i]) != name {
+			t.Fatalf("scan[%d] = %q, want %q", i, got[i], name)
+		}
+	}
+}
+
+func TestScanRecentImagesCapsAtMax(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	root := filepath.Join(mount, "Camera")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 8; i++ {
+		writeTouch(t, filepath.Join(root, fmt.Sprintf("img%d.png", i)), base.Add(time.Duration(i)*time.Minute), "x")
+	}
+	got, err := scanRecentImages(root, mount, 3, false)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("scan returned %d entries, want 3: %v", len(got), got)
+	}
+	// The three newest by mtime are img7, img6, img5.
+	want := []string{"img7.png", "img6.png", "img5.png"}
+	for i, name := range want {
+		if filepath.Base(got[i]) != name {
+			t.Fatalf("scan[%d] = %q, want %q", i, got[i], name)
+		}
+	}
+}
+
+func TestScanRecentImagesSubdirectoryDepth(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	root := filepath.Join(mount, "DCIM")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "Camera"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	// top.png is the immediate child of root (depth 1); hidden.png lives in
+	// Camera/ (depth 2), reachable only when subdirectories are scanned.
+	writeTouch(t, filepath.Join(root, "top.png"), base.Add(-1*time.Hour), "top")
+	writeTouch(t, filepath.Join(root, "Camera", "hidden.png"), base, "hidden")
+
+	shallowOnly, err := scanRecentImages(root, mount, 6, false)
+	if err != nil {
+		t.Fatalf("shallow scan: %v", err)
+	}
+	if len(shallowOnly) != 1 || filepath.Base(shallowOnly[0]) != "top.png" {
+		t.Fatalf("shallow scan returned %v, want just top.png", shallowOnly)
+	}
+
+	deepScan, err := scanRecentImages(root, mount, 6, true)
+	if err != nil {
+		t.Fatalf("deep scan: %v", err)
+	}
+	if len(deepScan) != 2 {
+		t.Fatalf("deep scan returned %d entries, want 2: %v", len(deepScan), deepScan)
+	}
+	if filepath.Base(deepScan[0]) != "hidden.png" || filepath.Base(deepScan[1]) != "top.png" {
+		t.Fatalf("deep scan order = %v, want hidden then top", deepScan)
+	}
+}
+
+func TestScanRecentImagesNoMatches(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	root := filepath.Join(mount, "Camera")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := scanRecentImages(root, mount, 6, false)
+	if err != nil {
+		t.Fatalf("empty scan: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("empty mount returned %v, want none", got)
+	}
+}
+
+func TestThumbnailRoundTripAndCache(t *testing.T) {
+	t.Parallel()
+	cache := t.TempDir()
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "pic.png")
+	mtime := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	img := image.NewRGBA(image.Rect(0, 0, 4, 2))
+	for x := 0; x < 4; x++ {
+		for y := 0; y < 2; y++ {
+			img.Set(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	out, err := os.Create(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(out, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(src, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+
+	cached, err := thumbnail(src, cache)
+	if err != nil {
+		t.Fatalf("thumbnail: %v", err)
+	}
+	if !filepath.IsAbs(cached) || filepath.Dir(cached) != cache {
+		t.Fatalf("cached path %q is not under cache %q", cached, cache)
+	}
+	if filepath.Ext(cached) != ".jpg" {
+		t.Fatalf("cached path extension = %q, want .jpg", filepath.Ext(cached))
+	}
+	// Cached file exists and is a valid JPEG (starts with the JPEG SOI marker).
+	body, err := os.ReadFile(cached)
+	if err != nil {
+		t.Fatalf("read cached: %v", err)
+	}
+	if len(body) < 4 || body[0] != 0xff || body[1] != 0xd8 {
+		t.Fatalf("cached body does not start with JPEG SOI: %x", body[:4])
+	}
+
+	// A second call returns the same path unchanged.
+	again, err := thumbnail(src, cache)
+	if err != nil {
+		t.Fatalf("thumbnail second call: %v", err)
+	}
+	if again != cached {
+		t.Fatalf("second call returned %q, want %q", again, cached)
+	}
+}
+
+func TestThumbnailRejectsMissingSource(t *testing.T) {
+	t.Parallel()
+	cache := t.TempDir()
+	if _, err := thumbnail(filepath.Join(t.TempDir(), "no.png"), cache); err == nil {
+		t.Fatal("thumbnail accepted a missing source")
+	}
+}
+
+func TestThumbnailSizeKeepsADegenerateAspectVisible(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		w, h, max, wantW, wantH int
+	}{
+		{10000, 1, 512, 512, 1},
+		{1, 10000, 512, 1, 512},
+		{100, 100, 512, 100, 100},
+	} {
+		w, h := thumbnailSize(tc.w, tc.h, tc.max)
+		if w != tc.wantW || h != tc.wantH {
+			t.Fatalf("thumbnailSize(%d, %d, %d) = %dx%d, want %dx%d",
+				tc.w, tc.h, tc.max, w, h, tc.wantW, tc.wantH)
+		}
+	}
+}
+
+// recentImagesBus is a fake bus whose devA advertises sftp and mounts at
+// mountPoint, the seam refreshRecentImages drives.
+func recentImagesBus(mountPoint string) *fakeBus {
+	return &fakeBus{objects: map[dbus.ObjectPath]*fakeObject{
+		kdeDaemonPath: {devices: []string{"devA"}, announced: "My Desktop", selfID: "deadbeef01"},
+		devicePath("devA"): {
+			ifaces: map[string]map[string]dbus.Variant{
+				kdeDeviceIface: deviceProps("Pixel 10 Pro XL", "phone", true, true, []string{"sftp"}),
+			},
+		},
+		pluginPath("devA", "sftp"): {
+			mountPoint: mountPoint,
+			actions:    map[string]bool{sftpIface + ".startBrowsing": true},
+		},
+	}}
+}
+
+func recentImagesState(svc *Service) *daemonState {
+	return &daemonState{
+		svc:   svc,
+		order: []string{"devA"},
+		devices: map[string]*Device{"devA": {ID: "devA", Name: "Pixel 10 Pro XL",
+			Reachable: true, Paired: true, SupportedPlugins: []string{"sftp"}}},
+	}
+}
+
+func TestRefreshRecentImagesWiresTheMount(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	root := filepath.Join(mount, "DCIM")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	// A real decodable PNG: the wiring thumbnails every scan hit, so a
+	// text file would drop out of the grid.
+	pic := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	pic.Set(0, 0, color.RGBA{R: 255, A: 255})
+	photo := filepath.Join(root, "photo.png")
+	out, err := os.Create(photo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(out, pic); err != nil {
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(photo, base, base); err != nil {
+		t.Fatal(err)
+	}
+
+	cache := t.TempDir()
+	saved := recentImageThumbDir
+	recentImageThumbDir = cache
+	t.Cleanup(func() { recentImageThumbDir = saved })
+
+	bus := recentImagesBus(mount)
+	svc := &Service{settings: Settings{RecentImagesPath: "DCIM", MaxRecentImages: 6}}
+	st := recentImagesState(svc)
+	chosen := "devA"
+	st.refreshRecentImages(bus, &chosen)
+
+	sftp := bus.objects[pluginPath("devA", "sftp")]
+	if !sftp.asked(sftpIface+".startBrowsing") || !sftp.asked(sftpIface+".mountPoint") {
+		t.Fatalf("sftp calls = %v, want mount then mountPoint", sftp.calls)
+	}
+	if len(st.recentImages) != 1 {
+		t.Fatalf("recentImages = %+v, want one entry", st.recentImages)
+	}
+	img := st.recentImages[0]
+	if img.Source != filepath.Join(root, "photo.png") {
+		t.Fatalf("source = %q, want the scanned mount path", img.Source)
+	}
+	if img.Thumb == "" || filepath.Dir(img.Thumb) != cache {
+		t.Fatalf("thumb = %q, want a cached path under %q", img.Thumb, cache)
+	}
+	if len(img.ID) != 12 {
+		t.Fatalf("id = %q, want a 12-hex wire key", img.ID)
+	}
+	// The snapshot carries the same grid, the ID → Source pair the action
+	// routing resolves against.
+	snap := buildSnapshot(true, st.announced, st.selfID, st.order, st.devices, &chosen, st.recentImages)
+	if len(snap.RecentImages) != 1 || snap.RecentImages[0].ID != img.ID {
+		t.Fatalf("snapshot recentImages = %+v", snap.RecentImages)
+	}
+}
+
+func TestRefreshRecentImagesSkipsWithoutPathOrPlugin(t *testing.T) {
+	t.Parallel()
+	bus := recentImagesBus(t.TempDir())
+	svc := &Service{}
+	st := recentImagesState(svc)
+	chosen := "devA"
+	st.refreshRecentImages(bus, &chosen)
+	if len(st.recentImages) != 0 {
+		t.Fatalf("empty path produced %+v", st.recentImages)
+	}
+	if sftp := bus.objects[pluginPath("devA", "sftp")]; sftp != nil && len(sftp.calls) > 0 {
+		t.Fatalf("empty path still called %v", sftp.calls)
+	}
+
+	// A selected device without the sftp plugin never mounts either.
+	svc.settings = Settings{RecentImagesPath: "DCIM"}
+	st.devices["devA"].SupportedPlugins = nil
+	st.refreshRecentImages(bus, &chosen)
+	if len(st.recentImages) != 0 {
+		t.Fatalf("plugin-less device produced %+v", st.recentImages)
+	}
+	if sftp := bus.objects[pluginPath("devA", "sftp")]; len(sftp.calls) > 0 {
+		t.Fatalf("plugin-less device still called %v", sftp.calls)
+	}
+}
+
+func TestRefreshRecentImagesDegradesToEmptyGrid(t *testing.T) {
+	t.Parallel()
+	// The mountPoint reply fails: the grid empties instead of surfacing an
+	// unavailable panel.
+	bus := recentImagesBus("")
+	svc := &Service{settings: Settings{RecentImagesPath: "DCIM"}}
+	st := recentImagesState(svc)
+	chosen := "devA"
+	st.refreshRecentImages(bus, &chosen)
+	if len(st.recentImages) != 0 {
+		t.Fatalf("failed mount produced %+v", st.recentImages)
+	}
+
+	// A scan root outside the mount degrades the same way.
+	mount := t.TempDir()
+	bus = recentImagesBus(mount)
+	st = recentImagesState(svc)
+	st.refreshRecentImages(bus, &chosen)
+	if len(st.recentImages) != 0 {
+		t.Fatalf("foreign root produced %+v", st.recentImages)
 	}
 }

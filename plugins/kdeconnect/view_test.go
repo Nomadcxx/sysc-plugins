@@ -38,6 +38,120 @@ func pairedSnap() Snapshot {
 	}
 }
 
+// findImage walks for the image node carrying id.
+func findImage(n *v1.Node, id string) *v1.Node {
+	if n == nil {
+		return nil
+	}
+	if n.Kind == v1.KindImage && n.ID == id {
+		return n
+	}
+	for _, c := range n.Children {
+		if found := findImage(c, id); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// recentSnap is the paired snapshot with a four-image grid on the selected
+// device: three fill the first row, the fourth wraps.
+func recentSnap() Snapshot {
+	snap := pairedSnap()
+	snap.RecentImages = []RecentImage{
+		{ID: "aaaaaaaaaaaa", Source: "/mnt/phone/DCIM/a.jpg", Thumb: "/cache/thumbs/a.jpg"},
+		{ID: "bbbbbbbbbbbb", Source: "/mnt/phone/DCIM/b.jpg", Thumb: "/cache/thumbs/b.jpg"},
+		{ID: "cccccccccccc", Source: "/mnt/phone/DCIM/c.jpg", Thumb: "/cache/thumbs/c.jpg"},
+		{ID: "dddddddddddd", Source: "/mnt/phone/DCIM/d.jpg", Thumb: "/cache/thumbs/d.jpg"},
+	}
+	return snap
+}
+
+func TestRecentImagesTreeGrid(t *testing.T) {
+	t.Parallel()
+	card := recentImagesTree(recentSnap())
+	if card == nil || card.Fill != "card" {
+		t.Fatalf("recent card = %+v", card)
+	}
+	if card.Children[0].Kind != v1.KindText || card.Children[0].Text != "Recent" {
+		t.Fatalf("headline = %+v", card.Children[0])
+	}
+	// Four images wrap into a row of three plus a row of one.
+	rows := card.Children[1:]
+	if len(rows) != 2 || len(rows[0].Children) != 3 || len(rows[1].Children) != 1 {
+		t.Fatalf("grid rows = %+v", rows)
+	}
+	for i, img := range recentSnap().RecentImages {
+		var cell *v1.Node
+		if i < 3 {
+			cell = rows[0].Children[i]
+		} else {
+			cell = rows[1].Children[0]
+		}
+		image := findImage(cell, "recent-"+img.ID)
+		if image == nil || image.Path != img.Thumb || image.ImageSize != 96 {
+			t.Fatalf("image %d = %+v, want Path %q at size 96", i, image, img.Thumb)
+		}
+		open := findButton(cell, "recent-open-"+img.ID)
+		if open == nil || open.Icon != "folder-open" || open.Role != "button" {
+			t.Fatalf("open button %d = %+v", i, open)
+		}
+		share := findButton(cell, "recent-share-"+img.ID)
+		if share == nil || share.Icon != "share" || share.Role != "button" {
+			t.Fatalf("share button %d = %+v", i, share)
+		}
+	}
+}
+
+func TestRecentImagesTreeHiddenWhenEmpty(t *testing.T) {
+	t.Parallel()
+	if got := recentImagesTree(Snapshot{}); got != nil {
+		t.Fatalf("empty grid = %+v, want nil", got)
+	}
+	plain := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
+	for _, child := range plain.Children {
+		if len(child.Children) > 0 && child.Children[0].Kind == v1.KindText && child.Children[0].Text == "Recent" {
+			t.Fatal("panel shows a recent card without images")
+		}
+	}
+}
+
+func TestPanelTreeShowsRecentGrid(t *testing.T) {
+	t.Parallel()
+	panel := PanelTree(recentSnap(), testSettings(), ComposerNone, Drafts{})
+	var card *v1.Node
+	for _, child := range panel.Children {
+		if len(child.Children) > 0 && child.Children[0].Kind == v1.KindText && child.Children[0].Text == "Recent" {
+			card = child
+			break
+		}
+	}
+	if card == nil {
+		t.Fatal("panel lacks the recent card")
+	}
+	if findImage(card, "recent-aaaaaaaaaaaa") == nil ||
+		findButton(card, "recent-open-aaaaaaaaaaaa") == nil ||
+		findButton(card, "recent-share-aaaaaaaaaaaa") == nil {
+		t.Fatal("recent card lacks its image and actions")
+	}
+}
+
+func TestPanelDeltaFullSnapshotWhenTheGridMoves(t *testing.T) {
+	t.Parallel()
+	prev, next := recentSnap(), recentSnap()
+	next.RecentImages = append([]RecentImage{{ID: "eeeeeeeeeeee",
+		Source: "/mnt/phone/DCIM/e.jpg", Thumb: "/cache/thumbs/e.jpg"}}, next.RecentImages[:3]...)
+	if got := PanelDelta(prev, next); got != nil {
+		t.Fatal("a moved grid produced a patch instead of a full snapshot")
+	}
+	// The same grid with a moved reading still patches the readings.
+	same := recentSnap()
+	same.Devices[0].BatteryCharge = 50
+	if got := PanelDelta(prev, same); got == nil {
+		t.Fatal("an identical grid lost the reading patch")
+	}
+}
+
 func TestBarTreeShowsOfflineState(t *testing.T) {
 	t.Parallel()
 	open := BarTree(Snapshot{}).Children[0]
@@ -683,6 +797,10 @@ func TestTreesValidate(t *testing.T) {
 	bare.Devices[0].NetworkKnown = false
 	bare.Devices[0].NotificationsKnown = false
 	states = append(states, bare)
+
+	// The recent-images grid rides the panel too: its image nodes must be
+	// wire-legal (absolute cached path, one box form) inside the full tree.
+	states = append(states, recentSnap())
 
 	for i, snap := range states {
 		if err := v1.Validate(PanelTree(snap, testSettings(), ComposerNone, Drafts{}), v1.ViewPanel); err != nil {

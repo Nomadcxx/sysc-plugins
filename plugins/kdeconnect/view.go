@@ -2,6 +2,7 @@ package kdeconnect
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -156,6 +157,9 @@ func PanelTree(snap Snapshot, settings Settings, composer Composer, drafts Draft
 		col.Children = append(col.Children,
 			actionRowTree(selected, settings),
 			infoRowsTree(selected))
+		if grid := recentImagesTree(snap); grid != nil {
+			col.Children = append(col.Children, grid)
+		}
 		switch composer {
 		case ComposerShare:
 			col.Children = append(col.Children, shareComposerTree(drafts))
@@ -571,6 +575,42 @@ func infoRow(key, icon, label, value string, tone v1.Tone) *v1.Node {
 	}}
 }
 
+// recentImagesTree is the recent-images grid card: three thumbnails per
+// row, each cell stacking its image over an open and a share button. The
+// thumbnails are the plugin's cached JPEGs; the source paths ride the
+// action IDs. An empty grid renders nothing at all — a failed mount
+// removes the card rather than showing an empty shell.
+func recentImagesTree(snap Snapshot) *v1.Node {
+	if len(snap.RecentImages) == 0 {
+		return nil
+	}
+	card := &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 6,
+		Children: []*v1.Node{{Kind: v1.KindText, Text: "Recent", Bold: true}}}
+	for start := 0; start < len(snap.RecentImages); start += 3 {
+		end := start + 3
+		if end > len(snap.RecentImages) {
+			end = len(snap.RecentImages)
+		}
+		row := &v1.Node{Kind: v1.KindRow, Gap: 8}
+		for _, img := range snap.RecentImages[start:end] {
+			row.Children = append(row.Children, &v1.Node{Kind: v1.KindColumn, Gap: 4,
+				Children: []*v1.Node{
+					{Kind: v1.KindImage, ID: "recent-" + img.ID, Path: img.Thumb, ImageSize: 96},
+					{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
+						{Kind: v1.KindButton, ID: "recent-open-" + img.ID, Icon: "folder-open",
+							Name: "Open " + path.Base(img.Source), Role: "button",
+							Events: []v1.EventKind{v1.EventActivate}},
+						{Kind: v1.KindButton, ID: "recent-share-" + img.ID, Icon: "share",
+							Name: "Share " + path.Base(img.Source), Role: "button",
+							Events: []v1.EventKind{v1.EventActivate}},
+					}},
+				}})
+		}
+		card.Children = append(card.Children, row)
+	}
+	return card
+}
+
 // batteryIconName follows the reference shell's breakpoints: charging icons
 // at 90/60/40/20, level icons at 95/80/65/50/35/20/10, and the critical
 // glyph below ten.
@@ -730,6 +770,16 @@ func samePanelStructure(prev, next Snapshot) bool {
 	if prev.Available != next.Available || prev.AnnouncedName != next.AnnouncedName ||
 		prev.SelectedID != next.SelectedID || len(prev.Devices) != len(next.Devices) {
 		return false
+	}
+	// A moved recent-images grid is structural: the reading patch below
+	// cannot carry it, so the panel needs the full snapshot instead.
+	if len(prev.RecentImages) != len(next.RecentImages) {
+		return false
+	}
+	for i := range prev.RecentImages {
+		if prev.RecentImages[i] != next.RecentImages[i] {
+			return false
+		}
 	}
 	for i := range prev.Devices {
 		a, b := &prev.Devices[i], &next.Devices[i]

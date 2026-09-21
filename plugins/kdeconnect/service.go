@@ -1,15 +1,39 @@
 package kdeconnect
 
 import (
+	"bytes"
+	"crypto/sha1"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
+	// The scan selects .png sources; register the PNG decoder for image.Decode.
+	_ "image/png"
+	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"golang.org/x/image/draw"
 )
+
+const recentImageMaxLongEdge = 512
+
+// recentImageThumbDir lives under os.UserCacheDir()/sysc-plugins/kdeconnect/
+// so per-thumb filenames stay short (sysc-shell's icons.FileResolver rejects
+// paths past 4096 bytes; a SHA-1 hex + .jpg stays well under that).
+var recentImageThumbDir = filepath.Join(os.TempDir(), "sysc-kdeconnect-thumbs")
+
+func init() {
+	if base, err := os.UserCacheDir(); err == nil {
+		recentImageThumbDir = filepath.Join(base, "sysc-plugins", "kdeconnect", "thumbs")
+	}
+}
 
 // The service owns one connection to the daemon. It reconnects for as long
 // as it lives: a fresh session-bus connection every cycle, an unavailable
@@ -65,18 +89,38 @@ type Snapshot struct {
 	SelfID        string
 	Devices       []Device
 	SelectedID    string
+	RecentImages  []RecentImage
+}
+
+// RecentImage is one entry in the recent-images grid. ID is the wire key
+// the view and the action routing share, Source is the absolute path on
+// the SFTP mount, Thumb the cached local thumbnail the host decodes.
+type RecentImage struct {
+	ID     string
+	Source string
+	Thumb  string
 }
 
 // Settings carries the manifest-backed plugin settings.
 type Settings struct {
-	RefreshSeconds  float64
-	EnableClipboard bool
-	ShowDeviceCard  bool
+	RefreshSeconds     float64
+	EnableClipboard    bool
+	ShowDeviceCard     bool
+	RecentImagesPath   string
+	MaxRecentImages    int
+	ScanSubdirectories bool
 }
 
 // DefaultSettings are the manifest defaults.
 func DefaultSettings() Settings {
-	return Settings{RefreshSeconds: 30, EnableClipboard: true, ShowDeviceCard: true}
+	return Settings{
+		RefreshSeconds:     30,
+		EnableClipboard:    true,
+		ShowDeviceCard:     true,
+		RecentImagesPath:   "",
+		MaxRecentImages:    6,
+		ScanSubdirectories: false,
+	}
 }
 
 // ActionKind names a device action the panel can drive.
@@ -277,7 +321,8 @@ func (s *Service) serve(bus daemonBus) error {
 	}
 
 	publish := func() {
-		s.push(buildSnapshot(true, st.announced, st.selfID, st.order, st.devices, &saved))
+		st.refreshRecentImages(bus, &saved)
+		s.push(buildSnapshot(true, st.announced, st.selfID, st.order, st.devices, &saved, st.recentImages))
 	}
 
 	if err := st.reconcile(bus); err != nil {
@@ -359,6 +404,7 @@ type daemonState struct {
 	exported      map[string]bool
 	lastReconcile time.Time
 	events        chan<- Event
+	recentImages  []RecentImage
 }
 
 // emit delivers an event without ever blocking the serve loop.
@@ -828,10 +874,209 @@ func updateFromSignal(sig *dbus.Signal, bus daemonBus, st *daemonState) bool {
 	return false
 }
 
+// scanRecentImages runs `find` over root (which must live under the
+// SFTP mountPoint) and returns the most recently modified images, capped
+// at max. The image filter is the host-decode subset (sysc-shell
+// decodableExtensions covers png/xpm/jpg/jpeg/gif/bmp); the plan
+// deliberately drops webp because the host cannot decode it.
+func scanRecentImages(root, mountPoint string, max int, sub bool) ([]string, error) {
+	if root == "" || mountPoint == "" {
+		return nil, errors.New("kdeconnect: scanRecentImages needs a root and a mount point")
+	}
+	cleanedRoot := filepath.Clean(root)
+	cleanedMount := filepath.Clean(mountPoint)
+	if cleanedRoot != cleanedMount && !strings.HasPrefix(cleanedRoot, cleanedMount+string(filepath.Separator)) {
+		return nil, fmt.Errorf("kdeconnect: scan root %s is not under SFTP mount %s", cleanedRoot, cleanedMount)
+	}
+	depth := "1"
+	if sub {
+		depth = "2"
+	}
+	cmd := exec.Command("find", cleanedRoot,
+		"-maxdepth", depth,
+		"(", "-iname", "*.png", "-o", "-iname", "*.jpg", "-o", "-iname", "*.jpeg", ")",
+		"-printf", "%T@ %p\n")
+	out, err := cmd.Output()
+	// find exits nonzero on any error — one unreadable subdirectory under
+	// scan_subdirectories — while still printing what it walked. Keep the
+	// partial listing; only a walk that produced nothing is a failure.
+	if err != nil && len(bytes.TrimSpace(out)) == 0 {
+		return nil, fmt.Errorf("kdeconnect: find %s: %w", cleanedRoot, err)
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		return nil, nil
+	}
+	type entry struct {
+		mtime float64
+		path  string
+	}
+	var entries []entry
+	for _, line := range bytes.Split(bytes.TrimSpace(out), []byte("\n")) {
+		space := bytes.IndexByte(line, ' ')
+		if space < 0 {
+			continue
+		}
+		mtime, err := strconv.ParseFloat(string(line[:space]), 64)
+		if err != nil {
+			continue
+		}
+		entries = append(entries, entry{mtime: mtime, path: string(line[space+1:])})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].mtime > entries[j].mtime })
+	if max > 0 && len(entries) > max {
+		entries = entries[:max]
+	}
+	paths := make([]string, len(entries))
+	for i, e := range entries {
+		paths[i] = e.path
+	}
+	return paths, nil
+}
+
+// thumbnail decodes src, scales the longest side to recentImageMaxLongEdge
+// with Catmull-Rom resampling, encodes JPEG, and caches the result under
+// cacheDir. The cache key hashes src with its mtime so a touched file
+// re-thumbnails and a stale entry never serves.
+func thumbnail(src, cacheDir string) (string, error) {
+	if src == "" {
+		return "", errors.New("kdeconnect: thumbnail needs a source path")
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return "", fmt.Errorf("kdeconnect: stat %s: %w", src, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("kdeconnect: %s is a directory", src)
+	}
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", fmt.Errorf("kdeconnect: mkdir %s: %w", cacheDir, err)
+	}
+	key := fmt.Sprintf("%x", sha1.Sum([]byte(src+"|"+strconv.FormatInt(info.ModTime().UnixNano(), 10))))
+	cached := filepath.Join(cacheDir, key+".jpg")
+	if body, err := os.ReadFile(cached); err == nil && len(body) >= 4 && body[0] == 0xff && body[1] == 0xd8 {
+		return cached, nil
+	}
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		return "", fmt.Errorf("kdeconnect: read %s: %w", src, err)
+	}
+	img, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return "", fmt.Errorf("kdeconnect: decode %s: %w", src, err)
+	}
+	dw, dh := thumbnailSize(img.Bounds().Dx(), img.Bounds().Dy(), recentImageMaxLongEdge)
+	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
+	tmp := cached + ".part"
+	out, err := os.Create(tmp)
+	if err != nil {
+		return "", fmt.Errorf("kdeconnect: create %s: %w", tmp, err)
+	}
+	err = jpeg.Encode(out, dst, &jpeg.Options{Quality: 80})
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(tmp)
+		return "", fmt.Errorf("kdeconnect: encode %s: %w", cached, err)
+	}
+	if err := os.Rename(tmp, cached); err != nil {
+		os.Remove(tmp)
+		return "", fmt.Errorf("kdeconnect: rename %s: %w", cached, err)
+	}
+	return cached, nil
+}
+
+// thumbnailSize returns the destination size that fits the source inside
+// the max-long-edge box, keeping the aspect ratio. Inputs at or below the
+// cap are returned unchanged so the encoder does no extra work on already
+// small images.
+func thumbnailSize(w, h, max int) (int, int) {
+	longest := w
+	if h > longest {
+		longest = h
+	}
+	if longest <= max || longest == 0 {
+		return w, h
+	}
+	if w >= h {
+		if short := h * max / w; short > 0 {
+			return max, short
+		}
+		return max, 1
+	}
+	if short := w * max / h; short > 0 {
+		return short, max
+	}
+	return 1, max
+}
+
+// recentImageID derives the wire key from the source path, so an image
+// keeps its identity across publishes and the action routing can map a
+// button press back to its file even after a re-render reorders the grid.
+func recentImageID(source string) string {
+	sum := sha1.Sum([]byte(source))
+	return fmt.Sprintf("%x", sum[:6])
+}
+
+// refreshRecentImages rebuilds the recent-images grid for the selected
+// device, the DMS sftp flow: mount() is idempotent, mountPoint() names
+// where the share landed, and the scan plus thumbnails run over the mount.
+// The configured path is relative to the mount point. Every failure —
+// no path configured, no sftp plugin, a failed mount, an unreadable file —
+// degrades to an empty grid, never an unavailable panel.
+func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
+	st.recentImages = nil
+	sub := st.svc.settings.RecentImagesPath
+	if sub == "" {
+		return
+	}
+	devices := make([]Device, 0, len(st.order))
+	for _, id := range st.order {
+		if dev, ok := st.devices[id]; ok {
+			devices = append(devices, *dev)
+		}
+	}
+	selected := resolveSelection(devices, *saved)
+	dev := st.devices[selected]
+	if dev == nil || !dev.Reachable || !hasPlugin(dev, "sftp") {
+		return
+	}
+	obj := bus.object(kdeService, pluginPath(selected, "sftp"))
+	// The pinned SFTP interface carries startBrowsing, mountPoint, and
+	// mountAndWait — no bare mount. startBrowsing is the DMS flow: it mounts
+	// the share and the mountPoint call then reads where it landed.
+	if call := obj.Call(sftpIface+".startBrowsing", 0); call.Err != nil {
+		return
+	}
+	call := obj.Call(sftpIface+".mountPoint", 0)
+	if call.Err != nil || len(call.Body) == 0 {
+		return
+	}
+	mount, _ := call.Body[0].(string)
+	if mount == "" {
+		return
+	}
+	paths, err := scanRecentImages(filepath.Join(mount, sub), mount,
+		st.svc.settings.MaxRecentImages, st.svc.settings.ScanSubdirectories)
+	if err != nil {
+		return
+	}
+	images := make([]RecentImage, 0, len(paths))
+	for _, p := range paths {
+		thumb, err := thumbnail(p, recentImageThumbDir)
+		if err != nil {
+			continue // an unreadable or undecodable file drops out of the grid
+		}
+		images = append(images, RecentImage{ID: recentImageID(p), Source: p, Thumb: thumb})
+	}
+	st.recentImages = images
+}
+
 // buildSnapshot assembles the live model in the daemon's own device order
 // and resolves the selection.
-func buildSnapshot(available bool, announced, selfID string, order []string, devices map[string]*Device, saved *string) Snapshot {
-	snap := Snapshot{Available: available, BackendName: "KDE Connect", AnnouncedName: announced, SelfID: selfID}
+func buildSnapshot(available bool, announced, selfID string, order []string, devices map[string]*Device, saved *string, recent []RecentImage) Snapshot {
+	snap := Snapshot{Available: available, BackendName: "KDE Connect", AnnouncedName: announced, SelfID: selfID, RecentImages: recent}
 	if !available {
 		return snap
 	}
