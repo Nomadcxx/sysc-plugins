@@ -242,14 +242,13 @@ func monogram(id string) *v1.Node {
 // fleetRollup summarizes the tracked fleet the way AIOC's header does:
 // average load across timed quota windows (balance and informational
 // placeholders are excluded so they cannot dilute the average), the peak
-// provider as a jump link, the at-risk count, and the next reset anywhere.
+// provider as a jump link, and the at-risk count.
 func fleetRollup(r Report, cfg Config, now time.Time) *v1.Node {
 	var total float64
 	timed := 0
 	atRisk := 0
 	var peak *ProviderReport
 	peakPct := -1.0
-	var nextReset time.Time
 	for i := range r.Providers {
 		p := &r.Providers[i]
 		if p.State != StateFresh || p.Stale {
@@ -267,31 +266,23 @@ func fleetRollup(r Report, cfg Config, now time.Time) *v1.Node {
 		if peak == nil || h.UsedPercent > peakPct {
 			peak, peakPct = p, h.UsedPercent
 		}
-		if !h.ResetsAt.IsZero() && (nextReset.IsZero() || h.ResetsAt.Before(nextReset)) {
-			nextReset = h.ResetsAt
-		}
 	}
 	if timed == 0 {
 		return nil
 	}
-	row := &v1.Node{Kind: v1.KindRow, Gap: 8, Fill: "card", Shape: "card", Padding: 8, Key: "fleet-rollup"}
+	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Fill: "card", Shape: "card", Padding: 8, Height: 28, Key: "fleet-rollup"}
 	row.Children = append(row.Children,
-		&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Avg %v%%", math.Round(total/float64(timed))), Bold: true})
+		&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Avg %v%%", math.Round(total/float64(timed))), Bold: true, Width: 56})
 	if peak != nil {
 		row.Children = append(row.Children, &v1.Node{
 			Kind: v1.KindButton, ID: "peak:" + peak.ID,
 			Text: fmt.Sprintf("Peak %s %v%%", peak.Name, peakPct),
 			Name: "Jump to " + peak.Name + ", the most loaded provider", Role: "button",
+			Width:  132,
 			Events: []v1.EventKind{v1.EventActivate}})
 	}
 	row.Children = append(row.Children,
-		&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d at risk", atRisk), Tone: v1.ToneSubtle, Size: "caption"})
-	if !nextReset.IsZero() {
-		if cd := FormatCountdown(nextReset, now); cd != "" {
-			row.Children = append(row.Children,
-				&v1.Node{Kind: v1.KindText, Text: "next reset " + cd, Tone: v1.ToneSubtle, Size: "caption", Tabular: true})
-		}
-	}
+		&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d at risk", atRisk), Tone: v1.ToneSubtle, Size: "caption", Width: 52})
 	return row
 }
 
@@ -306,7 +297,7 @@ func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor 
 	const paneHeight = 406 // panel 430 − root padding 24
 	list := &v1.Node{Kind: v1.KindList, Width: 290, Height: paneHeight, Gap: 2, Children: []*v1.Node{}}
 	list.Children = append(list.Children,
-		&v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
+		&v1.Node{Kind: v1.KindRow, Gap: 6, Height: 28, Children: []*v1.Node{
 			{Kind: v1.KindIcon, Icon: "ai-usage"},
 			{Kind: v1.KindText, Text: "AI Usage", Bold: true, Size: "title"},
 			&v1.Node{Kind: v1.KindButton, ID: "refresh", Text: "Refresh",
@@ -391,7 +382,7 @@ func providerRow(p ProviderReport, selected bool, cfg Config, hostMinor int, now
 
 	row := &v1.Node{
 		Kind: v1.KindRow, Key: "provider-" + p.ID,
-		Fill: fill, Shape: "card", Padding: 8, Gap: 8,
+		Fill: fill, Shape: "card", Padding: 8, Gap: 6, Height: 28,
 	}
 	// The selection tint gets a hairline accent rim on minor-5-plus hosts —
 	// the border AIOC draws around its active provider.
@@ -399,23 +390,26 @@ func providerRow(p ProviderReport, selected bool, cfg Config, hostMinor int, now
 		row.Stroke = 1
 		row.StrokeFill = "accent"
 	}
+	// Every child carries a fixed width: the pane is 274 logical pixels of
+	// content, and a row whose children measure naturally overflows it and
+	// fails layout. Fixed widths are the ai-usagebar rule.
 	row.Children = append(row.Children, monogram(p.ID))
 	row.Children = append(row.Children, &v1.Node{
 		Kind: v1.KindButton, ID: "sel:" + p.ID, Text: p.Name,
-		Name: "Show " + p.Name, Role: "button",
+		Name: "Show " + p.Name, Role: "button", Width: 88,
 		Tooltip: rowTooltip(p, now),
 		Events:  []v1.EventKind{v1.EventActivate},
 	})
 	row.Children = append(row.Children, &v1.Node{
-		Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+		Kind: v1.KindColumn, Gap: 2, Width: 64, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: secondLine, Tone: tone, Size: "caption"},
 		},
 	})
 	pin := &v1.Node{
-		Kind: v1.KindColumn, Gap: 2, PinEnd: true,
+		Kind: v1.KindColumn, Gap: 2, PinEnd: true, Width: 56,
 		Children: []*v1.Node{
-			{Kind: v1.KindText, Text: pctText, Tabular: true, Tone: pctTone, Bold: size == "title", Size: size, Width: 48},
-			{Kind: v1.KindProgress, Value: meterV, Height: meterH, Width: 60},
+			{Kind: v1.KindText, Text: pctText, Tabular: true, Tone: pctTone, Bold: size == "title", Size: size, Width: 56},
+			{Kind: v1.KindProgress, Value: meterV, Height: meterH, Width: 56},
 		},
 	}
 	row.Children = append(row.Children, pin)
@@ -533,7 +527,7 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 		})
 		return pane
 	case StateFault:
-		row := &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+		row := &v1.Node{Kind: v1.KindRow, Gap: 8, Height: 28, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: p.Err, Tone: v1.ToneError, Size: "caption", MaxWidth: 320},
 		}}
 		if p.Stale && len(p.Windows) > 0 {
@@ -629,7 +623,7 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 		for _, pct := range hist {
 			values = append(values, pct/100)
 		}
-		card.Children = append(card.Children, &v1.Node{Kind: v1.KindGraph, Values: values, Height: 40})
+		card.Children = append(card.Children, &v1.Node{Kind: v1.KindGraph, Values: values, Height: 40, Width: 340})
 		card.Children = append(card.Children,
 			&v1.Node{Kind: v1.KindText, Text: trendCaption(hist), Tone: v1.ToneSubtle, Size: "caption"})
 		pane.Children = append(pane.Children, card)
@@ -652,7 +646,7 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 	}
 
 	// The honesty footer, with the history export beside it.
-	footer := &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+	footer := &v1.Node{Kind: v1.KindRow, Gap: 8, Height: 28, Children: []*v1.Node{
 		{Kind: v1.KindText, Tone: v1.ToneSubtle, Size: "caption",
 			Text: "Quota windows · last local snapshot per provider · not billing figures"},
 		{Kind: v1.KindButton, ID: "export", Text: "Export CSV",
