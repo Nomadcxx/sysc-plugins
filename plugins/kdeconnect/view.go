@@ -2,7 +2,9 @@ package kdeconnect
 
 import (
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -29,6 +31,64 @@ func deviceIcon(dev *Device) string {
 		return "tv"
 	}
 	return "devices"
+}
+
+// mockupAssetDir overrides the directory the mockup artwork resolves from;
+// empty means beside the running executable, the installed plugin's
+// ../assets. Tests point it at a temp directory.
+var mockupAssetDir string
+
+// mockupSizes carries the DMS size classes: the canvas each type's mockup
+// was drawn on.
+var mockupSizes = map[string][2]int{
+	"phone":   {135, 260},
+	"tablet":  {180, 240},
+	"desktop": {260, 160},
+	"laptop":  {260, 170},
+}
+
+// mockupKind mirrors deviceIcon's type normalisation onto the mockup asset
+// names; an empty result means the type has no mockup.
+func mockupKind(dev *Device) string {
+	if dev == nil {
+		return ""
+	}
+	switch dev.Type {
+	case "phone", "smartphone":
+		return "phone"
+	case "tablet":
+		return "tablet"
+	case "desktop", "computer":
+		return "desktop"
+	case "laptop":
+		return "laptop"
+	}
+	return ""
+}
+
+// deviceMockup resolves the device type's mockup artwork: the asset path
+// and the DMS size class for the type. ok is false when the type has no
+// mockup or the asset is not installed, and the card falls back to the
+// type icon.
+func deviceMockup(dev *Device) (string, int, int, bool) {
+	kind := mockupKind(dev)
+	if kind == "" {
+		return "", 0, 0, false
+	}
+	size := mockupSizes[kind]
+	dir := mockupAssetDir
+	if dir == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return "", 0, 0, false
+		}
+		dir = filepath.Join(filepath.Dir(exe), "..", "assets")
+	}
+	p := filepath.Join(dir, kind+".png")
+	if _, err := os.Stat(p); err != nil {
+		return "", 0, 0, false
+	}
+	return p, size[0], size[1], true
 }
 
 // selectedDevice returns the snapshot's selected device, or nil when the
@@ -456,13 +516,20 @@ func cardStatusTone(dev *Device) v1.Tone {
 	return v1.ToneSubtle
 }
 
-// deviceCardTree is the main device card: type icon, name, status, and the
-// battery meter. Tapping the card pings the device (sysc-468), so the card
-// itself is a button; the action-row ping button hides while the card
+// deviceCardTree is the main device card: the type-sized mockup when the
+// asset is installed (the DMS PhoneDisplay's mockup, a non-interactive
+// leaf inside the button), the type icon otherwise, over the name, status,
+// and battery meter. Tapping the card pings the device (sysc-468), so the
+// card itself is a button; the action-row ping button hides while the card
 // handles it.
 func deviceCardTree(dev *Device) *v1.Node {
+	lead := &v1.Node{Kind: v1.KindIcon, Icon: deviceIcon(dev), CenterX: true}
+	if p, w, h, ok := deviceMockup(dev); ok {
+		lead = &v1.Node{Kind: v1.KindImage, Path: p, ImageW: w, ImageH: h,
+			Background: true, Shape: "card", CenterX: true}
+	}
 	children := []*v1.Node{
-		{Kind: v1.KindIcon, Icon: deviceIcon(dev), CenterX: true},
+		lead,
 		{Kind: v1.KindText, Text: dev.Name, Size: "headline", Bold: true, CenterX: true},
 		{Kind: v1.KindText, Text: deviceStatus(dev), Size: "caption", Tone: v1.ToneSubtle, CenterX: true},
 	}

@@ -1,6 +1,8 @@
 package kdeconnect
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -327,6 +329,100 @@ func TestDeviceCardTapToPing(t *testing.T) {
 	}
 	if card.Children[1].Text != "Pixel 10 Pro XL" {
 		t.Fatalf("name child text = %q, want Pixel 10 Pro XL", card.Children[1].Text)
+	}
+}
+
+// useMockupAssets points the mockup resolver at a temp directory holding a
+// zero-byte PNG per named type — the plugin only stats the file, decoding
+// is host-side — and restores the previous directory afterwards. The tests
+// using it stay sequential: parallel tests read the package var while
+// these run, and a write would race them.
+func useMockupAssets(t *testing.T, types ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, typ := range types {
+		if err := os.WriteFile(filepath.Join(dir, typ+".png"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prev := mockupAssetDir
+	mockupAssetDir = dir
+	t.Cleanup(func() { mockupAssetDir = prev })
+	return dir
+}
+
+func TestDeviceMockupResolvesTypeAssets(t *testing.T) {
+	dir := useMockupAssets(t, "phone", "tablet", "desktop", "laptop")
+	cases := map[string]struct {
+		file string
+		w, h int
+	}{
+		"phone":      {"phone.png", 135, 260},
+		"smartphone": {"phone.png", 135, 260},
+		"tablet":     {"tablet.png", 180, 240},
+		"desktop":    {"desktop.png", 260, 160},
+		"computer":   {"desktop.png", 260, 160},
+		"laptop":     {"laptop.png", 260, 170},
+	}
+	for typ, want := range cases {
+		path, w, h, ok := deviceMockup(&Device{Type: typ})
+		if !ok || path != filepath.Join(dir, want.file) || w != want.w || h != want.h {
+			t.Fatalf("deviceMockup(%q) = %q,%d,%d,%v, want %s at %dx%d",
+				typ, path, w, h, ok, want.file, want.w, want.h)
+		}
+	}
+}
+
+func TestDeviceMockupFallsBackWithoutAsset(t *testing.T) {
+	useMockupAssets(t) // empty directory: nothing installed
+	for _, typ := range []string{"phone", "tablet", "desktop", "laptop"} {
+		if _, _, _, ok := deviceMockup(&Device{Type: typ}); ok {
+			t.Fatalf("deviceMockup(%q) resolved without an asset", typ)
+		}
+	}
+	useMockupAssets(t, "phone", "tablet", "desktop", "laptop")
+	if _, _, _, ok := deviceMockup(&Device{Type: "tv"}); ok {
+		t.Fatal("deviceMockup resolved an unknown type")
+	}
+	if _, _, _, ok := deviceMockup(nil); ok {
+		t.Fatal("deviceMockup resolved a nil device")
+	}
+}
+
+func TestDeviceCardShowsMockupWhenAssetResolves(t *testing.T) {
+	dir := useMockupAssets(t, "phone", "tablet")
+	dev := &Device{ID: "devA", Name: "Pixel 10 Pro XL", Type: "phone",
+		Paired: true, Reachable: true, BatteryKnown: true, BatteryCharge: 98}
+	card := deviceCardTree(dev)
+	mock := card.Children[0]
+	if mock.Kind != v1.KindImage {
+		t.Fatalf("lead child = %+v, want the mockup image", mock)
+	}
+	if mock.Path != filepath.Join(dir, "phone.png") || mock.ImageW != 135 || mock.ImageH != 260 ||
+		!mock.Background || mock.Shape != "card" || !mock.CenterX {
+		t.Fatalf("mockup node = %+v", mock)
+	}
+	if len(card.Children) != 4 {
+		t.Fatalf("device card children = %d, want 4 (mockup, name, status, battery)", len(card.Children))
+	}
+
+	// The mockup-bearing card rides the panel, so it must stay wire-legal
+	// for both mockup-carrying types.
+	snap := pairedSnap()
+	if err := v1.Validate(PanelTree(snap, testSettings(), ComposerNone, Drafts{}), v1.ViewPanel); err != nil {
+		t.Fatal(err)
+	}
+	snap.SelectedID = "devB"
+	if err := v1.Validate(PanelTree(snap, testSettings(), ComposerNone, Drafts{}), v1.ViewPanel); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeviceCardKeepsIconWithoutAsset(t *testing.T) {
+	useMockupAssets(t) // empty directory: the icon fallback
+	card := deviceCardTree(&Device{ID: "devA", Name: "Pixel 10 Pro XL", Type: "phone"})
+	if card.Children[0].Kind != v1.KindIcon || card.Children[0].Icon != "smartphone" {
+		t.Fatalf("lead child = %+v, want the smartphone icon", card.Children[0])
 	}
 }
 
