@@ -27,6 +27,18 @@ type Env struct {
 	Now func() time.Time
 	// Env overrides environment lookups. Nil means os.Getenv.
 	Env func(string) string
+	// Keys are the pasted per-provider keys from settings, keyed by
+	// provider id. A pasted key wins over the environment and over
+	// well-known files.
+	Keys map[string]string
+}
+
+// key returns the pasted key for a provider id, if any.
+func (e Env) key(id string) string {
+	if e.Keys == nil {
+		return ""
+	}
+	return e.Keys[id]
 }
 
 func (e Env) httpClient() *http.Client {
