@@ -6,7 +6,9 @@ package minidocker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -38,12 +40,38 @@ type CLI struct{}
 
 const listTimeout = 30 * time.Second
 
+// actionTimeout caps start/stop/restart. A docker action that never answers
+// must become a readable error, not a pill button disabled forever.
+// ponytail: single cap for all three actions (a var so tests can shorten
+// it); per-action tuning only if a real workload ever shows it matters.
+var actionTimeout = 15 * time.Second
+
+// maxListBytes bounds the stdout read at the trust boundary: docker ps -a
+// with hundreds of containers is well under 1 MiB, and an unbounded read of
+// an external process's output has no ceiling worth defending.
+// ponytail: ceiling for a per-5s poll; if exotic outputs ever appear, stream
+// instead of buffer.
+const maxListBytes = 1 << 20
+
 func (CLI) List(ctx context.Context) ([]Container, error) {
 	ctx, cancel := context.WithTimeout(ctx, listTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "docker", "ps", "-a", "--format", "{{json .}}").Output()
+	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--format", "{{json .}}")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	pipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return nil, diagnose(err, stderr.String())
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, diagnose(err, stderr.String())
+	}
+	out, readErr := io.ReadAll(io.LimitReader(pipe, maxListBytes))
+	if err := cmd.Wait(); err != nil {
+		return nil, listFailure(ctx, err, stderr.String())
+	}
+	if readErr != nil {
+		return nil, listFailure(ctx, readErr, stderr.String())
 	}
 	var containers []Container
 	for _, line := range strings.Split(string(out), "\n") {
@@ -73,11 +101,50 @@ func (CLI) Restart(ctx context.Context, id string) error {
 }
 
 func runDocker(ctx context.Context, args ...string) error {
+	ctx, cancel := context.WithTimeout(ctx, actionTimeout)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%w: %s", err, stderr.String())
+		// The context expiry surfaces as the process's kill signal on some
+		// Go versions; our own timeout is the cause worth naming.
+		if ctx.Err() != nil {
+			return errors.New("docker action timed out")
+		}
+		return diagnose(err, stderr.String())
 	}
 	return nil
+}
+
+// listFailure names a List failure, preferring our own timeout over the
+// process's kill signal.
+func listFailure(ctx context.Context, err error, stderr string) error {
+	if ctx.Err() != nil {
+		return errors.New("docker list timed out")
+	}
+	return diagnose(err, stderr)
+}
+
+// diagnose turns a docker CLI failure into a message a user can act on.
+// The bare exec error ("exit status 1") says nothing; the two failures that
+// actually happen (daemon down, docker not installed) and the stderr line
+// for everything else cover the space.
+// ponytail: matches on the stderr text docker actually prints; if a docker
+// release changes the wording, the fallback still carries the stderr tail.
+func diagnose(err error, stderr string) error {
+	msg := strings.TrimSpace(stderr)
+	if len(msg) > 500 {
+		msg = msg[len(msg)-500:] // tail: the error line is last
+	}
+	switch {
+	case errors.Is(err, exec.ErrNotFound):
+		return errors.New("docker command not found")
+	case strings.Contains(msg, "Cannot connect to the Docker daemon"):
+		return errors.New("Docker daemon not running")
+	case msg != "":
+		return fmt.Errorf("docker: %s", msg)
+	default:
+		return fmt.Errorf("docker: %w", err)
+	}
 }
