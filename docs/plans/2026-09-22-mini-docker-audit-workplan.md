@@ -1,7 +1,7 @@
 # Mini Docker audit workplan
 
 **Date:** 2026-09-22
-**Status:** in flight
+**Status:** complete (tranche landed 2026-09-22; live gate green)
 **Driver:** The mini-docker plugin (v0.2.0) was built quickly, has never been tested live by the user, and is suspected incomplete. Four audits produce the findings that become the roadmap for the next development tranche.
 
 ## Workflow contract
@@ -52,5 +52,10 @@ After Phase 1 findings land, run the hallmark skill (anti-slop design audit) ove
 - [x] Audit 3: Functionality/backend → `2026-09-22-mini-docker-backend-audit.md` (verdict: crash-risk data race + unopenable panel; ≈−16 line shrink)
 - [x] Audit 4: Hallmark → `2026-09-22-mini-docker-hallmark-audit.md` (0 critical · 4 major · 5 minor; no template fingerprint, absence-of-craft majors)
 - [x] Consolidated roadmap written → `2026-09-22-mini-docker-roadmap.md` (T0–T4, 3 decisions, net ≈ +80–110 lines)
-- [ ] User sign-off on roadmap
-- [ ] Development tranche (TDD + ponytail) — scoped after sign-off
+- [x] User sign-off on roadmap (2026-09-22: start T0; D1 = delete show_count, honest status_mode labels; D3 = file sysc-496/497/498)
+- [x] Development tranche (TDD + ponytail):
+  - [x] T0 gates → 1a9bf9d (reachable panel, mutex-serialized state with -race storm test, refresh off main loop)
+  - [x] T1 truthfulness → 4e1fa78 (diagnosed stderr, persistent actErr, 15s action timeout, error tone on pill)
+  - [x] T2 surface → 293fe10 (KindList scroll + 150-row cap + "+N more", read-only tooltip column, running-first + accent, padding/title/PinEnd/Tabular)
+  - [x] T3 shrink → 77242ed (show_count deleted, honest labels, notifications capability dropped, dead instance field gone, ParseAction allow-list before argv, fallbackVersion pinned by test)
+  - [x] T4 verification: live gate `go test -tags live ./plugins/mini-docker/` passes against the real daemon (11 containers, 6 running, all trees validate); manifest 0.3.0, panel width 480 (live-named decision), fallback synced, binaries rebuilt
