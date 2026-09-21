@@ -130,6 +130,31 @@ func TestBarLabelModes(t *testing.T) {
 	}
 }
 
+func TestBarTreeValidate(t *testing.T) {
+	bar := BarTree("docker 2")
+	if err := v1.Validate(bar, v1.ViewBar); err != nil {
+		t.Fatal(err)
+	}
+	// The pill must be an activatable button so the host can route the click
+	// to the plugin; a bare text pill leaves the panel unreachable.
+	if bar.Kind != v1.KindRow || len(bar.Children) != 1 {
+		t.Fatalf("bar root = %+v", bar)
+	}
+	btn := bar.Children[0]
+	if btn.Kind != v1.KindButton || btn.ID != "open" {
+		t.Fatalf("bar child = %+v", btn)
+	}
+	activates := false
+	for _, e := range btn.Events {
+		if e == v1.EventActivate {
+			activates = true
+		}
+	}
+	if !activates {
+		t.Fatalf("open button events = %v", btn.Events)
+	}
+}
+
 func TestPanelTreeValidate(t *testing.T) {
 	containers := []Container{
 		{ID: "a1", Names: "web", Image: "nginx:latest", State: "running", Status: "Up 2 hours"},

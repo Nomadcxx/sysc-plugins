@@ -6,12 +6,15 @@ import (
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-// BarTree renders the docker pill: a label, the running count per status
-// mode, and the tooltip text.
+// BarTree renders the docker pill. One activatable button carrying the
+// label — the click opens the panel (host only opens panels on the
+// plugin's own CallPanelOpen), mirroring the world-clock bar shape.
 func BarTree(label string) *v1.Node {
-	return &v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
-		{Kind: v1.KindText, Text: label},
-	}}
+	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{
+		Kind: v1.KindButton, ID: "open", Text: label,
+		Name: "Open mini docker", Role: "button",
+		Events: []v1.EventKind{v1.EventActivate},
+	}}}
 }
 
 // BarLabel computes the bar text for the current settings and snapshot.
