@@ -1,0 +1,7 @@
+// captured 2026-09-19 from ~/.codex/sessions/**/*.jsonl token_count rows,
+// hand-assembled from real records. The trailing truncated line is deliberate:
+// a rotated or killed writer leaves one behind, and the tail scan skips it.
+{"timestamp":"2026-09-19T11:58:00Z","payload":{"type":"turn_context","model":"gpt-5.1"}}
+{"timestamp":"2026-09-19T12:00:00Z","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"plus","primary":{"used_percent":20,"window_minutes":300,"resets_at":1787224800},"secondary":{"used_percent":35,"window_minutes":10080,"resets_at":1787743200}}}}
+{"timestamp":"2026-09-19T12:01:00Z","payload":{"type":"token_count","rate_limits":{"limit_id":"premium","primary":{"used_percent":99,"window_minutes":300,"resets_at":1787224800}}}}
+{"rate_limits":
