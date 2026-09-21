@@ -3,6 +3,8 @@ package kdeconnect
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -728,5 +730,194 @@ func TestShareReceivedEvent(t *testing.T) {
 	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventShareReceived })
 	if e.Message != "File received from Pixel 10 Pro XL" || e.Detail != "file:///home/me/photo.png" {
 		t.Fatalf("share received event = %+v", e)
+	}
+}
+
+
+// writeTouch is a tiny helper that writes a file with a forced mtime so the
+// scan's mtime ordering is reproducible without depending on real time.
+func writeTouch(t *testing.T, path string, mtime time.Time, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatalf("chtimes %s: %v", path, err)
+	}
+}
+
+func TestScanRecentImagesRejectsRootOutsideMount(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	other := t.TempDir()
+	if _, err := scanRecentImages(filepath.Join(other, "DCIM"), mount, 6, false); err == nil {
+		t.Fatal("scan accepted a root outside the SFTP mount")
+	}
+}
+
+func TestScanRecentImagesSortsByMTimeDescAndCapsAtMax(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	root := filepath.Join(mount, "DCIM", "Camera")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	writeTouch(t, filepath.Join(root, "old.png"), base.Add(-72*time.Hour), "old")
+	writeTouch(t, filepath.Join(root, "new.jpg"), base.Add(-1*time.Hour), "new")
+	writeTouch(t, filepath.Join(root, "mid.jpeg"), base.Add(-24*time.Hour), "mid")
+	// webp is dropped by the scan (host cannot decode it; sysc-shell
+	// decodableExtensions covers png/xpm/jpg/jpeg/gif/bmp only).
+	writeTouch(t, filepath.Join(root, "ignored.webp"), base, "ignored")
+
+	got, err := scanRecentImages(root, mount, 6, false)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	want := []string{"new.jpg", "mid.jpeg", "old.png"}
+	if len(got) != len(want) {
+		t.Fatalf("scan returned %d entries, want %d: %v", len(got), len(want), got)
+	}
+	for i, name := range want {
+		if filepath.Base(got[i]) != name {
+			t.Fatalf("scan[%d] = %q, want %q", i, got[i], name)
+		}
+	}
+}
+
+func TestScanRecentImagesCapsAtMax(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	root := filepath.Join(mount, "Camera")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 8; i++ {
+		writeTouch(t, filepath.Join(root, fmt.Sprintf("img%d.png", i)), base.Add(time.Duration(i)*time.Minute), "x")
+	}
+	got, err := scanRecentImages(root, mount, 3, false)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("scan returned %d entries, want 3: %v", len(got), got)
+	}
+	want := []string{"img7.png", "img6.png", "img5.png"}
+	for i, name := range want {
+		if filepath.Base(got[i]) != name {
+			t.Fatalf("scan[%d] = %q, want %q", i, got[i], name)
+		}
+	}
+}
+
+func TestScanRecentImagesSubdirectoryDepth(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	root := filepath.Join(mount, "DCIM")
+	shallow := filepath.Join(root, "Camera")
+	deep := filepath.Join(root, "Camera", "nested")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	writeTouch(t, filepath.Join(shallow, "top.png"), base.Add(-1*time.Hour), "top")
+	writeTouch(t, filepath.Join(deep, "hidden.png"), base, "hidden")
+
+	shallowOnly, err := scanRecentImages(root, mount, 6, false)
+	if err != nil {
+		t.Fatalf("shallow scan: %v", err)
+	}
+	if len(shallowOnly) != 1 || filepath.Base(shallowOnly[0]) != "top.png" {
+		t.Fatalf("shallow scan returned %v, want just top.png", shallowOnly)
+	}
+
+	deepScan, err := scanRecentImages(root, mount, 6, true)
+	if err != nil {
+		t.Fatalf("deep scan: %v", err)
+	}
+	if len(deepScan) != 2 {
+		t.Fatalf("deep scan returned %d entries, want 2: %v", len(deepScan), deepScan)
+	}
+	if filepath.Base(deepScan[0]) != "hidden.png" || filepath.Base(deepScan[1]) != "top.png" {
+		t.Fatalf("deep scan order = %v, want hidden then top", deepScan)
+	}
+}
+
+func TestScanRecentImagesEmptyMountPoint(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	root := filepath.Join(mount, "Camera")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := scanRecentImages(root, mount, 6, false)
+	if err != nil {
+		t.Fatalf("empty scan: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("empty mount returned %v, want none", got)
+	}
+}
+
+func TestThumbnailRoundTripAndCache(t *testing.T) {
+	t.Parallel()
+	cache := t.TempDir()
+	srcDir := t.TempDir()
+	png := []byte{
+		0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
+		0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x02,
+		0x08, 0x06, 0x00, 0x00, 0x00,
+		0xf2, 0x4e, 0x6f, 0x72,
+		0x00, 0x00, 0x00, 0x1f, 'I', 'D', 'A', 'T',
+		0x78, 0x9c, 0x62, 0xfc, 0xcf, 0xc0, 0xc0, 0xc0,
+		0xc0, 0xc0, 0xc0, 0xf0, 0x9f, 0xc1, 0x20, 0x00,
+		0x00, 0x00, 0x09, 0x00, 0x01, 0xe2, 0x26, 0x05,
+		0x9b, 0x36,
+		0x00, 0x00, 0x00, 0x00, 'I', 'E', 'N', 'D',
+		0xae, 0x42, 0x60, 0x82,
+	}
+	src := filepath.Join(srcDir, "pic.png")
+	mtime := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	if err := os.WriteFile(src, png, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(src, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+
+	cached, err := thumbnail(src, cache)
+	if err != nil {
+		t.Fatalf("thumbnail: %v", err)
+	}
+	if !filepath.IsAbs(cached) || filepath.Dir(cached) != cache {
+		t.Fatalf("cached path %q is not under cache %q", cached, cache)
+	}
+	if filepath.Ext(cached) != ".jpg" {
+		t.Fatalf("cached path extension = %q, want .jpg", filepath.Ext(cached))
+	}
+	body, err := os.ReadFile(cached)
+	if err != nil {
+		t.Fatalf("read cached: %v", err)
+	}
+	if len(body) < 4 || body[0] != 0xff || body[1] != 0xd8 {
+		t.Fatalf("cached body does not start with JPEG SOI: %x", body[:4])
+	}
+
+	again, err := thumbnail(src, cache)
+	if err != nil {
+		t.Fatalf("thumbnail second call: %v", err)
+	}
+	if again != cached {
+		t.Fatalf("second call returned %q, want %q", again, cached)
+	}
+}
+
+func TestThumbnailRejectsMissingSource(t *testing.T) {
+	t.Parallel()
+	cache := t.TempDir()
+	if _, err := thumbnail(filepath.Join(t.TempDir(), "no.png"), cache); err == nil {
+		t.Fatal("thumbnail accepted a missing source")
 	}
 }
