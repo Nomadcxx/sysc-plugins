@@ -31,8 +31,8 @@ type manifest struct {
 		ID string `json:"id"`
 	} `json:"services"`
 	Widgets []struct {
-		ID       string `json:"id"`
-		Settings []any  `json:"settings"`
+		ID       string    `json:"id"`
+		Settings []setting `json:"settings"`
 	} `json:"widgets"`
 	Panels []struct {
 		ID              string `json:"id"`
@@ -41,16 +41,19 @@ type manifest struct {
 		Placement       string `json:"placement"`
 		IncludeSettings bool   `json:"include_settings"`
 	} `json:"panels"`
-	Settings []struct {
-		Key         string         `json:"key"`
-		Type        string         `json:"type"`
-		Label       string         `json:"label"`
-		Default     any            `json:"default"`
-		Min         any            `json:"min"`
-		Max         any            `json:"max"`
-		Options     []any          `json:"options"`
-		VisibleWhen map[string]any `json:"visible_when"`
-	} `json:"settings"`
+	Settings []setting `json:"settings"`
+}
+
+// setting is one manifest settings row, at plugin scope or inside a widget.
+type setting struct {
+	Key         string         `json:"key"`
+	Type        string         `json:"type"`
+	Label       string         `json:"label"`
+	Default     any            `json:"default"`
+	Min         any            `json:"min"`
+	Max         any            `json:"max"`
+	Options     []any          `json:"options"`
+	VisibleWhen map[string]any `json:"visible_when"`
 }
 
 var allowedCapabilities = map[string]bool{
@@ -135,17 +138,17 @@ func validate(path string, seenIDs map[string]string) error {
 			return fmt.Errorf("unknown capability %q", c)
 		}
 	}
-	for _, s := range m.Settings {
-		if s.Key == "" {
-			return fmt.Errorf("setting with empty key")
-		}
-		if !allowedSettingTypes[s.Type] {
-			return fmt.Errorf("setting %q has unknown type %q", s.Key, s.Type)
-		}
+	if _, err := validateSettings(m.Settings); err != nil {
+		return err
 	}
 	for i, w := range m.Widgets {
 		if w.ID == "" {
 			return fmt.Errorf("widgets[%d] has empty id", i)
+		}
+		// Instance-scope settings are declared and validated by position:
+		// the same rules the plugin-level list obeys.
+		if _, err := validateSettings(w.Settings); err != nil {
+			return fmt.Errorf("widgets[%d]: %w", i, err)
 		}
 	}
 	for i, p := range m.Panels {
@@ -162,4 +165,41 @@ func validate(path string, seenIDs map[string]string) error {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "validate-manifests:", err)
 	os.Exit(1)
+}
+
+// validateSettings checks one settings list: keys unique and typed, and any
+// visible_when shaped exactly as the host expects — an object carrying
+// "key" and "equals", where the key names a setting declared in this list.
+func validateSettings(settings []setting) (map[string]bool, error) {
+	keys := map[string]bool{}
+	for _, s := range settings {
+		if s.Key == "" {
+			return nil, fmt.Errorf("setting with empty key")
+		}
+		if keys[s.Key] {
+			return nil, fmt.Errorf("setting %q declared twice", s.Key)
+		}
+		if !allowedSettingTypes[s.Type] {
+			return nil, fmt.Errorf("setting %q has unknown type %q", s.Key, s.Type)
+		}
+		keys[s.Key] = true
+	}
+	for _, s := range settings {
+		if s.VisibleWhen == nil {
+			continue
+		}
+		key, hasKey := s.VisibleWhen["key"]
+		_, hasEquals := s.VisibleWhen["equals"]
+		if !hasKey || !hasEquals || len(s.VisibleWhen) != 2 {
+			return nil, fmt.Errorf("setting %q: visible_when must be an object with exactly \"key\" and \"equals\"", s.Key)
+		}
+		keyStr, isString := key.(string)
+		if !isString || keyStr == "" {
+			return nil, fmt.Errorf("setting %q: visible_when.key must name a setting", s.Key)
+		}
+		if !keys[keyStr] {
+			return nil, fmt.Errorf("setting %q: visible_when key %q is not a declared setting", s.Key, keyStr)
+		}
+	}
+	return keys, nil
 }

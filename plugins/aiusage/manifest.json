@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "id": "org.sysc.aiusage",
+  "name": "AI Usage",
+  "version": "0.1.0",
+  "protocol": {"major": 1, "minor": 4},
+  "exec": "bin/sysc-plugin-aiusage",
+  "capabilities": ["notifications", "panels", "settings", "state"],
+  "requires": {"commands": []},
+  "services": [{"id": "aiusage"}],
+  "widgets": [
+    {
+      "id": "bar",
+      "settings": [
+        {
+          "key": "vendor",
+          "type": "select",
+          "label": "Provider",
+          "default": "auto",
+          "options": [
+            {"value": "auto", "label": "Automatic"},
+            {"value": "claude", "label": "Claude"},
+            {"value": "codex", "label": "Codex"},
+            {"value": "commandcode", "label": "Command Code"},
+            {"value": "minimax", "label": "MiniMax"},
+            {"value": "ollama", "label": "Ollama"},
+            {"value": "synthetic", "label": "Synthetic"}
+          ]
+        },
+        {
+          "key": "visualization",
+          "type": "select",
+          "label": "Dial",
+          "default": "radial",
+          "options": [
+            {"value": "radial", "label": "Radial dial"},
+            {"value": "meter", "label": "Bar"},
+            {"value": "none", "label": "Hidden"}
+          ]
+        },
+        {"key": "show_value", "type": "bool", "label": "Show percent", "default": true},
+        {"key": "show_glyph", "type": "bool", "label": "Show glyph", "default": true},
+        {
+          "key": "glyph_position",
+          "type": "select",
+          "label": "Glyph position",
+          "default": "before",
+          "options": [
+            {"value": "before", "label": "Before"},
+            {"value": "after", "label": "After"}
+          ]
+        },
+        {
+          "key": "extras",
+          "type": "select",
+          "label": "Extras",
+          "default": "none",
+          "options": [
+            {"value": "none", "label": "None"},
+            {"value": "countdown", "label": "Countdown"},
+            {"value": "pace", "label": "Pace"},
+            {"value": "both", "label": "Countdown and pace"}
+          ]
+        },
+        {"key": "show_name", "type": "bool", "label": "Show provider name", "default": false}
+      ]
+    }
+  ],
+  "panels": [
+    {"id": "panel", "width": 750, "height": 430, "placement": "attached"}
+  ],
+  "settings": [
+    {"key": "track_claude", "type": "bool", "label": "Track Claude", "default": true},
+    {"key": "track_codex", "type": "bool", "label": "Track Codex", "default": true},
+    {"key": "track_commandcode", "type": "bool", "label": "Track Command Code", "default": true},
+    {"key": "track_ollama", "type": "bool", "label": "Track Ollama", "default": false},
+    {"key": "track_minimax", "type": "bool", "label": "Track MiniMax", "default": false},
+    {"key": "track_synthetic", "type": "bool", "label": "Track Synthetic", "default": false},
+    {
+      "key": "ollama_api_key",
+      "type": "string",
+      "label": "Ollama API key",
+      "default": "",
+      "visible_when": {"key": "track_ollama", "equals": true}
+    },
+    {
+      "key": "minimax_api_key",
+      "type": "string",
+      "label": "MiniMax API key",
+      "default": "",
+      "visible_when": {"key": "track_minimax", "equals": true}
+    },
+    {
+      "key": "synthetic_api_key",
+      "type": "string",
+      "label": "Synthetic API key",
+      "default": "",
+      "visible_when": {"key": "track_synthetic", "equals": true}
+    },
+    {
+      "key": "refresh_interval",
+      "type": "int",
+      "label": "Refresh interval (s)",
+      "default": 300,
+      "min": 60,
+      "max": 3600
+    },
+    {"key": "alerts_enabled", "type": "bool", "label": "Threshold alerts", "default": true},
+    {
+      "key": "warn_threshold",
+      "type": "int",
+      "label": "Warn at %",
+      "default": 85,
+      "min": 50,
+      "max": 99,
+      "visible_when": {"key": "alerts_enabled", "equals": true}
+    },
+    {
+      "key": "critical_threshold",
+      "type": "int",
+      "label": "Critical at %",
+      "default": 95,
+      "min": 51,
+      "max": 99,
+      "visible_when": {"key": "alerts_enabled", "equals": true}
+    }
+  ]
+}

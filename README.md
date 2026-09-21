@@ -36,6 +36,7 @@ After `make install`, enable plugins from sysc-shell's Plugins manager panel
 | Mini Docker | `org.sysc.mini-docker` | 0.2.0 | port of noctalia community plugin |
 | Wallpaper Depth | `org.sysc.wallpaper-depth` | 0.1.0 stub | port of noctalia official plugin |
 | Phone Connect | `org.sysc.kdeconnect` | 0.1.0 skeleton | port of DMS DankKDEConnect |
+| AI Usage | `org.sysc.aiusage` | 0.1.0 | new; patterns ported from noctalia ai-usagebar + DMS usage widgets |
 
 "First sweep" means working but early: these plugins were generated before
 much of the shell's plugin infrastructure existed, and their views are
@@ -83,3 +84,10 @@ runtime compatibility with Noctalia; only behavior is ported. Plugins marked
 Avenge Media for DankMaterialShell's DankKDEConnect plugin
 (dms-plugin-registry #386), under the MIT license; runtime compatibility
 with DMS is not claimed or preserved.
+
+AI Usage is a new plugin built from the patterns in its prior-art research
+(docs/plans/2026-09-19-aiusage-research.md), including the owner's own
+noctalia ai-usagebar plugin. Its codex session-file collector reads session
+logs only — never authentication files, never the network — and pasted API
+keys live in the host's own settings store and are sent only to their
+provider's API.
