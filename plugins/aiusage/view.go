@@ -289,7 +289,7 @@ func providerRow(p ProviderReport, selected bool, cfg Config, hostMinor int, now
 	if selected {
 		fill = "chip" // the selection tint
 	}
-	secondLine, tone := p.secondLine()
+	secondLine, tone := p.secondLine(cfg, now)
 	h := Headline(p.Windows)
 
 	pctText, pctTone := "--", v1.ToneSubtle
@@ -334,21 +334,35 @@ func providerRow(p ProviderReport, selected bool, cfg Config, hostMinor int, now
 	return row
 }
 
+// staleFor flags a report the loop marked, or one simply too old: past
+// twice the refresh interval the numbers are stale however fresh the state
+// claims (the AIOC 2× rule).
+func (p ProviderReport) staleFor(cfg Config, now time.Time) bool {
+	if p.Stale {
+		return true
+	}
+	if p.UpdatedAt.IsZero() {
+		return false
+	}
+	return now.Sub(p.UpdatedAt) > 2*cfg.Refresh
+}
+
 // secondLine is the row's status line: plan, or why there is no number.
-func (p ProviderReport) secondLine() (string, v1.Tone) {
+func (p ProviderReport) secondLine(cfg Config, now time.Time) (string, v1.Tone) {
 	switch p.State {
 	case StateNeedsSetup:
 		return "Needs setup", v1.ToneAccent
 	case StateFault:
-		if p.Stale {
-			return "Stale · last read kept", v1.ToneError
-		}
 		return "Read failed", v1.ToneError
 	case StateNoData:
 		return "No data yet", v1.ToneSubtle
 	default:
-		if p.Stale {
-			return "Stale · Nm", v1.ToneError
+		if p.staleFor(cfg, now) {
+			age := "just now"
+			if !p.UpdatedAt.IsZero() {
+				age = "Stale · " + humanizeAge(now.Sub(p.UpdatedAt)) + " ago"
+			}
+			return age, v1.ToneError
 		}
 		if p.Plan != "" {
 			return p.Plan, v1.ToneSubtle
@@ -407,10 +421,9 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 	freshness := "no readings yet"
 	tone := v1.ToneSubtle
 	if !p.UpdatedAt.IsZero() {
-		age := now.Sub(p.UpdatedAt)
-		freshness = fmt.Sprintf("Updated %s · %s", humanizeAge(age), p.UpdatedAt.Format("15:04"))
-		if p.Stale {
-			freshness = "Stale since " + p.UpdatedAt.Format("15:04") + " — is the tool signed in?"
+		freshness = fmt.Sprintf("Updated %s · %s", humanizeAge(now.Sub(p.UpdatedAt)), p.UpdatedAt.Format("15:04"))
+		if p.staleFor(cfg, now) {
+			freshness = fmt.Sprintf("Stale (%s) — is the tool signed in?", humanizeAge(now.Sub(p.UpdatedAt)))
 			tone = v1.ToneError
 		}
 	}
@@ -453,8 +466,9 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 	}
 
 	h := Headline(p.Windows)
-	if p.State == StateFresh || (p.State == StateFault && p.Stale) {
-		// Hero dial for the headline window.
+	if p.State == StateFresh {
+		// Hero dial for the headline window. A stale fault gets a record
+		// card instead: dated text, not gauges — nothing is reading.
 		gauge := &v1.Node{
 			Kind: v1.KindGauge, Width: 64, Height: 64,
 			Value: 0, ValueText: "--", Absent: h == nil || !h.HasPercent,
@@ -467,10 +481,31 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 			gauge.Tone = severityTone(h.UsedPercent, true, cfg)
 		}
 		pane.Children = append(pane.Children, gauge)
+
+		// Exhausted-quota notice: a window at or past one hundred blocks
+		// use, and the panel says so with the renew instant.
+		for _, w := range p.Windows {
+			if !w.HasPercent || w.UsedPercent < 100 {
+				continue
+			}
+			line := fmt.Sprintf("%s · Quota exhausted", w.Label)
+			if cd := FormatCountdown(w.ResetsAt, now); cd != "" {
+				line += " · renews in " + cd
+			} else if !w.ResetsAt.IsZero() {
+				line += " · renews " + w.ResetsAt.Format("Mon 15:04")
+			}
+			pane.Children = append(pane.Children, &v1.Node{
+				Kind: v1.KindColumn, Fill: "error-container", Shape: "card", Padding: 10,
+				Children: []*v1.Node{
+					{Kind: v1.KindText, Text: line, Tone: v1.ToneError, Bold: true},
+				},
+			})
+			break // the blocking window is the story; one notice covers it
+		}
 	}
 
 	// History card: the sparkline over recorded percents, with the trend.
-	if hostMinor >= 4 && len(hist) >= 2 {
+	if hostMinor >= 4 && p.State == StateFresh && len(hist) >= 2 {
 		card := &v1.Node{Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: 10, Gap: 4}
 		values := make([]float64, 0, len(hist))
 		for _, pct := range hist {
@@ -482,13 +517,17 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 		pane.Children = append(pane.Children, card)
 	}
 
-	// One card per window.
-	for _, w := range p.Windows {
-		pane.Children = append(pane.Children, windowCard(w, cfg, now))
+	// One card per window — fresh reads only. A stale fault rendered its
+	// numbers as the record card above; drawing meters over them would read
+	// as a live reading, and nothing is reading.
+	if p.State == StateFresh {
+		for _, w := range p.Windows {
+			pane.Children = append(pane.Children, windowCard(w, cfg, now))
+		}
 	}
 
-	// Credits row when the provider reports a balance.
-	if p.Credits != nil {
+	// Credits row when the provider reports a balance worth showing.
+	if p.Credits != nil && *p.Credits > 0 {
 		pane.Children = append(pane.Children,
 			&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Credits: $%s", formatAmount(*p.Credits)),
 				Tone: v1.ToneSubtle, Size: "caption"})
@@ -522,14 +561,20 @@ func windowCard(w Window, cfg Config, now time.Time) *v1.Node {
 	}
 	clockRow := &v1.Node{Kind: v1.KindRow, Gap: 8}
 	cd := FormatCountdown(w.ResetsAt, now)
-	if cd != "" {
+	switch {
+	case w.HasPercent && !w.ResetsAt.IsZero() && w.ResetsAt.Before(now):
+		// The window rolled over but no fresh snapshot has landed: keep the
+		// last percents — never show 0% on a rolled-over window.
+		clockRow.Children = append(clockRow.Children,
+			&v1.Node{Kind: v1.KindText, Text: "Waiting for fresh data", Tone: v1.ToneSubtle, Size: "caption"})
+	case cd != "":
 		clockRow.Children = append(clockRow.Children,
 			&v1.Node{Kind: v1.KindText, Text: "resets in " + cd, Tabular: true})
 		if !w.ResetsAt.IsZero() {
 			clockRow.Children = append(clockRow.Children,
 				&v1.Node{Kind: v1.KindText, Text: w.ResetsAt.Format("Mon 15:04"), Tone: v1.ToneSubtle, Size: "caption"})
 		}
-	} else {
+	default:
 		clockRow.Children = append(clockRow.Children,
 			&v1.Node{Kind: v1.KindText, Text: w.resetLine(), Tone: v1.ToneSubtle, Size: "caption"})
 	}
@@ -595,4 +640,36 @@ func humanizeAge(d time.Duration) string {
 		return fmt.Sprintf("%dh %dm", h, int(d.Minutes())%60)
 	}
 	return fmt.Sprintf("%dd %dh", int(d.Hours())/24, int(d.Hours())%24)
+}
+
+// TooltipTree is the hover content the shell opens for the bar widget: a
+// text-only view (tooltips reject interactive nodes) naming the displayed
+// provider, its headline window, and the reset.
+func TooltipTree(r Report, inst Instance, cfg Config, hostMinor int, now time.Time) *v1.Node {
+	col := &v1.Node{Kind: v1.KindColumn, Gap: 2}
+	p := selectProvider(r, inst.Vendor, cfg.Warn, cfg.Crit)
+	if p == nil {
+		col.Children = append(col.Children,
+			&v1.Node{Kind: v1.KindText, Text: "No readings yet", Tone: v1.ToneSubtle})
+		return col
+	}
+	h := Headline(p.Windows)
+	if h == nil {
+		line := p.Name + ": no readings yet"
+		if p.Err != "" {
+			line = p.Name + ": " + p.Err
+		}
+		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: line, Tone: v1.ToneSubtle})
+		return col
+	}
+	line := fmt.Sprintf("%s · %s %v%%", p.Name, h.Label, h.UsedPercent)
+	if cd := FormatCountdown(h.ResetsAt, now); cd != "" {
+		line += " · resets in " + cd
+	}
+	col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: line})
+	if p.staleFor(cfg, now) {
+		col.Children = append(col.Children,
+			&v1.Node{Kind: v1.KindText, Text: "stale — last read kept", Tone: v1.ToneError, Size: "caption"})
+	}
+	return col
 }

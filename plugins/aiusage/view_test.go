@@ -385,3 +385,38 @@ func treeHasKey(n *v1.Node, key string) bool {
 	}
 	return false
 }
+
+func TestDetailExhaustedNoticeAndTooltip(t *testing.T) {
+	t.Parallel()
+
+	cfg := viewConfig()
+	rep := viewReport()
+	rep.Providers[0].Windows[0].UsedPercent = 100
+	rep.Providers[0].Windows[0].ResetsAt = viewNow.Add(30 * time.Hour)
+	tree := PanelTree(rep, "alpha", nil, cfg, 4, viewNow)
+	if findText(tree, "Session · Quota exhausted · renews in 1d 6h") == nil {
+		t.Fatal("exhausted notice missing")
+	}
+
+	// The tooltip view is text-only and names provider, window, and reset.
+	// Auto picks the depleted window, so the tooltip leads with Alpha at
+	// 100% — the bottleneck headline logic reaching the hover too.
+	tt := TooltipTree(rep, DefaultInstance(), cfg, 4, viewNow)
+	if err := v1.Validate(tt, v1.ViewTooltip); err != nil {
+		t.Fatalf("tooltip rejected: %v", err)
+	}
+	if !strings.Contains(tt.Children[0].Text, "Alpha · Session 100%") {
+		t.Fatalf("tooltip line = %q", tt.Children[0].Text)
+	}
+}
+
+func TestWindowCardWaitingForFreshData(t *testing.T) {
+	t.Parallel()
+
+	w := Window{Key: "primary", Label: "Session", HasPercent: true,
+		UsedPercent: 40, WindowMinutes: 300, ResetsAt: viewNow.Add(-time.Minute)}
+	card := windowCard(w, viewConfig(), viewNow)
+	if findText(card, "Waiting for fresh data") == nil {
+		t.Fatalf("card = %+v", card)
+	}
+}

@@ -34,6 +34,11 @@ type Config struct {
 // it exceeds twice this.
 const historyCap = 2000
 
+// crossInstanceGuard is how young a cache snapshot must be before a reload
+// trusts it instead of refetching: the usage endpoints rate-limit hard, and
+// shells reload far more often than quotas move.
+const crossInstanceGuard = 150 * time.Second
+
 // Loop owns the collectors, the serial fetch rounds, the per-collector
 // schedule (floors and backoff), the warm-start cache, and the usage
 // history. One round runs at a time; the service loop in main.go drives it.
@@ -118,12 +123,46 @@ func (l *Loop) loadCache() Report {
 			r.Providers[i].Stale = true
 		}
 	}
-	for _, p := range r.Providers {
-		if p.State == StateFresh {
-			l.lastGood[p.ID] = p
+	for i := range r.Providers {
+		p := r.Providers[i]
+		if p.State != StateFresh {
+			continue
 		}
+		l.lastGood[p.ID] = p
+		// A warm cache counts as a reading: the collector's next due moment
+		// runs from the capture, and never sooner than the cross-instance
+		// guard — a reload inside the guard serves the cache and touches
+		// no endpoint.
+		due := p.UpdatedAt
+		if due.Before(r.CapturedAt) {
+			due = r.CapturedAt
+		}
+		due = due.Add(maxDuration(l.cfg.Refresh, l.floorOf(p.ID)))
+		if earliest := r.CapturedAt.Add(crossInstanceGuard); due.Before(earliest) {
+			due = earliest
+		}
+		l.nextDue[p.ID] = due
 	}
 	return r
+}
+
+// floorOf returns the collector's rate-limit floor, if it declares one.
+func (l *Loop) floorOf(id string) time.Duration {
+	if col, ok := l.collectors[id]; ok {
+		if f, isFloored := col.(Floored); isFloored {
+			return f.Floor()
+		}
+	}
+	return 0
+}
+
+// SetLoading flags the published snapshot while a round runs, so the
+// refresh button can read as busy.
+func (l *Loop) SetLoading(v bool) Report {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.last.Loading = v
+	return l.last
 }
 
 // Force queues a per-provider forced fetch on the next round.
@@ -169,13 +208,14 @@ func (l *Loop) Round(ctx context.Context, force bool) Report {
 		switch {
 		case isSetup(err):
 			// The instruction is the whole point of the card: never retain.
+			// The scrub runs here too — the error text is provider-derived.
 			rep.State = StateNeedsSetup
-			rep.Err = err.Error()
+			rep.Err = Scrub(err.Error())
 			l.nextDue[id] = now.Add(l.cfg.Refresh)
 			providers = append(providers, rep)
 		case err != nil:
 			rep.State = StateFault
-			rep.Err = err.Error()
+			rep.Err = Scrub(err.Error())
 			l.failures[id]++
 			l.nextDue[id] = now.Add(l.backoffWait(id, floor))
 			// Last good carries forward — but only a snapshot that was
@@ -206,9 +246,17 @@ func isSetup(err error) bool {
 	return errors.As(err, &setup)
 }
 
-// backoffWait doubles per consecutive failure, capped at fifteen minutes.
+// backoffWait doubles per consecutive failure from the second one, capped at
+// fifteen minutes: one failure keeps the normal cadence, a streak escalates.
 func (l *Loop) backoffWait(id string, floor time.Duration) time.Duration {
-	wait := l.cfg.Refresh << min(l.failures[id], 8) // interval · 2^n
+	shift := l.failures[id] - 1
+	if shift < 0 {
+		shift = 0
+	}
+	if shift > 8 {
+		shift = 8
+	}
+	wait := l.cfg.Refresh << shift // interval · 2^(n-1)
 	const cap = 15 * time.Minute
 	if wait > cap {
 		wait = cap

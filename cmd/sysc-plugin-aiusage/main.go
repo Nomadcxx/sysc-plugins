@@ -88,6 +88,10 @@ func run(in, out *os.File) error {
 			switch v.kind {
 			case v1.ViewBar:
 				root = aiusage.BarTree(rep, inst, cfg, minor, time.Now())
+			case v1.ViewTooltip:
+				// The shell auto-opens this view under the bar widget; a
+				// text-only tree is what it can paint.
+				root = aiusage.TooltipTree(rep, inst, cfg, minor, time.Now())
 			default:
 				root = aiusage.PanelTree(rep, selected, hist, cfg, minor, time.Now())
 			}
@@ -101,7 +105,10 @@ func run(in, out *os.File) error {
 		if loop == nil {
 			return
 		}
+		publish() // the refresh button reads busy while the round runs
+		loop.SetLoading(true)
 		rep := loop.Round(ctx, force)
+		loop.SetLoading(false)
 		for _, n := range aiusage.CheckAlerts(rep, cfg.Warn, cfg.Crit, ledger, time.Now()) {
 			urgency := v1.UrgencyNormal
 			if n.Critical {
@@ -153,7 +160,10 @@ func run(in, out *os.File) error {
 					started = true
 					ensure(nil) // the first settings push fills real values
 					loadLedger()
-					round(true)
+					// Warm-start aware: floors and the cross-instance cache
+					// guard decide who fetches; a reload inside the guard
+					// serves the cache and touches no endpoint.
+					round(false)
 				}
 				views[m.ViewID] = view{kind: m.View}
 				publish()
@@ -170,10 +180,14 @@ func run(in, out *os.File) error {
 				case m.Node == "open":
 					_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 				case m.Node == "refresh":
-					round(true)
+					// Floors hold on a manual refresh: backoff is overridden
+					// by Force, the rate-limit discipline is not.
+					round(false)
 				case strings.HasPrefix(m.Node, "retry:"):
+					// Retry re-arms exactly the failed collector — the
+					// zeroed next-due makes it due, the others keep theirs.
 					loop.Force(strings.TrimPrefix(m.Node, "retry:"))
-					round(true)
+					round(false)
 				case strings.HasPrefix(m.Node, "sel:"):
 					selected = strings.TrimPrefix(m.Node, "sel:")
 					publish()
@@ -244,6 +258,9 @@ func resolveConfig(values map[string]any, minor int) aiusage.Config {
 		}
 		return ""
 	}
+	// The nudge is applied once here so views and alerts agree on the
+	// thresholds the settings commit to.
+	warn, crit := aiusage.FixThresholds(i("warn_threshold", 85), i("critical_threshold", 95))
 	return aiusage.Config{
 		Track: map[string]bool{
 			"claude":      b("track_claude", true),
@@ -259,8 +276,8 @@ func resolveConfig(values map[string]any, minor int) aiusage.Config {
 			"synthetic": s("synthetic_api_key"),
 		},
 		Refresh:   time.Duration(i("refresh_interval", 300)) * time.Second,
-		Warn:      i("warn_threshold", 85),
-		Crit:      i("critical_threshold", 95),
+		Warn:      warn,
+		Crit:      crit,
 		HostMinor: minor,
 	}
 }

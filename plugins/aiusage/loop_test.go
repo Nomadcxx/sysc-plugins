@@ -132,25 +132,25 @@ func TestBackoffDoublesAndForceOverrides(t *testing.T) {
 	cache, history := loopPaths(t)
 	l := NewLoop(testRegistry(failing), testConfig(), env, cache, history) // refresh 60s
 
-	// First failure: next due in 2× interval.
-	l.Round(t.Context(), false)
+	// First failure keeps the normal cadence; the streak escalates from the
+	// second consecutive failure.
+	l.Round(t.Context(), false) // t0: failure 1, due t0+60s
 	if failing.calls != 1 {
 		t.Fatalf("first round calls = %d", failing.calls)
 	}
 
-	*now = base.Add(90 * time.Second)
-	l.Round(t.Context(), false)
+	*now = base.Add(30 * time.Second)
+	l.Round(t.Context(), false) // blocked by the normal cadence
 	if failing.calls != 1 {
-		t.Fatalf("backoff did not block: %d calls", failing.calls)
+		t.Fatalf("cadence did not hold: %d calls", failing.calls)
 	}
 
-	// Past 2× interval it runs, and the wait doubles again.
-	*now = base.Add(2*time.Minute + time.Second)
-	l.Round(t.Context(), false)
+	*now = base.Add(61 * time.Second)
+	l.Round(t.Context(), false) // failure 2, due t0+181s
 	if failing.calls != 2 {
 		t.Fatalf("second round calls = %d", failing.calls)
 	}
-	*now = base.Add(3 * time.Minute)
+	*now = base.Add(3 * time.Minute) // t0+180s: still inside the doubled wait
 	l.Round(t.Context(), false)
 	if failing.calls != 2 {
 		t.Fatalf("2^n backoff did not double: %d calls", failing.calls)
@@ -276,21 +276,28 @@ func TestScrubAppliesAtPublish(t *testing.T) {
 	t.Parallel()
 
 	env, _ := loopEnv()
-	dirty := &fakeCollector{id: "alpha", rep: ProviderReport{
-		ID: "alpha", Name: "alpha",
-		Plan:  "plan sk-abc123def456hi",
-		Err:   "failed with sk-xyz98765432ab",
-		State: StateFault,
-		Windows: []Window{{Key: "primary", HasPercent: false,
-			DisplayValue: "key gz1Ax9+/EE0fF2gHh5iJ8kK7lL6mM5nN4oO3pP2qQ1rR=="}}},
+	// The secret rides the ERROR too — the fault branch must scrub it, not
+	// just the collector-provided struct (the earlier version of this test
+	// passed while the code it guarded could not fire).
+	dirty := &fakeCollector{id: "alpha",
+		err: errors.New("request failed with key sk-xyz98765432ab"),
+		rep: ProviderReport{
+			ID: "alpha", Name: "alpha",
+			Plan:  "plan sk-abc123def456hi",
+			State: StateFault,
+			Windows: []Window{{Key: "primary", HasPercent: false,
+				DisplayValue: "key gz1Ax9+/EE0fF2gHh5iJ8kK7lL6mM5nN4oO3pP2qQ1rR=="}}},
 	}
 	cache, history := loopPaths(t)
 	l := NewLoop(testRegistry(dirty), testConfig(), env, cache, history)
 
 	rep := l.Round(t.Context(), false)
 	p := rep.Providers[0]
-	if strings.Contains(p.Plan, "sk-abc") || strings.Contains(p.Err, "sk-xyz") {
-		t.Fatalf("secrets survived the scrub: %q / %q", p.Plan, p.Err)
+	if strings.Contains(p.Err, "sk-xyz") {
+		t.Fatalf("error secret survived: %q", p.Err)
+	}
+	if strings.Contains(p.Plan, "sk-abc") {
+		t.Fatalf("plan secret survived: %q", p.Plan)
 	}
 	if strings.Contains(p.Windows[0].DisplayValue, "gz1Ax9") {
 		t.Fatalf("display secret survived: %q", p.Windows[0].DisplayValue)
