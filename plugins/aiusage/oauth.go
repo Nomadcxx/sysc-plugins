@@ -38,6 +38,11 @@ func NewOAuthUsage(env Env) Collector {
 
 func (c *oauthUsageCollector) ID() string { return "claude" }
 
+// Floor is the scheduler-level rate-limit discipline: the endpoint 429s
+// aggressively (safe only at 180 s or slower per the prior-art design), so
+// the loop never schedules this collector faster, whatever the setting says.
+func (c *oauthUsageCollector) Floor() time.Duration { return 180 * time.Second }
+
 // tokenCand is one credential candidate. expiresAtMS is epoch milliseconds,
 // the shape the CLI writes.
 type tokenCand struct {
