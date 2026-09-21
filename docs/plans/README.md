@@ -40,6 +40,7 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-21-kdeconnect-gap-fill-audit-report.md` | audit | Independent audit of Plan D: verdict, claims table, primed-finding dispositions, diff-level amendments, merge-order go/no-go. |
 | `2026-09-21-kdeconnect-device-mockups.md` | plan | The artwork commission plan the device-mockup PNGs were generated from (assets live in `plugins/kdeconnect/assets/`). |
 | `2026-09-22-kdeconnect-live-test-round.md` | plan | Plan D Task 8 runbook — build, deploy, and manually exercise the plugin on the laptop against a real phone; matrix, rollback, bd closes. |
+| `2026-09-22-kdeconnect-live-failure-audit-handover.md` | handover | Commission for the live-failure audit: root-cause the three deployed symptoms, commission gap-analysis and hallmark sub-audits, then write the redesign plan. |
 
 ## Documents on branches
 
