@@ -165,7 +165,9 @@ func BarTree(r Report, inst Instance, cfg Config, hostMinor int, now time.Time) 
 	if inst.ShowName {
 		row.Children = append(row.Children, &v1.Node{Kind: v1.KindText, Text: name, Tone: tone})
 	}
-	if inst.ShowValue {
+	if inst.ShowValue && inst.Visualization != "radial" {
+		// The radial dial carries its own center label; a separate percent
+		// beside it would say the same thing twice.
 		row.Children = append(row.Children, &v1.Node{Kind: v1.KindText, Text: pctText, Tabular: true, Tone: tone})
 	}
 	if inst.Extras == "countdown" || inst.Extras == "both" {
@@ -294,9 +296,15 @@ func fleetRollup(r Report, cfg Config, now time.Time) *v1.Node {
 }
 
 // PanelTree builds the master/detail panel: provider rows on the left,
-// the selected provider's detail on the right.
+// the selected provider's detail on the right. The panel root must be a
+// column (the host converter refuses a row root), so the side-by-side
+// master/detail row is its single child.
 func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor int, now time.Time) *v1.Node {
-	list := &v1.Node{Kind: v1.KindColumn, Width: 290, Gap: 2}
+	// Column root (panel rule). Both panes are fixed-height scrolls — the
+	// panel box is 750×430 and the content overflows it, so each pane gets
+	// an explicit viewport (the scroll rule: it clips only with a height).
+	const paneHeight = 406 // panel 430 − root padding 24
+	list := &v1.Node{Kind: v1.KindList, Width: 290, Height: paneHeight, Gap: 2, Children: []*v1.Node{}}
 	list.Children = append(list.Children,
 		&v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
 			{Kind: v1.KindIcon, Icon: "ai-usage"},
@@ -323,10 +331,13 @@ func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor 
 		list.Children = append(list.Children, providerRow(p, selected == p.ID, cfg, hostMinor, now))
 	}
 
-	detail := &v1.Node{Kind: v1.KindColumn, Gap: 10}
-	detail.Children = append(detail.Children, detailPane(r, providers, selected, hist, cfg, hostMinor, now))
+	detail := &v1.Node{Kind: v1.KindList, Width: 412, Height: paneHeight, Gap: 10, Children: detailPane(r, providers, selected, hist, cfg, hostMinor, now).Children}
 
-	return &v1.Node{Kind: v1.KindRow, Gap: 12, Padding: 12, Children: []*v1.Node{list, detail}}
+	// Column root (panel rule) with the side-by-side master/detail row as
+	// its single child.
+	return &v1.Node{Kind: v1.KindColumn, Padding: 12, Children: []*v1.Node{
+		{Kind: v1.KindRow, Gap: 12, Children: []*v1.Node{list, detail}},
+	}}
 }
 
 // sortProviderRows orders the list severity-first, percent-second; setup and
