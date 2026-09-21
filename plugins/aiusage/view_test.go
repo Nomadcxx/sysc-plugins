@@ -98,14 +98,46 @@ func TestBarTreeValidatesAcrossStatesAndHosts(t *testing.T) {
 	}
 	inst := DefaultInstance()
 	inst.Extras = "both"
+	cfg := viewConfig()
+	// The matrix runs to minor 6: the pinned grammar here predates minor
+	// seven, so absent meters validate only in the shell's own tests. The
+	// builder's minor-7 gating is asserted separately below.
 	for name, r := range states {
-		for _, minor := range []int{4, 3, 2} {
-			tree := BarTree(r, inst, viewConfig(), minor, viewNow)
+		for _, minor := range []int{6, 5, 4, 3, 2} {
+			tree := BarTree(r, inst, cfg, minor, viewNow)
 			if err := v1.Validate(tree, v1.ViewBar); err != nil {
 				t.Errorf("%s minor %d: bar rejected: %v", name, minor, err)
 			}
 		}
 	}
+}
+
+func TestBarTreeElapsedStripGatesOnHostMinor(t *testing.T) {
+	t.Parallel()
+
+	cfg := viewConfig()
+	empty := Report{} // no provider: bounds unknown, the strip cannot speak
+	if tree := BarTree(empty, DefaultInstance(), cfg, 7, viewNow); !treeHasAbsentMeter(tree) {
+		t.Fatal("minor-7 host: the elapsed strip should reserve its slot via absent")
+	}
+	if tree := BarTree(empty, DefaultInstance(), cfg, 6, viewNow); treeHasAbsentMeter(tree) {
+		t.Fatal("minor-6 host: the strip falls back to a zero value, not absent")
+	}
+}
+
+func treeHasAbsentMeter(n *v1.Node) bool {
+	if n == nil {
+		return false
+	}
+	if n.Kind == v1.KindProgress && n.Absent {
+		return true
+	}
+	for _, ch := range n.Children {
+		if treeHasAbsentMeter(ch) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBarTreeContentPerState(t *testing.T) {
@@ -225,8 +257,11 @@ func TestPanelTreeValidatesAcrossStatesAndHosts(t *testing.T) {
 		"empty":  {},
 	}
 	hist := []float64{10, 20, 40}
+	// Panel matrix to minor 6 for the same pin reason as the bar; the
+	// minor-7 absent meter is gated in the builder and covered by the
+	// shell's grammar tests.
 	for name, r := range states {
-		for _, minor := range []int{4, 3, 2} {
+		for _, minor := range []int{6, 5, 4, 3, 2} {
 			tree := PanelTree(r, "alpha", hist, viewConfig(), minor, viewNow)
 			if err := v1.Validate(tree, v1.ViewPanel); err != nil {
 				t.Errorf("%s minor %d: panel rejected: %v", name, minor, err)
@@ -317,6 +352,11 @@ func TestPanelTreeStructure(t *testing.T) {
 	tree = PanelTree(rep2, "beta", nil, cfg, 4, viewNow)
 	if btn := findByID(tree, "retry:beta"); btn == nil {
 		t.Fatal("retry button missing on the faulted detail")
+	}
+	// The record card shows the last numbers as dated text — the date alone
+	// would blank the pane's only useful content.
+	if findText(tree, "Session 90%") == nil {
+		t.Fatal("record card missing the last numbers")
 	}
 	if findText(tree, "Quota windows · last local snapshot per provider · not billing figures") == nil {
 		t.Fatal("honesty footer missing")
@@ -415,7 +455,7 @@ func TestWindowCardWaitingForFreshData(t *testing.T) {
 
 	w := Window{Key: "primary", Label: "Session", HasPercent: true,
 		UsedPercent: 40, WindowMinutes: 300, ResetsAt: viewNow.Add(-time.Minute)}
-	card := windowCard(w, viewConfig(), viewNow)
+	card := windowCard(w, viewConfig(), 7, viewNow)
 	if findText(card, "Waiting for fresh data") == nil {
 		t.Fatalf("card = %+v", card)
 	}

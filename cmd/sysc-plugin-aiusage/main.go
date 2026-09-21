@@ -240,7 +240,7 @@ func run(in, out *os.File) error {
 func negotiate(supported []v1.Version) int {
 	minor := 0
 	for _, v := range supported {
-		if v.Major == 1 && v.Minor > minor && v.Minor <= 4 {
+		if v.Major == 1 && v.Minor > minor && v.Minor <= 7 {
 			minor = v.Minor
 		}
 	}

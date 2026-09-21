@@ -111,9 +111,11 @@ func BarTree(r Report, inst Instance, cfg Config, hostMinor int, now time.Time) 
 	countdown, pace := "", ""
 	name := ""
 	tooltip := "no readings yet"
+	staleCountdownTone := v1.ToneSubtle
 
 	if p != nil {
 		name = p.Name
+		stale := p.staleFor(cfg, now)
 		if h := Headline(p.Windows); h != nil {
 			if h.HasPercent {
 				pctText = fmt.Sprintf("%.0f%%", h.UsedPercent)
@@ -132,6 +134,13 @@ func BarTree(r Report, inst Instance, cfg Config, hostMinor int, now time.Time) 
 			tooltip = fmt.Sprintf("%s · %s %v%%", p.Name, h.Label, h.UsedPercent)
 			if cd := FormatCountdown(h.ResetsAt, now); cd != "" {
 				tooltip += " · resets in " + cd
+			}
+			if stale {
+				// The numbers are the point, with a caveat attached — the
+				// caveat rides the tooltip and recolors the countdown slot;
+				// it never adds a node.
+				tooltip += " · stale, last read kept"
+				staleCountdownTone = v1.ToneAccent
 			}
 		} else if p.Err != "" {
 			tooltip = p.Err
@@ -160,34 +169,46 @@ func BarTree(r Report, inst Instance, cfg Config, hostMinor int, now time.Time) 
 		row.Children = append(row.Children, &v1.Node{Kind: v1.KindText, Text: pctText, Tabular: true, Tone: tone})
 	}
 	if inst.Extras == "countdown" || inst.Extras == "both" {
-		row.Children = append(row.Children, &v1.Node{Kind: v1.KindText, Text: countdown, Tabular: true, Tone: v1.ToneSubtle})
+		cdTone := v1.ToneSubtle
+		if staleCountdownTone == v1.ToneAccent {
+			cdTone = v1.ToneAccent
+		}
+		row.Children = append(row.Children, &v1.Node{Kind: v1.KindText, Text: countdown, Tabular: true, Tone: cdTone})
 	}
 	if inst.Extras == "pace" || inst.Extras == "both" {
 		row.Children = append(row.Children, &v1.Node{Kind: v1.KindText, Text: pace, Tone: v1.ToneSubtle})
 	}
 
 	// The quota-over-elapsed pairing: a thin strip beneath the pill showing
-	// how far through the headline window the clock is. Zero when unknown —
-	// a fixed slot, so the node count never changes.
+	// how far through the headline window the clock is. Unknown bounds are
+	// honest absence on minor-7 hosts (reserve the slot, paint nothing); a
+	// zero strip is the pre-7 fallback.
 	col := &v1.Node{Kind: v1.KindColumn, Gap: 2}
 	col.Children = append(col.Children, row)
 	if inst.Visualization != "none" {
-		elapsed := 0.0
+		elapsed, known := 0.0, false
 		if p != nil {
 			if h := Headline(p.Windows); h != nil {
 				if e, ok := ElapsedPercent(*h, now); ok {
-					elapsed = e / 100
+					elapsed, known = e/100, true
 				}
 			}
 		}
-		col.Children = append(col.Children, &v1.Node{Kind: v1.KindProgress, Value: elapsed, Height: 3, MaxWidth: 120})
+		strip := &v1.Node{Kind: v1.KindProgress, Height: 3, MaxWidth: 120}
+		if known {
+			strip.Value = elapsed
+		} else if hostMinor >= 7 {
+			strip.Absent = true
+		}
+		col.Children = append(col.Children, strip)
 	}
 	return col
 }
 
 // gaugeOrMeter is the visualization slot: a radial gauge on minor-3-plus
 // hosts (absent reserves the box with no reading), a meter below that, or
-// nothing when the visualization is "none".
+// nothing when the visualization is "none". Gauges animate on value change
+// from minor six.
 func gaugeOrMeter(inst Instance, value float64, absent bool, pctText string, tone v1.Tone, cfg Config, hostMinor int) []*v1.Node {
 	if inst.Visualization == "none" {
 		return nil
@@ -197,6 +218,10 @@ func gaugeOrMeter(inst Instance, value float64, absent bool, pctText string, ton
 			Kind: v1.KindGauge, Width: 22, Height: 22,
 			Value: value, ValueText: strings.TrimSuffix(pctText, "%"),
 			Absent: absent, Tone: tone,
+		}
+		if hostMinor >= 6 {
+			g.Animate = true
+			g.Key = "pill"
 		}
 		if absent {
 			g.Value = 0
@@ -208,7 +233,12 @@ func gaugeOrMeter(inst Instance, value float64, absent bool, pctText string, ton
 	if absent {
 		pct = 0
 	}
-	return []*v1.Node{{Kind: v1.KindProgress, Value: pct, Height: 5, MaxWidth: 60, Tone: tone}}
+	m := &v1.Node{Kind: v1.KindProgress, Value: pct, Height: 5, MaxWidth: 60, Tone: tone}
+	if hostMinor >= 6 {
+		m.Animate = true
+		m.Key = "pill"
+	}
+	return []*v1.Node{m}
 }
 
 // monogram is the provider identity disc: a circle with the id's first
@@ -373,6 +403,12 @@ func providerRow(p ProviderReport, selected bool, cfg Config, hostMinor int, now
 		Kind: v1.KindRow, Key: "provider-" + p.ID,
 		Fill: fill, Shape: "card", Padding: 8, Gap: 8,
 	}
+	// The selection tint gets a hairline accent rim on minor-5-plus hosts —
+	// the border AIOC draws around its active provider.
+	if selected && hostMinor >= 5 {
+		row.Stroke = 1
+		row.StrokeFill = "accent"
+	}
 	row.Children = append(row.Children, monogram(p.ID))
 	row.Children = append(row.Children, &v1.Node{
 		Kind: v1.KindButton, ID: "sel:" + p.ID, Text: p.Name,
@@ -512,10 +548,24 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 		}}
 		if p.Stale && len(p.Windows) > 0 {
 			// A record card shows the last numbers as dated text: a bar
-			// reads as a live reading, and nothing is reading.
-			row.Children = append(row.Children, &v1.Node{Kind: v1.KindText,
+			// reads as a live reading, and nothing is reading. The numbers
+			// are the point; the date is the caveat.
+			card := &v1.Node{Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: 10, Gap: 2}
+			card.Children = append(card.Children, &v1.Node{Kind: v1.KindText,
 				Text: "Last reading, " + humanizeAge(now.Sub(p.UpdatedAt)) + " ago",
-				Tone: v1.ToneSubtle, Size: "caption"})
+				Bold: true, Size: "caption"})
+			for _, w := range p.Windows {
+				line := w.Label
+				if w.HasPercent {
+					line += fmt.Sprintf(" %v%%", w.UsedPercent)
+				}
+				if w.DisplayValue != "" {
+					line += " · " + w.DisplayValue
+				}
+				card.Children = append(card.Children, &v1.Node{Kind: v1.KindText,
+					Text: line, Tone: v1.ToneSubtle, Size: "caption"})
+			}
+			pane.Children = append(pane.Children, card)
 		}
 		row.Children = append(row.Children, &v1.Node{
 			Kind: v1.KindButton, ID: "retry:" + p.ID, Text: "Retry",
@@ -529,20 +579,36 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 
 	h := Headline(p.Windows)
 	if p.State == StateFresh {
-		// Hero dial for the headline window. A stale fault gets a record
-		// card instead: dated text, not gauges — nothing is reading.
-		gauge := &v1.Node{
-			Kind: v1.KindGauge, Width: 64, Height: 64,
-			Value: 0, ValueText: "--", Absent: h == nil || !h.HasPercent,
-			Name: "headline usage", Role: "img",
-		}
+		// Hero dial for the headline window — meter-plus-text on pre-3
+		// hosts, animated from minor six. A stale fault gets a record card
+		// instead: dated text, not gauges — nothing is reading.
+		heroPct := "--"
+		heroValue := 0.0
+		heroAbsent := h == nil || !h.HasPercent
+		heroTone := v1.ToneSubtle
 		if h != nil && h.HasPercent {
-			gauge.Value = h.UsedPercent / 100
-			gauge.ValueText = fmt.Sprintf("%.0f%%", h.UsedPercent)
-			gauge.Absent = false
-			gauge.Tone = severityTone(h.UsedPercent, true, cfg)
+			heroPct = fmt.Sprintf("%.0f%%", h.UsedPercent)
+			heroValue = h.UsedPercent / 100
+			heroAbsent = false
+			heroTone = severityTone(h.UsedPercent, true, cfg)
 		}
-		pane.Children = append(pane.Children, gauge)
+		if hostMinor >= 3 {
+			gauge := &v1.Node{
+				Kind: v1.KindGauge, Width: 64, Height: 64,
+				Value: heroValue, ValueText: heroPct, Absent: heroAbsent,
+				Name: "headline usage", Role: "img", Tone: heroTone,
+			}
+			if hostMinor >= 6 {
+				gauge.Animate = true
+				gauge.Key = "hero"
+			}
+			pane.Children = append(pane.Children, gauge)
+		} else {
+			pane.Children = append(pane.Children, &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+				{Kind: v1.KindProgress, Value: heroValue, Height: 8, MaxWidth: 200},
+				{Kind: v1.KindText, Text: heroPct, Size: "display", Bold: true, Tone: heroTone, Tabular: true},
+			}})
+		}
 
 		// Exhausted-quota notice: a window at or past one hundred blocks
 		// use, and the panel says so with the renew instant.
@@ -584,7 +650,7 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 	// as a live reading, and nothing is reading.
 	if p.State == StateFresh {
 		for _, w := range p.Windows {
-			pane.Children = append(pane.Children, windowCard(w, cfg, now))
+			pane.Children = append(pane.Children, windowCard(w, cfg, hostMinor, now))
 		}
 	}
 
@@ -608,7 +674,7 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 	return pane
 }
 
-func windowCard(w Window, cfg Config, now time.Time) *v1.Node {
+func windowCard(w Window, cfg Config, hostMinor int, now time.Time) *v1.Node {
 	tone := severityTone(w.UsedPercent, w.HasPercent, cfg)
 	card := &v1.Node{Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: 10, Gap: 4}
 	pct := "--"
@@ -618,14 +684,26 @@ func windowCard(w Window, cfg Config, now time.Time) *v1.Node {
 	card.Children = append(card.Children, &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
 		{Kind: v1.KindText, Text: w.Label, Bold: true},
 		{Kind: v1.KindColumn, PinEnd: true, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: pct, Tabular: true, Tone: tone, Bold: true},
+			{Kind: v1.KindText, Text: pct, Tabular: true, Tone: tone, Bold: true, Width: 48},
 		}},
 	}})
 	if w.HasPercent {
-		card.Children = append(card.Children, &v1.Node{Kind: v1.KindProgress, Value: w.UsedPercent / 100, Height: 5})
+		quota := &v1.Node{Kind: v1.KindProgress, Value: w.UsedPercent / 100, Height: 5, Key: "meter:" + w.Key}
+		if hostMinor >= 6 {
+			quota.Animate = true
+		}
+		card.Children = append(card.Children, quota)
 	}
 	if e, ok := ElapsedPercent(w, now); ok {
-		card.Children = append(card.Children, &v1.Node{Kind: v1.KindProgress, Value: e / 100, Height: 3})
+		elapsed := &v1.Node{Kind: v1.KindProgress, Value: e / 100, Height: 3, Key: "elapsed:" + w.Key}
+		if hostMinor >= 6 {
+			elapsed.Animate = true
+		}
+		card.Children = append(card.Children, elapsed)
+	} else if hostMinor >= 7 && w.WindowMinutes > 0 {
+		// Bounds exist upstream but the reset instant is unknown: reserve
+		// the strip honestly rather than claiming the window just began.
+		card.Children = append(card.Children, &v1.Node{Kind: v1.KindProgress, Absent: true, Height: 3, Key: "elapsed:" + w.Key})
 	}
 	clockRow := &v1.Node{Kind: v1.KindRow, Gap: 8}
 	cd := FormatCountdown(w.ResetsAt, now)
