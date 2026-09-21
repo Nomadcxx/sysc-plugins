@@ -150,8 +150,10 @@ func TestBarTreeContentPerState(t *testing.T) {
 	if gaugeNode == nil || gaugeNode.ValueText != "90" || gaugeNode.Absent || gaugeNode.Tone != v1.ToneAccent {
 		t.Fatalf("auto gauge = %+v, want beta's 90%% in accent", gaugeNode)
 	}
-	if findText(bar, "90%") == nil {
-		t.Fatal("percent text missing")
+	// The radial dial carries the number; a duplicate percent beside it is
+	// exactly the noise the dial exists to remove.
+	if findText(bar, "90%") != nil {
+		t.Fatal("percent text duplicated beside the radial dial")
 	}
 	if findText(bar, "2h 0m") == nil {
 		t.Fatal("countdown missing from the fresh bar")
@@ -185,9 +187,9 @@ func TestBarTreeContentPerState(t *testing.T) {
 	if gaugeNode == nil || !gaugeNode.Absent {
 		t.Fatalf("no-data gauge = %+v", gaugeNode)
 	}
-	if findText(bar, "--") == nil {
-		t.Fatal("no-data percent slot missing")
-	}
+	// No separate dash text beside the dial: the absent gauge reserves the
+	// slot and paints nothing, leaving the glyph as the only mark — the
+	// empty-capsule rule for a number nothing is refreshing.
 }
 
 func TestBarTreeMinorTwoUsesMeter(t *testing.T) {
