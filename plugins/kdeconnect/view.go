@@ -48,7 +48,8 @@ var mockupSizes = map[string][2]int{
 }
 
 // mockupKind mirrors deviceIcon's type normalisation onto the mockup asset
-// names; an empty result means the type has no mockup.
+// names for the four mockup types; an empty result means the type has no
+// mockup.
 func mockupKind(dev *Device) string {
 	if dev == nil {
 		return ""

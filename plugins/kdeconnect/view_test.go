@@ -305,6 +305,10 @@ func TestDeviceCardChipsAndStatus(t *testing.T) {
 	}
 }
 
+// The tap-to-ping card test rides the default asset resolution: under go
+// test the binary's ../assets never exists, so the lead child is always the
+// type icon. Pin that assumption here; a resolution change would surface as
+// a lead-child mismatch in this test.
 func TestDeviceCardTapToPing(t *testing.T) {
 	t.Parallel()
 	card := findButton(PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{}), "device-ping")
