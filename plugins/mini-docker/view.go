@@ -2,7 +2,6 @@ package minidocker
 
 import (
 	"fmt"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -83,8 +82,8 @@ func PanelTreeForSession(state SessionSnapshot) *v1.Node {
 	}
 	col := &v1.Node{Kind: v1.KindColumn, Gap: 8, Padding: 16, Children: []*v1.Node{
 		{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: "Docker containers", Size: "title", Bold: true},
-			{Kind: v1.KindButton, ID: "refresh", Text: "Refresh", Name: "Refresh containers", Role: "button",
+			{Kind: v1.KindText, Text: "Docker " + string(state.Scope), Size: "title", Bold: true},
+			{Kind: v1.KindButton, ID: "refresh", Text: "Refresh", Name: "Refresh " + string(state.Scope), Role: "button",
 				Events: []v1.EventKind{v1.EventActivate}},
 		}},
 	}}
@@ -95,14 +94,15 @@ func PanelTreeForSession(state SessionSnapshot) *v1.Node {
 		col.Children = append(col.Children, &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: status})
 	}
 
-	var rows []Container
-	containerStatus := state.ContainerTab
-	if state.Scope == ScopeContainers && containerStatus.Available {
-		rows = sortedContainers(state.Containers)
+	statusState := tabStatus(state)
+	entities := panelEntities(state)
+	selected := selectedEntity(state, entities)
+	selectedID := state.SelectedID
+	if state.PendingRemoval != nil && state.PendingRemoval.Scope == state.Scope {
+		selectedID = state.PendingRemoval.ID
 	}
-	showLoading := state.Scope == ScopeContainers && containerStatus.Loading && !containerStatus.Available
+	showLoading := statusState.Loading && !statusState.Available
 	listHeight := 400 - 20*len(status)
-	selected := selectedContainer(state)
 	if selected != nil {
 		listHeight -= 112
 	}
@@ -110,27 +110,29 @@ func PanelTreeForSession(state SessionSnapshot) *v1.Node {
 		listHeight = 200
 	}
 	list := &v1.Node{Kind: v1.KindList, Height: listHeight, Gap: 4}
-	if state.Scope != ScopeContainers {
-		list.Children = append(list.Children, &v1.Node{Kind: v1.KindText, Text: emptyTabText(state.Scope), Tone: v1.ToneSubtle})
-	} else if showLoading {
+	if showLoading {
 		list.Children = append(list.Children, &v1.Node{Kind: v1.KindText, Text: "Loading…", Tone: v1.ToneSubtle})
-	} else if !containerStatus.Available || len(rows) == 0 {
-		list.Children = append(list.Children, &v1.Node{Kind: v1.KindText, Text: "No containers", Tone: v1.ToneSubtle})
+	} else if !statusState.Available || len(entities) == 0 {
+		list.Children = append(list.Children, &v1.Node{Kind: v1.KindText, Text: emptyTabText(state.Scope), Tone: v1.ToneSubtle})
 	}
-	visibleRows := rows
-	if len(rows) > maxPanelRows {
-		visibleRows = rows[:maxPanelRows]
+	visibleEntities := entities
+	if len(entities) > maxPanelRows {
+		visibleEntities = entities[:maxPanelRows]
 	}
-	for _, c := range visibleRows {
-		list.Children = append(list.Children, containerRow(c, state.SelectedID))
+	for _, entity := range visibleEntities {
+		if entity.Scope == ScopeContainers {
+			list.Children = append(list.Children, containerRow(*entity.container, selectedID))
+		} else {
+			list.Children = append(list.Children, entityRow(entity, selectedID))
+		}
 	}
 	col.Children = append(col.Children, list)
-	if len(rows) > maxPanelRows {
+	if len(entities) > maxPanelRows {
 		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText,
-			Text: fmt.Sprintf("+%d more", len(rows)-maxPanelRows), Tone: v1.ToneSubtle})
+			Text: fmt.Sprintf("+%d more", len(entities)-maxPanelRows), Tone: v1.ToneSubtle})
 	}
 	if selected != nil {
-		col.Children = append(col.Children, containerDetail(*selected, state.ActingID))
+		col.Children = append(col.Children, entityDetail(*selected, state))
 	}
 	return col
 }
@@ -162,7 +164,7 @@ func panelStatus(state SessionSnapshot) []*v1.Node {
 	appendLine(active.ListError, v1.ToneError)
 	if len(status) < 2 {
 		switch {
-		case state.ActingID != "":
+		case hasInFlightScope(state, state.Scope) || state.Scope == ScopeContainers && state.ActingID != "":
 			appendLine("Working…", v1.ToneSubtle)
 		case active.Loading && active.Available:
 			appendLine("Refreshing…", v1.ToneSubtle)
@@ -199,6 +201,191 @@ func emptyTabText(scope Scope) string {
 	}
 }
 
+type panelEntity struct {
+	Scope      Scope
+	ID         string
+	Name       string
+	Summary    string
+	Referenced int
+	Builtin    bool
+	container  *Container
+}
+
+func panelEntities(state SessionSnapshot) []panelEntity {
+	switch state.Scope {
+	case ScopeContainers:
+		if !state.ContainerTab.Available {
+			return nil
+		}
+		containers := sortedContainers(state.Containers)
+		entities := make([]panelEntity, 0, len(containers))
+		for i := range containers {
+			c := containers[i]
+			entities = append(entities, panelEntity{
+				Scope: state.Scope, ID: c.ID, Name: c.Names, Summary: c.Image + " · " + c.Status,
+				container: &c,
+			})
+		}
+		return entities
+	case ScopeImages:
+		if !state.ImageTab.Available {
+			return nil
+		}
+		images := slices.Clone(state.Images)
+		slices.SortFunc(images, func(a, b Image) int {
+			if c := strings.Compare(a.Repository+":"+a.Tag, b.Repository+":"+b.Tag); c != 0 {
+				return c
+			}
+			return strings.Compare(a.ID, b.ID)
+		})
+		entities := make([]panelEntity, 0, len(images))
+		for _, image := range images {
+			entities = append(entities, panelEntity{
+				Scope: state.Scope, ID: image.ID, Name: image.Repository + ":" + image.Tag,
+				Summary: image.ID + " · " + image.Size, Referenced: image.Containers,
+			})
+		}
+		return entities
+	case ScopeVolumes:
+		if !state.VolumeTab.Available {
+			return nil
+		}
+		volumes := slices.Clone(state.Volumes)
+		slices.SortFunc(volumes, func(a, b Volume) int {
+			if c := strings.Compare(a.Name, b.Name); c != 0 {
+				return c
+			}
+			return strings.Compare(a.Driver, b.Driver)
+		})
+		entities := make([]panelEntity, 0, len(volumes))
+		for _, volume := range volumes {
+			entities = append(entities, panelEntity{
+				Scope: state.Scope, ID: volume.Name, Name: volume.Name,
+				Summary: volume.Driver + " · " + volume.Scope,
+			})
+		}
+		return entities
+	case ScopeNetworks:
+		if !state.NetworkTab.Available {
+			return nil
+		}
+		networks := slices.Clone(state.Networks)
+		slices.SortFunc(networks, func(a, b Network) int {
+			if c := strings.Compare(a.Name, b.Name); c != 0 {
+				return c
+			}
+			return strings.Compare(a.ID, b.ID)
+		})
+		entities := make([]panelEntity, 0, len(networks))
+		for _, network := range networks {
+			entities = append(entities, panelEntity{
+				Scope: state.Scope, ID: network.ID, Name: network.Name,
+				Summary: network.Driver + " · " + network.Scope,
+				Builtin: network.Name == "bridge" || network.Name == "host" || network.Name == "none",
+			})
+		}
+		return entities
+	default:
+		return nil
+	}
+}
+
+func selectedEntity(state SessionSnapshot, entities []panelEntity) *panelEntity {
+	id := state.SelectedID
+	if state.PendingRemoval != nil && state.PendingRemoval.Scope == state.Scope {
+		id = state.PendingRemoval.ID
+	}
+	if id == "" {
+		return nil
+	}
+	for i := range entities {
+		if entities[i].ID == id {
+			return &entities[i]
+		}
+	}
+	return nil
+}
+
+func entityRow(entity panelEntity, selectedID string) *v1.Node {
+	fill := "outline"
+	if entity.ID == selectedID {
+		fill = "card"
+	}
+	return &v1.Node{Kind: v1.KindButton, ID: "select:" + entity.ID,
+		Name: "Select " + entity.Name, Role: "button", Fill: fill, Radius: 10, Padding: 8, Height: 54,
+		Events: []v1.EventKind{v1.EventActivate}, Children: []*v1.Node{{
+			Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+				{Kind: v1.KindText, Text: entity.Name, Bold: true},
+				{Kind: v1.KindText, Text: entity.Summary, Tone: v1.ToneSubtle},
+			},
+		}},
+	}
+}
+
+func entityDetail(entity panelEntity, state SessionSnapshot) *v1.Node {
+	if state.PendingRemoval != nil && state.PendingRemoval.Scope == entity.Scope && state.PendingRemoval.ID == entity.ID {
+		return removalConfirmation(entity)
+	}
+	if entity.Scope == ScopeContainers {
+		return containerDetail(*entity.container, state)
+	}
+	actions := &v1.Node{Kind: v1.KindRow, Gap: 4}
+	switch entity.Scope {
+	case ScopeImages:
+		actions.Children = append(actions.Children,
+			actionButton("run:"+entity.ID, "Run", "Run "+entity.Name, actionInFlight(state, ScopeImages, "run", entity.ID)),
+			actionButton("rmi:"+entity.ID, "Remove", "Remove image "+entity.Name,
+				entity.Referenced > 0 || actionInFlight(state, ScopeImages, "rmi", entity.ID)),
+		)
+	case ScopeVolumes:
+		actions.Children = append(actions.Children,
+			actionButton("volrm:"+entity.ID, "Remove", "Remove volume "+entity.Name,
+				actionInFlight(state, ScopeVolumes, "volrm", entity.ID)),
+		)
+	case ScopeNetworks:
+		actions.Children = append(actions.Children,
+			actionButton("netrm:"+entity.ID, "Remove", "Remove network "+entity.Name,
+				entity.Builtin || actionInFlight(state, ScopeNetworks, "netrm", entity.ID)),
+		)
+	}
+	return &v1.Node{Kind: v1.KindColumn, ID: "detail", Fill: "card", Radius: 10,
+		Padding: 8, Gap: 4, Height: 112, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: entity.Name, Bold: true},
+			{Kind: v1.KindText, Text: entity.Summary, Tone: v1.ToneSubtle},
+			{Kind: v1.KindText, Text: entity.ID, Tone: v1.ToneSubtle},
+			actions,
+		}}
+}
+
+func removalConfirmation(entity panelEntity) *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, ID: "detail", Fill: "card", Radius: 10,
+		Padding: 8, Gap: 4, Height: 112, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: "Remove " + entity.Name + "?", Bold: true},
+			{Kind: v1.KindText, Text: entity.ID, Tone: v1.ToneSubtle},
+			{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
+				actionButton("confirm", "Confirm remove", "Confirm remove "+entity.Name, false),
+				actionButton("cancel", "Cancel", "Cancel removal of "+entity.Name, false),
+			}},
+		}}
+}
+
+func actionInFlight(state SessionSnapshot, scope Scope, verb, id string) bool {
+	if state.InFlight == nil && scope == ScopeContainers && state.ActingID == id {
+		return true
+	}
+	_, exists := state.InFlight[actionKey{scope: scope, verb: verb, id: id}]
+	return exists
+}
+
+func hasInFlightScope(state SessionSnapshot, scope Scope) bool {
+	for key := range state.InFlight {
+		if key.scope == scope {
+			return true
+		}
+	}
+	return false
+}
+
 func sortedContainers(containers []Container) []Container {
 	sorted := slices.Clone(containers)
 	slices.SortFunc(sorted, func(a, b Container) int {
@@ -214,19 +401,6 @@ func sortedContainers(containers []Container) []Container {
 		return strings.Compare(a.ID, b.ID)
 	})
 	return sorted
-}
-
-func selectedContainer(state SessionSnapshot) *Container {
-	if state.Scope != ScopeContainers || !state.ContainerTab.Available || state.SelectedID == "" {
-		return nil
-	}
-	for i := range state.Containers {
-		if state.Containers[i].ID == state.SelectedID {
-			selected := state.Containers[i]
-			return &selected
-		}
-	}
-	return nil
 }
 
 // maxPanelRows keeps the worst-case tree (6 nodes per row) inside the
@@ -253,20 +427,23 @@ func containerRow(c Container, selectedID string) *v1.Node {
 	}
 }
 
-func containerDetail(c Container, actingID string) *v1.Node {
+func containerDetail(c Container, state SessionSnapshot) *v1.Node {
 	info := c.Image + " · " + c.Status
 	actions := &v1.Node{Kind: v1.KindRow, Gap: 4}
-	disabled := c.ID == actingID
 	if c.Running() {
 		actions.Children = append(actions.Children,
-			actionButton("stop:"+c.ID, "Stop", "Stop "+c.Names, disabled),
-			actionButton("restart:"+c.ID, "Restart", "Restart "+c.Names, disabled),
+			actionButton("stop:"+c.ID, "Stop", "Stop "+c.Names, actionInFlight(state, ScopeContainers, "stop", c.ID)),
+			actionButton("restart:"+c.ID, "Restart", "Restart "+c.Names, actionInFlight(state, ScopeContainers, "restart", c.ID)),
 		)
 	} else {
-		actions.Children = append(actions.Children, actionButton("start:"+c.ID, "Start", "Start "+c.Names, disabled))
+		actions.Children = append(actions.Children,
+			actionButton("start:"+c.ID, "Start", "Start "+c.Names,
+				actionInFlight(state, ScopeContainers, "start", c.ID)),
+		)
 	}
 	actions.Children = append(actions.Children,
-		actionButton("remove:"+c.ID, "Remove", "Remove "+c.Names, disabled || c.Running()))
+		actionButton("remove:"+c.ID, "Remove", "Remove "+c.Names,
+			c.Running() || actionInFlight(state, ScopeContainers, "remove", c.ID)))
 	return &v1.Node{Kind: v1.KindColumn, ID: "detail", Fill: "card", Radius: 10,
 		Padding: 8, Gap: 4, Height: 112, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: c.Names, Bold: true},
@@ -289,20 +466,19 @@ var actionPrefixes = []struct {
 	{"start:", "start"},
 	{"stop:", "stop"},
 	{"restart:", "restart"},
+	{"remove:", "remove"},
+	{"rmi:", "rmi"},
+	{"volrm:", "volrm"},
+	{"netrm:", "netrm"},
 }
 
-// idRE allow-lists the container ID half of an action node ID before it is
-// echoed into a docker argv. Docker IDs are hex, but the widest honest
-// contract is plain identifier characters.
-var idRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
-
 // ParseAction splits an action node ID ("start:<id>") into its verb and
-// container ID, rejecting anything that should never reach an argv.
+// entity ID, rejecting anything that should never reach an argv.
 func ParseAction(node string) (action, id string, ok bool) {
 	for _, p := range actionPrefixes {
 		if strings.HasPrefix(node, p.prefix) {
 			id = node[len(p.prefix):]
-			if idRE.MatchString(id) {
+			if validEntityID(id) {
 				return p.action, id, true
 			}
 			return "", "", false

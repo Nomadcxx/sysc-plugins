@@ -2,6 +2,7 @@ package minidocker
 
 import (
 	"context"
+	"regexp"
 	"sync"
 	"time"
 )
@@ -24,36 +25,53 @@ type TabStatus struct {
 	RefreshedAt  time.Time
 }
 
+// RemovalTarget identifies the current tab entity awaiting confirmation.
+type RemovalTarget struct {
+	Scope Scope
+	ID    string
+}
+
+type actionKey struct {
+	scope Scope
+	verb  string
+	id    string
+}
+
+var entityIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/@-]*$`)
+
 // SessionSnapshot is an immutable copy of the state used to render a view.
 type SessionSnapshot struct {
-	Scope        Scope
-	SelectedID   string
-	Containers   []Container
-	Images       []Image
-	Volumes      []Volume
-	Networks     []Network
-	ContainerTab TabStatus
-	ImageTab     TabStatus
-	VolumeTab    TabStatus
-	NetworkTab   TabStatus
-	ActionError  string
-	ActingID     string
+	Scope          Scope
+	SelectedID     string
+	Containers     []Container
+	Images         []Image
+	Volumes        []Volume
+	Networks       []Network
+	ContainerTab   TabStatus
+	ImageTab       TabStatus
+	VolumeTab      TabStatus
+	NetworkTab     TabStatus
+	ActionError    string
+	ActingID       string
+	PendingRemoval *RemovalTarget
+	InFlight       map[actionKey]struct{}
 }
 
 // Session owns Docker snapshots and user interaction state. Docker calls run
 // without mu held so view reads and independent tab state remain responsive.
 type Session struct {
-	mu         sync.Mutex
-	docker     Docker
-	scope      Scope
-	selectedID string
-	tabs       map[Scope]TabStatus
-	containers []Container
-	images     []Image
-	volumes    []Volume
-	networks   []Network
-	actErr     string
-	actingID   string
+	mu             sync.Mutex
+	docker         Docker
+	scope          Scope
+	selectedID     string
+	tabs           map[Scope]TabStatus
+	containers     []Container
+	images         []Image
+	volumes        []Volume
+	networks       []Network
+	actErr         string
+	pendingRemoval *RemovalTarget
+	inFlight       map[actionKey]struct{}
 }
 
 func NewSession(d Docker) *Session {
@@ -66,6 +84,7 @@ func NewSession(d Docker) *Session {
 			ScopeVolumes:    {},
 			ScopeNetworks:   {},
 		},
+		inFlight: make(map[actionKey]struct{}),
 	}
 }
 
@@ -77,6 +96,7 @@ func (s *Session) SetScope(scope Scope) bool {
 	if s.scope != scope {
 		s.scope = scope
 		s.selectedID = ""
+		s.pendingRemoval = nil
 	}
 	s.mu.Unlock()
 	return true
@@ -85,20 +105,15 @@ func (s *Session) SetScope(scope Scope) bool {
 func (s *Session) Select(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.scope != ScopeContainers || !s.tabs[ScopeContainers].Available || !idRE.MatchString(id) {
+	if !validEntityID(id) || !s.tabs[s.scope].Available || !s.hasEntityLocked(s.scope, id) {
 		return false
 	}
 	if s.selectedID == id {
 		s.selectedID = ""
 		return true
 	}
-	for _, container := range s.containers {
-		if container.ID == id {
-			s.selectedID = id
-			return true
-		}
-	}
-	return false
+	s.selectedID = id
+	return true
 }
 
 func validScope(scope Scope) bool {
@@ -116,18 +131,20 @@ func (s *Session) State() SessionSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return SessionSnapshot{
-		Scope:        s.scope,
-		SelectedID:   s.selectedID,
-		Containers:   append([]Container(nil), s.containers...),
-		Images:       append([]Image(nil), s.images...),
-		Volumes:      append([]Volume(nil), s.volumes...),
-		Networks:     append([]Network(nil), s.networks...),
-		ContainerTab: s.tabs[ScopeContainers],
-		ImageTab:     s.tabs[ScopeImages],
-		VolumeTab:    s.tabs[ScopeVolumes],
-		NetworkTab:   s.tabs[ScopeNetworks],
-		ActionError:  s.actErr,
-		ActingID:     s.actingID,
+		Scope:          s.scope,
+		SelectedID:     s.selectedID,
+		Containers:     append([]Container(nil), s.containers...),
+		Images:         append([]Image(nil), s.images...),
+		Volumes:        append([]Volume(nil), s.volumes...),
+		Networks:       append([]Network(nil), s.networks...),
+		ContainerTab:   s.tabs[ScopeContainers],
+		ImageTab:       s.tabs[ScopeImages],
+		VolumeTab:      s.tabs[ScopeVolumes],
+		NetworkTab:     s.tabs[ScopeNetworks],
+		ActionError:    s.actErr,
+		ActingID:       s.actingContainerLocked(),
+		PendingRemoval: cloneRemovalTarget(s.pendingRemoval),
+		InFlight:       cloneActionSet(s.inFlight),
 	}
 }
 
@@ -188,6 +205,62 @@ func (s *Session) RefreshTab(ctx context.Context, scope Scope) {
 	}
 }
 
+func (s *Session) hasEntityLocked(scope Scope, id string) bool {
+	switch scope {
+	case ScopeContainers:
+		for _, item := range s.containers {
+			if item.ID == id {
+				return true
+			}
+		}
+	case ScopeImages:
+		for _, item := range s.images {
+			if item.ID == id {
+				return true
+			}
+		}
+	case ScopeVolumes:
+		for _, item := range s.volumes {
+			if item.Name == id {
+				return true
+			}
+		}
+	case ScopeNetworks:
+		for _, item := range s.networks {
+			if item.ID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Session) actingContainerLocked() string {
+	var id string
+	for key := range s.inFlight {
+		if key.scope == ScopeContainers && (id == "" || key.id < id) {
+			id = key.id
+		}
+	}
+	return id
+}
+
+func cloneRemovalTarget(target *RemovalTarget) *RemovalTarget {
+	if target == nil {
+		return nil
+	}
+	copy := *target
+	return &copy
+}
+
+func cloneActionSet(actions map[actionKey]struct{}) map[actionKey]struct{} {
+	copy := make(map[actionKey]struct{}, len(actions))
+	for key := range actions {
+		copy[key] = struct{}{}
+	}
+	return copy
+}
+
 func (s *Session) finishRefresh(scope Scope, skipped int, err error, replace func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -209,28 +282,23 @@ func (s *Session) finishRefresh(scope Scope, skipped int, err error, replace fun
 	status.RefreshedAt = time.Now()
 	s.tabs[scope] = status
 	replace()
-	if scope == ScopeContainers && s.selectedID != "" {
-		found := false
-		for _, container := range s.containers {
-			if container.ID == s.selectedID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			s.selectedID = ""
-		}
+	if s.scope == scope && s.selectedID != "" && !s.hasEntityLocked(scope, s.selectedID) {
+		s.selectedID = ""
+	}
+	if s.pendingRemoval != nil && s.pendingRemoval.Scope == scope && !s.hasEntityLocked(scope, s.pendingRemoval.ID) {
+		s.pendingRemoval = nil
 	}
 }
 
 // Act accepts only a current, eligible container action. It snapshots the
 // choice under the lock, then performs Docker I/O without holding the lock.
 func (s *Session) Act(ctx context.Context, action, id string) {
-	if !validContainerAction(action) || !idRE.MatchString(id) {
+	if !validContainerAction(action) || !validEntityID(id) {
 		return
 	}
 	s.mu.Lock()
-	if s.scope != ScopeContainers || !s.tabs[ScopeContainers].Available || s.actingID != "" {
+	key := actionKey{scope: ScopeContainers, verb: action, id: id}
+	if s.scope != ScopeContainers || !s.tabs[ScopeContainers].Available {
 		s.mu.Unlock()
 		return
 	}
@@ -245,7 +313,11 @@ func (s *Session) Act(ctx context.Context, action, id string) {
 		s.mu.Unlock()
 		return
 	}
-	s.actingID = id
+	if _, exists := s.inFlight[key]; exists {
+		s.mu.Unlock()
+		return
+	}
+	s.inFlight[key] = struct{}{}
 	s.mu.Unlock()
 
 	var err error
@@ -259,7 +331,7 @@ func (s *Session) Act(ctx context.Context, action, id string) {
 	}
 
 	s.mu.Lock()
-	s.actingID = ""
+	delete(s.inFlight, key)
 	if err != nil {
 		s.actErr = err.Error()
 	} else {
@@ -268,6 +340,116 @@ func (s *Session) Act(ctx context.Context, action, id string) {
 	s.mu.Unlock()
 	s.Refresh(ctx)
 }
+
+// ArmRemoval records an eligible target from the current tab. The target is
+// checked again on confirmation because Docker snapshots can change.
+func (s *Session) ArmRemoval(id string) bool {
+	if !validEntityID(id) {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.tabs[s.scope].Available || !s.canRemoveLocked(s.scope, id) {
+		return false
+	}
+	if _, exists := s.inFlight[actionKey{scope: s.scope, verb: removeVerb(s.scope), id: id}]; exists {
+		return false
+	}
+	s.pendingRemoval = &RemovalTarget{Scope: s.scope, ID: id}
+	return true
+}
+
+func (s *Session) CancelRemoval() {
+	s.mu.Lock()
+	s.pendingRemoval = nil
+	s.mu.Unlock()
+}
+
+// ConfirmRemoval consumes the confirmation before dispatch, then rechecks the
+// active scope, snapshot membership, and eligibility immediately before I/O.
+func (s *Session) ConfirmRemoval(ctx context.Context) {
+	s.mu.Lock()
+	target := s.pendingRemoval
+	s.pendingRemoval = nil
+	if target == nil || target.Scope != s.scope || !s.tabs[target.Scope].Available || !s.canRemoveLocked(target.Scope, target.ID) {
+		s.mu.Unlock()
+		return
+	}
+	verb := removeVerb(target.Scope)
+	key := actionKey{scope: target.Scope, verb: verb, id: target.ID}
+	if _, exists := s.inFlight[key]; exists {
+		s.mu.Unlock()
+		return
+	}
+	s.inFlight[key] = struct{}{}
+	s.mu.Unlock()
+
+	var err error
+	switch target.Scope {
+	case ScopeContainers:
+		err = s.docker.Remove(ctx, target.ID)
+	case ScopeImages:
+		err = s.docker.Rmi(ctx, target.ID)
+	case ScopeVolumes:
+		err = s.docker.VolRm(ctx, target.ID)
+	case ScopeNetworks:
+		err = s.docker.NetRm(ctx, target.ID)
+	}
+
+	s.mu.Lock()
+	delete(s.inFlight, key)
+	if err != nil {
+		s.actErr = err.Error()
+	} else {
+		s.actErr = ""
+	}
+	s.mu.Unlock()
+	s.RefreshTab(ctx, target.Scope)
+}
+
+func removeVerb(scope Scope) string {
+	switch scope {
+	case ScopeImages:
+		return "rmi"
+	case ScopeVolumes:
+		return "volrm"
+	case ScopeNetworks:
+		return "netrm"
+	default:
+		return "remove"
+	}
+}
+
+func (s *Session) canRemoveLocked(scope Scope, id string) bool {
+	if !s.hasEntityLocked(scope, id) {
+		return false
+	}
+	switch scope {
+	case ScopeContainers:
+		for _, item := range s.containers {
+			if item.ID == id {
+				return !item.Running()
+			}
+		}
+	case ScopeImages:
+		for _, item := range s.images {
+			if item.ID == id {
+				return item.Containers <= 0
+			}
+		}
+	case ScopeVolumes:
+		return true
+	case ScopeNetworks:
+		for _, item := range s.networks {
+			if item.ID == id {
+				return item.Name != "bridge" && item.Name != "host" && item.Name != "none"
+			}
+		}
+	}
+	return false
+}
+
+func validEntityID(id string) bool { return entityIDRE.MatchString(id) }
 
 func validContainerAction(action string) bool {
 	switch action {

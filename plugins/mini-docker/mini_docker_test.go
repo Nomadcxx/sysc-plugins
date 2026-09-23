@@ -307,6 +307,317 @@ func TestSessionSelectsOnlyCurrentContainerAndClearsSelection(t *testing.T) {
 	}
 }
 
+func TestSessionSelectsCurrentEntityInEveryScope(t *testing.T) {
+	s := NewSession(&fakeDocker{
+		containers: []Container{{ID: "container1", Names: "web"}},
+		images:     []Image{{ID: "sha256:image1", Repository: "nginx", Tag: "latest"}},
+		volumes:    []Volume{{Name: "volume1"}},
+		networks:   []Network{{ID: "network1", Name: "custom"}},
+	})
+	s.Refresh(context.Background())
+	for _, scope := range []Scope{ScopeImages, ScopeVolumes, ScopeNetworks} {
+		s.RefreshTab(context.Background(), scope)
+	}
+	for _, tc := range []struct {
+		scope Scope
+		id    string
+	}{
+		{ScopeContainers, "container1"},
+		{ScopeImages, "sha256:image1"},
+		{ScopeVolumes, "volume1"},
+		{ScopeNetworks, "network1"},
+	} {
+		if !s.SetScope(tc.scope) || !s.Select(tc.id) {
+			t.Fatalf("could not select %q in %s", tc.id, tc.scope)
+		}
+		if got := s.State().SelectedID; got != tc.id {
+			t.Fatalf("selected ID in %s = %q, want %q", tc.scope, got, tc.id)
+		}
+	}
+}
+
+type gatedStartDocker struct {
+	*fakeDocker
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (d *gatedStartDocker) Start(ctx context.Context, id string) error {
+	if id == "a1" {
+		close(d.entered)
+		select {
+		case <-d.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return d.fakeDocker.Start(ctx, id)
+}
+
+func TestSessionAllowsDifferentEntitiesDuringAnAction(t *testing.T) {
+	fd := &gatedStartDocker{
+		fakeDocker: &fakeDocker{containers: []Container{
+			{ID: "a1", Names: "web", State: "exited"},
+			{ID: "b2", Names: "db", State: "exited"},
+		}},
+		entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	s := NewSession(fd)
+	s.Refresh(context.Background())
+	done := make(chan struct{})
+	go func() {
+		s.Act(context.Background(), "start", "a1")
+		close(done)
+	}()
+	select {
+	case <-fd.entered:
+	case <-time.After(time.Second):
+		t.Fatal("first action did not enter Docker")
+	}
+	s.Act(context.Background(), "start", "a1") // duplicate key is ignored
+	s.Act(context.Background(), "start", "b2")
+	if !slices.Contains(fd.actions, "start:b2") {
+		t.Fatalf("unrelated action was rejected while a1 was running: %v", fd.actions)
+	}
+	close(fd.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("first action did not finish")
+	}
+	if got := strings.Join(fd.actions, ","); got != "start:b2,start:a1" {
+		t.Fatalf("actions = %q, want one action per entity", got)
+	}
+}
+
+func TestSessionConfirmsCurrentScopedRemoval(t *testing.T) {
+	cases := []struct {
+		name  string
+		scope Scope
+		id    string
+		want  string
+		fd    *fakeDocker
+	}{
+		{
+			name: "container", scope: ScopeContainers, id: "b2", want: "remove:b2",
+			fd: &fakeDocker{containers: []Container{{ID: "b2", Names: "db", State: "exited"}}},
+		},
+		{
+			name: "image", scope: ScopeImages, id: "sha256:image", want: "rmi:sha256:image",
+			fd: &fakeDocker{images: []Image{{ID: "sha256:image", Repository: "alpine", Tag: "3"}}},
+		},
+		{
+			name: "volume", scope: ScopeVolumes, id: "cache", want: "volrm:cache",
+			fd: &fakeDocker{volumes: []Volume{{Name: "cache"}}},
+		},
+		{
+			name: "network", scope: ScopeNetworks, id: "custom1", want: "netrm:custom1",
+			fd: &fakeDocker{networks: []Network{{ID: "custom1", Name: "custom"}}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewSession(tc.fd)
+			s.RefreshTab(context.Background(), tc.scope)
+			s.SetScope(tc.scope)
+			if !s.ArmRemoval(tc.id) {
+				t.Fatalf("could not arm removal for %q", tc.id)
+			}
+			if target := s.State().PendingRemoval; target == nil || target.Scope != tc.scope || target.ID != tc.id {
+				t.Fatalf("pending removal = %+v, want %s:%s", target, tc.scope, tc.id)
+			}
+			s.ConfirmRemoval(context.Background())
+			if !slices.Contains(tc.fd.actions, tc.want) {
+				t.Fatalf("actions = %v, want %q", tc.fd.actions, tc.want)
+			}
+			if target := s.State().PendingRemoval; target != nil {
+				t.Fatalf("confirmation remained armed after dispatch: %+v", target)
+			}
+		})
+	}
+}
+
+func TestSessionRemovalConfirmationCancelsOnCancelScopeChangeOrMissingEntity(t *testing.T) {
+	fd := &fakeDocker{images: []Image{{ID: "sha256:image", Repository: "alpine", Tag: "3"}}}
+	s := NewSession(fd)
+	s.RefreshTab(context.Background(), ScopeImages)
+	s.SetScope(ScopeImages)
+	if !s.ArmRemoval("sha256:image") {
+		t.Fatal("could not arm image removal")
+	}
+	s.RefreshTab(context.Background(), ScopeImages)
+	if s.State().PendingRemoval == nil {
+		t.Fatal("refresh cleared confirmation while the image remained present")
+	}
+	s.CancelRemoval()
+	if s.State().PendingRemoval != nil {
+		t.Fatal("cancel left removal armed")
+	}
+	if !s.ArmRemoval("sha256:image") {
+		t.Fatal("could not arm image removal again")
+	}
+	s.SetScope(ScopeVolumes)
+	if s.State().PendingRemoval != nil {
+		t.Fatal("scope change left removal armed")
+	}
+	s.SetScope(ScopeImages)
+	if !s.ArmRemoval("sha256:image") {
+		t.Fatal("could not arm image removal after returning to its tab")
+	}
+	fd.images = nil
+	s.RefreshTab(context.Background(), ScopeImages)
+	if s.State().PendingRemoval != nil {
+		t.Fatal("refresh left a removed image confirmation armed")
+	}
+	s.ConfirmRemoval(context.Background())
+	if len(fd.actions) != 0 {
+		t.Fatalf("stale confirmation reached Docker: %v", fd.actions)
+	}
+}
+
+func TestSessionRechecksRemovalEligibilityBeforeDispatch(t *testing.T) {
+	fd := &fakeDocker{images: []Image{{ID: "sha256:image", Repository: "alpine", Tag: "3"}}}
+	s := NewSession(fd)
+	s.RefreshTab(context.Background(), ScopeImages)
+	s.SetScope(ScopeImages)
+	if !s.ArmRemoval("sha256:image") {
+		t.Fatal("could not arm image removal")
+	}
+	fd.images[0].Containers = 1
+	s.RefreshTab(context.Background(), ScopeImages)
+	if s.State().PendingRemoval == nil {
+		t.Fatal("refresh cleared confirmation although the image still exists")
+	}
+	s.ConfirmRemoval(context.Background())
+	if len(fd.actions) != 0 {
+		t.Fatalf("newly referenced image reached Docker: %v", fd.actions)
+	}
+}
+
+func TestSessionDoesNotArmIneligibleOrStaleRemovals(t *testing.T) {
+	fd := &fakeDocker{
+		containers: []Container{{ID: "running1", Names: "web", State: "running"}},
+		images:     []Image{{ID: "sha256:used", Repository: "nginx", Tag: "latest", Containers: 1}},
+		networks: []Network{
+			{ID: "bridge1", Name: "bridge"},
+			{ID: "host1", Name: "host"},
+			{ID: "none1", Name: "none"},
+		},
+	}
+	s := NewSession(fd)
+	for _, scope := range []Scope{ScopeContainers, ScopeImages, ScopeNetworks} {
+		s.RefreshTab(context.Background(), scope)
+		s.SetScope(scope)
+		ids := []string{"missing"}
+		switch scope {
+		case ScopeContainers:
+			ids = append(ids, "running1")
+		case ScopeImages:
+			ids = append(ids, "sha256:used")
+		case ScopeNetworks:
+			ids = append(ids, "bridge1", "host1", "none1")
+		}
+		for _, id := range ids {
+			if s.ArmRemoval(id) {
+				t.Errorf("armed ineligible or stale %s removal %q", scope, id)
+				s.CancelRemoval()
+			}
+		}
+	}
+	for _, scope := range []Scope{ScopeContainers, ScopeImages, ScopeNetworks} {
+		s.SetScope(scope)
+		s.ConfirmRemoval(context.Background())
+	}
+	if len(fd.actions) != 0 {
+		t.Fatalf("ineligible or stale removals reached Docker: %v", fd.actions)
+	}
+}
+
+type blockedImageRemovalDocker struct {
+	*fakeDocker
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (d *blockedImageRemovalDocker) Rmi(ctx context.Context, id string) error {
+	close(d.entered)
+	select {
+	case <-d.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return d.fakeDocker.Rmi(ctx, id)
+}
+
+func TestSessionConsumesConfirmationBeforeRemovalAndDisablesOnlyThatKey(t *testing.T) {
+	fd := &blockedImageRemovalDocker{
+		fakeDocker: &fakeDocker{images: []Image{
+			{ID: "sha256:image1", Repository: "alpine", Tag: "3"},
+			{ID: "sha256:image2", Repository: "nginx", Tag: "latest"},
+		}},
+		entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	s := NewSession(fd)
+	s.RefreshTab(context.Background(), ScopeImages)
+	s.SetScope(ScopeImages)
+	if !s.Select("sha256:image1") || !s.ArmRemoval("sha256:image1") {
+		t.Fatal("could not select and arm image removal")
+	}
+	done := make(chan struct{})
+	go func() {
+		s.ConfirmRemoval(context.Background())
+		close(done)
+	}()
+	select {
+	case <-fd.entered:
+	case <-time.After(time.Second):
+		t.Fatal("image removal did not enter Docker")
+	}
+	state := s.State()
+	if state.PendingRemoval != nil {
+		t.Fatalf("confirmation still armed while Docker is running: %+v", state.PendingRemoval)
+	}
+	panel := PanelTreeForSession(state)
+	if node := findNode(panel, "rmi:sha256:image1"); node == nil || !node.Disabled {
+		t.Fatalf("matching remove action not disabled in flight: %+v", node)
+	}
+	if node := findNode(panel, "run:sha256:image1"); node == nil || node.Disabled {
+		t.Fatalf("unrelated action for the same image disabled: %+v", node)
+	}
+	if node := findNode(panel, "select:sha256:image2"); node == nil || node.Disabled {
+		t.Fatalf("unrelated image cannot be selected while action is running: %+v", node)
+	}
+	if !s.Select("sha256:image2") {
+		t.Fatal("could not select unrelated image during removal")
+	}
+	panel = PanelTreeForSession(s.State())
+	if node := findNode(panel, "rmi:sha256:image2"); node == nil || node.Disabled {
+		t.Fatalf("unrelated image remove action disabled: %+v", node)
+	}
+	close(fd.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("image removal did not finish")
+	}
+}
+
+func TestPanelShowsInlineRemovalConfirmation(t *testing.T) {
+	state := SessionSnapshot{
+		Scope: ScopeImages, SelectedID: "sha256:image",
+		Images:         []Image{{ID: "sha256:image", Repository: "alpine", Tag: "3"}},
+		ImageTab:       TabStatus{Available: true},
+		PendingRemoval: &RemovalTarget{Scope: ScopeImages, ID: "sha256:image"},
+	}
+	panel := PanelTreeForSession(state)
+	if findNode(panel, "confirm") == nil || findNode(panel, "cancel") == nil {
+		t.Fatal("confirmation card is missing confirm or cancel controls")
+	}
+	if findNode(panel, "rmi:sha256:image") != nil {
+		t.Fatal("armed removal still shows the original remove action")
+	}
+}
+
 type blockedListDocker struct {
 	*fakeDocker
 	entered chan struct{}
@@ -649,6 +960,10 @@ func TestParseAction(t *testing.T) {
 		{"start:abc123def456", "start", "abc123def456", true},
 		{"stop:abc123def456", "stop", "abc123def456", true},
 		{"restart:abc123def456", "restart", "abc123def456", true},
+		{"remove:abc123def456", "remove", "abc123def456", true},
+		{"rmi:sha256:abc123", "rmi", "sha256:abc123", true},
+		{"volrm:cache_data", "volrm", "cache_data", true},
+		{"netrm:custom/network@v1", "netrm", "custom/network@v1", true},
 		{"open", "", "", false},
 		{"refresh", "", "", false},
 		{"start:", "", "", false},
@@ -807,6 +1122,96 @@ func TestPanelScopeButtons(t *testing.T) {
 		if button.Fill != fill {
 			t.Fatalf("%s fill = %q, want %q", button.ID, button.Fill, fill)
 		}
+	}
+}
+
+func TestPanelRendersSortedImageVolumeAndNetworkDetails(t *testing.T) {
+	cases := []struct {
+		name      string
+		state     SessionSnapshot
+		wantRows  []string
+		detail    string
+		removeID  string
+		removeOff bool
+		wantText  []string
+	}{
+		{
+			name: "images",
+			state: SessionSnapshot{
+				Scope: ScopeImages, SelectedID: "sha256:used",
+				Images: []Image{
+					{ID: "sha256:used", Repository: "zulu", Tag: "latest", Size: "40MB", Containers: 1},
+					{ID: "sha256:free", Repository: "alpine", Tag: "3", Size: "8MB"},
+				},
+				ImageTab: TabStatus{Available: true},
+			},
+			wantRows: []string{"select:sha256:free", "select:sha256:used"},
+			detail:   "detail",
+			removeID: "rmi:sha256:used", removeOff: true,
+			wantText: []string{"alpine:3", "zulu:latest", "sha256:used · 40MB"},
+		},
+		{
+			name: "volumes",
+			state: SessionSnapshot{
+				Scope: ScopeVolumes, SelectedID: "z-data",
+				Volumes: []Volume{
+					{Name: "z-data", Driver: "local", Scope: "local", Mountpoint: "/var/lib/docker/volumes/z-data"},
+					{Name: "a-cache", Driver: "local", Scope: "local"},
+				},
+				VolumeTab: TabStatus{Available: true},
+			},
+			wantRows: []string{"select:a-cache", "select:z-data"},
+			detail:   "detail",
+			removeID: "volrm:z-data",
+			wantText: []string{"a-cache", "z-data", "local · local"},
+		},
+		{
+			name: "networks",
+			state: SessionSnapshot{
+				Scope: ScopeNetworks, SelectedID: "builtin",
+				Networks: []Network{
+					{Name: "z-custom", ID: "custom-z", Driver: "bridge", Scope: "local"},
+					{Name: "bridge", ID: "builtin", Driver: "bridge", Scope: "local"},
+					{Name: "a-custom", ID: "custom-a", Driver: "bridge", Scope: "local"},
+				},
+				NetworkTab: TabStatus{Available: true},
+			},
+			wantRows: []string{"select:custom-a", "select:builtin", "select:custom-z"},
+			detail:   "detail",
+			removeID: "netrm:builtin", removeOff: true,
+			wantText: []string{"bridge", "a-custom", "z-custom"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			panel := PanelTreeForSession(tc.state)
+			list := findKind(panel, v1.KindList)
+			if list == nil {
+				t.Fatal("panel has no entity list")
+			}
+			var gotRows []string
+			for _, row := range list.Children {
+				if row.Kind == v1.KindButton {
+					gotRows = append(gotRows, row.ID)
+				}
+			}
+			if !slices.Equal(gotRows, tc.wantRows) {
+				t.Fatalf("row IDs = %v, want %v", gotRows, tc.wantRows)
+			}
+			if findNode(panel, tc.detail) == nil {
+				t.Fatal("selected entity has no detail card")
+			}
+			remove := findNode(panel, tc.removeID)
+			if remove == nil || remove.Disabled != tc.removeOff {
+				t.Fatalf("remove action = %+v, want disabled=%v", remove, tc.removeOff)
+			}
+			for _, text := range tc.wantText {
+				if !containsText(panel, text) {
+					t.Errorf("panel is missing row/detail text %q", text)
+				}
+			}
+		})
 	}
 }
 
@@ -1091,5 +1496,70 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 	}
 	for _, f := range shelllint.Tree(panel, v1.ViewPanel, panelW, panelH) {
 		t.Errorf("worst-case panel: %s", f)
+	}
+
+	containerRows := make([]Container, maxPanelRows+1)
+	imageRows := make([]Image, maxPanelRows+1)
+	volumeRows := make([]Volume, maxPanelRows+1)
+	networkRows := make([]Network, maxPanelRows+1)
+	for i := range containerRows {
+		id := i + 1
+		containerRows[i] = row(id, "exited", "Exited (0) 2 days ago")
+		imageRows[i] = Image{ID: fmt.Sprintf("sha256:image%03d", id), Repository: fmt.Sprintf("image%03d", id), Tag: "latest", Size: "8MB"}
+		volumeRows[i] = Volume{Name: fmt.Sprintf("volume%03d", id), Driver: "local", Scope: "local"}
+		networkRows[i] = Network{ID: fmt.Sprintf("network%03d", id), Name: fmt.Sprintf("network%03d", id), Driver: "bridge", Scope: "local"}
+	}
+	armedStates := []struct {
+		name  string
+		state SessionSnapshot
+	}{
+		{
+			name: "containers confirmation",
+			state: SessionSnapshot{
+				Scope: ScopeContainers, SelectedID: "c001", Containers: containerRows,
+				ContainerTab:   TabStatus{Available: true, ListError: "last refresh failed"},
+				ActionError:    "remove action failed",
+				PendingRemoval: &RemovalTarget{Scope: ScopeContainers, ID: "c001"},
+			},
+		},
+		{
+			name: "images confirmation",
+			state: SessionSnapshot{
+				Scope: ScopeImages, SelectedID: "sha256:image001", Images: imageRows,
+				ImageTab:       TabStatus{Available: true, ListError: "last refresh failed"},
+				ActionError:    "remove action failed",
+				PendingRemoval: &RemovalTarget{Scope: ScopeImages, ID: "sha256:image001"},
+			},
+		},
+		{
+			name: "volumes confirmation",
+			state: SessionSnapshot{
+				Scope: ScopeVolumes, SelectedID: "volume001", Volumes: volumeRows,
+				VolumeTab:      TabStatus{Available: true, ListError: "last refresh failed"},
+				ActionError:    "remove action failed",
+				PendingRemoval: &RemovalTarget{Scope: ScopeVolumes, ID: "volume001"},
+			},
+		},
+		{
+			name: "networks confirmation",
+			state: SessionSnapshot{
+				Scope: ScopeNetworks, SelectedID: "network001", Networks: networkRows,
+				NetworkTab:     TabStatus{Available: true, ListError: "last refresh failed"},
+				ActionError:    "remove action failed",
+				PendingRemoval: &RemovalTarget{Scope: ScopeNetworks, ID: "network001"},
+			},
+		},
+	}
+	for _, tc := range armedStates {
+		panel := PanelTreeForSession(tc.state)
+		if findNode(panel, "detail") == nil || findNode(panel, "confirm") == nil || findNode(panel, "cancel") == nil {
+			t.Errorf("%s is missing confirmation details", tc.name)
+		}
+		if !containsText(panel, "+1 more") {
+			t.Errorf("%s is missing its overflow footer", tc.name)
+		}
+		for _, f := range shelllint.Tree(panel, v1.ViewPanel, panelW, panelH) {
+			t.Errorf("%s: %s", tc.name, f)
+		}
 	}
 }
