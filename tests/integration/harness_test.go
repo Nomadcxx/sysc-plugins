@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-shell/plugin/lint"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -84,6 +85,38 @@ func argValue(flag string) string {
 		}
 	}
 	return ""
+}
+
+// viewSlot is the box a host opened a view with. A scripted host records the
+// slot before it sends ViewOpen, so every snapshot it captures can be laid out
+// exactly as the real host would have laid it out.
+type viewSlot struct {
+	view v1.ViewKind
+	w, h int
+}
+
+// recordSlot remembers the slot a host announced for a view. It is called
+// before the ViewOpen goes out, so no snapshot can arrive unmonitored.
+func recordSlot(m map[string]viewSlot, id string, slot viewSlot) map[string]viewSlot {
+	if m == nil {
+		m = make(map[string]viewSlot, 2)
+	}
+	m[id] = slot
+	return m
+}
+
+// checkFits runs a captured tree through the host's own layout rules. A
+// rejection here is the bug class that used to reach the desktop: a tree that
+// validates and cannot be drawn. t.Errorf is safe off the test goroutine,
+// which is where each decoder calls this.
+func checkFits(t *testing.T, slot viewSlot, root *v1.Node) {
+	t.Helper()
+	if root == nil {
+		return
+	}
+	for _, f := range lint.Tree(root, slot.view, slot.w, slot.h) {
+		t.Errorf("%s view at %dx%d: %s", slot.view, slot.w, slot.h, f)
+	}
 }
 
 func repoRoot(t *testing.T) string {

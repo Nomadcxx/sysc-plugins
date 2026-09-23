@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-shell/plugin/lint"
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -74,9 +75,13 @@ func TestPluginCalendarGateMonthNavigation(t *testing.T) {
 				_ = h.send(&v1.HostReply{ID: m.ID, OK: true})
 			case *v1.ViewSnapshot:
 				h.mu.Lock()
+				slot, monitored := h.slots[m.ViewID]
 				h.root = m.Root
 				h.rev = m.Revision
 				h.mu.Unlock()
+				if monitored {
+					checkFits(h.t, slot, m.Root)
+				}
 				select {
 				case h.wake <- struct{}{}:
 				default:
@@ -92,6 +97,9 @@ func TestPluginCalendarGateMonthNavigation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	h.mu.Lock()
+	h.slots = recordSlot(h.slots, "panel-1", viewSlot{v1.ViewPanel, 320, 420})
+	h.mu.Unlock()
 	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Output: "DP-1", Width: 320, Height: 420}); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +120,10 @@ func TestPluginCalendarGateMonthNavigation(t *testing.T) {
 	})
 
 	// The bar view shows the day of the month.
-	if err := h.send(&v1.ViewOpen{ViewID: "bar-1", View: v1.ViewBar, Entry: "bar", Output: "DP-1", Width: 64, Height: 32}); err != nil {
+	h.mu.Lock()
+	h.slots = recordSlot(h.slots, "bar-1", viewSlot{v1.ViewBar, lint.BarWidth, lint.BarHeight})
+	h.mu.Unlock()
+	if err := h.send(&v1.ViewOpen{ViewID: "bar-1", View: v1.ViewBar, Entry: "bar", Output: "DP-1", Width: lint.BarWidth, Height: lint.BarHeight}); err != nil {
 		t.Fatal(err)
 	}
 	h.waitNode(func(n *v1.Node) bool {
@@ -121,12 +132,13 @@ func TestPluginCalendarGateMonthNavigation(t *testing.T) {
 }
 
 type calendarHost struct {
-	t    *testing.T
-	enc  *v1.Encoder
-	mu   sync.Mutex
-	root *v1.Node
-	rev  uint64
-	wake chan struct{}
+	t     *testing.T
+	enc   *v1.Encoder
+	mu    sync.Mutex
+	root  *v1.Node
+	rev   uint64
+	slots map[string]viewSlot
+	wake  chan struct{}
 }
 
 func (h *calendarHost) send(m v1.Message) error {

@@ -270,7 +270,9 @@ func fleetRollup(r Report, cfg Config, now time.Time) *v1.Node {
 	if timed == 0 {
 		return nil
 	}
-	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Fill: "card", Shape: "card", Padding: 8, Height: 28, Key: "fleet-rollup"}
+	// Height includes padding: 42 is 26 of content plus the 2×8 the card
+	// insets, so the rollup stands as tall as a provider row.
+	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Fill: "card", Shape: "card", Padding: 8, Height: 42, Key: "fleet-rollup"}
 	row.Children = append(row.Children,
 		&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Avg %v%%", math.Round(total/float64(timed))), Bold: true, Width: 56})
 	if peak != nil {
@@ -382,7 +384,10 @@ func providerRow(p ProviderReport, selected bool, cfg Config, hostMinor int, now
 
 	row := &v1.Node{
 		Kind: v1.KindRow, Key: "provider-" + p.ID,
-		Fill: fill, Shape: "card", Padding: 8, Gap: 6, Height: 28,
+		Fill: fill, Shape: "card", Padding: 8, Gap: 6,
+		// Height includes padding: 42 is 26 of content — the monogram disc's
+		// square — plus the 2×8 the card insets.
+		Height: 42,
 	}
 	// The selection tint gets a hairline accent rim on minor-5-plus hosts —
 	// the border AIOC draws around its active provider.
@@ -646,7 +651,9 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 	}
 
 	// The honesty footer, with the history export beside it.
-	footer := &v1.Node{Kind: v1.KindRow, Gap: 8, Height: 28, Children: []*v1.Node{
+	// PinEnd reserves the export button's width so the caption clips rather
+	// than pushing the button past the pane's edge.
+	footer := &v1.Node{Kind: v1.KindRow, Gap: 8, Height: 28, PinEnd: true, Children: []*v1.Node{
 		{Kind: v1.KindText, Tone: v1.ToneSubtle, Size: "caption",
 			Text: "Quota windows · last local snapshot per provider · not billing figures"},
 		{Kind: v1.KindButton, ID: "export", Text: "Export CSV",

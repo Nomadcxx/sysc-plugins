@@ -104,6 +104,7 @@ type notesHost struct {
 	mu    sync.Mutex
 	root  *v1.Node
 	rev   uint64
+	slots map[string]viewSlot
 	wake  chan struct{}
 }
 
@@ -172,9 +173,13 @@ func startNotes(t *testing.T) *notesHost {
 				_ = h.send(&v1.HostReply{ID: m.ID, OK: true})
 			case *v1.ViewSnapshot:
 				h.mu.Lock()
+				slot, monitored := h.slots[m.ViewID]
 				h.root = m.Root
 				h.rev = m.Revision
 				h.mu.Unlock()
+				if monitored {
+					checkFits(h.t, slot, m.Root)
+				}
 				select {
 				case h.wake <- struct{}{}:
 				default:
@@ -219,6 +224,9 @@ func (h *notesHost) send(m v1.Message) error {
 
 func (h *notesHost) openPanel() {
 	h.t.Helper()
+	h.mu.Lock()
+	h.slots = recordSlot(h.slots, "panel-1", viewSlot{v1.ViewPanel, 420, 800})
+	h.mu.Unlock()
 	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Output: "DP-1", Width: 420, Height: 800}); err != nil {
 		h.t.Fatal(err)
 	}

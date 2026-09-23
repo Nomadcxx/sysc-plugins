@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Nomadcxx/sysc-plugins/plugins/screen-recorder"
+	"github.com/Nomadcxx/sysc-shell/plugin/lint"
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -199,6 +200,7 @@ type recorderHost struct {
 	enc    *v1.Encoder
 	mu     sync.Mutex
 	roots  map[string]*v1.Node
+	slots  map[string]viewSlot
 	notify []v1.NotifyParams
 	args   []string
 	own    recorder.Ownership
@@ -328,8 +330,12 @@ func startRecorderWithState(t *testing.T, behavior, binDir string, seed recorder
 				}
 			case *v1.ViewSnapshot:
 				h.mu.Lock()
+				slot, monitored := h.slots[m.ViewID]
 				h.roots[m.ViewID] = m.Root
 				h.mu.Unlock()
+				if monitored {
+					checkFits(h.t, slot, m.Root)
+				}
 				select {
 				case h.wake <- struct{}{}:
 				default:
@@ -356,7 +362,10 @@ func (h *recorderHost) send(m v1.Message) error {
 
 func (h *recorderHost) open(id string, kind v1.ViewKind, output string) {
 	h.t.Helper()
-	if err := h.send(&v1.ViewOpen{ViewID: id, View: kind, Entry: "bar", Output: output, Width: 120, Height: 32}); err != nil {
+	h.mu.Lock()
+	h.slots = recordSlot(h.slots, id, viewSlot{kind, lint.BarWidth, lint.BarHeight})
+	h.mu.Unlock()
+	if err := h.send(&v1.ViewOpen{ViewID: id, View: kind, Entry: "bar", Output: output, Width: lint.BarWidth, Height: lint.BarHeight}); err != nil {
 		h.t.Fatal(err)
 	}
 }

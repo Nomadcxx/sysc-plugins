@@ -59,7 +59,9 @@ rows. The timer is the first rebuild; the rest follow its patterns.
    `plugin/v1`'s `Client` and serves its views.
 3. Add the plugin to `PLUGINS` in the `Makefile` and to the table above.
 4. Validate every view tree with `v1.Validate(...)` in a test — the host
-   rejects invalid trees at render time.
+   rejects invalid trees at render time. Validation is geometry-blind, so lay
+   every view out with `plugin/lint` at the sizes the host uses: see
+   [docs/plugin-ui-rules.md](docs/plugin-ui-rules.md).
 
 Notes the hard way taught us:
 
