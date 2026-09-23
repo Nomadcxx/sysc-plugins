@@ -1,0 +1,4 @@
+{"ID":"a1","Names":"web","Image":"nginx:latest","State":"running","Status":"Up 2 hours"}
+
+{"not json"}
+{"ID":"b2","Names":"db","Image":"postgres:16","State":"exited","Status":"Exited (0) 5 minutes ago"}

@@ -16,18 +16,16 @@ import (
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-const psOutput = `{"ID":"a1","Names":"web","Image":"nginx:latest","State":"running","Status":"Up 2 hours"}
-{"ID":"b2","Names":"db","Image":"postgres:16","State":"exited","Status":"Exited (0) 5 minutes ago"}
-{"not json"}
-`
-
 type fakeDocker struct {
-	listErr    error
-	containers []Container
-	actions    []string
+	listErr      error
+	containers   []Container
+	skippedLines int
+	actions      []string
 }
 
-func (f *fakeDocker) List(ctx context.Context) ([]Container, error) { return f.containers, f.listErr }
+func (f *fakeDocker) List(ctx context.Context) ([]Container, int, error) {
+	return f.containers, f.skippedLines, f.listErr
+}
 
 func (f *fakeDocker) Start(ctx context.Context, id string) error {
 	f.actions = append(f.actions, "start:"+id)
@@ -48,7 +46,7 @@ func TestCLIDiagnosesFailures(t *testing.T) {
 	t.Run("daemon down reads as daemon down", func(t *testing.T) {
 		bin := t.TempDir()
 		writeFakeDocker(t, bin, "#!/bin/sh\necho 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock' >&2\nexit 1\n")
-		_, err := CLI{}.List(context.Background())
+		_, _, err := CLI{}.List(context.Background())
 		if err == nil || err.Error() != "Docker daemon not running" {
 			t.Fatalf("err = %v, want the daemon diagnosis", err)
 		}
@@ -56,7 +54,7 @@ func TestCLIDiagnosesFailures(t *testing.T) {
 
 	t.Run("missing binary reads as missing binary", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())
-		_, err := CLI{}.List(context.Background())
+		_, _, err := CLI{}.List(context.Background())
 		if err == nil || err.Error() != "docker command not found" {
 			t.Fatalf("err = %v, want the not-found diagnosis", err)
 		}
@@ -100,29 +98,34 @@ func writeFakeDocker(t *testing.T, dir, script string) {
 	t.Setenv("PATH", dir)
 }
 
-func TestCLIParsesDockerJSONLines(t *testing.T) {
-	// The CLI List path is exercised indirectly; parse the same shape here to
-	// lock the expected docker output contract.
-	var containers []Container
-	for _, line := range strings.Split(psOutput, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var c Container
-		if err := json.Unmarshal([]byte(line), &c); err != nil {
-			continue
-		}
-		containers = append(containers, c)
+func TestParseContainers(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "containers.jsonl"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	containers, skipped := parseContainers(data)
 	if len(containers) != 2 {
 		t.Fatalf("containers = %d, want 2", len(containers))
+	}
+	if skipped != 1 {
+		t.Fatalf("skipped = %d, want 1 malformed record (blank lines are ignored)", skipped)
+	}
+	if containers[0].ID != "a1" {
+		t.Fatalf("first container = %+v, want a1", containers[0])
 	}
 	if containers[0].Names != "web" || !containers[0].Running() {
 		t.Fatalf("web = %+v", containers[0])
 	}
-	if containers[1].Running() {
+	if containers[1].ID != "b2" || containers[1].Running() {
 		t.Fatalf("db should not be running: %+v", containers[1])
+	}
+}
+
+func TestSessionRefreshStoresSkippedLineCount(t *testing.T) {
+	s := NewSession(&fakeDocker{skippedLines: 2})
+	s.Refresh(context.Background())
+	if got := s.SkippedLines(); got != 2 {
+		t.Fatalf("skipped lines = %d, want 2", got)
 	}
 }
 
@@ -230,7 +233,7 @@ type failStartCLI struct {
 	failStart bool
 }
 
-func (f *failStartCLI) List(context.Context) ([]Container, error) { return f.list, nil }
+func (f *failStartCLI) List(context.Context) ([]Container, int, error) { return f.list, 0, nil }
 
 func (f *failStartCLI) Start(context.Context, string) error {
 	if f.failStart {

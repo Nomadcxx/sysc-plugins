@@ -29,7 +29,7 @@ func (c Container) Running() bool { return c.State == "running" }
 // Docker runs the docker CLI. It is an interface so the service can be tested
 // without a docker daemon.
 type Docker interface {
-	List(ctx context.Context) ([]Container, error)
+	List(ctx context.Context) ([]Container, int, error)
 	Start(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string) error
 	Restart(ctx context.Context, id string) error
@@ -53,7 +53,7 @@ var actionTimeout = 15 * time.Second
 // instead of buffer.
 const maxListBytes = 1 << 20
 
-func (CLI) List(ctx context.Context) ([]Container, error) {
+func (CLI) List(ctx context.Context) ([]Container, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, listTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--format", "{{json .}}")
@@ -61,31 +61,40 @@ func (CLI) List(ctx context.Context) ([]Container, error) {
 	cmd.Stderr = &stderr
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, diagnose(err, stderr.String())
+		return nil, 0, diagnose(err, stderr.String())
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, diagnose(err, stderr.String())
+		return nil, 0, diagnose(err, stderr.String())
 	}
 	out, readErr := io.ReadAll(io.LimitReader(pipe, maxListBytes))
 	if err := cmd.Wait(); err != nil {
-		return nil, listFailure(ctx, err, stderr.String())
+		return nil, 0, listFailure(ctx, err, stderr.String())
 	}
 	if readErr != nil {
-		return nil, listFailure(ctx, readErr, stderr.String())
+		return nil, 0, listFailure(ctx, readErr, stderr.String())
 	}
+	containers, skipped := parseContainers(out)
+	return containers, skipped, nil
+}
+
+// parseContainers decodes Docker's one-JSON-object-per-line output and counts
+// malformed non-empty lines so the UI can report incomplete list data.
+func parseContainers(data []byte) ([]Container, int) {
 	var containers []Container
-	for _, line := range strings.Split(string(out), "\n") {
+	skipped := 0
+	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		var c Container
 		if err := json.Unmarshal([]byte(line), &c); err != nil {
+			skipped++
 			continue
 		}
 		containers = append(containers, c)
 	}
-	return containers, nil
+	return containers, skipped
 }
 
 func (CLI) Start(ctx context.Context, id string) error {

@@ -11,14 +11,15 @@ import (
 // the last failed action and is cleared only by the next successful one -
 // the action's own trailing refresh must not erase it.
 type Session struct {
-	mu         sync.Mutex
-	docker     Docker
-	containers []Container
-	available  bool
-	loading    bool
-	listErr    string
-	actErr     string
-	actingID   string
+	mu           sync.Mutex
+	docker       Docker
+	containers   []Container
+	skippedLines int
+	available    bool
+	loading      bool
+	listErr      string
+	actErr       string
+	actingID     string
 }
 
 func NewSession(d Docker) *Session {
@@ -48,13 +49,20 @@ func (s *Session) RunningCount() int {
 	return n
 }
 
+// SkippedLines reports malformed records in the last successful container list.
+func (s *Session) SkippedLines() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.skippedLines
+}
+
 // Refresh polls docker ps and records availability.
 func (s *Session) Refresh(ctx context.Context) {
 	s.mu.Lock()
 	s.loading = true
 	s.mu.Unlock()
 
-	containers, err := s.docker.List(ctx)
+	containers, skippedLines, err := s.docker.List(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
@@ -64,6 +72,7 @@ func (s *Session) Refresh(ctx context.Context) {
 		return
 	}
 	s.containers = containers
+	s.skippedLines = skippedLines
 	s.available = true
 	s.loading = false
 	s.listErr = ""
