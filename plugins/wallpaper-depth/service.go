@@ -128,11 +128,13 @@ type OutputRow struct {
 }
 
 type ControllerSnapshot struct {
-	Helper   HelperStatus
-	Settings Settings
-	Error    string
-	Busy     bool
-	Rows     []OutputRow
+	Helper    HelperStatus
+	Settings  Settings
+	Error     string
+	Busy      bool
+	Checked   bool
+	Operation string
+	Rows      []OutputRow
 }
 
 // Registrar is the shell boundary that gives a generated mask to one output.
@@ -179,6 +181,7 @@ type controllerState struct {
 	settings Settings
 	helper   HelperStatus
 	err      string
+	checked  bool
 	rows     map[string]*outputState
 	queue    []workItem
 	queued   map[string]struct{}
@@ -544,6 +547,9 @@ func (s *controllerState) dispatch(c *Controller) {
 func (s *controllerState) finish(c *Controller, result workResult) {
 	item := result.item
 	s.active = nil
+	if item.operation == operationCheck || item.operation == operationSetup {
+		s.checked = true
+	}
 	if result.err != nil {
 		s.finishError(item, result.err)
 		if item.operation == operationClearCache && s.settings.AutoGenerate && s.helper.Ready {
@@ -700,9 +706,14 @@ func (s *controllerState) publish(c *Controller) {
 		rows = append(rows, state.row)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Output < rows[j].Output })
+	operation := ""
+	if s.active != nil {
+		operation = string(s.active.operation)
+	}
 	snapshot := ControllerSnapshot{
 		Helper: s.helper, Settings: s.settings, Error: s.err,
-		Busy: s.active != nil || len(s.queue) != 0, Rows: rows,
+		Busy:    s.active != nil || len(s.queue) != 0,
+		Checked: s.checked, Operation: operation, Rows: rows,
 	}
 	c.mu.Lock()
 	changed := !sameControllerSnapshot(c.snapshot, snapshot)

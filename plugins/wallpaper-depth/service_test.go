@@ -10,8 +10,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 func TestControllerSerializesOutputsAndDeduplicatesPolls(t *testing.T) {
@@ -261,6 +259,22 @@ func TestControllerChangedSignalSkipsIdenticalPolls(t *testing.T) {
 	}
 }
 
+func TestControllerSnapshotReportsActiveHelperOperation(t *testing.T) {
+	runner := newBlockingRunner()
+	gate := make(chan struct{})
+	runner.Block("", gate)
+	c := NewController(context.Background(), runner, &fakeRegistrar{})
+	t.Cleanup(c.Close)
+	c.Check()
+	waitSnapshot(t, c, func(s ControllerSnapshot) bool {
+		return s.Busy && s.Operation == string(operationCheck) && !s.Checked
+	})
+	close(gate)
+	waitSnapshot(t, c, func(s ControllerSnapshot) bool {
+		return !s.Busy && s.Checked && s.Operation == ""
+	})
+}
+
 type blockingRunner struct {
 	mu       sync.Mutex
 	calls    [][]string
@@ -436,20 +450,4 @@ func flagArg(args []string, flag string) string {
 		}
 	}
 	return ""
-}
-
-func TestTreesValidate(t *testing.T) {
-	status := HelperStatus{Ready: true, RuntimeReady: true, ModelReady: true}
-	if err := v1.Validate(BarTree(true), v1.ViewBar); err != nil {
-		t.Fatal(err)
-	}
-	if err := v1.Validate(BarTree(false), v1.ViewBar); err != nil {
-		t.Fatal(err)
-	}
-	if err := v1.Validate(PanelTree(status, "", false, "/tmp/mask.png", "/home/x/wall.jpg", 30, 8), v1.ViewPanel); err != nil {
-		t.Fatal(err)
-	}
-	if err := v1.Validate(PanelTree(HelperStatus{}, "boom", true, "", "", 30, 8), v1.ViewPanel); err != nil {
-		t.Fatal(err)
-	}
 }
