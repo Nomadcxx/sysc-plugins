@@ -42,6 +42,7 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-22-kdeconnect-live-test-round.md` | plan | Plan D Task 8 runbook — build, deploy, and manually exercise the plugin on the laptop against a real phone; matrix, rollback, bd closes. |
 | `2026-09-22-kdeconnect-live-failure-audit-handover.md` | handover | Commission for the live-failure audit: root-cause the three deployed symptoms, commission gap-analysis and hallmark sub-audits, then write the redesign plan. |
 | `2026-09-23-plugin-view-geometry-lint.md` | plan | Host-side node identity in layout rejections, a public `plugin/lint` built on the shell's own pipeline, and the plugin-repo tests and rules doc that use it — so a view that validates but cannot be drawn fails in `go test`, not on the desktop. |
+| `2026-09-23-mini-docker-research.md` | research | Prior-art research for the mini-docker redesign: the Noctalia v4/v5 and DMS managers read in full (pinned SHAs), the pinned shell's render vocabulary, surfaces, limits and icon catalogue, the unmerged v0.3.0 branch's open findings, and the feature-disposition table the design will decide from. |
 
 ## Documents on branches
 
