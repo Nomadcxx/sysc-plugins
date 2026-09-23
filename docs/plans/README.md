@@ -52,6 +52,7 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-23-mini-docker-research.md` | research | Prior-art research for the mini-docker redesign: the Noctalia v4/v5 and DMS managers read in full (pinned SHAs), the pinned shell's render vocabulary, surfaces, limits and icon catalogue, the v0.3.0 tranche's open findings, and the feature-disposition table the design will decide from. |
 | `2026-09-23-mini-docker-design.md` | design | The mini-docker redesign: four tabs with containers carried furthest, a scope row and detail card, inline armed confirmation, a `/proc/net/tcp` port preflight, additive-only settings with a `show_count` tombstone, and the verification contract — eight decisions awaiting sign-off. |
 | `2026-09-23-wallpaper-depth-design.md` | design | The approved Wallpaper Depth design: a fixed shell-owned clock on the Bottom layer, per-output Depth Anything masks, destination-out composition, and two narrow wallpaper host calls. |
+| `2026-09-23-wallpaper-depth.md` | plan | The TDD implementation sequence for wire minor 7, wallpaper snapshot and mask calls, the Bottom-layer depth clock, serialized per-output inference, process gate, and bare-metal calibration. |
 
 ## Documents on branches
 

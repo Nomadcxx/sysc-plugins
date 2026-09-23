@@ -196,10 +196,11 @@ the calculated mask edge with gSlapper for all four modes before the feature shi
 
 ### Bar and tooltip
 
-The bar renders one `layers-subtract` icon. It carries no text. Its tone changes only for an
-error. Left click opens the panel; right click opens the plugin's settings when the host
-supports that existing action. The tooltip reports one of ready, processing, setup required,
-or the latest error.
+The bar renders the shell catalogue's `wallpaper` icon, the closest installed match to
+upstream's unavailable `layers-subtract` glyph. It carries no text. Its tone changes only for
+an error. Left click opens the panel. The tooltip reports one of ready, processing, setup
+required, or the latest error. The current wire has no settings-open call, so right click has
+no action in this release.
 
 ### Panel
 
