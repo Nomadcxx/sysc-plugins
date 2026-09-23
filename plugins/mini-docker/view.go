@@ -1,21 +1,35 @@
 package minidocker
 
 import (
+	"fmt"
+	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-// BarTree renders the docker pill: a label, the running count per status
-// mode, and the tooltip text.
-func BarTree(label string) *v1.Node {
-	return &v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
-		{Kind: v1.KindText, Text: label},
-	}}
+// BarTree renders the docker pill. One activatable button carrying the
+// label — the click opens the panel (host only opens panels on the
+// plugin's own CallPanelOpen), mirroring the world-clock bar shape. An
+// unavailable docker tones the pill error: hidden must not read as
+// zero-running.
+func BarTree(label string, unavailable bool) *v1.Node {
+	var tone v1.Tone
+	if unavailable {
+		tone = v1.ToneError
+	}
+	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{
+		Kind: v1.KindButton, ID: "open", Text: label, Tone: tone,
+		Name: "Open mini docker", Role: "button", Tabular: true,
+		Events: []v1.EventKind{v1.EventActivate},
+	}}}
 }
 
 // BarLabel computes the bar text for the current settings and snapshot.
-func BarLabel(showCount bool, statusMode string, running int, available bool) string {
+// show_count was folded into status_mode: one setting, honest labels.
+func BarLabel(statusMode string, running int, available bool) string {
 	if !available {
 		return "docker"
 	}
@@ -27,10 +41,7 @@ func BarLabel(showCount bool, statusMode string, running int, available bool) st
 			return "docker"
 		}
 	}
-	if showCount {
-		return "docker " + strconv.Itoa(running)
-	}
-	return "docker"
+	return "docker " + strconv.Itoa(running)
 }
 
 // TooltipText computes the bar tooltip.
@@ -44,19 +55,34 @@ func TooltipText(running int, available bool) string {
 	return strconv.Itoa(running) + " containers running"
 }
 
+// TooltipTree renders the bar tooltip. Tooltip views reject interactive
+// nodes, so this is a plain column — never the bar's button tree.
+func TooltipTree(text string) *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, Children: []*v1.Node{
+		{Kind: v1.KindText, Text: text},
+	}}
+}
+
 // PanelTree lists containers with lifecycle buttons; start is offered only
-// for stopped containers, stop and restart only for running ones.
-func PanelTree(available, loading bool, errMsg string, containers []Container) *v1.Node {
-	col := &v1.Node{Kind: v1.KindColumn, Gap: 8, Children: []*v1.Node{
-		{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: "Docker containers"},
+// for stopped containers, stop and restart only for running ones. actErr
+// (the last failed action) outranks listErr: it is what the user just did,
+// and the action's own refresh must not have erased it. A container with an
+// action in flight gets its buttons disabled - no silent double-fires.
+func PanelTree(available, loading bool, listErr, actErr, actingID string, containers []Container) *v1.Node {
+	col := &v1.Node{Kind: v1.KindColumn, Gap: 8, Padding: 16, Children: []*v1.Node{
+		{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: "Docker containers", Size: "title", Bold: true},
 			{Kind: v1.KindButton, ID: "refresh", Text: "Refresh", Name: "Refresh containers", Role: "button",
 				Events: []v1.EventKind{v1.EventActivate}},
 		}},
 	}}
-	if errMsg != "" {
+	if actErr != "" {
 		col.Children = append(col.Children,
-			&v1.Node{Kind: v1.KindText, Text: errMsg, Tone: v1.ToneError})
+			&v1.Node{Kind: v1.KindText, Text: actErr, Tone: v1.ToneError})
+	}
+	if listErr != "" {
+		col.Children = append(col.Children,
+			&v1.Node{Kind: v1.KindText, Text: listErr, Tone: v1.ToneError})
 	}
 	if loading {
 		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: "Loading…"})
@@ -70,33 +96,92 @@ func PanelTree(available, loading bool, errMsg string, containers []Container) *
 		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: "No containers"})
 		return col
 	}
-	for _, c := range containers {
-		col.Children = append(col.Children, containerRow(c))
+	// Running containers surface first; exited ones must not bury the
+	// actionable rows. Stable keeps each group in docker's own order.
+	sorted := slices.Clone(containers)
+	slices.SortStableFunc(sorted, func(a, b Container) int {
+		if a.Running() != b.Running() {
+			if a.Running() {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	})
+	rows := sorted
+	list := &v1.Node{Kind: v1.KindList, Height: 400, Gap: 8}
+	if len(rows) > maxPanelRows {
+		rows = rows[:maxPanelRows]
+		col.Children = append(col.Children,
+			&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("+%d more", len(containers)-maxPanelRows), Tone: v1.ToneSubtle})
 	}
+	for _, c := range rows {
+		list.Children = append(list.Children, containerRow(c, actingID))
+	}
+	col.Children = append(col.Children, list)
 	return col
 }
 
-func containerRow(c Container) *v1.Node {
+// maxPanelRows keeps the worst-case tree (6 nodes per row) inside the
+// host's MaxNodes budget of 1024; the overflow is summarized in a footer.
+const maxPanelRows = 150
+
+func containerRow(c Container, actingID string) *v1.Node {
+	tone := v1.ToneNormal
+	if c.Running() {
+		tone = v1.ToneAccent
+	}
 	row := &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
-		{Kind: v1.KindText, Text: c.Names + " · " + c.Status},
+		{Kind: v1.KindText, Text: c.Names + " · " + c.Status, Tone: tone},
 		{Kind: v1.KindText, Text: c.Image, Tone: v1.ToneSubtle},
 	}}
+	disabled := c.ID == actingID
 	actions := &v1.Node{Kind: v1.KindRow, Gap: 4}
 	if c.Running() {
 		actions.Children = append(actions.Children,
-			actionButton("stop:"+c.ID, "Stop", "Stop "+c.Names),
-			actionButton("restart:"+c.ID, "Restart", "Restart "+c.Names),
+			actionButton("stop:"+c.ID, "Stop", "Stop "+c.Names, disabled),
+			actionButton("restart:"+c.ID, "Restart", "Restart "+c.Names, disabled),
 		)
 	} else {
 		actions.Children = append(actions.Children,
-			actionButton("start:"+c.ID, "Start", "Start "+c.Names),
+			actionButton("start:"+c.ID, "Start", "Start "+c.Names, disabled),
 		)
 	}
 	row.Children = append(row.Children, actions)
 	return row
 }
 
-func actionButton(id, label, name string) *v1.Node {
+func actionButton(id, label, name string, disabled bool) *v1.Node {
 	return &v1.Node{Kind: v1.KindButton, ID: id, Text: label, Name: name, Role: "button",
-		Events: []v1.EventKind{v1.EventActivate}}
+		Disabled: disabled, Events: []v1.EventKind{v1.EventActivate}}
+}
+
+// actionPrefixes drives ParseAction; each entry pairs a node-ID prefix with
+// the docker action it dispatches.
+var actionPrefixes = []struct {
+	prefix, action string
+}{
+	{"start:", "start"},
+	{"stop:", "stop"},
+	{"restart:", "restart"},
+}
+
+// idRE allow-lists the container ID half of an action node ID before it is
+// echoed into a docker argv. Docker IDs are hex, but the widest honest
+// contract is plain identifier characters.
+var idRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// ParseAction splits an action node ID ("start:<id>") into its verb and
+// container ID, rejecting anything that should never reach an argv.
+func ParseAction(node string) (action, id string, ok bool) {
+	for _, p := range actionPrefixes {
+		if strings.HasPrefix(node, p.prefix) {
+			id = node[len(p.prefix):]
+			if idRE.MatchString(id) {
+				return p.action, id, true
+			}
+			return "", "", false
+		}
+	}
+	return "", "", false
 }

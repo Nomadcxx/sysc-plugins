@@ -4,8 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -38,6 +43,62 @@ func (f *fakeDocker) Restart(ctx context.Context, id string) error {
 	return nil
 }
 
+func TestCLIDiagnosesFailures(t *testing.T) {
+	t.Run("daemon down reads as daemon down", func(t *testing.T) {
+		bin := t.TempDir()
+		writeFakeDocker(t, bin, "#!/bin/sh\necho 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock' >&2\nexit 1\n")
+		_, err := CLI{}.List(context.Background())
+		if err == nil || err.Error() != "Docker daemon not running" {
+			t.Fatalf("err = %v, want the daemon diagnosis", err)
+		}
+	})
+
+	t.Run("missing binary reads as missing binary", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		_, err := CLI{}.List(context.Background())
+		if err == nil || err.Error() != "docker command not found" {
+			t.Fatalf("err = %v, want the not-found diagnosis", err)
+		}
+	})
+
+	t.Run("action errors carry stderr", func(t *testing.T) {
+		bin := t.TempDir()
+		writeFakeDocker(t, bin, "#!/bin/sh\necho 'Error response from daemon: no such container' >&2\nexit 1\n")
+		err := CLI{}.Start(context.Background(), "a1")
+		if err == nil || !strings.Contains(err.Error(), "no such container") {
+			t.Fatalf("err = %v, want stderr carried through", err)
+		}
+	})
+
+	t.Run("hung action is capped", func(t *testing.T) {
+		oldCap := actionTimeout
+		actionTimeout = 300 * time.Millisecond
+		defer func() { actionTimeout = oldCap }()
+
+		bin := t.TempDir()
+		// A docker that never answers (pure-shell spin: PATH holds nothing
+		// else). The action must come back with a readable timeout error.
+		writeFakeDocker(t, bin, "#!/bin/sh\ni=0\nwhile [ $i -lt 100000000 ]; do i=$((i+1)); done\n")
+		start := time.Now()
+		err := CLI{}.Stop(context.Background(), "a1")
+		if err == nil || !strings.Contains(err.Error(), "timed out") {
+			t.Fatalf("err = %v, want the timeout diagnosis", err)
+		}
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Fatalf("action took %v, timeout cap not applied", elapsed)
+		}
+	})
+}
+
+func writeFakeDocker(t *testing.T, dir, script string) {
+	t.Helper()
+	path := filepath.Join(dir, "docker")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+}
+
 func TestCLIParsesDockerJSONLines(t *testing.T) {
 	// The CLI List path is exercised indirectly; parse the same shape here to
 	// lock the expected docker output contract.
@@ -67,11 +128,11 @@ func TestCLIParsesDockerJSONLines(t *testing.T) {
 func TestSessionRefreshUnavailable(t *testing.T) {
 	s := NewSession(&fakeDocker{listErr: errors.New("Cannot connect to the Docker daemon")})
 	s.Refresh(context.Background())
-	_, available, loading, errMsg := s.Snapshot()
+	_, available, loading, listErr, _, _ := s.Snapshot()
 	if available || loading {
 		t.Fatalf("available=%v loading=%v", available, loading)
 	}
-	if errMsg == "" {
+	if listErr == "" {
 		t.Fatal("error message empty")
 	}
 	if got := TooltipText(0, available); got != "Docker unavailable" {
@@ -93,6 +154,110 @@ func TestSessionRefreshAndRunningCount(t *testing.T) {
 	}
 }
 
+func TestActErrorSurvivesItsOwnRefresh(t *testing.T) {
+	// A failed action must not be erased by the refresh that follows it:
+	// the daemon is up, the List succeeds, and the old code cleared the
+	// error anyway - the user clicked stop and saw nothing.
+	fd := &failStartCLI{failStart: true, list: []Container{{ID: "b2", Names: "db", State: "exited"}}}
+	s := NewSession(fd)
+	s.Act(context.Background(), "start", "b2")
+	_, _, _, _, actErr, _ := s.Snapshot()
+	if actErr == "" {
+		t.Fatal("actErr empty after a failed action")
+	}
+}
+
+func TestActErrorClearsOnNextSuccess(t *testing.T) {
+	fd := &failStartCLI{list: []Container{{ID: "b2", Names: "db", State: "exited"}}}
+	s := NewSession(fd)
+	s.Act(context.Background(), "start", "b2")
+	fd.failStart = false
+	s.Act(context.Background(), "start", "b2")
+	_, _, _, _, actErr, _ := s.Snapshot()
+	if actErr != "" {
+		t.Fatalf("actErr = %q, want cleared by the next successful action", actErr)
+	}
+}
+
+func TestPanelDisablesButtonsWhileActing(t *testing.T) {
+	s := NewSession(&slowActionCLI{
+		failStartCLI: failStartCLI{list: []Container{
+			{ID: "a1", Names: "web", State: "running"},
+			{ID: "b2", Names: "db", State: "exited"},
+		}},
+		delay: 150 * time.Millisecond,
+	})
+	go s.Act(context.Background(), "stop", "a1")
+
+	// While the action is in flight, its container's buttons are disabled
+	// and the other container's are not.
+	deadline := time.Now().Add(2 * time.Second)
+	var disabled []string
+	for time.Now().Before(deadline) {
+		containers, _, _, _, _, actingID := s.Snapshot()
+		if actingID != "" {
+			tree := PanelTree(true, false, "", "", actingID, containers)
+			disabled = nil
+			walkNodes(tree, func(n *v1.Node) {
+				if n.Disabled {
+					disabled = append(disabled, n.ID)
+				}
+			})
+			for _, id := range disabled {
+				if !strings.HasPrefix(id, "stop:a1") && !strings.HasPrefix(id, "restart:a1") {
+					t.Fatalf("disabled node %q is not the acting container's", id)
+				}
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("actingID never became visible during the action")
+}
+
+func walkNodes(n *v1.Node, fn func(*v1.Node)) {
+	fn(n)
+	for _, c := range n.Children {
+		walkNodes(c, fn)
+	}
+}
+
+// failStartCLI fails Start until told otherwise; List always works, which is
+// exactly the shape that exposed the erasure bug.
+type failStartCLI struct {
+	list      []Container
+	failStart bool
+}
+
+func (f *failStartCLI) List(context.Context) ([]Container, error) { return f.list, nil }
+
+func (f *failStartCLI) Start(context.Context, string) error {
+	if f.failStart {
+		return errors.New("Error response from daemon: conflict")
+	}
+	return nil
+}
+
+func (f *failStartCLI) Stop(context.Context, string) error    { return nil }
+func (f *failStartCLI) Restart(context.Context, string) error { return nil }
+
+// slowActionCLI makes any action take delay, so a test can observe the
+// in-flight window.
+type slowActionCLI struct {
+	failStartCLI
+	delay time.Duration
+}
+
+func (f slowActionCLI) Start(ctx context.Context, id string) error {
+	time.Sleep(f.delay)
+	return f.failStartCLI.Start(ctx, id)
+}
+
+func (f slowActionCLI) Stop(ctx context.Context, id string) error {
+	time.Sleep(f.delay)
+	return f.failStartCLI.Stop(ctx, id)
+}
+
 func TestSessionActRunsActionAndRefreshes(t *testing.T) {
 	fd := &fakeDocker{containers: []Container{{ID: "b2", Names: "db", State: "exited"}}}
 	s := NewSession(fd)
@@ -109,24 +274,214 @@ func TestSessionActRunsActionAndRefreshes(t *testing.T) {
 	}
 }
 
+func TestBarTreeUnavailableTone(t *testing.T) {
+	// The unavailable pill must carry ToneError: hidden == zero-running ==
+	// unavailable is how the bar lies today.
+	tree := BarTree("docker", true)
+	if tree.Children[0].Tone != v1.ToneError {
+		t.Fatalf("tone = %v, want error", tree.Children[0].Tone)
+	}
+	tree = BarTree("docker 2", false)
+	if tree.Children[0].Tone != "" {
+		t.Fatalf("tone = %v, want default when available", tree.Children[0].Tone)
+	}
+}
+
+// show_count is gone (D1): it duplicated status_mode. The mode labels are
+// honest now - "Never" really means no count, not a hidden pill.
 func TestBarLabelModes(t *testing.T) {
-	if got := BarLabel(true, "always", 3, true); got != "docker 3" {
+	if got := BarLabel("always", 3, true); got != "docker 3" {
 		t.Fatalf("always = %q", got)
 	}
-	if got := BarLabel(false, "always", 3, true); got != "docker" {
-		t.Fatalf("no count = %q", got)
-	}
-	if got := BarLabel(true, "running_only", 0, true); got != "docker" {
+	if got := BarLabel("running_only", 0, true); got != "docker" {
 		t.Fatalf("running_only zero = %q", got)
 	}
-	if got := BarLabel(true, "running_only", 2, true); got != "docker 2" {
+	if got := BarLabel("running_only", 2, true); got != "docker 2" {
 		t.Fatalf("running_only = %q", got)
 	}
-	if got := BarLabel(true, "hidden", 5, true); got != "docker" {
+	if got := BarLabel("hidden", 5, true); got != "docker" {
 		t.Fatalf("hidden = %q", got)
 	}
-	if got := BarLabel(true, "always", 0, false); got != "docker" {
+	if got := BarLabel("always", 0, false); got != "docker" {
 		t.Fatalf("unavailable = %q", got)
+	}
+}
+
+// Action node IDs minted by actionButton are "verb:containerID"; the ID is
+// echoed into a docker argv, so it must survive a strict allow-list before
+// dispatch.
+func TestParseAction(t *testing.T) {
+	cases := []struct {
+		node, action, id string
+		ok               bool
+	}{
+		{"start:abc123def456", "start", "abc123def456", true},
+		{"stop:abc123def456", "stop", "abc123def456", true},
+		{"restart:abc123def456", "restart", "abc123def456", true},
+		{"open", "", "", false},
+		{"refresh", "", "", false},
+		{"start:", "", "", false},
+		{"start", "", "", false},
+		{"start:bad id", "", "", false},
+		{"start:;rm -rf /", "", "", false},
+		{"start:-lead", "", "", false},
+	}
+	for _, tc := range cases {
+		action, id, ok := ParseAction(tc.node)
+		if ok != tc.ok || action != tc.action || id != tc.id {
+			t.Errorf("ParseAction(%q) = %q, %q, %v; want %q, %q, %v",
+				tc.node, action, id, ok, tc.action, tc.id, tc.ok)
+		}
+	}
+}
+
+func TestBarTreeValidate(t *testing.T) {
+	bar := BarTree("docker 2", false)
+	if err := v1.Validate(bar, v1.ViewBar); err != nil {
+		t.Fatal(err)
+	}
+	// The pill must be an activatable button so the host can route the click
+	// to the plugin; a bare text pill leaves the panel unreachable.
+	if bar.Kind != v1.KindRow || len(bar.Children) != 1 {
+		t.Fatalf("bar root = %+v", bar)
+	}
+	btn := bar.Children[0]
+	if btn.Kind != v1.KindButton || btn.ID != "open" {
+		t.Fatalf("bar child = %+v", btn)
+	}
+	activates := false
+	for _, e := range btn.Events {
+		if e == v1.EventActivate {
+			activates = true
+		}
+	}
+	if !activates {
+		t.Fatalf("open button events = %v", btn.Events)
+	}
+}
+
+func TestPanelListScrollsAndCaps(t *testing.T) {
+	// Rows live in a scrolled list; past the cap the panel still validates
+	// instead of blowing past MaxNodes and being silently dropped.
+	var containers []Container
+	for i := 0; i < 300; i++ {
+		id := fmt.Sprintf("c%03d", i)
+		containers = append(containers, Container{ID: id, Names: id, Image: "img", State: "running", Status: "Up"})
+	}
+	panel := PanelTree(true, false, "", "", "", containers)
+	if err := v1.Validate(panel, v1.ViewPanel); err != nil {
+		t.Fatalf("300 containers: %v", err)
+	}
+	var list *v1.Node
+	walkNodes(panel, func(n *v1.Node) {
+		if n.Kind == v1.KindList {
+			list = n
+		}
+	})
+	if list == nil {
+		t.Fatal("panel has no list; container rows cannot scroll")
+	}
+	if len(list.Children) != maxPanelRows {
+		t.Fatalf("list rows = %d, want %d", len(list.Children), maxPanelRows)
+	}
+	more := false
+	walkNodes(panel, func(n *v1.Node) {
+		if n.Text == fmt.Sprintf("+%d more", len(containers)-maxPanelRows) {
+			more = true
+		}
+	})
+	if !more {
+		t.Fatalf("no +%d more line", len(containers)-maxPanelRows)
+	}
+	// A handful of containers must not gain the cap line.
+	small := PanelTree(true, false, "", "", "", containers[:3])
+	walkNodes(small, func(n *v1.Node) {
+		if strings.HasPrefix(n.Text, "+") {
+			t.Fatalf("unexpected overflow line %q with 3 containers", n.Text)
+		}
+	})
+}
+
+func TestTooltipTreeIsReadOnlyColumn(t *testing.T) {
+	// The tooltip view rejects interactive nodes; the old shape published the
+	// bar's button there and the host silently dropped the view.
+	tip := TooltipTree("2 containers running")
+	if err := v1.Validate(tip, v1.ViewTooltip); err != nil {
+		t.Fatal(err)
+	}
+	if tip.Kind != v1.KindColumn || len(tip.Children) != 1 || tip.Children[0].Text != "2 containers running" {
+		t.Fatalf("tooltip tree = %+v", tip)
+	}
+}
+
+func TestPanelOrdersRunningFirstWithAccentState(t *testing.T) {
+	containers := []Container{
+		{ID: "b2", Names: "db", Image: "postgres:16", State: "exited", Status: "Exited (0)"},
+		{ID: "a1", Names: "web", Image: "nginx:latest", State: "running", Status: "Up 2 hours"},
+		{ID: "c3", Names: "cache", Image: "redis:7", State: "exited", Status: "Exited (137)"},
+		{ID: "d4", Names: "api", Image: "api:1", State: "running", Status: "Up 5 hours"},
+	}
+	panel := PanelTree(true, false, "", "", "", containers)
+	var list *v1.Node
+	walkNodes(panel, func(n *v1.Node) {
+		if n.Kind == v1.KindList {
+			list = n
+		}
+	})
+	if list == nil {
+		t.Fatal("no list")
+	}
+	// Running containers surface first (stable within each group); exited
+	// ones must not bury the actionable rows.
+	var names []string
+	for _, row := range list.Children {
+		names = append(names, row.Children[0].Text)
+	}
+	want := []string{"web · Up 2 hours", "api · Up 5 hours", "db · Exited (0)", "cache · Exited (137)"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("row order = %v, want %v", names, want)
+	}
+	for _, row := range list.Children {
+		running := strings.Contains(row.Children[0].Text, "Up ")
+		tone := row.Children[0].Tone
+		if running && tone != v1.ToneAccent {
+			t.Fatalf("running row %q tone = %q, want accent", row.Children[0].Text, tone)
+		}
+		if !running && tone != v1.ToneNormal {
+			t.Fatalf("stopped row %q tone = %q, want normal", row.Children[0].Text, tone)
+		}
+	}
+}
+
+func TestPanelCraftPass(t *testing.T) {
+	panel := PanelTree(true, false, "", "", "", nil)
+	if panel.Padding != 16 {
+		t.Fatalf("panel padding = %d, want 16 (timer precedent)", panel.Padding)
+	}
+	header := panel.Children[0]
+	if !header.PinEnd {
+		t.Fatal("header row must right-pin the refresh button")
+	}
+	title := header.Children[0]
+	if !title.Bold || title.Size != "title" {
+		t.Fatalf("title Bold=%v Size=%q, want bold title", title.Bold, title.Size)
+	}
+}
+
+func TestBarTreeCountIsTabular(t *testing.T) {
+	var buttons []*v1.Node
+	walkNodes(BarTree("docker 12", false), func(n *v1.Node) {
+		if n.Kind == v1.KindButton {
+			buttons = append(buttons, n)
+		}
+	})
+	if len(buttons) != 1 {
+		t.Fatalf("bar buttons = %d, want 1", len(buttons))
+	}
+	// The running count changes every refresh; tabular figures keep the
+	// pill from wobbling in width.
+	if !buttons[0].Tabular {
+		t.Fatal("bar count must be Tabular")
 	}
 }
 
@@ -135,16 +490,16 @@ func TestPanelTreeValidate(t *testing.T) {
 		{ID: "a1", Names: "web", Image: "nginx:latest", State: "running", Status: "Up 2 hours"},
 		{ID: "b2", Names: "db", Image: "postgres:16", State: "exited", Status: "Exited (0)"},
 	}
-	if err := v1.Validate(PanelTree(true, false, "", containers), v1.ViewPanel); err != nil {
+	if err := v1.Validate(PanelTree(true, false, "", "", "", containers), v1.ViewPanel); err != nil {
 		t.Fatal(err)
 	}
-	if err := v1.Validate(PanelTree(false, false, "daemon down", nil), v1.ViewPanel); err != nil {
+	if err := v1.Validate(PanelTree(false, false, "daemon down", "", "", nil), v1.ViewPanel); err != nil {
 		t.Fatal(err)
 	}
-	if err := v1.Validate(PanelTree(true, true, "", nil), v1.ViewPanel); err != nil {
+	if err := v1.Validate(PanelTree(true, true, "", "", "", nil), v1.ViewPanel); err != nil {
 		t.Fatal(err)
 	}
-	if err := v1.Validate(BarTree("docker 2"), v1.ViewBar); err != nil {
+	if err := v1.Validate(BarTree("docker 2", false), v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
 }

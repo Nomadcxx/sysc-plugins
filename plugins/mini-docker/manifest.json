@@ -2,14 +2,13 @@
   "schema": 1,
   "id": "org.sysc.mini-docker",
   "name": "Mini Docker",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "protocol": {
     "major": 1,
     "minor": 1
   },
   "exec": "bin/sysc-plugin-mini-docker",
   "capabilities": [
-    "notifications",
     "panels",
     "settings"
   ],
@@ -32,7 +31,7 @@
   "panels": [
     {
       "id": "panel",
-      "width": 720,
+      "width": 480,
       "height": 560,
       "placement": "attached"
     }
@@ -47,12 +46,6 @@
       "max": 30
     },
     {
-      "key": "show_count",
-      "type": "bool",
-      "label": "Show running count",
-      "default": true
-    },
-    {
       "key": "status_mode",
       "type": "select",
       "label": "Bar count mode",
@@ -64,11 +57,11 @@
         },
         {
           "value": "running_only",
-          "label": "When containers run"
+          "label": "When running"
         },
         {
           "value": "hidden",
-          "label": "Hidden"
+          "label": "Never"
         }
       ]
     }
