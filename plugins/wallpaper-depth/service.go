@@ -1,10 +1,5 @@
-// Package wallpaperdepth is a stub port of the Noctalia official plugin
-// "wallpaper_depth". The helper that generates depth masks from a wallpaper
-// (Depth Anything V2 Small via ONNX) is vendored unchanged and driven by this
-// plugin; what is not possible yet is the payoff — compositing desktop
-// widgets behind the wallpaper foreground — because the shell's plugin
-// protocol has no wallpaper or surface API. This plugin therefore manages
-// helper setup, status, and mask generation, and documents the rest.
+// Package wallpaperdepth follows shell wallpaper assignments and generates
+// per-output depth masks with the vendored Depth Anything V2 Small helper.
 package wallpaperdepth
 
 import (

@@ -34,7 +34,7 @@ After `make install`, enable plugins from sysc-shell's Plugins manager panel
 | Calendar | `org.sysc.calendar` | first sweep | port of the built-in clock-panel calendar |
 | GitHub Notifications | `org.sysc.github-notifications` | 0.2.0 | port of noctalia community plugin |
 | Mini Docker | `org.sysc.mini-docker` | 0.2.0 | port of noctalia community plugin |
-| Wallpaper Depth | `org.sysc.wallpaper-depth` | 0.1.0 stub | port of noctalia official plugin |
+| Wallpaper Depth | `org.sysc.wallpaper-depth` | 1.0.0 | port of noctalia official plugin |
 | Phone Connect | `org.sysc.kdeconnect` | 0.1.0 skeleton | port of DMS DankKDEConnect |
 | AI Usage | `org.sysc.aiusage` | 0.1.0 | new; patterns ported from noctalia ai-usagebar + DMS usage widgets |
 
@@ -43,7 +43,8 @@ much of the shell's plugin infrastructure existed, and their views are
 visually extremely basic. The plan is to refactor them and rebuild their UIs
 against the noctalia plugins as prior art (layout, density, interaction
 patterns), now that iteration happens in this repo. The 0.1.0 ports are
-skeletons by design; wallpaper-depth is blocked on a shell wallpaper API.
+skeletons by design. Wallpaper Depth 1.0.0 tracks active image wallpapers and
+supplies depth masks for the shell's centred clock.
 
 The protocol grew for this work: plugin/v1 minor 1 adds `subtle` and
 `accent` text tones (muted foreground and theme accent) and the host now
