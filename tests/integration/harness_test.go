@@ -21,6 +21,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv("SYSC_FAKE_DOCKER") == "1" {
 		os.Exit(runGateFakeDocker())
 	}
+	if os.Getenv("SYSC_FAKE_WALLPAPER_DEPTH") == "1" {
+		os.Exit(runGateFakeWallpaperDepth())
+	}
 	if os.Getenv("SYSC_FAKE_RECORDER") == "1" {
 		os.Exit(runGateFakeRecorder())
 	}
