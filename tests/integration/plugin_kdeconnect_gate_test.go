@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-shell/plugin/lint"
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -92,6 +93,7 @@ type kdeconnectHost struct {
 	mu    sync.Mutex
 	roots map[string]*v1.Node
 	revs  map[string]uint64
+	slots map[string]viewSlot
 	wake  chan struct{}
 }
 
@@ -171,9 +173,13 @@ func startKDEConnect(t *testing.T) *kdeconnectHost {
 				_ = h.send(&v1.HostReply{ID: m.ID, OK: true})
 			case *v1.ViewSnapshot:
 				h.mu.Lock()
+				slot, monitored := h.slots[m.ViewID]
 				h.roots[m.ViewID] = m.Root
 				h.revs[m.ViewID] = m.Revision
 				h.mu.Unlock()
+				if monitored {
+					checkFits(h.t, slot, m.Root)
+				}
 				select {
 				case h.wake <- struct{}{}:
 				default:
@@ -204,6 +210,9 @@ func (h *kdeconnectHost) send(m v1.Message) error {
 
 func (h *kdeconnectHost) openBar() {
 	h.t.Helper()
+	h.mu.Lock()
+	h.slots = recordSlot(h.slots, "bar-1", viewSlot{v1.ViewBar, lint.BarWidth, lint.BarHeight})
+	h.mu.Unlock()
 	if err := h.send(&v1.ViewOpen{ViewID: "bar-1", View: v1.ViewBar, Entry: "bar", Instance: "kdeconnect-1", Width: 240, Height: 32}); err != nil {
 		h.t.Fatal(err)
 	}
@@ -211,6 +220,9 @@ func (h *kdeconnectHost) openBar() {
 
 func (h *kdeconnectHost) openPanel() {
 	h.t.Helper()
+	h.mu.Lock()
+	h.slots = recordSlot(h.slots, "panel-1", viewSlot{v1.ViewPanel, 400, 520})
+	h.mu.Unlock()
 	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Output: "DP-1", Width: 400, Height: 520}); err != nil {
 		h.t.Fatal(err)
 	}
