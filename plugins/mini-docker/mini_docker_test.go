@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,6 +97,74 @@ func (f *fakeDocker) Run(ctx context.Context, opts RunOpts) error {
 	f.runs = append(f.runs, opts)
 	f.actions = append(f.actions, "run:"+opts.Image)
 	return f.runErr
+}
+
+type overlappingRefreshDocker struct {
+	*fakeDocker
+	active  atomic.Int32
+	maximum atomic.Int32
+	started chan struct{}
+	release chan struct{}
+}
+
+func (d *overlappingRefreshDocker) enter() {
+	active := d.active.Add(1)
+	for maximum := d.maximum.Load(); active > maximum; maximum = d.maximum.Load() {
+		if d.maximum.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	d.started <- struct{}{}
+	<-d.release
+	d.active.Add(-1)
+}
+
+func (d *overlappingRefreshDocker) List(context.Context) ([]Container, int, error) {
+	d.enter()
+	return nil, 0, nil
+}
+
+func (d *overlappingRefreshDocker) Images(context.Context) ([]Image, int, error) {
+	d.enter()
+	return nil, 0, nil
+}
+
+func TestSessionSerializesRefreshes(t *testing.T) {
+	d := &overlappingRefreshDocker{
+		fakeDocker: &fakeDocker{}, started: make(chan struct{}, 2), release: make(chan struct{}),
+	}
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(d.release)
+		}
+	})
+	s := NewSession(d)
+	done := make(chan struct{}, 2)
+	go func() { s.RefreshTab(context.Background(), ScopeContainers); done <- struct{}{} }()
+	select {
+	case <-d.started:
+	case <-time.After(time.Second):
+		t.Fatal("first refresh did not start")
+	}
+	go func() { s.RefreshTab(context.Background(), ScopeImages); done <- struct{}{} }()
+	select {
+	case <-d.started:
+		t.Fatal("second refresh overlapped the first")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(d.release)
+	released = true
+	for range 2 {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("refresh did not finish")
+		}
+	}
+	if got := d.maximum.Load(); got != 1 {
+		t.Fatalf("maximum concurrent refreshes = %d, want 1", got)
+	}
 }
 
 func TestCLIDiagnosesFailures(t *testing.T) {
@@ -1450,6 +1519,15 @@ func TestTooltipTreeIsReadOnlyColumn(t *testing.T) {
 	}
 	if tip.Kind != v1.KindColumn || len(tip.Children) != 1 || tip.Children[0].Text != "2 containers running" {
 		t.Fatalf("tooltip tree = %+v", tip)
+	}
+	failed := TooltipTreeForSession(SessionSnapshot{
+		ContainerTab: TabStatus{ListError: "Docker daemon not running"},
+	}, 0)
+	if err := v1.Validate(failed, v1.ViewTooltip); err != nil {
+		t.Fatal(err)
+	}
+	if len(failed.Children) != 2 || failed.Children[1].Text != "Docker daemon not running" {
+		t.Fatalf("unavailable tooltip omitted its diagnosis: %+v", failed)
 	}
 }
 

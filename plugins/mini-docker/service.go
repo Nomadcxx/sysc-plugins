@@ -82,7 +82,10 @@ type SessionSnapshot struct {
 // Session owns Docker snapshots and user interaction state. Docker calls run
 // without mu held so view reads and independent tab state remain responsive.
 type Session struct {
-	mu             sync.Mutex
+	mu sync.Mutex
+	// ponytail: one process-wide gate enforces the one-refresh-at-a-time
+	// contract; split by tab only if the contract changes to permit overlap.
+	refreshMu      sync.Mutex
 	docker         Docker
 	scope          Scope
 	selectedID     string
@@ -206,18 +209,35 @@ func (s *Session) SkippedLines() int {
 }
 
 func (s *Session) Refresh(ctx context.Context) {
-	s.RefreshTab(ctx, ScopeContainers)
+	s.RefreshWithStart(ctx, nil)
+}
+
+// RefreshWithStart reports Loading after updating the state and before Docker
+// I/O starts, so callers can publish the last-known snapshot with its status.
+func (s *Session) RefreshWithStart(ctx context.Context, started func()) {
+	s.RefreshTabWithStart(ctx, ScopeContainers, started)
 }
 
 func (s *Session) RefreshTab(ctx context.Context, scope Scope) {
+	s.RefreshTabWithStart(ctx, scope, nil)
+}
+
+// RefreshTabWithStart serializes refreshes and leaves the state lock free
+// during Docker I/O and the optional start notification.
+func (s *Session) RefreshTabWithStart(ctx context.Context, scope Scope, started func()) {
 	if !validScope(scope) {
 		return
 	}
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
 	s.mu.Lock()
 	status := s.tabs[scope]
 	status.Loading = true
 	s.tabs[scope] = status
 	s.mu.Unlock()
+	if started != nil {
+		started()
+	}
 
 	switch scope {
 	case ScopeContainers:
@@ -553,6 +573,13 @@ func parseEnvironment(text string) ([]string, error) {
 }
 
 func (s *Session) SubmitRun(ctx context.Context) bool {
+	return s.SubmitRunWithStart(ctx, nil)
+}
+
+// SubmitRunWithStart calls started after recording the in-flight action and
+// releasing the state lock, so the renderer can show the disabled Run button
+// before Docker I/O begins.
+func (s *Session) SubmitRunWithStart(ctx context.Context, started func()) bool {
 	s.mu.Lock()
 	if s.runForm == nil {
 		s.mu.Unlock()
@@ -574,6 +601,9 @@ func (s *Session) SubmitRun(ctx context.Context) bool {
 	s.runForm.Error = ""
 	portInUse := s.portInUse
 	s.mu.Unlock()
+	if started != nil {
+		started()
+	}
 
 	if draft.Publish && draft.Port != "" {
 		port, _ := strconv.Atoi(draft.Port)
@@ -593,8 +623,8 @@ func (s *Session) SubmitRun(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	s.Refresh(ctx)
-	s.RefreshTab(ctx, ScopeImages)
+	s.RefreshWithStart(ctx, started)
+	s.RefreshTabWithStart(ctx, ScopeImages, started)
 	return true
 }
 
@@ -650,6 +680,12 @@ func (s *Session) finishRefresh(scope Scope, skipped int, err error, replace fun
 // Act accepts only a current, eligible container action. It snapshots the
 // choice under the lock, then performs Docker I/O without holding the lock.
 func (s *Session) Act(ctx context.Context, action, id string) {
+	s.ActWithStart(ctx, action, id, nil)
+}
+
+// ActWithStart publishes the in-flight state before Docker performs the
+// container action. The callback always runs without the session lock held.
+func (s *Session) ActWithStart(ctx context.Context, action, id string, started func()) {
 	if !validContainerAction(action) || !validEntityID(id) {
 		return
 	}
@@ -676,6 +712,9 @@ func (s *Session) Act(ctx context.Context, action, id string) {
 	}
 	s.inFlight[key] = struct{}{}
 	s.mu.Unlock()
+	if started != nil {
+		started()
+	}
 
 	var err error
 	switch action {
@@ -695,7 +734,7 @@ func (s *Session) Act(ctx context.Context, action, id string) {
 		s.actErr = ""
 	}
 	s.mu.Unlock()
-	s.Refresh(ctx)
+	s.RefreshWithStart(ctx, started)
 }
 
 // ArmRemoval records an eligible target from the current tab. The target is
@@ -725,6 +764,12 @@ func (s *Session) CancelRemoval() {
 // ConfirmRemoval consumes the confirmation before dispatch, then rechecks the
 // active scope, snapshot membership, and eligibility immediately before I/O.
 func (s *Session) ConfirmRemoval(ctx context.Context) {
+	s.ConfirmRemovalWithStart(ctx, nil)
+}
+
+// ConfirmRemovalWithStart publishes the in-flight confirmation after the
+// target is consumed and validated but before the Docker command starts.
+func (s *Session) ConfirmRemovalWithStart(ctx context.Context, started func()) {
 	s.mu.Lock()
 	target := s.pendingRemoval
 	s.pendingRemoval = nil
@@ -740,6 +785,9 @@ func (s *Session) ConfirmRemoval(ctx context.Context) {
 	}
 	s.inFlight[key] = struct{}{}
 	s.mu.Unlock()
+	if started != nil {
+		started()
+	}
 
 	var err error
 	switch target.Scope {
@@ -761,7 +809,7 @@ func (s *Session) ConfirmRemoval(ctx context.Context) {
 		s.actErr = ""
 	}
 	s.mu.Unlock()
-	s.RefreshTab(ctx, target.Scope)
+	s.RefreshTabWithStart(ctx, target.Scope, started)
 }
 
 func removeVerb(scope Scope) string {

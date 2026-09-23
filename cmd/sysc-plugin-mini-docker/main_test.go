@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -113,8 +114,8 @@ func TestRunConcurrentTraffic(t *testing.T) {
 	h := host{w: bufio.NewWriter(inW)}
 	h.send(&v1.HostHello{
 		Type:         v1.TypeHostHello,
-		Supported:    []v1.Version{{Major: 1, Minor: 1}},
-		Plugin:       v1.Identity{ID: "org.sysc.mini-docker", Name: "Mini Docker", Version: "0.2.0"},
+		Supported:    []v1.Version{{Major: 1, Minor: 4}},
+		Plugin:       v1.Identity{ID: "org.sysc.mini-docker", Name: "Mini Docker", Version: "0.4.0"},
 		Capabilities: []string{"panels", "settings"},
 		Limits:       v1.DefaultLimits,
 	})
@@ -125,6 +126,7 @@ func TestRunConcurrentTraffic(t *testing.T) {
 	// Drain everything the plugin writes; an unread pipe would block publish
 	// and mask the races under test. Count snapshots as liveness evidence.
 	var snapshots atomic.Int64
+	var latestRevision atomic.Uint64
 	go func() {
 		dec := json.NewDecoder(outR)
 		var m map[string]any
@@ -134,6 +136,9 @@ func TestRunConcurrentTraffic(t *testing.T) {
 			}
 			if m["type"] == v1.TypeViewSnapshot {
 				snapshots.Add(1)
+				if revision, ok := m["revision"].(float64); ok {
+					latestRevision.Store(uint64(revision))
+				}
 			}
 		}
 	}()
@@ -160,7 +165,7 @@ func TestRunConcurrentTraffic(t *testing.T) {
 				"status_mode":              []string{"always", "running_only", "hidden"}[i%3],
 			}})
 		h.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "v1",
-			Node: "start:a1", Event: v1.EventActivate})
+			Revision: latestRevision.Load(), Node: "start:a1", Event: v1.EventActivate})
 		if i%10 == 0 {
 			h.send(&v1.ViewClose{Type: v1.TypeViewClose, ViewID: "v1"})
 			h.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "v1", View: v1.ViewBar, Entry: "bar"})
@@ -203,8 +208,8 @@ func TestRefreshClickDoesNotBlockMainLoop(t *testing.T) {
 	h := host{w: bufio.NewWriter(inW)}
 	h.send(&v1.HostHello{
 		Type:      v1.TypeHostHello,
-		Supported: []v1.Version{{Major: 1, Minor: 1}},
-		Plugin:    v1.Identity{ID: "org.sysc.mini-docker", Name: "Mini Docker", Version: "0.2.0"},
+		Supported: []v1.Version{{Major: 1, Minor: 4}},
+		Plugin:    v1.Identity{ID: "org.sysc.mini-docker", Name: "Mini Docker", Version: "0.4.0"},
 		Limits:    v1.DefaultLimits,
 	})
 
@@ -216,11 +221,13 @@ func TestRefreshClickDoesNotBlockMainLoop(t *testing.T) {
 	// after the unambiguous "docker 1" (available + counted) snapshot, since
 	// the pre-refresh unavailable bar also reads "docker".
 	var armed, canary atomic.Bool
+	var latestRevision atomic.Uint64
 	go func() {
 		dec := json.NewDecoder(outR)
 		var m struct {
-			Type string `json:"type"`
-			Root *struct {
+			Type     string `json:"type"`
+			Revision uint64 `json:"revision"`
+			Root     *struct {
 				Children []struct {
 					Text string `json:"text"`
 				} `json:"children"`
@@ -233,6 +240,7 @@ func TestRefreshClickDoesNotBlockMainLoop(t *testing.T) {
 			if m.Type != v1.TypeViewSnapshot || m.Root == nil || len(m.Root.Children) == 0 {
 				continue
 			}
+			latestRevision.Store(m.Revision)
 			switch text := m.Root.Children[0].Text; {
 			case text == "docker 1":
 				armed.Store(true)
@@ -254,7 +262,8 @@ func TestRefreshClickDoesNotBlockMainLoop(t *testing.T) {
 
 	// Refresh against the hung daemon, then the settings commit. With the
 	// refresh inline on the main loop the commit waits out the full delay.
-	h.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "v1", Node: "refresh", Event: v1.EventActivate})
+	h.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "v1", Revision: latestRevision.Load(),
+		Node: "refresh", Event: v1.EventActivate})
 	h.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
 		Values: map[string]any{"status_mode": "hidden"}})
 
@@ -312,8 +321,8 @@ func TestViewResyncResetsRevisionAndRepublishes(t *testing.T) {
 	h := host{w: bufio.NewWriter(inW)}
 	h.send(&v1.HostHello{
 		Type:      v1.TypeHostHello,
-		Supported: []v1.Version{{Major: 1, Minor: 1}},
-		Plugin:    v1.Identity{ID: "org.sysc.mini-docker", Name: "Mini Docker", Version: "0.3.0"},
+		Supported: []v1.Version{{Major: 1, Minor: 4}},
+		Plugin:    v1.Identity{ID: "org.sysc.mini-docker", Name: "Mini Docker", Version: "0.4.0"},
 		Limits:    v1.DefaultLimits,
 	})
 
@@ -356,7 +365,7 @@ func TestViewResyncResetsRevisionAndRepublishes(t *testing.T) {
 	}
 	// A settings commit forces a second publish; the bar revision climbs.
 	h.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
-		Values: map[string]any{"status_mode": "running_only"}})
+		Values: map[string]any{"status_mode": "hidden"}})
 	if !waitFor(func() bool { return secondRevision.Load() >= 1 }, 5*time.Second) {
 		t.Fatal("settings commit produced no second snapshot")
 	}
@@ -375,5 +384,394 @@ func TestViewResyncResetsRevisionAndRepublishes(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("run did not exit after host.shutdown")
+	}
+}
+
+type interactionCLI struct {
+	listCalls    atomic.Int64
+	imageCalls   atomic.Int64
+	networkCalls atomic.Int64
+	runs         chan minidocker.RunOpts
+}
+
+func (c *interactionCLI) List(context.Context) ([]minidocker.Container, int, error) {
+	c.listCalls.Add(1)
+	return []minidocker.Container{{ID: "a1", Names: "web", Image: "nginx:latest", State: "running", Status: "Up"}}, 0, nil
+}
+
+func (*interactionCLI) Start(context.Context, string) error   { return nil }
+func (*interactionCLI) Stop(context.Context, string) error    { return nil }
+func (*interactionCLI) Restart(context.Context, string) error { return nil }
+func (c *interactionCLI) Images(context.Context) ([]minidocker.Image, int, error) {
+	c.imageCalls.Add(1)
+	return []minidocker.Image{{ID: "image1", Repository: "alpine", Tag: "3"}}, 0, nil
+}
+func (*interactionCLI) Volumes(context.Context) ([]minidocker.Volume, int, error) {
+	return nil, 0, nil
+}
+func (c *interactionCLI) Networks(context.Context) ([]minidocker.Network, int, error) {
+	c.networkCalls.Add(1)
+	return []minidocker.Network{
+		{Name: "bridge", ID: "network1"},
+		{Name: "custom", ID: "network2"},
+	}, 0, nil
+}
+func (*interactionCLI) ImageExposedPorts(context.Context, string) ([]int, error) { return nil, nil }
+func (*interactionCLI) Remove(context.Context, string) error                     { return nil }
+func (*interactionCLI) Rmi(context.Context, string) error                        { return nil }
+func (*interactionCLI) VolRm(context.Context, string) error                      { return nil }
+func (*interactionCLI) NetRm(context.Context, string) error                      { return nil }
+func (c *interactionCLI) Run(_ context.Context, opts minidocker.RunOpts) error {
+	if c.runs != nil {
+		c.runs <- opts
+	}
+	return nil
+}
+
+type blockedActionCLI struct {
+	*blockedRefreshCLI
+	entered chan struct{}
+	release <-chan struct{}
+}
+
+type blockedRefreshCLI struct {
+	*interactionCLI
+	blockAfter atomic.Int64
+	completed  atomic.Int64
+	blocked    atomic.Bool
+	entered    chan struct{}
+	release    <-chan struct{}
+	stopped    bool
+}
+
+func (c *blockedRefreshCLI) List(context.Context) ([]minidocker.Container, int, error) {
+	call := c.listCalls.Add(1)
+	if threshold := c.blockAfter.Load(); threshold > 0 && call >= threshold && c.blocked.CompareAndSwap(false, true) {
+		c.entered <- struct{}{}
+		<-c.release
+	}
+	c.completed.Add(1)
+	state, status := "running", "Up"
+	containers := []minidocker.Container{{ID: "a1", Names: "web", Image: "nginx:latest", State: state, Status: status}}
+	if c.stopped {
+		containers[0].State, containers[0].Status = "exited", "Exited (0)"
+		containers = append(containers, minidocker.Container{ID: "b2", Names: "worker", Image: "busybox:latest", State: "exited", Status: "Exited (0)"})
+	}
+	return containers, 0, nil
+}
+
+func (c *blockedActionCLI) Start(context.Context, string) error {
+	c.entered <- struct{}{}
+	<-c.release
+	return nil
+}
+
+type wireSnapshot struct {
+	Type     string   `json:"type"`
+	ViewID   string   `json:"view_id"`
+	Revision uint64   `json:"revision"`
+	Root     *v1.Node `json:"root"`
+}
+
+type pluginHarness struct {
+	host      host
+	inW       *os.File
+	outW      *os.File
+	snapshots chan wireSnapshot
+	done      chan error
+	stopOnce  sync.Once
+}
+
+func startPluginHarness(t *testing.T, docker minidocker.Docker) *pluginHarness {
+	t.Helper()
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &pluginHarness{
+		host: host{w: bufio.NewWriter(inW)}, inW: inW, outW: outW,
+		snapshots: make(chan wireSnapshot, 256), done: make(chan error, 1),
+	}
+	h.host.send(&v1.HostHello{
+		Type: v1.TypeHostHello, Supported: []v1.Version{{Major: 1, Minor: 4}},
+		Plugin:       v1.Identity{ID: "org.sysc.mini-docker", Name: "Mini Docker", Version: "0.4.0"},
+		Capabilities: []string{"panels", "settings"}, Limits: v1.DefaultLimits,
+	})
+	previous := newSession
+	newSession = func() *minidocker.Session { return minidocker.NewSession(docker) }
+	go func() { h.done <- run(inR, outW) }()
+	go func() {
+		defer close(h.snapshots)
+		dec := json.NewDecoder(outR)
+		for {
+			var raw json.RawMessage
+			if err := dec.Decode(&raw); err != nil {
+				return
+			}
+			var envelope struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(raw, &envelope) != nil || envelope.Type != v1.TypeViewSnapshot {
+				continue
+			}
+			var snapshot wireSnapshot
+			if json.Unmarshal(raw, &snapshot) == nil {
+				h.snapshots <- snapshot
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		h.stop()
+		newSession = previous
+		_ = inR.Close()
+		_ = outR.Close()
+	})
+	return h
+}
+
+func (h *pluginHarness) stop() {
+	h.stopOnce.Do(func() {
+		h.host.send(&v1.HostShutdown{Type: v1.TypeHostShutdown})
+		_ = h.inW.Close()
+		select {
+		case <-h.done:
+		case <-time.After(5 * time.Second):
+		}
+		_ = h.outW.Close()
+	})
+}
+
+func (h *pluginHarness) nextSnapshot(t *testing.T, viewID string, match func(wireSnapshot) bool) wireSnapshot {
+	t.Helper()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case snapshot, ok := <-h.snapshots:
+			if !ok {
+				t.Fatal("plugin output closed before expected snapshot")
+			}
+			if snapshot.ViewID == viewID && match(snapshot) {
+				return snapshot
+			}
+		case <-timer.C:
+			t.Fatalf("timed out waiting for view %s snapshot", viewID)
+		}
+	}
+}
+
+func nodeByID(root *v1.Node, id string) *v1.Node {
+	if root == nil {
+		return nil
+	}
+	if root.ID == id {
+		return root
+	}
+	for _, child := range root.Children {
+		if found := nodeByID(child, id); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func treeHasText(root *v1.Node, text string) bool {
+	if root == nil {
+		return false
+	}
+	if root.Text == text {
+		return true
+	}
+	for _, child := range root.Children {
+		if treeHasText(child, text) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRunRoutesTextInputAndRejectsStaleRevision(t *testing.T) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	finish := func() { releaseOnce.Do(func() { close(release) }) }
+	cli := &blockedRefreshCLI{
+		interactionCLI: &interactionCLI{}, blockAfter: atomic.Int64{}, entered: make(chan struct{}, 1), release: release,
+	}
+	cli.blockAfter.Store(2)
+	h := startPluginHarness(t, cli)
+	t.Cleanup(finish)
+	h.host.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
+		Values: map[string]any{"default_network": "custom"}})
+	h.host.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "panel", View: v1.ViewPanel, Entry: "panel"})
+	select {
+	case <-cli.entered:
+	case <-time.After(time.Second):
+		t.Fatal("panel-open refresh did not reach Docker")
+	}
+	panel := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool {
+		return nodeByID(s.Root, "select:a1") != nil && treeHasText(s.Root, "Refreshing…")
+	})
+	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "panel", Revision: panel.Revision,
+		Node: "tab:images", Event: v1.EventActivate})
+	imageSnapshot := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool {
+		return treeHasText(s.Root, "Docker images")
+	})
+	finish()
+	imageSnapshot = h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return nodeByID(s.Root, "select:image1") != nil })
+	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "panel", Revision: imageSnapshot.Revision,
+		Node: "select:image1", Event: v1.EventActivate})
+	selected := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return nodeByID(s.Root, "run:image1") != nil })
+	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "panel", Revision: selected.Revision,
+		Node: "run:image1", Event: v1.EventActivate})
+	form := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return nodeByID(s.Root, "name") != nil })
+	if got := nodeByID(form.Root, "form:network"); got == nil || got.Text != "Network: custom" {
+		t.Fatalf("default network not applied to run form: %+v", got)
+	}
+	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "panel", Revision: form.Revision,
+		Node: "name", Event: v1.EventChange, Text: "from-host"})
+	updated := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool {
+		node := nodeByID(s.Root, "name")
+		return node != nil && node.Text == "from-host"
+	})
+	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "panel", Revision: updated.Revision - 1,
+		Node: "name", Event: v1.EventChange, Text: "stale"})
+	h.host.send(&v1.ViewResync{Type: v1.TypeViewResync, ViewID: "panel"})
+	resynced := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return s.Revision == 1 })
+	if got := nodeByID(resynced.Root, "name"); got == nil || got.Text != "from-host" {
+		t.Fatalf("stale revision changed the retained draft: %+v", got)
+	}
+}
+
+func TestRunPublishesChangedTreesPerViewAndForcesOpenAndResync(t *testing.T) {
+	h := startPluginHarness(t, &interactionCLI{})
+	h.host.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "first", View: v1.ViewBar, Entry: "bar"})
+	first := h.nextSnapshot(t, "first", func(s wireSnapshot) bool {
+		node := nodeByID(s.Root, "open")
+		return node != nil && node.Text == "docker 1"
+	})
+	h.host.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
+		Values: map[string]any{"status_mode": "always"}})
+	select {
+	case snapshot := <-h.snapshots:
+		t.Fatalf("unchanged view was republished: %+v", snapshot)
+	case <-time.After(120 * time.Millisecond):
+	}
+	h.host.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "second", View: v1.ViewBar, Entry: "bar"})
+	second := h.nextSnapshot(t, "second", func(s wireSnapshot) bool { return nodeByID(s.Root, "open") != nil })
+	if second.Revision != 1 {
+		t.Fatalf("new view revision = %d, want 1", second.Revision)
+	}
+	h.host.send(&v1.ViewResync{Type: v1.TypeViewResync, ViewID: "first"})
+	resynced := h.nextSnapshot(t, "first", func(s wireSnapshot) bool { return s.Revision == 1 })
+	if resynced.Revision != 1 || nodeByID(resynced.Root, "open") == nil || first.Revision == 0 {
+		t.Fatalf("forced resync snapshot = %+v", resynced)
+	}
+}
+
+func TestRunResetsPollTimerWhenIntervalChanges(t *testing.T) {
+	cli := &interactionCLI{}
+	h := startPluginHarness(t, cli)
+	if !waitFor(func() bool { return cli.listCalls.Load() >= 1 }, 2*time.Second) {
+		t.Fatal("startup poll did not run")
+	}
+	h.host.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
+		Values: map[string]any{"refresh_interval_seconds": 1.0}})
+	if !waitFor(func() bool { return cli.listCalls.Load() >= 2 }, 1800*time.Millisecond) {
+		t.Fatal("poll timer kept the old five-second interval after the setting changed")
+	}
+}
+
+func TestRunPublishesInFlightActionBeforeDockerCompletes(t *testing.T) {
+	refreshRelease := make(chan struct{})
+	var refreshReleaseOnce sync.Once
+	finishRefresh := func() { refreshReleaseOnce.Do(func() { close(refreshRelease) }) }
+	actionRelease := make(chan struct{})
+	var actionReleaseOnce sync.Once
+	finishAction := func() { actionReleaseOnce.Do(func() { close(actionRelease) }) }
+	base := &blockedRefreshCLI{
+		interactionCLI: &interactionCLI{}, blockAfter: atomic.Int64{}, entered: make(chan struct{}, 1),
+		release: refreshRelease, stopped: true,
+	}
+	base.blockAfter.Store(2)
+	cli := &blockedActionCLI{
+		blockedRefreshCLI: base, entered: make(chan struct{}, 1), release: actionRelease,
+	}
+	h := startPluginHarness(t, cli)
+	t.Cleanup(finishRefresh)
+	t.Cleanup(finishAction)
+	h.host.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "panel", View: v1.ViewPanel, Entry: "panel"})
+	select {
+	case <-base.entered:
+	case <-time.After(time.Second):
+		t.Fatalf("panel-open refresh did not reach Docker (calls=%d)", base.listCalls.Load())
+	}
+	state := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool {
+		return nodeByID(s.Root, "select:a1") != nil && treeHasText(s.Root, "Refreshing…")
+	})
+	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "panel", Revision: state.Revision,
+		Node: "select:a1", Event: v1.EventActivate})
+	selected := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return nodeByID(s.Root, "start:a1") != nil })
+	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "panel", Revision: selected.Revision,
+		Node: "start:a1", Event: v1.EventActivate})
+	select {
+	case <-cli.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Docker start did not begin")
+	}
+	busy := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool {
+		node := nodeByID(s.Root, "start:a1")
+		return node != nil && node.Disabled
+	})
+	if tab := nodeByID(busy.Root, "tab:images"); tab == nil || tab.Disabled {
+		t.Fatalf("unrelated control disabled during action: %+v", tab)
+	}
+	finishAction()
+	finishRefresh()
+}
+
+func TestRunShowsRefreshingWithLastSnapshotDuringRefresh(t *testing.T) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	finish := func() { releaseOnce.Do(func() { close(release) }) }
+	cli := &blockedRefreshCLI{
+		interactionCLI: &interactionCLI{}, entered: make(chan struct{}, 1), release: release,
+	}
+	h := startPluginHarness(t, cli)
+	t.Cleanup(finish)
+	h.host.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "panel", View: v1.ViewPanel, Entry: "panel"})
+	h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return nodeByID(s.Root, "select:a1") != nil })
+	if !waitFor(func() bool { return cli.completed.Load() >= 2 }, time.Second) {
+		t.Fatal("panel-open refresh did not finish")
+	}
+	h.host.send(&v1.ViewResync{Type: v1.TypeViewResync, ViewID: "panel"})
+	state := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool {
+		return s.Revision == 1 && nodeByID(s.Root, "select:a1") != nil && !treeHasText(s.Root, "Refreshing…")
+	})
+	cli.blockAfter.Store(cli.listCalls.Load() + 1)
+	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "panel", Revision: state.Revision,
+		Node: "refresh", Event: v1.EventActivate})
+	select {
+	case <-cli.entered:
+	case <-time.After(time.Second):
+		t.Fatal("explicit refresh did not reach Docker")
+	}
+	refreshing := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return treeHasText(s.Root, "Refreshing…") })
+	if nodeByID(refreshing.Root, "select:a1") == nil {
+		t.Fatal("refresh blanked the last successful container snapshot")
+	}
+	finish()
+}
+
+func TestTooltipIncludesDockerFailureDiagnosis(t *testing.T) {
+	state := minidocker.SessionSnapshot{
+		ContainerTab: minidocker.TabStatus{ListError: "Docker daemon not running"},
+	}
+	root := viewTree(v1.ViewTooltip, state, "always", 0)
+	if !treeHasText(root, "Docker daemon not running") {
+		t.Fatalf("tooltip omitted the Docker diagnosis: %+v", root)
 	}
 }

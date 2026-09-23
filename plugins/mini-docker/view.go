@@ -62,6 +62,17 @@ func TooltipTree(text string) *v1.Node {
 	}}
 }
 
+// TooltipTreeForSession adds the current container-list diagnosis while
+// keeping the tooltip read-only and within its two-line contract.
+func TooltipTreeForSession(state SessionSnapshot, running int) *v1.Node {
+	root := TooltipTree(TooltipText(running, state.ContainerTab.Available))
+	if !state.ContainerTab.Available && state.ContainerTab.ListError != "" {
+		root.Children = append(root.Children, &v1.Node{Kind: v1.KindText,
+			Text: state.ContainerTab.ListError, Tone: v1.ToneError})
+	}
+	return root
+}
+
 // PanelTree preserves the original container-only call shape for the plugin
 // process while the renderer consumes the complete session snapshot.
 func PanelTree(available, loading bool, listErr, actErr, actingID string, containers []Container) *v1.Node {
