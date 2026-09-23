@@ -54,6 +54,13 @@ func run(in *os.File, out *os.File) error {
 	// upgrade path is the funnel if lock contention ever shows on a profile.
 	var mu sync.Mutex
 
+	// sendMu serializes every write to the client's encoder. v1.Client.Send
+	// writes without a lock of its own, so a publish racing a host.call would
+	// interleave two frames on one pipe and break the host's reader. mu
+	// cannot cover this alone: c.Call runs on the main loop, which by
+	// definition is not holding mu when a publish is in flight.
+	var sendMu sync.Mutex
+
 	incoming := make(chan v1.Message, 8)
 	go func() {
 		for {
@@ -73,6 +80,8 @@ func run(in *os.File, out *os.File) error {
 		running := session.RunningCount()
 		barText := minidocker.BarLabel(settings.statusMode, running, available)
 		tooltip := minidocker.TooltipText(running, available)
+		sendMu.Lock()
+		defer sendMu.Unlock()
 		for id, v := range views {
 			v.rev++
 			views[id] = v
@@ -134,10 +143,23 @@ func run(in *os.File, out *os.File) error {
 				mu.Lock()
 				delete(views, msg.ViewID)
 				mu.Unlock()
+			case *v1.ViewResync:
+				// The host rejected or dropped this view and asks for a
+				// fresh base: restart the revision so the next snapshot is
+				// taken at face value instead of as a stale revision.
+				mu.Lock()
+				if v, ok := views[msg.ViewID]; ok {
+					v.rev = 0
+					views[msg.ViewID] = v
+				}
+				mu.Unlock()
+				publish()
 			case *v1.InputEvent:
 				switch {
 				case msg.Node == "open":
+					sendMu.Lock()
 					_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: msg.Output, Instance: msg.ViewID})
+					sendMu.Unlock()
 				case msg.Node == "refresh":
 					select {
 					case refresh <- struct{}{}:

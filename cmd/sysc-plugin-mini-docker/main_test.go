@@ -261,3 +261,89 @@ func TestHandshakeFallbackMatchesManifest(t *testing.T) {
 		t.Fatalf("handshake fallback %q != manifest version %q", fallbackVersion, m.Version)
 	}
 }
+
+// TestViewResyncResetsRevisionAndRepublishes pins the host's resync contract:
+// when the host drops or rejects a view it asks for a fresh snapshot, and the
+// plugin must answer with one whose revision restarts — the host takes the next
+// snapshot as a new base. Revisions otherwise only climb, so a second snapshot
+// carrying revision 1 is proof the counter was reset for this view.
+func TestViewResyncResetsRevisionAndRepublishes(t *testing.T) {
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inR.Close()
+	defer outR.Close()
+
+	h := host{w: bufio.NewWriter(inW)}
+	h.send(&v1.HostHello{
+		Type:      v1.TypeHostHello,
+		Supported: []v1.Version{{Major: 1, Minor: 1}},
+		Plugin:    v1.Identity{ID: "org.sysc.mini-docker", Name: "Mini Docker", Version: "0.3.0"},
+		Limits:    v1.DefaultLimits,
+	})
+
+	newSession = func() *minidocker.Session { return minidocker.NewSession(fakeCLI{}) }
+	defer func() { newSession = func() *minidocker.Session { return minidocker.NewSession(minidocker.CLI{}) } }()
+
+	// Snapshots arrive on one pipe for the whole run; counting the revision
+	// values is enough to prove the reset, and atomics keep the drain
+	// goroutine out of the test's way.
+	var firstRevision, secondRevision atomic.Int64
+	go func() {
+		dec := json.NewDecoder(outR)
+		var m struct {
+			Type     string `json:"type"`
+			ViewID   string `json:"view_id"`
+			Revision uint64 `json:"revision"`
+		}
+		for {
+			if err := dec.Decode(&m); err != nil {
+				return
+			}
+			if m.Type != v1.TypeViewSnapshot || m.ViewID != "v1" {
+				continue
+			}
+			switch m.Revision {
+			case 1:
+				firstRevision.Add(1)
+			case 2:
+				secondRevision.Add(1)
+			}
+		}
+	}()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- run(inR, outW) }()
+
+	h.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "v1", View: v1.ViewBar, Entry: "bar"})
+	if !waitFor(func() bool { return firstRevision.Load() >= 1 }, 5*time.Second) {
+		t.Fatal("no first snapshot within 5s")
+	}
+	// A settings commit forces a second publish; the bar revision climbs.
+	h.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
+		Values: map[string]any{"status_mode": "running_only"}})
+	if !waitFor(func() bool { return secondRevision.Load() >= 1 }, 5*time.Second) {
+		t.Fatal("settings commit produced no second snapshot")
+	}
+
+	// The host rejected or dropped the view and asks for a fresh base.
+	h.send(&v1.ViewResync{Type: v1.TypeViewResync, ViewID: "v1"})
+	if !waitFor(func() bool { return firstRevision.Load() >= 2 }, 5*time.Second) {
+		t.Fatal("view.resync ignored: no snapshot restarted at revision 1")
+	}
+
+	h.send(&v1.HostShutdown{Type: v1.TypeHostShutdown})
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not exit after host.shutdown")
+	}
+}
