@@ -54,6 +54,7 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-23-mini-docker-parity-pass.md` | plan | Approved TDD implementation sequence for mini-docker parity, with exact files, focused verification, and task-boundary commits. |
 | `2026-09-23-wallpaper-depth-design.md` | design | The approved Wallpaper Depth design: a fixed shell-owned clock on the Bottom layer, per-output Depth Anything masks, destination-out composition, and two narrow wallpaper host calls. |
 | `2026-09-23-wallpaper-depth.md` | plan | The TDD implementation sequence for wire minor 7, wallpaper snapshot and mask calls, the Bottom-layer depth clock, serialized per-output inference, process gate, and bare-metal calibration. |
+| `2026-09-24-wallpaper-depth-gap-closure.md` | plan | Reuse the host settings renderer, add queued bulk mask generation and setup/result detail, then polish the Wallpaper Depth panel. |
 
 ## Documents on branches
 

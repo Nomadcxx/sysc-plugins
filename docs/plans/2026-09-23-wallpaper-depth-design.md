@@ -27,13 +27,22 @@ output and removes the clock pixels covered by foreground scenery.
    card, and the shell's existing clock and text renderer. The release adds no clock settings.
 6. **Every mask is provisional.** A wallpaper transition, path mismatch, output removal,
    plugin exit, or foreign wallpaper surface removes the mask and clock at once.
+7. **Use the host settings controls.** The attached plugin panel includes the manifest's
+   automatic-generation, threshold, and feather controls. No settings-open protocol call is
+   needed.
+8. **Generate all current images on request.** Manual generation clears and queues each
+   current image output in connector order, using the same serialized helper queue as automatic
+   generation.
 
 ## Prior art
 
 The upstream plugin uses Depth Anything V2 Small through ONNX Runtime. It keeps depth
 predictions separate from thresholded masks, processes outputs one at a time, polls output
 wallpapers once per second, and rejects work that became stale while inference ran. The
-existing stub already vendors its helper and cache format.
+existing stub already vendors its helper and cache format. Its bar opens a dedicated panel;
+the panel summarizes settings and offers setup, bulk generation, cache clearing, output status,
+and a settings shortcut. Sysc-shell renders the declared settings directly in the attached
+panel instead of adding a settings-open call.
 
 Noctalia does not repaint the wallpaper foreground over a desktop widget. Its desktop host
 draws each widget on a tightly sized `Bottom` layer surface. A wallpaper-mask shader maps
@@ -197,25 +206,27 @@ the calculated mask edge with gSlapper for all four modes before the feature shi
 ### Bar and tooltip
 
 The bar renders the shell catalogue's `wallpaper` icon, the closest installed match to
-upstream's unavailable `layers-subtract` glyph. It carries no text. Its tone changes only for
-an error. Left click opens the panel. The tooltip reports one of ready, processing, setup
-required, or the latest error. The current wire has no settings-open call, so right click has
-no action in this release.
+upstream's unavailable `layers-subtract` glyph. It carries no text. Its tone marks errors,
+active generation, and setup-required state. Left click opens the panel. The tooltip reports
+helper readiness, output count, ready count, and output errors.
 
 ### Panel
 
 The panel follows the upstream 500-pixel-wide structure:
 
 1. title and one-line description;
-2. setup card with Python state, model state, and the 99 MB local-model disclosure;
-3. threshold, feather, and automatic-generation summary;
-4. scrolling output rows;
-5. **Generate masks** and **Clear cache** actions.
+2. setup card with Python state, model state, a 99 MB first-download disclosure, and Check and
+   Run setup actions;
+3. an **Outputs** heading and scrolling rows with per-output Generate and elapsed time on
+   ready rows;
+4. **Generate masks** for all current image outputs and **Clear cache** actions;
+5. a compact settings summary followed by the host-rendered controls.
 
 Each output row names the connector and reports processing, ready, waiting, no wallpaper,
 image required, foreign coverage, or a concrete error. A ready row includes generation time
 and cache-hit state when available. The panel removes the `(stub)` label and generic `Done`
-notification.
+notification. The shell host places every remaining visible plugin setting in a generic
+Settings card when a panel opts into `include_settings`.
 
 The implementation keeps the panel at 500×560 unless the real layout lint rejects the
 approved state matrix. A size change requires a manifest edit and matching gate update.

@@ -44,13 +44,20 @@ The panel provides these actions:
 
 - **Check** reads helper and model readiness.
 - **Run setup** installs the local runtime and model.
-- **Generate** runs inference for one image output.
+- **Generate masks** runs inference for every current image output; each row also has a
+  **Generate** action for that output.
 - **Clear cache** removes cached depth predictions and masks.
 
+The panel includes controls for automatic generation, threshold, and feather.
 Automatic generation starts enabled and runs after image wallpaper changes.
-Turn it off to generate masks from an output row on demand. **Threshold** sets
-the relative depth cutoff from 0 to 100. **Feather** sets the transition width
-around that cutoff from 0 to 50; higher values soften the mask edge.
+Turn it off to generate masks on demand. **Threshold** sets the relative depth
+cutoff from 0 to 100. **Feather** sets the transition width around that cutoff
+from 0 to 50; higher values soften the mask edge.
+
+Before setup, the panel reports that it downloads the 99 MB model once and needs
+internet access. Wallpaper inference stays local. Ready output rows show elapsed
+time and whether the helper reused cached depth data. Errors appear in the panel
+and tint the bar glyph.
 
 ## Bare-metal calibration
 
