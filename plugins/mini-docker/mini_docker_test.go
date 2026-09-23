@@ -1938,7 +1938,9 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 		for _, f := range shelllint.Tree(bar, v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight) {
 			t.Errorf("%s bar: %s", name, f)
 		}
-		tip := TooltipTree(TooltipText(1, s.available))
+		tip := TooltipTreeForSession(SessionSnapshot{
+			ContainerTab: TabStatus{Available: s.available, ListError: s.listErr},
+		}, 1)
 		for _, f := range shelllint.Tree(tip, v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight) {
 			t.Errorf("%s tooltip: %s", name, f)
 		}
@@ -1946,6 +1948,22 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 		for _, f := range shelllint.Tree(panel, v1.ViewPanel, panelW, panelH) {
 			t.Errorf("%s panel: %s", name, f)
 		}
+	}
+
+	runForm := PanelTreeForSession(SessionSnapshot{
+		Scope: ScopeImages, ImageTab: TabStatus{Available: true},
+		NetworkTab: TabStatus{Available: true},
+		RunForm: &RunDraft{
+			ImageID: "sha256:image001", ImageRef: "registry.example/team/api:latest",
+			Name: "api-1", Port: "8080", Publish: true, Network: "bridge",
+			Environment: "A=one\nB=two=three", Error: "docker: run failed", Reseed: 1,
+		},
+	})
+	if err := v1.Validate(runForm, v1.ViewPanel); err != nil {
+		t.Fatalf("run form rejected: %v", err)
+	}
+	for _, f := range shelllint.Tree(runForm, v1.ViewPanel, panelW, panelH) {
+		t.Errorf("run form: %s", f)
 	}
 
 	worstCase := SessionSnapshot{
