@@ -21,6 +21,60 @@ Design: `docs/plans/2026-09-23-wallpaper-depth-design.md`.
 - Keep the protocol surface to `wallpaper.snapshot` and `wallpaper.mask.set`.
 - Use the current `plugins/wallpaper-depth/depth_helper.py`; do not rewrite the model pipeline.
 
+## Baseline repair
+
+### Task 0: Close idle weather HTTP connections
+
+The unchanged shell baseline currently fails
+`TestClosingTheRegistryStopsTheWeatherGoroutine`. A goroutine dump after
+`Registry.Close` shows the weather worker has stopped, while the standard
+library HTTP transport retains one idle TLS connection through its
+`persistConn.readLoop` and `persistConn.writeLoop`. This is tracked as
+`sysc-500` and must be repaired before Task 1.
+
+**Files:**
+- Modify: `/home/nomadx/sysc-shell/internal/services/weather.go`
+- Modify: `/home/nomadx/sysc-shell/internal/services/weather_test.go`
+
+**Step 1: Write the failing transport cleanup test**
+
+Install a small test `http.RoundTripper` on the weather client's
+`Transport`. Give it a `CloseIdleConnections` method and assert that one
+call to `Weather.Close` invokes that method. Keep this at the service
+boundary; do not make the shell test inspect process-wide goroutine stacks.
+
+**Step 2: Run the failing test**
+
+```bash
+timeout 300s env GOMAXPROCS=2 go test -count=1 ./internal/services -run 'WeatherClose'
+```
+
+Expected: FAIL because `Weather.Close` stops its worker but does not close
+idle connections owned by its HTTP client.
+
+**Step 3: Close the installed client's idle connections**
+
+After the weather worker has stopped, call the standard library
+`http.Client.CloseIdleConnections`. Keep `Close` idempotent and do not
+replace the transport or disable keep-alives globally.
+
+**Step 4: Run the focused proof**
+
+```bash
+timeout 300s env GOMAXPROCS=2 go test -count=1 ./internal/services -run 'WeatherClose'
+timeout 300s env GOMAXPROCS=2 go test -count=3 ./internal/shell -run '^TestClosingTheRegistryStopsTheWeatherGoroutine$'
+```
+
+Expected: PASS; the registry test no longer leaves the transport's read and
+write loops behind.
+
+**Step 5: Commit**
+
+```bash
+git add .beads/issues.jsonl internal/services/weather.go internal/services/weather_test.go
+git commit -m "fix(weather): close idle HTTP connections"
+```
+
 ## Phase A: sysc-shell
 
 ### Task 1: Declare wire minor 7 and the wallpaper capability
