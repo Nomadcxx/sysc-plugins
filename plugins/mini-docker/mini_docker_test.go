@@ -17,20 +17,33 @@ import (
 )
 
 type fakeDocker struct {
-	listErr      error
-	containers   []Container
-	skippedLines int
-	actions      []string
+	listErr        error
+	containers     []Container
+	skippedLines   int
+	images         []Image
+	imagesErr      error
+	imageSkipped   int
+	volumes        []Volume
+	volumesErr     error
+	volumeSkipped  int
+	networks       []Network
+	networksErr    error
+	networkSkipped int
+	actions        []string
 }
 
 func (f *fakeDocker) List(ctx context.Context) ([]Container, int, error) {
 	return f.containers, f.skippedLines, f.listErr
 }
 
-func (*fakeDocker) Images(context.Context) ([]Image, int, error)   { return nil, 0, nil }
-func (*fakeDocker) Volumes(context.Context) ([]Volume, int, error) { return nil, 0, nil }
-func (*fakeDocker) Networks(context.Context) ([]Network, int, error) {
-	return nil, 0, nil
+func (f *fakeDocker) Images(context.Context) ([]Image, int, error) {
+	return f.images, f.imageSkipped, f.imagesErr
+}
+func (f *fakeDocker) Volumes(context.Context) ([]Volume, int, error) {
+	return f.volumes, f.volumeSkipped, f.volumesErr
+}
+func (f *fakeDocker) Networks(context.Context) ([]Network, int, error) {
+	return f.networks, f.networkSkipped, f.networksErr
 }
 func (*fakeDocker) ImageExposedPorts(context.Context, string) ([]int, error) { return nil, nil }
 
@@ -158,6 +171,136 @@ func TestSessionRefreshStoresSkippedLineCount(t *testing.T) {
 	s.Refresh(context.Background())
 	if got := s.SkippedLines(); got != 2 {
 		t.Fatalf("skipped lines = %d, want 2", got)
+	}
+}
+
+func TestSessionStartsWithContainerLoading(t *testing.T) {
+	state := NewSession(&fakeDocker{}).State()
+	if state.Scope != ScopeContainers || !state.ContainerTab.Loading {
+		t.Fatalf("initial state = %+v, want container scope loading", state)
+	}
+	if state.ImageTab.Loading || state.VolumeTab.Loading || state.NetworkTab.Loading {
+		t.Fatalf("inactive tabs should start idle: %+v", state)
+	}
+}
+
+func TestSessionKeepsSnapshotsPerTabAndReplacesIdenticalData(t *testing.T) {
+	fd := &fakeDocker{
+		containers: []Container{{ID: "a1", Names: "web", State: "running"}},
+		images:     []Image{{ID: "img1", Repository: "nginx", Tag: "latest", Containers: 1}},
+	}
+	s := NewSession(fd)
+	s.Refresh(context.Background())
+	s.RefreshTab(context.Background(), ScopeImages)
+	s.RefreshTab(context.Background(), ScopeImages)
+	state := s.State()
+	if len(state.Containers) != 1 || state.Containers[0].ID != "a1" {
+		t.Fatalf("container snapshot = %+v", state.Containers)
+	}
+	if len(state.Images) != 1 || state.Images[0].ID != "img1" {
+		t.Fatalf("image snapshot = %+v", state.Images)
+	}
+	if !state.ContainerTab.Available || !state.ImageTab.Available || state.ImageTab.Loading {
+		t.Fatalf("tab states = container %+v, image %+v", state.ContainerTab, state.ImageTab)
+	}
+}
+
+func TestSessionRetainsKnownRowsWhileRefreshRuns(t *testing.T) {
+	s := NewSession(&fakeDocker{containers: []Container{{ID: "a1", Names: "web"}}})
+	s.Refresh(context.Background())
+	blocked := &blockedListDocker{
+		fakeDocker: &fakeDocker{containers: []Container{{ID: "b2", Names: "db"}}},
+		entered:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	s.docker = blocked
+	done := make(chan struct{})
+	go func() {
+		s.Refresh(context.Background())
+		close(done)
+	}()
+	<-blocked.entered
+
+	stateRead := make(chan SessionSnapshot, 1)
+	go func() { stateRead <- s.State() }()
+	select {
+	case state := <-stateRead:
+		if !state.ContainerTab.Loading || len(state.Containers) != 1 || state.Containers[0].ID != "a1" {
+			t.Fatalf("refresh state = %+v, want loading with cached a1", state)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Session lock held while Docker.List was blocked")
+	}
+	close(blocked.release)
+	<-done
+	if got := s.State().Containers[0].ID; got != "b2" {
+		t.Fatalf("completed refresh ID = %q, want b2", got)
+	}
+}
+
+func TestSessionPrimaryFailureKeepsCacheButRejectsMutation(t *testing.T) {
+	fd := &fakeDocker{containers: []Container{{ID: "b2", Names: "db", State: "exited"}}}
+	s := NewSession(fd)
+	s.Refresh(context.Background())
+	fd.listErr = errors.New("Docker daemon not running")
+	s.Refresh(context.Background())
+	state := s.State()
+	if state.ContainerTab.Available || state.ContainerTab.ListError == "" {
+		t.Fatalf("primary failure state = %+v", state.ContainerTab)
+	}
+	if len(state.Containers) != 1 || state.Containers[0].ID != "b2" {
+		t.Fatalf("cached containers lost: %+v", state.Containers)
+	}
+	s.Act(context.Background(), "start", "b2")
+	if len(fd.actions) != 0 {
+		t.Fatalf("mutated while primary list unavailable: %v", fd.actions)
+	}
+}
+
+func TestSessionSecondaryFailureRetainsLastSuccessfulRows(t *testing.T) {
+	fd := &fakeDocker{images: []Image{{ID: "img1", Repository: "nginx", Tag: "latest"}}}
+	s := NewSession(fd)
+	s.RefreshTab(context.Background(), ScopeImages)
+	fd.imagesErr = errors.New("registry unavailable")
+	s.RefreshTab(context.Background(), ScopeImages)
+	state := s.State()
+	if !state.ImageTab.Available || state.ImageTab.ListError == "" {
+		t.Fatalf("secondary failure state = %+v", state.ImageTab)
+	}
+	if len(state.Images) != 1 || state.Images[0].ID != "img1" {
+		t.Fatalf("last successful image rows lost: %+v", state.Images)
+	}
+}
+
+func TestSessionRejectsStaleScopeEntityAndIneligibleActions(t *testing.T) {
+	fd := &fakeDocker{containers: []Container{
+		{ID: "a1", Names: "web", State: "running"},
+		{ID: "b2", Names: "db", State: "exited"},
+	}}
+	s := NewSession(fd)
+	s.Refresh(context.Background())
+	s.Act(context.Background(), "start", "gone")
+	s.Act(context.Background(), "start", "a1")
+	s.SetScope(ScopeImages)
+	s.Act(context.Background(), "start", "b2")
+	if len(fd.actions) != 0 {
+		t.Fatalf("stale or ineligible actions reached Docker: %v", fd.actions)
+	}
+}
+
+type blockedListDocker struct {
+	*fakeDocker
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (d *blockedListDocker) List(ctx context.Context) ([]Container, int, error) {
+	close(d.entered)
+	select {
+	case <-d.release:
+		return d.fakeDocker.List(ctx)
+	case <-ctx.Done():
+		return nil, 0, ctx.Err()
 	}
 }
 
@@ -311,6 +454,7 @@ func TestActErrorSurvivesItsOwnRefresh(t *testing.T) {
 	// error anyway - the user clicked stop and saw nothing.
 	fd := &failStartCLI{failStart: true, list: []Container{{ID: "b2", Names: "db", State: "exited"}}}
 	s := NewSession(fd)
+	s.Refresh(context.Background())
 	s.Act(context.Background(), "start", "b2")
 	_, _, _, _, actErr, _ := s.Snapshot()
 	if actErr == "" {
@@ -321,6 +465,7 @@ func TestActErrorSurvivesItsOwnRefresh(t *testing.T) {
 func TestActErrorClearsOnNextSuccess(t *testing.T) {
 	fd := &failStartCLI{list: []Container{{ID: "b2", Names: "db", State: "exited"}}}
 	s := NewSession(fd)
+	s.Refresh(context.Background())
 	s.Act(context.Background(), "start", "b2")
 	fd.failStart = false
 	s.Act(context.Background(), "start", "b2")
@@ -338,6 +483,7 @@ func TestPanelDisablesButtonsWhileActing(t *testing.T) {
 		}},
 		delay: 150 * time.Millisecond,
 	})
+	s.Refresh(context.Background())
 	go s.Act(context.Background(), "stop", "a1")
 
 	// While the action is in flight, its container's buttons are disabled
@@ -423,6 +569,7 @@ func (f slowActionCLI) Stop(ctx context.Context, id string) error {
 func TestSessionActRunsActionAndRefreshes(t *testing.T) {
 	fd := &fakeDocker{containers: []Container{{ID: "b2", Names: "db", State: "exited"}}}
 	s := NewSession(fd)
+	s.Refresh(context.Background())
 	s.Act(context.Background(), "start", "b2")
 	if len(fd.actions) != 1 || fd.actions[0] != "start:b2" {
 		t.Fatalf("actions = %v", fd.actions)
