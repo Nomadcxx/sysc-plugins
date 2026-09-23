@@ -12,39 +12,58 @@ import (
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-func TestLiveListAndTrees(t *testing.T) {
+func TestLiveListsAndTrees(t *testing.T) {
 	s := NewSession(CLI{})
-	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*listTimeout)
 	defer cancel()
 	s.Refresh(ctx)
 
-	containers, available, loading, listErr, actErr, actingID := s.Snapshot()
-	if !available {
-		t.Fatalf("docker unavailable on live machine: listErr=%q", listErr)
+	scopes := []Scope{ScopeContainers, ScopeImages, ScopeVolumes, ScopeNetworks}
+	counts := make(map[Scope]int, len(scopes))
+	for _, scope := range scopes {
+		if scope != ScopeContainers {
+			s.SetScope(scope)
+			s.RefreshTab(ctx, scope)
+		}
+		state := s.State()
+		status := tabStatus(state)
+		if !status.Available || status.Loading || status.ListError != "" {
+			t.Fatalf("live %s list failed: available=%v loading=%v error=%q",
+				scope, status.Available, status.Loading, status.ListError)
+		}
+		counts[scope] = countTab(state, scope)
+		panel := PanelTreeForSession(state)
+		if err := v1.Validate(panel, v1.ViewPanel); err != nil {
+			t.Fatalf("live %s panel tree rejected: %v", scope, err)
+		}
 	}
-	if loading || listErr != "" || actErr != "" || actingID != "" {
-		t.Fatalf("unexpected session state: loading=%v listErr=%q actErr=%q actingID=%q",
-			loading, listErr, actErr, actingID)
-	}
-	if len(containers) == 0 {
-		t.Skip("no containers on this machine; nothing to render")
-	}
-
-	panel := PanelTree(available, loading, listErr, actErr, actingID, containers)
-	if err := v1.Validate(panel, v1.ViewPanel); err != nil {
-		t.Fatalf("live panel tree rejected: %v", err)
-	}
-
 	running := s.RunningCount()
-	if running < 1 {
-		t.Fatalf("RunningCount = %d, live docker ps shows running containers", running)
-	}
-	bar := BarTree(BarLabel("always", running, available), !available)
+	bar := BarTree(BarLabel("always", running, true), false)
 	if err := v1.Validate(bar, v1.ViewBar); err != nil {
 		t.Fatalf("live bar tree rejected: %v", err)
 	}
-	if err := v1.Validate(TooltipTree(TooltipText(running, available)), v1.ViewTooltip); err != nil {
+	if err := v1.Validate(TooltipTreeForSession(s.State(), running), v1.ViewTooltip); err != nil {
 		t.Fatalf("live tooltip tree rejected: %v", err)
 	}
-	t.Logf("live: %d containers, %d running", len(containers), running)
+	occupied, err := hostPortInUse(1)
+	if err != nil {
+		t.Fatalf("live /proc TCP preflight failed: %v", err)
+	}
+	t.Logf("live: containers=%d running=%d images=%d volumes=%d networks=%d tcp-port-1-occupied=%v",
+		counts[ScopeContainers], running, counts[ScopeImages], counts[ScopeVolumes], counts[ScopeNetworks], occupied)
+}
+
+func countTab(state SessionSnapshot, scope Scope) int {
+	switch scope {
+	case ScopeContainers:
+		return len(state.Containers)
+	case ScopeImages:
+		return len(state.Images)
+	case ScopeVolumes:
+		return len(state.Volumes)
+	case ScopeNetworks:
+		return len(state.Networks)
+	default:
+		return 0
+	}
 }

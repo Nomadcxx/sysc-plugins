@@ -270,12 +270,13 @@ new icons — both are shell-side asks, not design requirements.
 3. **Fit.** `TestViewsFitTheirHostSlots` extends to every tab, the form, the armed state, and
    both status-band heights, at bar/tooltip/480×560 — the geometry contract from
    `docs/plugin-ui-rules.md`.
-4. **Integration gate.** Deliver T4.2, never built: `tests/integration/plugin_mini_docker_gate_test.go`
-   following the kdeconnect gate — a fake `docker` script on PATH, drive handshake → open →
-   act → settings, assert the published trees and the script's recorded argv.
+4. **Integration gate.** `tests/integration/plugin_mini_docker_gate_test.go` uses a fake Docker
+   executable on PATH, drives handshake → open → tab switch → form input → run → confirmed
+   remove → settings → resync → shutdown, and asserts the published trees and recorded argv.
 5. **Live gate (contract).** `go test -tags live` asserts what is assertable: daemon reachable,
-   every view validates, the port preflight answers. Counts are logged, never asserted —
-   the wrong claim this tranche was failed for. Manual acceptance on the machine with docker:
+   all four tab panel trees, bar, and tooltip validate, and the port preflight answers. Counts
+   are logged; no host-specific count is asserted, correcting the earlier gate's claim. Manual
+   acceptance on the machine with Docker:
    pill click opens the panel; the list survives a refresh with docker hung; the daemon-down
    line is readable; 200+ containers scroll and stay under the node budget; start/stop works
    and a failure is visible; a remove requires the second click.
