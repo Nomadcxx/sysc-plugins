@@ -288,6 +288,25 @@ func TestSessionRejectsStaleScopeEntityAndIneligibleActions(t *testing.T) {
 	}
 }
 
+func TestSessionSelectsOnlyCurrentContainerAndClearsSelection(t *testing.T) {
+	s := NewSession(&fakeDocker{containers: []Container{{ID: "a1", Names: "web", State: "running"}}})
+	s.Refresh(context.Background())
+	if !s.Select("a1") || s.State().SelectedID != "a1" {
+		t.Fatalf("selection = %q, want a1", s.State().SelectedID)
+	}
+	if !s.Select("a1") || s.State().SelectedID != "" {
+		t.Fatalf("same-row select should clear selection, got %q", s.State().SelectedID)
+	}
+	if s.Select("gone") {
+		t.Fatal("stale container selected")
+	}
+	s.Select("a1")
+	s.SetScope(ScopeImages)
+	if got := s.State().SelectedID; got != "" {
+		t.Fatalf("scope change kept selection %q", got)
+	}
+}
+
 type blockedListDocker struct {
 	*fakeDocker
 	entered chan struct{}
@@ -493,7 +512,10 @@ func TestPanelDisablesButtonsWhileActing(t *testing.T) {
 	for time.Now().Before(deadline) {
 		containers, _, _, _, _, actingID := s.Snapshot()
 		if actingID != "" {
-			tree := PanelTree(true, false, "", "", actingID, containers)
+			tree := PanelTreeForSession(SessionSnapshot{
+				Scope: ScopeContainers, Containers: containers, SelectedID: "a1", ActingID: actingID,
+				ContainerTab: TabStatus{Available: true},
+			})
 			disabled = nil
 			walkNodes(tree, func(n *v1.Node) {
 				if n.Disabled {
@@ -501,7 +523,7 @@ func TestPanelDisablesButtonsWhileActing(t *testing.T) {
 				}
 			})
 			for _, id := range disabled {
-				if !strings.HasPrefix(id, "stop:a1") && !strings.HasPrefix(id, "restart:a1") {
+				if id != "stop:a1" && id != "restart:a1" && id != "remove:a1" {
 					t.Fatalf("disabled node %q is not the acting container's", id)
 				}
 			}
@@ -740,26 +762,197 @@ func TestPanelOrdersRunningFirstWithAccentState(t *testing.T) {
 	if list == nil {
 		t.Fatal("no list")
 	}
-	// Running containers surface first (stable within each group); exited
-	// ones must not bury the actionable rows.
+	// Running containers surface first, and both groups sort by name so the
+	// order does not depend on Docker's output.
 	var names []string
 	for _, row := range list.Children {
-		names = append(names, row.Children[0].Text)
+		names = append(names, row.Children[0].Children[0].Text)
 	}
-	want := []string{"web · Up 2 hours", "api · Up 5 hours", "db · Exited (0)", "cache · Exited (137)"}
+	want := []string{"api", "web", "cache", "db"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("row order = %v, want %v", names, want)
 	}
 	for _, row := range list.Children {
-		running := strings.Contains(row.Children[0].Text, "Up ")
-		tone := row.Children[0].Tone
+		name := row.Children[0].Children[0]
+		status := row.Children[0].Children[1]
+		running := strings.Contains(status.Text, "Up ")
+		tone := name.Tone
 		if running && tone != v1.ToneAccent {
-			t.Fatalf("running row %q tone = %q, want accent", row.Children[0].Text, tone)
+			t.Fatalf("running row %q tone = %q, want accent", name.Text, tone)
 		}
 		if !running && tone != v1.ToneNormal {
-			t.Fatalf("stopped row %q tone = %q, want normal", row.Children[0].Text, tone)
+			t.Fatalf("stopped row %q tone = %q, want normal", name.Text, tone)
 		}
 	}
+}
+
+func TestPanelScopeButtons(t *testing.T) {
+	panel := PanelTreeForSession(SessionSnapshot{Scope: ScopeImages})
+	if len(panel.Children) < 2 {
+		t.Fatalf("panel children = %d, want header and scope row", len(panel.Children))
+	}
+	scopeRow := panel.Children[1]
+	want := []string{"tab:containers", "tab:images", "tab:volumes", "tab:networks"}
+	if len(scopeRow.Children) != len(want) {
+		t.Fatalf("scope buttons = %d, want %d", len(scopeRow.Children), len(want))
+	}
+	for i, button := range scopeRow.Children {
+		if button.ID != want[i] || button.Kind != v1.KindButton || len(button.Events) == 0 {
+			t.Fatalf("scope button %d = %+v", i, button)
+		}
+		fill := "outline"
+		if button.ID == "tab:images" {
+			fill = "accent"
+		}
+		if button.Fill != fill {
+			t.Fatalf("%s fill = %q, want %q", button.ID, button.Fill, fill)
+		}
+	}
+}
+
+func TestPanelSelectionAndContainerDetailActions(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		state  string
+		want   []string
+		remove bool
+	}{
+		{"running", "running", []string{"stop:a1", "restart:a1", "remove:a1"}, true},
+		{"stopped", "exited", []string{"start:a1", "remove:a1"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			panel := PanelTreeForSession(SessionSnapshot{
+				Scope: ScopeContainers, SelectedID: "a1",
+				Containers:   []Container{{ID: "a1", Names: "web", Image: "nginx:latest", State: tc.state, Status: "Up"}},
+				ContainerTab: TabStatus{Available: true},
+			})
+			selectButton := findNode(panel, "select:a1")
+			if selectButton == nil || selectButton.Fill != "card" || len(selectButton.Children) != 1 {
+				t.Fatalf("selected row = %+v", selectButton)
+			}
+			if findNode(panel, "detail") == nil {
+				t.Fatal("selected row has no detail card")
+			}
+			var got []string
+			for _, id := range tc.want {
+				node := findNode(panel, id)
+				if node == nil {
+					t.Errorf("missing detail action %q", id)
+					continue
+				}
+				got = append(got, id)
+				if id == "remove:a1" && node.Disabled != tc.remove {
+					t.Errorf("remove disabled=%v, want %v", node.Disabled, tc.remove)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("detail actions = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPanelEmptyLoadingAndFailureStates(t *testing.T) {
+	stale := []Container{{ID: "a1", Names: "web", State: "running"}}
+	cases := []struct {
+		name      string
+		state     SessionSnapshot
+		wantText  string
+		wantRows  int
+		wantError bool
+	}{
+		{"loading", SessionSnapshot{Scope: ScopeContainers, ContainerTab: TabStatus{Loading: true}}, "Loading…", 0, false},
+		{"empty", SessionSnapshot{Scope: ScopeContainers, ContainerTab: TabStatus{Available: true}}, "No containers", 0, false},
+		{"refreshing", SessionSnapshot{Scope: ScopeContainers, Containers: stale, ContainerTab: TabStatus{Available: true, Loading: true}}, "Refreshing…", 1, false},
+		{"unavailable", SessionSnapshot{Scope: ScopeContainers, Containers: stale, ContainerTab: TabStatus{ListError: "Docker daemon not running"}}, "No containers", 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			panel := PanelTreeForSession(tc.state)
+			list := findKind(panel, v1.KindList)
+			if list == nil {
+				t.Fatal("panel has no entity list")
+			}
+			var rows int
+			for _, child := range list.Children {
+				if child.Kind == v1.KindButton {
+					rows++
+				}
+			}
+			if rows != tc.wantRows {
+				t.Fatalf("rows = %d, want %d", rows, tc.wantRows)
+			}
+			if !containsText(panel, tc.wantText) {
+				t.Fatalf("panel does not show %q", tc.wantText)
+			}
+			if got := findNode(panel, "select:a1") != nil; got != (tc.wantRows == 1) {
+				t.Fatalf("selectable stale row = %v, want rows=%d", got, tc.wantRows)
+			}
+			if got := containsTone(panel, v1.ToneError); got != tc.wantError {
+				t.Fatalf("error tone = %v, want %v", got, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestPanelOverflowFooterFollowsList(t *testing.T) {
+	containers := make([]Container, maxPanelRows+3)
+	for i := range containers {
+		containers[i] = Container{ID: fmt.Sprintf("c%03d", i), Names: fmt.Sprintf("container-%03d", i), State: "running"}
+	}
+	panel := PanelTreeForSession(SessionSnapshot{Scope: ScopeContainers, Containers: containers, ContainerTab: TabStatus{Available: true}})
+	listIndex, footerIndex := -1, -1
+	for i, node := range panel.Children {
+		if node.Kind == v1.KindList {
+			listIndex = i
+		}
+		if strings.HasPrefix(node.Text, "+") {
+			footerIndex = i
+		}
+	}
+	if listIndex < 0 || footerIndex <= listIndex {
+		t.Fatalf("list index=%d overflow footer index=%d; footer must follow list", listIndex, footerIndex)
+	}
+}
+
+func findNode(root *v1.Node, id string) *v1.Node {
+	var found *v1.Node
+	walkNodes(root, func(node *v1.Node) {
+		if node.ID == id {
+			found = node
+		}
+	})
+	return found
+}
+
+func findKind(root *v1.Node, kind v1.NodeKind) *v1.Node {
+	var found *v1.Node
+	walkNodes(root, func(node *v1.Node) {
+		if node.Kind == kind {
+			found = node
+		}
+	})
+	return found
+}
+
+func containsText(root *v1.Node, text string) bool {
+	found := false
+	walkNodes(root, func(node *v1.Node) {
+		if node.Text == text {
+			found = true
+		}
+	})
+	return found
+}
+
+func containsTone(root *v1.Node, tone v1.Tone) bool {
+	found := false
+	walkNodes(root, func(node *v1.Node) {
+		if node.Tone == tone {
+			found = true
+		}
+	})
+	return found
 }
 
 func TestPanelCraftPass(t *testing.T) {
@@ -877,5 +1070,26 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 		for _, f := range shelllint.Tree(panel, v1.ViewPanel, panelW, panelH) {
 			t.Errorf("%s panel: %s", name, f)
 		}
+	}
+
+	worstCase := SessionSnapshot{
+		Scope:      ScopeContainers,
+		Containers: full,
+		SelectedID: "c001",
+		ContainerTab: TabStatus{
+			Available:    true,
+			SkippedLines: 2,
+		},
+		ActionError: "docker action timed out",
+	}
+	panel := PanelTreeForSession(worstCase)
+	if findNode(panel, "detail") == nil || findNode(panel, "select:c001") == nil {
+		t.Fatal("worst-case panel is missing selected detail or row")
+	}
+	if !containsText(panel, "+10 more") {
+		t.Fatal("worst-case panel is missing the overflow footer")
+	}
+	for _, f := range shelllint.Tree(panel, v1.ViewPanel, panelW, panelH) {
+		t.Errorf("worst-case panel: %s", f)
 	}
 }

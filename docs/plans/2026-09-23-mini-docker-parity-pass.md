@@ -191,7 +191,7 @@ Run each task in the approved implementation worktree. For behavior changes, add
 
 ### Task 4 — Build tabs and the container detail view
 
-**Files:** view.go, mini_docker_test.go.
+**Files:** service.go, view.go, mini_docker_test.go.
 
 1. Add failing tree tests for scope buttons, selected rows, detail actions, empty/loading/error states, running-first/name sort, and overflow footer placement.
 2. Render four-node selectable rows, the selected detail card, status band (including a subtle malformed-line count), and a list whose height is derived from visible bands.

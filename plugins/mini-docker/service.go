@@ -27,6 +27,7 @@ type TabStatus struct {
 // SessionSnapshot is an immutable copy of the state used to render a view.
 type SessionSnapshot struct {
 	Scope        Scope
+	SelectedID   string
 	Containers   []Container
 	Images       []Image
 	Volumes      []Volume
@@ -45,6 +46,7 @@ type Session struct {
 	mu         sync.Mutex
 	docker     Docker
 	scope      Scope
+	selectedID string
 	tabs       map[Scope]TabStatus
 	containers []Container
 	images     []Image
@@ -72,9 +74,31 @@ func (s *Session) SetScope(scope Scope) bool {
 		return false
 	}
 	s.mu.Lock()
-	s.scope = scope
+	if s.scope != scope {
+		s.scope = scope
+		s.selectedID = ""
+	}
 	s.mu.Unlock()
 	return true
+}
+
+func (s *Session) Select(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.scope != ScopeContainers || !s.tabs[ScopeContainers].Available || !idRE.MatchString(id) {
+		return false
+	}
+	if s.selectedID == id {
+		s.selectedID = ""
+		return true
+	}
+	for _, container := range s.containers {
+		if container.ID == id {
+			s.selectedID = id
+			return true
+		}
+	}
+	return false
 }
 
 func validScope(scope Scope) bool {
@@ -93,6 +117,7 @@ func (s *Session) State() SessionSnapshot {
 	defer s.mu.Unlock()
 	return SessionSnapshot{
 		Scope:        s.scope,
+		SelectedID:   s.selectedID,
 		Containers:   append([]Container(nil), s.containers...),
 		Images:       append([]Image(nil), s.images...),
 		Volumes:      append([]Volume(nil), s.volumes...),
@@ -184,6 +209,18 @@ func (s *Session) finishRefresh(scope Scope, skipped int, err error, replace fun
 	status.RefreshedAt = time.Now()
 	s.tabs[scope] = status
 	replace()
+	if scope == ScopeContainers && s.selectedID != "" {
+		found := false
+		for _, container := range s.containers {
+			if container.ID == s.selectedID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.selectedID = ""
+		}
+	}
 }
 
 // Act accepts only a current, eligible container action. It snapshots the

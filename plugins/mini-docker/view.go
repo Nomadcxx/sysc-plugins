@@ -63,12 +63,24 @@ func TooltipTree(text string) *v1.Node {
 	}}
 }
 
-// PanelTree lists containers with lifecycle buttons; start is offered only
-// for stopped containers, stop and restart only for running ones. actErr
-// (the last failed action) outranks listErr: it is what the user just did,
-// and the action's own refresh must not have erased it. A container with an
-// action in flight gets its buttons disabled - no silent double-fires.
+// PanelTree preserves the original container-only call shape for the plugin
+// process while the renderer consumes the complete session snapshot.
 func PanelTree(available, loading bool, listErr, actErr, actingID string, containers []Container) *v1.Node {
+	return PanelTreeForSession(SessionSnapshot{
+		Scope:        ScopeContainers,
+		Containers:   containers,
+		ContainerTab: TabStatus{Available: available, Loading: loading, ListError: listErr},
+		ActionError:  actErr,
+		ActingID:     actingID,
+	})
+}
+
+// PanelTreeForSession renders the four-tab shell and the container detail
+// view from an immutable state copy. Docker I/O belongs to Session.
+func PanelTreeForSession(state SessionSnapshot) *v1.Node {
+	if !validScope(state.Scope) {
+		state.Scope = ScopeContainers
+	}
 	col := &v1.Node{Kind: v1.KindColumn, Gap: 8, Padding: 16, Children: []*v1.Node{
 		{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: "Docker containers", Size: "title", Bold: true},
@@ -76,84 +88,197 @@ func PanelTree(available, loading bool, listErr, actErr, actingID string, contai
 				Events: []v1.EventKind{v1.EventActivate}},
 		}},
 	}}
-	if actErr != "" {
-		col.Children = append(col.Children,
-			&v1.Node{Kind: v1.KindText, Text: actErr, Tone: v1.ToneError})
+
+	col.Children = append(col.Children, scopeButtons(state.Scope))
+	status := panelStatus(state)
+	if len(status) != 0 {
+		col.Children = append(col.Children, &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: status})
 	}
-	if listErr != "" {
-		col.Children = append(col.Children,
-			&v1.Node{Kind: v1.KindText, Text: listErr, Tone: v1.ToneError})
+
+	var rows []Container
+	containerStatus := state.ContainerTab
+	if state.Scope == ScopeContainers && containerStatus.Available {
+		rows = sortedContainers(state.Containers)
 	}
-	if loading {
-		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: "Loading…"})
-		return col
+	showLoading := state.Scope == ScopeContainers && containerStatus.Loading && !containerStatus.Available
+	listHeight := 400 - 20*len(status)
+	selected := selectedContainer(state)
+	if selected != nil {
+		listHeight -= 112
 	}
-	if !available {
-		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: "Docker is not available"})
-		return col
+	if listHeight < 200 {
+		listHeight = 200
 	}
-	if len(containers) == 0 {
-		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: "No containers"})
-		return col
+	list := &v1.Node{Kind: v1.KindList, Height: listHeight, Gap: 4}
+	if state.Scope != ScopeContainers {
+		list.Children = append(list.Children, &v1.Node{Kind: v1.KindText, Text: emptyTabText(state.Scope), Tone: v1.ToneSubtle})
+	} else if showLoading {
+		list.Children = append(list.Children, &v1.Node{Kind: v1.KindText, Text: "Loading…", Tone: v1.ToneSubtle})
+	} else if !containerStatus.Available || len(rows) == 0 {
+		list.Children = append(list.Children, &v1.Node{Kind: v1.KindText, Text: "No containers", Tone: v1.ToneSubtle})
 	}
-	// Running containers surface first; exited ones must not bury the
-	// actionable rows. Stable keeps each group in docker's own order.
+	visibleRows := rows
+	if len(rows) > maxPanelRows {
+		visibleRows = rows[:maxPanelRows]
+	}
+	for _, c := range visibleRows {
+		list.Children = append(list.Children, containerRow(c, state.SelectedID))
+	}
+	col.Children = append(col.Children, list)
+	if len(rows) > maxPanelRows {
+		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText,
+			Text: fmt.Sprintf("+%d more", len(rows)-maxPanelRows), Tone: v1.ToneSubtle})
+	}
+	if selected != nil {
+		col.Children = append(col.Children, containerDetail(*selected, state.ActingID))
+	}
+	return col
+}
+
+func scopeButtons(selected Scope) *v1.Node {
+	buttons := &v1.Node{Kind: v1.KindRow, Gap: 4}
+	for _, scope := range []Scope{ScopeContainers, ScopeImages, ScopeVolumes, ScopeNetworks} {
+		label := strings.ToUpper(string(scope[:1])) + string(scope[1:])
+		fill := "outline"
+		if scope == selected {
+			fill = "accent"
+		}
+		buttons.Children = append(buttons.Children, &v1.Node{Kind: v1.KindButton,
+			ID: "tab:" + string(scope), Text: label, Name: label + " tab", Role: "button",
+			Fill: fill, Height: 28, Events: []v1.EventKind{v1.EventActivate}})
+	}
+	return buttons
+}
+
+func panelStatus(state SessionSnapshot) []*v1.Node {
+	var status []*v1.Node
+	appendLine := func(text string, tone v1.Tone) {
+		if text != "" && len(status) < 2 {
+			status = append(status, &v1.Node{Kind: v1.KindText, Text: text, Tone: tone})
+		}
+	}
+	active := tabStatus(state)
+	appendLine(state.ActionError, v1.ToneError)
+	appendLine(active.ListError, v1.ToneError)
+	if len(status) < 2 {
+		switch {
+		case state.ActingID != "":
+			appendLine("Working…", v1.ToneSubtle)
+		case active.Loading && active.Available:
+			appendLine("Refreshing…", v1.ToneSubtle)
+		case active.SkippedLines > 0:
+			appendLine(fmt.Sprintf("%d malformed lines skipped", active.SkippedLines), v1.ToneSubtle)
+		}
+	}
+	return status
+}
+
+func tabStatus(state SessionSnapshot) TabStatus {
+	switch state.Scope {
+	case ScopeImages:
+		return state.ImageTab
+	case ScopeVolumes:
+		return state.VolumeTab
+	case ScopeNetworks:
+		return state.NetworkTab
+	default:
+		return state.ContainerTab
+	}
+}
+
+func emptyTabText(scope Scope) string {
+	switch scope {
+	case ScopeImages:
+		return "No images"
+	case ScopeVolumes:
+		return "No volumes"
+	case ScopeNetworks:
+		return "No networks"
+	default:
+		return "No containers"
+	}
+}
+
+func sortedContainers(containers []Container) []Container {
 	sorted := slices.Clone(containers)
-	slices.SortStableFunc(sorted, func(a, b Container) int {
+	slices.SortFunc(sorted, func(a, b Container) int {
 		if a.Running() != b.Running() {
 			if a.Running() {
 				return -1
 			}
 			return 1
 		}
-		return 0
+		if c := strings.Compare(a.Names, b.Names); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
 	})
-	rows := sorted
-	list := &v1.Node{Kind: v1.KindList, Height: 400, Gap: 8}
-	if len(rows) > maxPanelRows {
-		rows = rows[:maxPanelRows]
-		col.Children = append(col.Children,
-			&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("+%d more", len(containers)-maxPanelRows), Tone: v1.ToneSubtle})
+	return sorted
+}
+
+func selectedContainer(state SessionSnapshot) *Container {
+	if state.Scope != ScopeContainers || !state.ContainerTab.Available || state.SelectedID == "" {
+		return nil
 	}
-	for _, c := range rows {
-		list.Children = append(list.Children, containerRow(c, actingID))
+	for i := range state.Containers {
+		if state.Containers[i].ID == state.SelectedID {
+			selected := state.Containers[i]
+			return &selected
+		}
 	}
-	col.Children = append(col.Children, list)
-	return col
+	return nil
 }
 
 // maxPanelRows keeps the worst-case tree (6 nodes per row) inside the
 // host's MaxNodes budget of 1024; the overflow is summarized in a footer.
 const maxPanelRows = 150
 
-func containerRow(c Container, actingID string) *v1.Node {
+func containerRow(c Container, selectedID string) *v1.Node {
 	tone := v1.ToneNormal
 	if c.Running() {
 		tone = v1.ToneAccent
 	}
-	row := &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
-		{Kind: v1.KindText, Text: c.Names + " · " + c.Status, Tone: tone},
-		{Kind: v1.KindText, Text: c.Image, Tone: v1.ToneSubtle},
-	}}
-	disabled := c.ID == actingID
+	fill := "outline"
+	if c.ID == selectedID {
+		fill = "card"
+	}
+	return &v1.Node{Kind: v1.KindButton, ID: "select:" + c.ID, Name: "Select " + c.Names,
+		Role: "button", Fill: fill, Radius: 10, Padding: 8, Height: 54,
+		Events: []v1.EventKind{v1.EventActivate}, Children: []*v1.Node{{
+			Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+				{Kind: v1.KindText, Text: c.Names, Tone: tone, Bold: true},
+				{Kind: v1.KindText, Text: c.Image + " · " + c.Status, Tone: v1.ToneSubtle},
+			},
+		}},
+	}
+}
+
+func containerDetail(c Container, actingID string) *v1.Node {
+	info := c.Image + " · " + c.Status
 	actions := &v1.Node{Kind: v1.KindRow, Gap: 4}
+	disabled := c.ID == actingID
 	if c.Running() {
 		actions.Children = append(actions.Children,
 			actionButton("stop:"+c.ID, "Stop", "Stop "+c.Names, disabled),
 			actionButton("restart:"+c.ID, "Restart", "Restart "+c.Names, disabled),
 		)
 	} else {
-		actions.Children = append(actions.Children,
-			actionButton("start:"+c.ID, "Start", "Start "+c.Names, disabled),
-		)
+		actions.Children = append(actions.Children, actionButton("start:"+c.ID, "Start", "Start "+c.Names, disabled))
 	}
-	row.Children = append(row.Children, actions)
-	return row
+	actions.Children = append(actions.Children,
+		actionButton("remove:"+c.ID, "Remove", "Remove "+c.Names, disabled || c.Running()))
+	return &v1.Node{Kind: v1.KindColumn, ID: "detail", Fill: "card", Radius: 10,
+		Padding: 8, Gap: 4, Height: 112, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: c.Names, Bold: true},
+			{Kind: v1.KindText, Text: info, Tone: v1.ToneSubtle},
+			{Kind: v1.KindText, Text: c.ID, Tone: v1.ToneSubtle},
+			actions,
+		}}
 }
 
 func actionButton(id, label, name string, disabled bool) *v1.Node {
 	return &v1.Node{Kind: v1.KindButton, ID: id, Text: label, Name: name, Role: "button",
-		Disabled: disabled, Events: []v1.EventKind{v1.EventActivate}}
+		Height: 28, Disabled: disabled, Events: []v1.EventKind{v1.EventActivate}}
 }
 
 // actionPrefixes drives ParseAction; each entry pairs a node-ID prefix with
