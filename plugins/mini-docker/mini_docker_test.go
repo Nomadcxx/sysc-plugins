@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -501,5 +502,72 @@ func TestPanelTreeValidate(t *testing.T) {
 	}
 	if err := v1.Validate(BarTree("docker 2", false), v1.ViewBar); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// panelSize reads the box the host opens this plugin's panel with. The
+// manifest is the only declaration of it, so a test that hardcoded 480x560
+// would drift the day the manifest moves.
+func panelSize(t *testing.T) (int, int) {
+	t.Helper()
+	raw, err := os.ReadFile("manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Panels []struct {
+			ID            string `json:"id"`
+			Width, Height int
+		} `json:"panels"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Panels) == 0 {
+		t.Fatal("manifest declares no panels")
+	}
+	return m.Panels[0].Width, m.Panels[0].Height
+}
+
+// TestViewsFitTheirHostSlots lays every view the plugin can build out with the
+// host's own rules, at the sizes the host uses. v1.Validate is geometry-blind
+// and the host's layout stops at the first rejection, so this matrix is the
+// panel's only whole check before a user sees it.
+func TestViewsFitTheirHostSlots(t *testing.T) {
+	panelW, panelH := panelSize(t)
+	row := func(i int, state, status string) Container {
+		return Container{ID: fmt.Sprintf("c%03d", i), Names: fmt.Sprintf("container-%03d", i),
+			Image: "ghcr.io/example/some-service:latest", State: state, Status: status}
+	}
+	full := make([]Container, maxPanelRows+10)
+	for i := range full {
+		full[i] = row(i+1, "running", "Up 3 hours")
+	}
+	states := map[string]struct {
+		available, loading        bool
+		listErr, actErr, actingID string
+		containers                []Container
+	}{
+		"list":        {available: true, containers: []Container{row(1, "running", "Up 3 hours"), row(2, "exited", "Exited (0) 2 days ago")}},
+		"full":        {available: true, containers: full},
+		"acting":      {available: true, actingID: "c001", containers: []Container{row(1, "running", "Up 3 hours")}},
+		"errors":      {available: true, listErr: "Docker daemon not running", actErr: "docker action timed out"},
+		"empty":       {available: true},
+		"loading":     {available: true, loading: true},
+		"unavailable": {listErr: "Docker daemon not running"},
+	}
+	for name, s := range states {
+		bar := BarTree(BarLabel("always", 1, s.available), !s.available)
+		for _, f := range shelllint.Tree(bar, v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight) {
+			t.Errorf("%s bar: %s", name, f)
+		}
+		tip := TooltipTree(TooltipText(1, s.available))
+		for _, f := range shelllint.Tree(tip, v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight) {
+			t.Errorf("%s tooltip: %s", name, f)
+		}
+		panel := PanelTree(s.available, s.loading, s.listErr, s.actErr, s.actingID, s.containers)
+		for _, f := range shelllint.Tree(panel, v1.ViewPanel, panelW, panelH) {
+			t.Errorf("%s panel: %s", name, f)
+		}
 	}
 }
