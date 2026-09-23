@@ -27,6 +27,13 @@ func (f *fakeDocker) List(ctx context.Context) ([]Container, int, error) {
 	return f.containers, f.skippedLines, f.listErr
 }
 
+func (*fakeDocker) Images(context.Context) ([]Image, int, error)   { return nil, 0, nil }
+func (*fakeDocker) Volumes(context.Context) ([]Volume, int, error) { return nil, 0, nil }
+func (*fakeDocker) Networks(context.Context) ([]Network, int, error) {
+	return nil, 0, nil
+}
+func (*fakeDocker) ImageExposedPorts(context.Context, string) ([]int, error) { return nil, nil }
+
 func (f *fakeDocker) Start(ctx context.Context, id string) error {
 	f.actions = append(f.actions, "start:"+id)
 	return nil
@@ -39,6 +46,31 @@ func (f *fakeDocker) Stop(ctx context.Context, id string) error {
 
 func (f *fakeDocker) Restart(ctx context.Context, id string) error {
 	f.actions = append(f.actions, "restart:"+id)
+	return nil
+}
+
+func (f *fakeDocker) Remove(ctx context.Context, id string) error {
+	f.actions = append(f.actions, "remove:"+id)
+	return nil
+}
+
+func (f *fakeDocker) Rmi(ctx context.Context, id string) error {
+	f.actions = append(f.actions, "rmi:"+id)
+	return nil
+}
+
+func (f *fakeDocker) VolRm(ctx context.Context, name string) error {
+	f.actions = append(f.actions, "volrm:"+name)
+	return nil
+}
+
+func (f *fakeDocker) NetRm(ctx context.Context, id string) error {
+	f.actions = append(f.actions, "netrm:"+id)
+	return nil
+}
+
+func (f *fakeDocker) Run(ctx context.Context, opts RunOpts) error {
+	f.actions = append(f.actions, "run:"+opts.Image)
 	return nil
 }
 
@@ -126,6 +158,121 @@ func TestSessionRefreshStoresSkippedLineCount(t *testing.T) {
 	s.Refresh(context.Background())
 	if got := s.SkippedLines(); got != 2 {
 		t.Fatalf("skipped lines = %d, want 2", got)
+	}
+}
+
+func TestParseImages(t *testing.T) {
+	images, skipped := parseImages(readFixture(t, "images.jsonl"))
+	if len(images) != 2 || skipped != 1 {
+		t.Fatalf("images=%d skipped=%d, want 2 and 1", len(images), skipped)
+	}
+	if images[0].Repository != "nginx" || images[0].Tag != "latest" || images[0].Containers != 2 {
+		t.Fatalf("first image = %+v", images[0])
+	}
+	if images[1].Repository != "<none>" || images[1].Containers != -1 {
+		t.Fatalf("second image = %+v", images[1])
+	}
+}
+
+func TestParseVolumes(t *testing.T) {
+	volumes, skipped := parseVolumes(readFixture(t, "volumes.jsonl"))
+	if len(volumes) != 1 || skipped != 1 {
+		t.Fatalf("volumes=%d skipped=%d, want 1 and 1", len(volumes), skipped)
+	}
+	if volumes[0].Name != "db-data" || volumes[0].Driver != "local" || volumes[0].Scope != "local" {
+		t.Fatalf("volume = %+v", volumes[0])
+	}
+}
+
+func TestParseNetworks(t *testing.T) {
+	networks, skipped := parseNetworks(readFixture(t, "networks.jsonl"))
+	if len(networks) != 1 || skipped != 1 {
+		t.Fatalf("networks=%d skipped=%d, want 1 and 1", len(networks), skipped)
+	}
+	if networks[0].Name != "bridge" || networks[0].ID != "net123" || networks[0].Driver != "bridge" {
+		t.Fatalf("network = %+v", networks[0])
+	}
+}
+
+func TestParseExposedPorts(t *testing.T) {
+	ports, err := parseExposedPorts(readFixture(t, "exposed-ports.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int{80, 8080}; !slices.Equal(ports, want) {
+		t.Fatalf("ports = %v, want %v", ports, want)
+	}
+	if ports, err = parseExposedPorts([]byte("null")); err != nil || len(ports) != 0 {
+		t.Fatalf("null ports = %v, err = %v; want empty and no error", ports, err)
+	}
+	if _, err := parseExposedPorts([]byte("{")); err == nil {
+		t.Fatal("malformed exposed-port JSON accepted")
+	}
+}
+
+func TestCLIArgv(t *testing.T) {
+	cases := []struct {
+		name string
+		call func(CLI) error
+		want []string
+	}{
+		{"container remove", func(cli CLI) error { return cli.Remove(context.Background(), "abc123") }, []string{"rm", "abc123"}},
+		{"image remove", func(cli CLI) error { return cli.Rmi(context.Background(), "registry.example/team/api:1") }, []string{"rmi", "registry.example/team/api:1"}},
+		{"volume remove", func(cli CLI) error { return cli.VolRm(context.Background(), "db-data") }, []string{"volume", "rm", "db-data"}},
+		{"network remove", func(cli CLI) error { return cli.NetRm(context.Background(), "net123") }, []string{"network", "rm", "net123"}},
+		{"run with empty options", func(cli CLI) error {
+			return cli.Run(context.Background(), RunOpts{Image: "nginx:1", Publish: true})
+		}, []string{"run", "-d", "nginx:1"}},
+		{"run without publish", func(cli CLI) error {
+			return cli.Run(context.Background(), RunOpts{Image: "nginx:1", Port: "8080"})
+		}, []string{"run", "-d", "nginx:1"}},
+		{"run with options", func(cli CLI) error {
+			return cli.Run(context.Background(), RunOpts{
+				Image: "registry.example/team/api:1@sha256:abc", Name: "api-1",
+				Environment: []string{"A=1", "B=two words"}, Port: "8080", Publish: true, Network: "bridge",
+			})
+		}, []string{"run", "-d", "--name", "api-1", "-e", "A=1", "-e", "B=two words", "-p", "8080:8080", "--network", "bridge", "registry.example/team/api:1@sha256:abc"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { assertCLIArgv(t, tc.call, tc.want) })
+	}
+}
+
+func TestCLIRejectsOversizedOutput(t *testing.T) {
+	bin := t.TempDir()
+	writeFakeDocker(t, bin, "#!/bin/sh\nexec /usr/bin/head -c 2097152 /dev/zero\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, _, err := (CLI{}).List(ctx); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("List error = %v, want oversized-output diagnosis", err)
+	}
+}
+
+func readFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func assertCLIArgv(t *testing.T, call func(CLI) error, want []string) {
+	t.Helper()
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv")
+	writeFakeDocker(t, dir, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_FILE\"\n")
+	t.Setenv("ARGV_FILE", argvFile)
+	if err := call(CLI{}); err != nil {
+		t.Fatalf("CLI call: %v", err)
+	}
+	data, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	if !slices.Equal(got, want) {
+		t.Fatalf("argv = %q, want %q", got, want)
 	}
 }
 
@@ -234,6 +381,12 @@ type failStartCLI struct {
 }
 
 func (f *failStartCLI) List(context.Context) ([]Container, int, error) { return f.list, 0, nil }
+func (*failStartCLI) Images(context.Context) ([]Image, int, error)     { return nil, 0, nil }
+func (*failStartCLI) Volumes(context.Context) ([]Volume, int, error)   { return nil, 0, nil }
+func (*failStartCLI) Networks(context.Context) ([]Network, int, error) { return nil, 0, nil }
+func (*failStartCLI) ImageExposedPorts(context.Context, string) ([]int, error) {
+	return nil, nil
+}
 
 func (f *failStartCLI) Start(context.Context, string) error {
 	if f.failStart {
@@ -244,6 +397,11 @@ func (f *failStartCLI) Start(context.Context, string) error {
 
 func (f *failStartCLI) Stop(context.Context, string) error    { return nil }
 func (f *failStartCLI) Restart(context.Context, string) error { return nil }
+func (f *failStartCLI) Remove(context.Context, string) error  { return nil }
+func (f *failStartCLI) Rmi(context.Context, string) error     { return nil }
+func (f *failStartCLI) VolRm(context.Context, string) error   { return nil }
+func (f *failStartCLI) NetRm(context.Context, string) error   { return nil }
+func (f *failStartCLI) Run(context.Context, RunOpts) error    { return nil }
 
 // slowActionCLI makes any action take delay, so a test can observe the
 // in-flight window.

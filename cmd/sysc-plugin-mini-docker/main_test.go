@@ -16,30 +16,60 @@ import (
 // fakeCLI answers instantly so the harness never touches a real daemon.
 type fakeCLI struct{}
 
-func (fakeCLI) List(context.Context) ([]minidocker.Container, error) {
+func (fakeCLI) List(context.Context) ([]minidocker.Container, int, error) {
 	return []minidocker.Container{
 		{ID: "a1", Names: "web", Image: "nginx:latest", State: "running", Status: "Up 2 hours"},
 		{ID: "b2", Names: "db", Image: "postgres:16", State: "exited", Status: "Exited (0)"},
-	}, nil
+	}, 0, nil
 }
 
 func (fakeCLI) Start(context.Context, string) error   { return nil }
 func (fakeCLI) Stop(context.Context, string) error    { return nil }
 func (fakeCLI) Restart(context.Context, string) error { return nil }
+func (fakeCLI) Images(context.Context) ([]minidocker.Image, int, error) {
+	return nil, 0, nil
+}
+func (fakeCLI) Volumes(context.Context) ([]minidocker.Volume, int, error) {
+	return nil, 0, nil
+}
+func (fakeCLI) Networks(context.Context) ([]minidocker.Network, int, error) {
+	return nil, 0, nil
+}
+func (fakeCLI) ImageExposedPorts(context.Context, string) ([]int, error) { return nil, nil }
+func (fakeCLI) Remove(context.Context, string) error                     { return nil }
+func (fakeCLI) Rmi(context.Context, string) error                        { return nil }
+func (fakeCLI) VolRm(context.Context, string) error                      { return nil }
+func (fakeCLI) NetRm(context.Context, string) error                      { return nil }
+func (fakeCLI) Run(context.Context, minidocker.RunOpts) error            { return nil }
 
 // slowCLI makes List take delay, emulating a hung docker daemon.
 type slowCLI struct{ delay time.Duration }
 
-func (s slowCLI) List(context.Context) ([]minidocker.Container, error) {
+func (s slowCLI) List(context.Context) ([]minidocker.Container, int, error) {
 	time.Sleep(s.delay)
 	return []minidocker.Container{
 		{ID: "a1", Names: "web", Image: "nginx:latest", State: "running", Status: "Up"},
-	}, nil
+	}, 0, nil
 }
 
 func (slowCLI) Start(context.Context, string) error   { return nil }
 func (slowCLI) Stop(context.Context, string) error    { return nil }
 func (slowCLI) Restart(context.Context, string) error { return nil }
+func (slowCLI) Images(context.Context) ([]minidocker.Image, int, error) {
+	return nil, 0, nil
+}
+func (slowCLI) Volumes(context.Context) ([]minidocker.Volume, int, error) {
+	return nil, 0, nil
+}
+func (slowCLI) Networks(context.Context) ([]minidocker.Network, int, error) {
+	return nil, 0, nil
+}
+func (slowCLI) ImageExposedPorts(context.Context, string) ([]int, error) { return nil, nil }
+func (slowCLI) Remove(context.Context, string) error                     { return nil }
+func (slowCLI) Rmi(context.Context, string) error                        { return nil }
+func (slowCLI) VolRm(context.Context, string) error                      { return nil }
+func (slowCLI) NetRm(context.Context, string) error                      { return nil }
+func (slowCLI) Run(context.Context, minidocker.RunOpts) error            { return nil }
 
 // host writes one framed host message as a JSON line.
 type host struct{ w *bufio.Writer }

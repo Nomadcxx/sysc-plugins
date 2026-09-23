@@ -131,7 +131,8 @@ not lock the panel or unrelated entities.
 
 ## Data layer
 
-**Docker surface** (argv, no shell; stderr captured and diagnosed; stdout bounded):
+**Docker surface** (argv, no shell; stderr captured and diagnosed; stdout bounded, with
+over-limit output rejected rather than returned as a partial list):
 
 | Tab | Command |
 |---|---|

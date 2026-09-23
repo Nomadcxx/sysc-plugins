@@ -30,6 +30,7 @@ The repository has no AGENTS.md. The project-level register is docs/plans/README
 8. Match the design's host/container port mapping: publish with -p P:P. The previous draft's -p P does not honor the requested host-port preflight.
 9. Docker image JSON needs its Containers count to disable image removal while referenced. Include that field in parser fixtures and verify the installed Docker CLI template support in live acceptance; Docker remains the final authority and action errors must be shown.
 10. Keep the fit matrix in the existing TestViewsFitTheirHostSlots. It is an extension of an existing test, not a new duplicate.
+11. Reject list/inspect output over the 1 MiB cap instead of accepting a truncated snapshot. Stop an oversized child before waiting, since it can block on a full stdout pipe.
 
 ## 2. Decisions and execution gate
 
@@ -156,7 +157,7 @@ Run each task in the approved implementation worktree. For behavior changes, add
 
 ### Task 1 — Extract and test production container parsing
 
-**Files:** plugins/mini-docker/docker.go, plugins/mini-docker/mini_docker_test.go, plugins/mini-docker/testdata/containers.jsonl.
+**Files:** plugins/mini-docker/docker.go, plugins/mini-docker/service.go, plugins/mini-docker/mini_docker_test.go, plugins/mini-docker/testdata/containers.jsonl.
 
 1. Add a failing parser test for valid lines, blank lines, and malformed lines, including the skipped-line count.
 2. Extract the inline List loop into parseContainers and have CLI.List use it. Return the skipped count to Session for a subtle status note. Keep the existing 1 MiB stdout bound and error diagnosis.
@@ -166,14 +167,14 @@ Run each task in the approved implementation worktree. For behavior changes, add
 
 ### Task 2 — Add other Docker reads and safe argv builders
 
-**Files:** docker.go, mini_docker_test.go, testdata/images.jsonl, volumes.jsonl, networks.jsonl, exposed-ports.json.
+**Files:** plugins/mini-docker/docker.go, plugins/mini-docker/mini_docker_test.go, cmd/sysc-plugin-mini-docker/main_test.go, and testdata/images.jsonl, volumes.jsonl, networks.jsonl, exposed-ports.json.
 
 1. Add failing fixtures/tests for image, volume, network, and exposed-port parsing. Include image Containers count and malformed-line behavior.
 2. Extend Docker and CLI for Images, Volumes, Networks, ImageExposedPorts, Remove, Rmi, VolRm, NetRm, and Run.
-3. Reuse one bounded command-output path for list/inspect commands and the existing stderr diagnosis pattern. Build Run arguments as discrete argv elements, with -p HOST:CONTAINER and no shell.
+3. Reuse one bounded command-output path for list/inspect commands and the existing stderr diagnosis pattern. Reject output over 1 MiB without returning partial rows. Build Run arguments as discrete argv elements, with -p HOST:CONTAINER and no shell.
 4. Test exact argv for optional/empty RunOpts and destructive commands with a fake executable.
 5. Run: go test ./plugins/mini-docker -run 'TestParse|TestCLI' -count=1
-6. Expected: parser and argv cases pass, including paths/tags containing allowed punctuation.
+6. Expected: parser, argv, and oversized-output cases pass, including paths/tags containing allowed punctuation.
 7. Commit the Docker layer.
 
 ### Task 3 — Model tab snapshots and refresh lifecycle
