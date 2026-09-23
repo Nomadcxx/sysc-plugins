@@ -26,7 +26,7 @@ func TestPluginKDEConnectGateServesViewsAndSurvivesInput(t *testing.T) {
 	h.openBar()
 	h.waitView("bar-1", func(n *v1.Node) bool {
 		open := findID(n, "open")
-		return open != nil && (open.Icon == "smartphone" || open.Icon == "phonelink-off")
+		return open != nil && (open.Icon == "smartphone" || open.Icon == "devices_other")
 	})
 
 	// The panel opens with the refresh control and a legal top state.
@@ -34,7 +34,9 @@ func TestPluginKDEConnectGateServesViewsAndSurvivesInput(t *testing.T) {
 	h.waitView("panel-1", kdeconnectPanelLegal)
 
 	// An input round trip: refresh must neither crash nor wedge the tree.
+	beforeRefresh := h.revOf("panel-1")
 	h.clickOn("panel-1", "refresh")
+	h.waitRev("panel-1", beforeRefresh+1)
 	h.waitView("panel-1", kdeconnectPanelLegal)
 
 	// The settings change is applied without a restart.
@@ -55,7 +57,7 @@ func TestPluginKDEConnectGateServesViewsAndSurvivesInput(t *testing.T) {
 	// Both views keep being served by the one process.
 	h.waitView("bar-1", func(n *v1.Node) bool {
 		open := findID(n, "open")
-		return open != nil && (open.Icon == "smartphone" || open.Icon == "phonelink-off")
+		return open != nil && (open.Icon == "smartphone" || open.Icon == "devices_other")
 	})
 
 	// The state store round-trips through the host replies.
@@ -73,6 +75,8 @@ func kdeconnectPanelLegal(n *v1.Node) bool {
 	text := treeText(n)
 	switch {
 	case strings.Contains(text, "KDE Connect daemon unreachable"):
+		return true
+	case strings.Contains(text, "Phone Connect Not Available"):
 		return true
 	case strings.Contains(text, "No devices"):
 		return true
@@ -104,6 +108,9 @@ func startKDEConnect(t *testing.T) *kdeconnectHost {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(pluginDir, "manifest.json"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.CopyFS(filepath.Join(pluginDir, "assets"), os.DirFS(filepath.Join(root, "plugins/kdeconnect/assets"))); err != nil {
 		t.Fatal(err)
 	}
 	build := exec.Command("go", "build", "-o", bin, "./cmd/sysc-plugin-kdeconnect")

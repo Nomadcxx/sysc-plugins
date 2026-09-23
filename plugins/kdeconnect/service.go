@@ -1091,12 +1091,17 @@ func buildSnapshot(available bool, announced, selfID string, order []string, dev
 }
 
 // resolveSelection keeps the saved choice while it stays paired and
-// reachable, and otherwise falls back to the first reachable device, then
-// the first device at all — the reference shell's auto-select order.
+// reachable, and otherwise prefers a paired reachable device before falling
+// back to any reachable device and then the first device at all.
 func resolveSelection(devices []Device, saved string) string {
 	for i := range devices {
 		if devices[i].ID == saved && devices[i].Paired && devices[i].Reachable {
 			return saved
+		}
+	}
+	for i := range devices {
+		if devices[i].Paired && devices[i].Reachable {
+			return devices[i].ID
 		}
 	}
 	for i := range devices {

@@ -24,8 +24,9 @@ func main() {
 // these are the committed values the sends use and the disabled states key
 // off.
 type uiState struct {
-	composer kdeconnect.Composer
-	drafts   kdeconnect.Drafts
+	composer     kdeconnect.Composer
+	drafts       kdeconnect.Drafts
+	switcherOpen bool
 }
 
 func run(in *os.File, out *os.File) error {
@@ -89,7 +90,7 @@ func run(in *os.File, out *os.File) error {
 			case v1.ViewTooltip:
 				root = kdeconnect.TooltipTree(snap)
 			default:
-				root = kdeconnect.PanelTree(snap, settings, ui.composer, ui.drafts)
+				root = kdeconnect.PanelTreeForState(snap, settings, ui.composer, ui.drafts, ui.switcherOpen)
 			}
 			_ = c.Snapshot(id, v.rev, root)
 		}
@@ -161,10 +162,23 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 	device := snap.SelectedID
 	switch {
 	case m.Node == "open":
+		if m.Event != v1.EventActivate {
+			return false
+		}
 		_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+	case m.Node == "device-switcher":
+		if m.Event != v1.EventActivate {
+			return false
+		}
+		ui.switcherOpen = !ui.switcherOpen
+		return true
 	case m.Node == "refresh":
 		// The manager shows the busy state while the reconcile runs; the
 		// next snapshot reports idle again.
+		_ = c.Send(&v1.PluginStatus{State: v1.StatusBusy, Message: "Refreshing devices"})
+		*busy = true
+		svc.Refresh()
+	case m.Node == "retry":
 		_ = c.Send(&v1.PluginStatus{State: v1.StatusBusy, Message: "Refreshing devices"})
 		*busy = true
 		svc.Refresh()

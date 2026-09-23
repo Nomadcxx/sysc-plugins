@@ -446,6 +446,15 @@ func TestResolveSelectionOrder(t *testing.T) {
 			selected: "b",
 		},
 		{
+			name: "paired reachable wins over unpaired reachable",
+			devices: []Device{
+				{ID: "archPC", Reachable: true, Paired: false},
+				{ID: "phone", Reachable: true, Paired: true},
+			},
+			saved:    "",
+			selected: "phone",
+		},
+		{
 			name: "nothing reachable falls to first device",
 			devices: []Device{
 				{ID: "a", Reachable: false, Paired: true},

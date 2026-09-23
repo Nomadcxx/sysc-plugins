@@ -111,16 +111,12 @@ func selectedDevice(snap Snapshot) *Device {
 // whenever the selected device is not reachable, with the percent only for
 // a connected, reporting device. The whole control opens the panel.
 func BarTree(snap Snapshot) *v1.Node {
-	icon, label := "phonelink-off", "N/A"
+	icon, label := "smartphone", "N/A"
 	if snap.Available {
-		icon, label = "smartphone", ""
+		label = ""
 		if dev := selectedDevice(snap); dev != nil {
-			if dev.Reachable {
-				if dev.BatteryKnown && dev.BatteryCharge >= 0 {
-					label = fmt.Sprintf("%d%%", dev.BatteryCharge)
-				}
-			} else {
-				icon = "phonelink-off"
+			if !dev.Reachable {
+				icon = "devices_other"
 			}
 		}
 	}
@@ -185,10 +181,16 @@ type Drafts struct {
 	SmsBody   string
 }
 
-// PanelTree is the phone-connect panel: the daemon header over the state,
-// pairing, switcher, device, action, info, and composer sections.
+// PanelTree is the phone-connect panel with its device chooser collapsed.
 func PanelTree(snap Snapshot, settings Settings, composer Composer, drafts Drafts) *v1.Node {
-	col := &v1.Node{Kind: v1.KindColumn, Gap: 10, Children: []*v1.Node{headerTree(snap)}}
+	return PanelTreeForState(snap, settings, composer, drafts, false)
+}
+
+// PanelTreeForState keeps the chooser state in the entry point while keeping
+// the panel tree pure. The compact chooser remains visible so the selected
+// device is always clear; opening it reveals every device and its actions.
+func PanelTreeForState(snap Snapshot, settings Settings, composer Composer, drafts Drafts, switcherOpen bool) *v1.Node {
+	col := &v1.Node{Kind: v1.KindList, Gap: 10, Padding: 8, Children: []*v1.Node{headerTree(snap)}}
 	if !snap.Available {
 		col.Children = append(col.Children, unavailableCard())
 		return col
@@ -201,6 +203,8 @@ func PanelTree(snap Snapshot, settings Settings, composer Composer, drafts Draft
 	}
 	selected := selectedDevice(snap)
 	if selected == nil {
+		col.Children = append(col.Children, deviceChooserTree(snap, nil, true), stateCard(
+			"Choose a device", "The saved device is no longer available. Select another device below."))
 		return col
 	}
 	switch {
@@ -210,7 +214,7 @@ func PanelTree(snap Snapshot, settings Settings, composer Composer, drafts Draft
 		col.Children = append(col.Children, unpairedCard(selected))
 	default:
 		if len(snap.Devices) > 1 {
-			col.Children = append(col.Children, switcherTree(snap, selected))
+			col.Children = append(col.Children, deviceChooserTree(snap, selected, switcherOpen))
 		}
 		if settings.ShowDeviceCard {
 			col.Children = append(col.Children, deviceCardTree(selected))
@@ -255,14 +259,14 @@ func headerTree(snap Snapshot) *v1.Node {
 		PinEnd: true, Children: []*v1.Node{
 			{Kind: v1.KindColumn, Children: []*v1.Node{
 				{Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
-					{Kind: v1.KindIcon, Icon: "devices"},
+					{Kind: v1.KindIcon, Icon: "devices_other"},
 					{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
 						{Kind: v1.KindText, Text: title, Bold: true, Size: "title"},
 						{Kind: v1.KindText, Text: detail, Size: "caption", Tone: v1.ToneAccent},
 					}},
 				}},
 			}},
-			{Kind: v1.KindButton, ID: "refresh", Icon: "refresh",
+			{Kind: v1.KindButton, ID: "refresh", Icon: "restart_alt",
 				Name: "Refresh devices", Role: "button",
 				Events: []v1.EventKind{v1.EventActivate}},
 		}}
@@ -273,8 +277,16 @@ func headerTree(snap Snapshot) *v1.Node {
 func stateCard(headline, hint string) *v1.Node {
 	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 4,
 		Children: []*v1.Node{
-			{Kind: v1.KindText, Text: headline, Bold: true},
-			{Kind: v1.KindText, Text: hint, Tone: v1.ToneSubtle},
+			{Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
+				{Kind: v1.KindIcon, Icon: "devices_other"},
+				{Kind: v1.KindColumn, Gap: 3, Children: []*v1.Node{
+					{Kind: v1.KindText, Text: headline, Bold: true},
+					{Kind: v1.KindText, Text: hint, Tone: v1.ToneSubtle},
+				}},
+			}},
+			{Kind: v1.KindButton, ID: "retry", Icon: "restart_alt", Text: "Retry",
+				Name: "Retry device discovery", Role: "button",
+				Events: []v1.EventKind{v1.EventActivate}},
 		}}
 }
 
@@ -283,9 +295,40 @@ func stateCard(headline, hint string) *v1.Node {
 func unavailableCard() *v1.Node {
 	return &v1.Node{Kind: v1.KindColumn, Fill: "error-container", Radius: 12, Padding: 14, Gap: 4,
 		Children: []*v1.Node{
-			{Kind: v1.KindText, Text: "Phone Connect Not Available", Bold: true, Tone: v1.ToneError},
-			{Kind: v1.KindText, Text: "Start kdeconnectd to use this plugin.", Tone: v1.ToneError},
+			{Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
+				{Kind: v1.KindIcon, Icon: "devices_other", Tone: v1.ToneError},
+				{Kind: v1.KindColumn, Gap: 3, Children: []*v1.Node{
+					{Kind: v1.KindText, Text: "Phone Connect Not Available", Bold: true, Tone: v1.ToneError},
+					{Kind: v1.KindText, Text: "Start kdeconnectd to use this plugin.", Tone: v1.ToneError},
+				}},
+			}},
+			{Kind: v1.KindButton, ID: "retry", Icon: "restart_alt", Text: "Retry",
+				Name: "Retry KDE Connect discovery", Role: "button",
+				Events: []v1.EventKind{v1.EventActivate}},
 		}}
+}
+
+// deviceChooserTree is compact by default and expands into all device cards
+// only after an explicit activation. A selected card remains visible while
+// expanded, with a disabled Selected button as the state cue.
+func deviceChooserTree(snap Snapshot, selected *Device, open bool) *v1.Node {
+	name, icon := "Choose device", "devices_other"
+	if selected != nil {
+		name, icon = selected.Name, deviceIcon(selected)
+	}
+	chooser := &v1.Node{Kind: v1.KindButton, ID: "device-switcher", Icon: icon,
+		Text: "Device: " + name, Fill: "card", Radius: 10, Padding: 10,
+		Name: "Choose the active device", Role: "button",
+		Events: []v1.EventKind{v1.EventActivate}}
+	if !open {
+		return chooser
+	}
+	children := []*v1.Node{chooser}
+	for i := range snap.Devices {
+		dev := &snap.Devices[i]
+		children = append(children, switcherCardTree(dev, selected != nil && dev.ID == selected.ID))
+	}
+	return &v1.Node{Kind: v1.KindColumn, Gap: 6, Children: children}
 }
 
 // shareComposerTree is the share card: one URL-or-text field with its two
@@ -294,19 +337,19 @@ func unavailableCard() *v1.Node {
 func shareComposerTree(drafts Drafts) *v1.Node {
 	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 8,
 		Children: []*v1.Node{
-			composerHeader("Share", "share", "share-close"),
+			composerHeader("Share", "link", "share-close"),
 			{Kind: v1.KindTextInput, ID: "share-text", Name: "URL or text to share", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-				gatedButton("share-url-send", "send", "Send URL", "Share the URL with the device",
+				gatedButton("share-url-send", "link", "Send URL", "Share the URL with the device",
 					isURILike(drafts.ShareText)),
-				gatedButton("share-text-send", "send", "Send text", "Share the text with the device",
+				gatedButton("share-text-send", "link", "Send text", "Share the text with the device",
 					strings.TrimSpace(drafts.ShareText) != ""),
 			}},
 			{Kind: v1.KindTextInput, ID: "share-file", Name: "File path to send", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-				gatedButton("share-file-send", "send", "Send file", "Send the file to the device",
+				gatedButton("share-file-send", "link", "Send file", "Send the file to the device",
 					drafts.ShareFile != ""),
 			}},
 		}}
@@ -317,13 +360,13 @@ func shareComposerTree(drafts Drafts) *v1.Node {
 func smsComposerTree(drafts Drafts) *v1.Node {
 	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 8,
 		Children: []*v1.Node{
-			composerHeader("New message", "sms", "sms-close"),
+			composerHeader("New message", "notifications", "sms-close"),
 			{Kind: v1.KindTextInput, ID: "sms-number", Name: "Phone number", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindTextInput, ID: "sms-body", Name: "Message", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-				gatedButton("sms-send", "send", "Send", "Send the message",
+				gatedButton("sms-send", "link", "Send", "Send the message",
 					drafts.SmsNumber != "" && drafts.SmsBody != ""),
 				{Kind: v1.KindButton, ID: "sms-app", Text: "Open app",
 					Name: "Open the SMS app on the device", Role: "button",
@@ -422,23 +465,10 @@ func unpairedCard(dev *Device) *v1.Node {
 		}}
 }
 
-// switcherTree lists every other device, the DMS device switcher.
-func switcherTree(snap Snapshot, selected *Device) *v1.Node {
-	col := &v1.Node{Kind: v1.KindColumn, Gap: 8}
-	for i := range snap.Devices {
-		dev := &snap.Devices[i]
-		if dev.ID == selected.ID {
-			continue
-		}
-		col.Children = append(col.Children, switcherCardTree(dev))
-	}
-	return col
-}
-
 // switcherCardTree renders one switcher card, the DMS DeviceCard: the type
 // icon, name, status line, battery and network chips, and — always, not
 // only for the selected device — the pairing actions.
-func switcherCardTree(dev *Device) *v1.Node {
+func switcherCardTree(dev *Device, selected bool) *v1.Node {
 	header := &v1.Node{Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
 		{Kind: v1.KindIcon, Icon: deviceIcon(dev)},
 		{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
@@ -466,10 +496,13 @@ func switcherCardTree(dev *Device) *v1.Node {
 
 	// The select affordance leads the action row; pairing actions follow on
 	// the cards they apply to.
+	selectText, selectName := "Use", "Switch to "+dev.Name
+	if selected {
+		selectText, selectName = "Selected", dev.Name+" is selected"
+	}
 	actions := []*v1.Node{{
-		Kind: v1.KindButton, ID: "select-" + dev.ID, Text: "Use",
-		Name: "Switch to " + dev.Name, Role: "button",
-		Events: []v1.EventKind{v1.EventActivate},
+		Kind: v1.KindButton, ID: "select-" + dev.ID, Text: selectText, Disabled: selected,
+		Name: selectName, Role: "button", Events: []v1.EventKind{v1.EventActivate},
 	}}
 	switch {
 	case dev.PairRequestedByPeer:
@@ -533,6 +566,7 @@ func deviceCardTree(dev *Device) *v1.Node {
 		lead,
 		{Kind: v1.KindText, Text: dev.Name, Size: "headline", Bold: true, CenterX: true},
 		{Kind: v1.KindText, Text: deviceStatus(dev), Size: "caption", Tone: v1.ToneSubtle, CenterX: true},
+		{Kind: v1.KindText, Text: "Tap to ping", Size: "caption", Tone: v1.ToneAccent, CenterX: true},
 	}
 	if progress := batteryProgressNode(dev); progress != nil {
 		children = append(children, progress)
@@ -541,7 +575,7 @@ func deviceCardTree(dev *Device) *v1.Node {
 		Name: "Tap to ping " + dev.Name, Role: "button",
 		Events: []v1.EventKind{v1.EventActivate},
 		Fill:   "card", Radius: 12, Padding: 14, Gap: 6,
-		Children: children}
+		Children: []*v1.Node{{Kind: v1.KindColumn, Gap: 6, Children: children}}}
 }
 
 func batteryProgressNode(dev *Device) *v1.Node {
@@ -556,34 +590,43 @@ func batteryProgressNode(dev *Device) *v1.Node {
 		Width: 180, CenterX: true}
 }
 
-// actionRowTree is one row of capability-gated action buttons. The device
-// card handles ping while it is shown, so this row omits its own ping
-// button in that case (sysc-468); hiding the card restores it.
+// actionRowTree groups capability-gated actions into labelled, host-sized
+// buttons. The device card handles ping while it is shown, so this group
+// omits its own ping button in that case (sysc-468); hiding the card restores
+// it.
 func actionRowTree(dev *Device, settings Settings) *v1.Node {
-	children := []*v1.Node{
-		actionButton("ring", "phone-in-talk", "Ring the device",
-			dev.Reachable && hasPlugin(dev, "findmyphone")),
+	buttons := []*v1.Node{
+		actionButton("ring", "smartphone", "Ring",
+			"Ring the device", dev.Reachable && hasPlugin(dev, "findmyphone")),
 	}
 	if !settings.ShowDeviceCard {
-		children = append(children,
-			actionButton("ping", "notifications-active", "Ping the device",
-				dev.Reachable && hasPlugin(dev, "ping")))
+		buttons = append(buttons, actionButton("ping", "notifications", "Ping",
+			"Ping the device", dev.Reachable && hasPlugin(dev, "ping")))
 	}
-	children = append(children,
-		actionButton("browse", "folder-open", "Browse the device files",
+	buttons = append(buttons,
+		actionButton("browse", "folder_open", "Files", "Browse the device files",
 			dev.Reachable && hasPlugin(dev, "sftp")),
-		actionButton("clipboard", "content-paste", "Send the clipboard",
+		actionButton("clipboard", "content_paste", "Clipboard", "Send the clipboard",
 			dev.Reachable && hasPlugin(dev, "clipboard") && settings.EnableClipboard),
-		actionButton("share", "share", "Share with the device",
+		actionButton("share", "link", "Share", "Share with the device",
 			dev.Reachable && hasPlugin(dev, "share")),
-		actionButton("sms", "sms", "Send a text message",
+		actionButton("sms", "notifications", "SMS", "Send a text message",
 			dev.Reachable && hasPlugin(dev, "sms")),
 	)
-	return &v1.Node{Kind: v1.KindRow, Gap: 8, Children: children}
+	rows := []*v1.Node{{Kind: v1.KindText, Text: "Actions", Bold: true, Size: "label"}}
+	for start := 0; start < len(buttons); start += 3 {
+		end := start + 3
+		if end > len(buttons) {
+			end = len(buttons)
+		}
+		rows = append(rows, &v1.Node{Kind: v1.KindRow, Gap: 8, Children: buttons[start:end]})
+	}
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 10, Gap: 6,
+		Children: rows}
 }
 
-func actionButton(id, icon, name string, enabled bool) *v1.Node {
-	b := &v1.Node{Kind: v1.KindButton, ID: id, Icon: icon, Name: name, Role: "button",
+func actionButton(id, icon, text, name string, enabled bool) *v1.Node {
+	b := &v1.Node{Kind: v1.KindButton, ID: id, Icon: icon, Text: text, Name: name, Role: "button",
 		Events: []v1.EventKind{v1.EventActivate}}
 	if !enabled {
 		b.Disabled = true
@@ -665,10 +708,10 @@ func recentImagesTree(snap Snapshot) *v1.Node {
 				Children: []*v1.Node{
 					{Kind: v1.KindImage, ID: "recent-" + img.ID, Path: img.Thumb, ImageSize: 96},
 					{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
-						{Kind: v1.KindButton, ID: "recent-open-" + img.ID, Icon: "folder-open",
+						{Kind: v1.KindButton, ID: "recent-open-" + img.ID, Icon: "folder_open",
 							Name: "Open " + path.Base(img.Source), Role: "button",
 							Events: []v1.EventKind{v1.EventActivate}},
-						{Kind: v1.KindButton, ID: "recent-share-" + img.ID, Icon: "share",
+						{Kind: v1.KindButton, ID: "recent-share-" + img.ID, Icon: "link",
 							Name: "Share " + path.Base(img.Source), Role: "button",
 							Events: []v1.EventKind{v1.EventActivate}},
 					}},

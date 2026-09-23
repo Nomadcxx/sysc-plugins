@@ -3,6 +3,7 @@ package kdeconnect
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -95,11 +96,11 @@ func TestRecentImagesTreeGrid(t *testing.T) {
 			t.Fatalf("image %d = %+v, want Path %q at size 96", i, image, img.Thumb)
 		}
 		open := findButton(cell, "recent-open-"+img.ID)
-		if open == nil || open.Icon != "folder-open" || open.Role != "button" {
+		if open == nil || open.Icon != "folder_open" || open.Role != "button" {
 			t.Fatalf("open button %d = %+v", i, open)
 		}
 		share := findButton(cell, "recent-share-"+img.ID)
-		if share == nil || share.Icon != "share" || share.Role != "button" {
+		if share == nil || share.Icon != "link" || share.Role != "button" {
 			t.Fatalf("share button %d = %+v", i, share)
 		}
 	}
@@ -160,19 +161,19 @@ func TestBarTreeShowsOfflineState(t *testing.T) {
 	if open.ID != "open" || open.Name == "" || open.Role == "" {
 		t.Fatalf("open control = %+v", open)
 	}
-	if open.Icon != "phonelink-off" || open.Text != "N/A" {
+	if open.Icon != "smartphone" || open.Text != "N/A" {
 		t.Fatalf("offline pill = %q %q", open.Icon, open.Text)
 	}
 }
 
-func TestBarTreeShowsBatteryForSelectedDevice(t *testing.T) {
+func TestBarTreeOmitsBatteryForSelectedDevice(t *testing.T) {
 	t.Parallel()
 	open := BarTree(pairedSnap()).Children[0]
 	if open.Icon != "smartphone" {
 		t.Fatalf("available glyph = %q", open.Icon)
 	}
-	if open.Text != "98%" {
-		t.Fatalf("battery label = %q", open.Text)
+	if open.Text != "" {
+		t.Fatalf("battery label = %q, want empty", open.Text)
 	}
 	unknown := pairedSnap()
 	unknown.Devices[0].BatteryKnown = false
@@ -184,7 +185,7 @@ func TestBarTreeShowsBatteryForSelectedDevice(t *testing.T) {
 	offline := pairedSnap()
 	offline.Devices[0].Reachable = false
 	offlinePill := BarTree(offline).Children[0]
-	if offlinePill.Icon != "phonelink-off" || offlinePill.Text != "" {
+	if offlinePill.Icon != "devices_other" || offlinePill.Text != "" {
 		t.Fatalf("offline pill = %q %q", offlinePill.Icon, offlinePill.Text)
 	}
 }
@@ -209,10 +210,80 @@ func TestTooltipTreeTracksState(t *testing.T) {
 
 func TestPanelTreeHeaderCounts(t *testing.T) {
 	t.Parallel()
-	header := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{}).Children[0]
+	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
+	if panel.Kind != v1.KindList {
+		t.Fatalf("panel root kind = %q, want list", panel.Kind)
+	}
+	header := panel.Children[0]
 	texts := headerTexts(header)
 	if len(texts) != 2 || texts[0] != "KDE Connect" || texts[1] != "2 connected • 2 paired" {
 		t.Fatalf("header texts = %v", texts)
+	}
+}
+
+func TestPanelTreeUsesRecoveryForStaleSelection(t *testing.T) {
+	t.Parallel()
+	snap := pairedSnap()
+	snap.SelectedID = "removed-device"
+	panel := PanelTree(snap, testSettings(), ComposerNone, Drafts{})
+	if findButton(panel, "device-switcher") == nil {
+		t.Fatal("stale selection has no device recovery control")
+	}
+	if len(panel.Children) <= 1 {
+		t.Fatal("stale selection rendered a header-only panel")
+	}
+}
+
+func TestPanelTreeCollapsesDeviceSwitcher(t *testing.T) {
+	t.Parallel()
+	closed := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
+	if findButton(closed, "device-switcher") == nil {
+		t.Fatal("closed panel has no device switcher control")
+	}
+	if findButton(closed, "select-devA") != nil || findButton(closed, "select-devB") != nil {
+		t.Fatal("closed panel exposes every device card")
+	}
+
+	open := PanelTreeForState(pairedSnap(), testSettings(), ComposerNone, Drafts{}, true)
+	selected := findButton(open, "select-devA")
+	if selected == nil || !selected.Disabled || selected.Text != "Selected" {
+		t.Fatalf("selected device switcher state = %+v", selected)
+	}
+	if findButton(open, "select-devB") == nil {
+		t.Fatal("open panel omits the other device")
+	}
+}
+
+func TestActionGroupUsesVisibleLabels(t *testing.T) {
+	t.Parallel()
+	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
+	actions := findSection(panel, func(n *v1.Node) bool {
+		return n.Kind == v1.KindColumn && n.Fill == "card" && contains(allTexts(n), "Actions")
+	})
+	if actions == nil {
+		t.Fatal("grouped action section missing")
+	}
+	for _, id := range []string{"ring", "browse", "share", "sms"} {
+		button := findButton(actions, id)
+		if button == nil || strings.TrimSpace(button.Text) == "" {
+			t.Fatalf("action %q has no visible label: %+v", id, button)
+		}
+	}
+}
+
+func TestStateCardsOfferRetryAndIcon(t *testing.T) {
+	t.Parallel()
+	for name, snap := range map[string]Snapshot{
+		"unavailable": {},
+		"empty":       {Available: true},
+	} {
+		card := PanelTree(snap, testSettings(), ComposerNone, Drafts{}).Children[1]
+		if findButton(card, "retry") == nil {
+			t.Errorf("%s state has no retry action", name)
+		}
+		if !walkFindNode(card, func(n *v1.Node) bool { return n.Kind == v1.KindIcon }) {
+			t.Errorf("%s state has no state icon", name)
+		}
 	}
 }
 
@@ -222,16 +293,16 @@ func TestPanelTreeUnavailableAndEmptyStates(t *testing.T) {
 	if len(down.Children) != 2 || down.Children[1].Fill != "error-container" {
 		t.Fatalf("unavailable panel = %+v", down)
 	}
-	if text := down.Children[1].Children[0].Text; text != "Phone Connect Not Available" {
-		t.Fatalf("unavailable headline = %q", text)
+	if !contains(allTexts(down.Children[1]), "Phone Connect Not Available") {
+		t.Fatalf("unavailable headline = %v", allTexts(down.Children[1]))
 	}
 
 	empty := PanelTree(Snapshot{Available: true}, testSettings(), ComposerNone, Drafts{})
 	if len(empty.Children) != 2 || empty.Children[1].Fill != "card" {
 		t.Fatalf("empty panel = %+v", empty)
 	}
-	if text := empty.Children[1].Children[0].Text; text != "No devices found" {
-		t.Fatalf("empty headline = %q", text)
+	if !contains(allTexts(empty.Children[1]), "No devices found") {
+		t.Fatalf("empty headline = %v", allTexts(empty.Children[1]))
 	}
 
 	populated := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
@@ -247,7 +318,7 @@ func TestHeaderRefreshControlPinsRight(t *testing.T) {
 		t.Fatal("header row is not a pin-end row")
 	}
 	refresh := header.Children[1]
-	if refresh.ID != "refresh" || refresh.Icon != "refresh" || refresh.Name == "" || refresh.Role == "" {
+	if refresh.ID != "refresh" || refresh.Icon != "restart_alt" || refresh.Name == "" || refresh.Role == "" {
 		t.Fatalf("refresh control = %+v", refresh)
 	}
 }
@@ -261,7 +332,7 @@ func TestPanelTreeSwitcherOnlyWhenMultipleDevices(t *testing.T) {
 		t.Fatal("switcher row for the selected device itself")
 	}
 
-	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
+	panel := PanelTreeForState(pairedSnap(), testSettings(), ComposerNone, Drafts{}, true)
 	if findButton(panel, "select-devB") == nil {
 		t.Fatal("switcher card for the tablet missing")
 	}
@@ -272,7 +343,7 @@ func TestDeviceCardChipsAndStatus(t *testing.T) {
 	chips := pairedSnap()
 	chips.Devices[1].NetworkKnown = true
 	chips.Devices[1].NetworkStrength = 3
-	card := deviceCard(PanelTree(chips, testSettings(), ComposerNone, Drafts{}), "Galaxy Tab")
+	card := deviceCard(PanelTreeForState(chips, testSettings(), ComposerNone, Drafts{}, true), "Galaxy Tab")
 	if card == nil {
 		t.Fatal("tablet card missing")
 	}
@@ -287,14 +358,14 @@ func TestDeviceCardChipsAndStatus(t *testing.T) {
 
 	offline := pairedSnap()
 	offline.Devices[1].Reachable = false
-	offlineCard := deviceCard(PanelTree(offline, testSettings(), ComposerNone, Drafts{}), "Galaxy Tab")
+	offlineCard := deviceCard(PanelTreeForState(offline, testSettings(), ComposerNone, Drafts{}, true), "Galaxy Tab")
 	if offlineCard == nil || !contains(allTexts(offlineCard), "Offline") {
 		t.Fatal("offline status missing")
 	}
 
 	pairing := pairedSnap()
 	pairing.Devices[1].PairRequested = true
-	pairCard := deviceCard(PanelTree(pairing, testSettings(), ComposerNone, Drafts{}), "Galaxy Tab")
+	pairCard := deviceCard(PanelTreeForState(pairing, testSettings(), ComposerNone, Drafts{}, true), "Galaxy Tab")
 	if pairCard == nil || !contains(allTexts(pairCard), "Pairing...") {
 		t.Fatal("pairing-in-progress status missing")
 	}
@@ -322,17 +393,17 @@ func TestDeviceCardTapToPing(t *testing.T) {
 	if len(card.Events) != 1 || card.Events[0] != v1.EventActivate {
 		t.Fatalf("device card events = %v, want [activate]", card.Events)
 	}
-	if len(card.Children) != 4 {
-		t.Fatalf("device card children = %d, want 4 (icon, name, status, battery)", len(card.Children))
+	if len(card.Children[0].Children) != 5 {
+		t.Fatalf("device card children = %d, want 5 (icon, name, status, cue, battery)", len(card.Children[0].Children))
 	}
-	wantKinds := []v1.NodeKind{v1.KindIcon, v1.KindText, v1.KindText, v1.KindProgress}
+	wantKinds := []v1.NodeKind{v1.KindIcon, v1.KindText, v1.KindText, v1.KindText, v1.KindProgress}
 	for i, want := range wantKinds {
-		if card.Children[i].Kind != want {
-			t.Fatalf("child %d kind = %q, want %q", i, card.Children[i].Kind, want)
+		if card.Children[0].Children[i].Kind != want {
+			t.Fatalf("child %d kind = %q, want %q", i, card.Children[0].Children[i].Kind, want)
 		}
 	}
-	if card.Children[1].Text != "Pixel 10 Pro XL" {
-		t.Fatalf("name child text = %q, want Pixel 10 Pro XL", card.Children[1].Text)
+	if card.Children[0].Children[1].Text != "Pixel 10 Pro XL" {
+		t.Fatalf("name child text = %q, want Pixel 10 Pro XL", card.Children[0].Children[1].Text)
 	}
 }
 
@@ -398,7 +469,7 @@ func TestDeviceCardShowsMockupWhenAssetResolves(t *testing.T) {
 	dev := &Device{ID: "devA", Name: "Pixel 10 Pro XL", Type: "phone",
 		Paired: true, Reachable: true, BatteryKnown: true, BatteryCharge: 98}
 	card := deviceCardTree(dev)
-	mock := card.Children[0]
+	mock := card.Children[0].Children[0]
 	if mock.Kind != v1.KindImage {
 		t.Fatalf("lead child = %+v, want the mockup image", mock)
 	}
@@ -406,8 +477,8 @@ func TestDeviceCardShowsMockupWhenAssetResolves(t *testing.T) {
 		!mock.Background || mock.Shape != "card" || !mock.CenterX {
 		t.Fatalf("mockup node = %+v", mock)
 	}
-	if len(card.Children) != 4 {
-		t.Fatalf("device card children = %d, want 4 (mockup, name, status, battery)", len(card.Children))
+	if len(card.Children[0].Children) != 5 {
+		t.Fatalf("device card children = %d, want 5 (mockup, name, status, cue, battery)", len(card.Children[0].Children))
 	}
 
 	// The mockup-bearing card rides the panel, so it must stay wire-legal
@@ -425,28 +496,28 @@ func TestDeviceCardShowsMockupWhenAssetResolves(t *testing.T) {
 func TestDeviceCardKeepsIconWithoutAsset(t *testing.T) {
 	useMockupAssets(t) // empty directory: the icon fallback
 	card := deviceCardTree(&Device{ID: "devA", Name: "Pixel 10 Pro XL", Type: "phone"})
-	if card.Children[0].Kind != v1.KindIcon || card.Children[0].Icon != "smartphone" {
-		t.Fatalf("lead child = %+v, want the smartphone icon", card.Children[0])
+	if card.Children[0].Children[0].Kind != v1.KindIcon || card.Children[0].Children[0].Icon != "smartphone" {
+		t.Fatalf("lead child = %+v, want the smartphone icon", card.Children[0].Children[0])
 	}
 }
 
 func TestDeviceCardPairingActionsPerCard(t *testing.T) {
 	t.Parallel()
-	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
+	panel := PanelTreeForState(pairedSnap(), testSettings(), ComposerNone, Drafts{}, true)
 	if findButton(panel, "pair-devB") != nil || findButton(panel, "accept-devB") != nil {
 		t.Fatal("pairing actions on a paired, reachable card")
 	}
 
 	unpaired := pairedSnap()
 	unpaired.Devices[1].Paired = false
-	if findButton(PanelTree(unpaired, testSettings(), ComposerNone, Drafts{}), "pair-devB") == nil {
+	if findButton(PanelTreeForState(unpaired, testSettings(), ComposerNone, Drafts{}, true), "pair-devB") == nil {
 		t.Fatal("request-pairing action missing on an unpaired card")
 	}
 
 	incoming := pairedSnap()
 	incoming.Devices[1].PairRequestedByPeer = true
 	incoming.Devices[1].VerificationKey = "999999"
-	inPanel := PanelTree(incoming, testSettings(), ComposerNone, Drafts{})
+	inPanel := PanelTreeForState(incoming, testSettings(), ComposerNone, Drafts{}, true)
 	if findButton(inPanel, "accept-devB") == nil || findButton(inPanel, "reject-devB") == nil {
 		t.Fatal("accept/reject actions missing on the requesting card")
 	}
@@ -585,13 +656,13 @@ func TestPairingComposerSendIcons(t *testing.T) {
 	t.Parallel()
 	share := PanelTree(pairedSnap(), testSettings(), ComposerShare, Drafts{ShareText: "https://example.com", ShareFile: "/tmp/x"})
 	for _, id := range []string{"share-url-send", "share-text-send", "share-file-send"} {
-		if b := findButton(share, id); b == nil || b.Icon != "send" {
-			t.Fatalf("%s icon = %q, want send", id, iconOf(b))
+		if b := findButton(share, id); b == nil || b.Icon != "link" {
+			t.Fatalf("%s icon = %q, want link", id, iconOf(b))
 		}
 	}
 	sms := PanelTree(pairedSnap(), testSettings(), ComposerSMS, Drafts{SmsNumber: "+1", SmsBody: "hi"})
-	if b := findButton(sms, "sms-send"); b == nil || b.Icon != "send" {
-		t.Fatalf("sms-send icon = %q, want send", iconOf(b))
+	if b := findButton(sms, "sms-send"); b == nil || b.Icon != "link" {
+		t.Fatalf("sms-send icon = %q, want link", iconOf(b))
 	}
 }
 
@@ -608,12 +679,12 @@ func TestActionRowGating(t *testing.T) {
 	t.Parallel()
 	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
 	actions := findSection(panel, func(n *v1.Node) bool {
-		return n.Kind == v1.KindRow && len(n.Children) == 5 && n.Children[0].ID == "ring"
+		return n.Kind == v1.KindColumn && n.Fill == "card" && contains(allTexts(n), "Actions")
 	})
 	if actions == nil {
 		t.Fatal("action row missing")
 	}
-	for _, b := range actions.Children {
+	for _, b := range buttonsIn(actions) {
 		if b.Disabled {
 			t.Fatalf("%s disabled with every capability present", b.ID)
 		}
@@ -622,17 +693,17 @@ func TestActionRowGating(t *testing.T) {
 	noClipboard := testSettings()
 	noClipboard.EnableClipboard = false
 	trimmed := findSection(PanelTree(pairedSnap(), noClipboard, ComposerNone, Drafts{}), func(n *v1.Node) bool {
-		return n.Kind == v1.KindRow && len(n.Children) == 5 && n.Children[0].ID == "ring"
+		return n.Kind == v1.KindColumn && n.Fill == "card" && contains(allTexts(n), "Actions")
 	})
-	if !trimmed.Children[2].Disabled {
+	if b := findButton(trimmed, "clipboard"); b == nil || !b.Disabled {
 		t.Fatal("clipboard action enabled with the setting off")
 	}
 
 	offline := pairedSnap()
 	offline.Devices[0].Reachable = false
-	for _, b := range findSection(PanelTree(offline, testSettings(), ComposerNone, Drafts{}), func(n *v1.Node) bool {
-		return n.Kind == v1.KindRow && len(n.Children) == 5 && n.Children[0].ID == "ring"
-	}).Children {
+	for _, b := range buttonsIn(findSection(PanelTree(offline, testSettings(), ComposerNone, Drafts{}), func(n *v1.Node) bool {
+		return n.Kind == v1.KindColumn && n.Fill == "card" && contains(allTexts(n), "Actions")
+	})) {
 		if !b.Disabled {
 			t.Fatalf("%s enabled while offline", b.ID)
 		}
@@ -640,9 +711,9 @@ func TestActionRowGating(t *testing.T) {
 
 	uncapable := pairedSnap()
 	uncapable.Devices[0].SupportedPlugins = nil
-	for _, b := range findSection(PanelTree(uncapable, testSettings(), ComposerNone, Drafts{}), func(n *v1.Node) bool {
-		return n.Kind == v1.KindRow && len(n.Children) == 5 && n.Children[0].ID == "ring"
-	}).Children {
+	for _, b := range buttonsIn(findSection(PanelTree(uncapable, testSettings(), ComposerNone, Drafts{}), func(n *v1.Node) bool {
+		return n.Kind == v1.KindColumn && n.Fill == "card" && contains(allTexts(n), "Actions")
+	})) {
 		if !b.Disabled {
 			t.Fatalf("%s enabled without capabilities", b.ID)
 		}
@@ -654,12 +725,12 @@ func TestActionRowRestoresPingWithoutTheCard(t *testing.T) {
 	plain := testSettings()
 	plain.ShowDeviceCard = false
 	actions := findSection(PanelTree(pairedSnap(), plain, ComposerNone, Drafts{}), func(n *v1.Node) bool {
-		return n.Kind == v1.KindRow && len(n.Children) == 6 && n.Children[0].ID == "ring"
+		return n.Kind == v1.KindColumn && n.Fill == "card" && contains(allTexts(n), "Actions")
 	})
 	if actions == nil {
 		t.Fatal("action row without the device card missing")
 	}
-	if ping := actions.Children[1]; ping.ID != "ping" || ping.Disabled {
+	if ping := findButton(actions, "ping"); ping == nil || ping.Disabled {
 		t.Fatalf("ping button = %+v, want enabled at index 1", ping)
 	}
 }
@@ -1075,6 +1146,20 @@ func findButton(n *v1.Node, id string) *v1.Node {
 	return nil
 }
 
+func buttonsIn(n *v1.Node) []*v1.Node {
+	if n == nil {
+		return nil
+	}
+	var out []*v1.Node
+	if n.Kind == v1.KindButton {
+		out = append(out, n)
+	}
+	for _, c := range n.Children {
+		out = append(out, buttonsIn(c)...)
+	}
+	return out
+}
+
 // findSection returns the first direct child of the panel matching want.
 func findSection(n *v1.Node, want func(*v1.Node) bool) *v1.Node {
 	if n == nil {
@@ -1086,4 +1171,12 @@ func findSection(n *v1.Node, want func(*v1.Node) bool) *v1.Node {
 		}
 	}
 	return nil
+}
+
+func TestDeviceCardUsesVerticalContent(t *testing.T) {
+	snap := pairedSnap()
+	card := deviceCardTree(&snap.Devices[0])
+	if len(card.Children) != 1 || card.Children[0].Kind != v1.KindColumn {
+		t.Fatal("device artwork and labels must stack inside the button")
+	}
 }
