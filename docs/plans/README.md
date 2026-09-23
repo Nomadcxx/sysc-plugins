@@ -41,8 +41,15 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-21-kdeconnect-device-mockups.md` | plan | The artwork commission plan the device-mockup PNGs were generated from (assets live in `plugins/kdeconnect/assets/`). |
 | `2026-09-22-kdeconnect-live-test-round.md` | plan | Plan D Task 8 runbook — build, deploy, and manually exercise the plugin on the laptop against a real phone; matrix, rollback, bd closes. |
 | `2026-09-22-kdeconnect-live-failure-audit-handover.md` | handover | Commission for the live-failure audit: root-cause the three deployed symptoms, commission gap-analysis and hallmark sub-audits, then write the redesign plan. |
+| `2026-09-22-mini-docker-audit-workplan.md` | plan | The four-audit commission for the mini-docker tranche and its checklist; the T0–T4 tranche landed on `feat/mini-docker-audit` and is merged. |
+| `2026-09-22-mini-docker-ui-audit.md` | audit | UI audit of the shipped v0.2.0: 15 findings, verdict first-sweep quality with an unreachable panel. |
+| `2026-09-22-mini-docker-ux-audit.md` | audit | UX audit: not usable as shipped — the panel could not open, and action errors were erased before display. |
+| `2026-09-22-mini-docker-backend-audit.md` | audit | Backend audit: a crash-risk data race, the argv and validation review, and a shrink ledger. |
+| `2026-09-22-mini-docker-hallmark-audit.md` | audit | Craft audit: 0 critical · 4 major · 5 minor, all absence-of-craft rather than template slop. |
+| `2026-09-22-mini-docker-roadmap.md` | plan | The consolidated T0–T4 tranche plan and its signed-off decisions (settings reduction, panel width, shell issue filing). |
+| `2026-09-22-mini-docker-tranche-review.md` | audit | Independent read of the tranche: verdict fix-first; its three items landed in `5991b68`. |
 | `2026-09-23-plugin-view-geometry-lint.md` | plan | Host-side node identity in layout rejections, a public `plugin/lint` built on the shell's own pipeline, and the plugin-repo tests and rules doc that use it — so a view that validates but cannot be drawn fails in `go test`, not on the desktop. |
-| `2026-09-23-mini-docker-research.md` | research | Prior-art research for the mini-docker redesign: the Noctalia v4/v5 and DMS managers read in full (pinned SHAs), the pinned shell's render vocabulary, surfaces, limits and icon catalogue, the unmerged v0.3.0 branch's open findings, and the feature-disposition table the design will decide from. |
+| `2026-09-23-mini-docker-research.md` | research | Prior-art research for the mini-docker redesign: the Noctalia v4/v5 and DMS managers read in full (pinned SHAs), the pinned shell's render vocabulary, surfaces, limits and icon catalogue, the v0.3.0 tranche's open findings, and the feature-disposition table the design will decide from. |
 
 ## Documents on branches
 
