@@ -29,7 +29,11 @@ type fakeDocker struct {
 	networks       []Network
 	networksErr    error
 	networkSkipped int
+	exposedPorts   map[string][]int
+	exposedErrs    map[string]error
+	runErr         error
 	actions        []string
+	runs           []RunOpts
 }
 
 func (f *fakeDocker) List(ctx context.Context) ([]Container, int, error) {
@@ -45,7 +49,12 @@ func (f *fakeDocker) Volumes(context.Context) ([]Volume, int, error) {
 func (f *fakeDocker) Networks(context.Context) ([]Network, int, error) {
 	return f.networks, f.networkSkipped, f.networksErr
 }
-func (*fakeDocker) ImageExposedPorts(context.Context, string) ([]int, error) { return nil, nil }
+func (f *fakeDocker) ImageExposedPorts(_ context.Context, image string) ([]int, error) {
+	if err := f.exposedErrs[image]; err != nil {
+		return nil, err
+	}
+	return slices.Clone(f.exposedPorts[image]), nil
+}
 
 func (f *fakeDocker) Start(ctx context.Context, id string) error {
 	f.actions = append(f.actions, "start:"+id)
@@ -83,8 +92,10 @@ func (f *fakeDocker) NetRm(ctx context.Context, id string) error {
 }
 
 func (f *fakeDocker) Run(ctx context.Context, opts RunOpts) error {
+	opts.Environment = slices.Clone(opts.Environment)
+	f.runs = append(f.runs, opts)
 	f.actions = append(f.actions, "run:"+opts.Image)
-	return nil
+	return f.runErr
 }
 
 func TestCLIDiagnosesFailures(t *testing.T) {
@@ -530,6 +541,388 @@ func TestSessionDoesNotArmIneligibleOrStaleRemovals(t *testing.T) {
 	}
 	if len(fd.actions) != 0 {
 		t.Fatalf("ineligible or stale removals reached Docker: %v", fd.actions)
+	}
+}
+
+func newRunSession(t *testing.T, fd *fakeDocker) *Session {
+	t.Helper()
+	s := NewSession(fd)
+	s.RefreshTab(context.Background(), ScopeImages)
+	s.RefreshTab(context.Background(), ScopeNetworks)
+	s.SetScope(ScopeImages)
+	if len(fd.images) == 0 || !s.Select(fd.images[0].ID) {
+		t.Fatal("could not select test image")
+	}
+	return s
+}
+
+func TestRunFormOpensForSelectedImageAndPreselectsPortAndNetwork(t *testing.T) {
+	fd := &fakeDocker{
+		images: []Image{{ID: "sha256:image", Repository: "nginx", Tag: "latest"}},
+		networks: []Network{
+			{Name: "z-overlay", ID: "network3"},
+			{Name: "custom", ID: "network2"},
+			{Name: "bridge", ID: "network1"},
+		},
+		exposedPorts: map[string][]int{"nginx:latest": {8080, 80, 0, 70000}},
+	}
+	s := newRunSession(t, fd)
+	s.SetDefaultNetwork("custom")
+	if !s.OpenRunForm(context.Background(), "sha256:image") {
+		t.Fatal("could not open run form")
+	}
+	draft := s.State().RunForm
+	if draft == nil || draft.ImageID != "sha256:image" || draft.ImageRef != "nginx:latest" {
+		t.Fatalf("run draft identity = %+v", draft)
+	}
+	if draft.Port != "80" || draft.Publish {
+		t.Fatalf("port/publish defaults = %q/%v, want first exposed port and publish off", draft.Port, draft.Publish)
+	}
+	if draft.Network != "custom" {
+		t.Fatalf("network = %q, want configured custom network", draft.Network)
+	}
+
+	fd.exposedErrs = map[string]error{"nginx:latest": errors.New("inspect failed")}
+	if !s.OpenRunForm(context.Background(), "sha256:image") {
+		t.Fatal("inspect failure should not prevent opening the form")
+	}
+	if got := s.State().RunForm.Port; got != "" {
+		t.Fatalf("port after inspect failure = %q, want empty", got)
+	}
+	s.SetDefaultNetwork("missing")
+	if !s.OpenRunForm(context.Background(), "sha256:image") {
+		t.Fatal("could not reopen run form with fallback network")
+	}
+	if got := s.State().RunForm.Network; got != "bridge" {
+		t.Fatalf("unknown default network fallback = %q, want first sorted network bridge", got)
+	}
+}
+
+func TestRunFormLoadsNetworksWhenNoSnapshotExists(t *testing.T) {
+	fd := &fakeDocker{
+		images:   []Image{{ID: "image1", Repository: "alpine", Tag: "3"}},
+		networks: []Network{{Name: "bridge", ID: "net1"}},
+	}
+	s := NewSession(fd)
+	s.RefreshTab(context.Background(), ScopeImages)
+	s.SetScope(ScopeImages)
+	if !s.Select("image1") || !s.OpenRunForm(context.Background(), "image1") {
+		t.Fatal("could not open run form")
+	}
+	state := s.State()
+	if !state.NetworkTab.Available || state.RunForm == nil || state.RunForm.Network != "bridge" || state.RunForm.Error != "" {
+		t.Fatalf("form did not load usable networks: %+v", state)
+	}
+}
+
+func TestRunFormDraftEditsAndRendersInputs(t *testing.T) {
+	fd := &fakeDocker{
+		images:       []Image{{ID: "image1", Repository: "alpine", Tag: "3"}},
+		networks:     []Network{{Name: "bridge", ID: "net1"}, {Name: "custom", ID: "net2"}},
+		exposedPorts: map[string][]int{"alpine:3": {80}},
+	}
+	s := newRunSession(t, fd)
+	if !s.OpenRunForm(context.Background(), "image1") {
+		t.Fatal("could not open run form")
+	}
+	for field, value := range map[string]string{
+		"name": "web-1",
+		"port": "8080",
+		"env":  "A=one=two\nB=second",
+	} {
+		if !s.UpdateRunField(field, value) {
+			t.Fatalf("could not update %s", field)
+		}
+	}
+	s.ToggleRunPublish()
+	s.CycleRunNetwork()
+	draft := s.State().RunForm
+	if draft.Name != "web-1" || draft.Port != "8080" || draft.Environment != "A=one=two\nB=second" || !draft.Publish || draft.Network != "custom" {
+		t.Fatalf("edited draft = %+v", draft)
+	}
+
+	panel := PanelTreeForSession(s.State())
+	if err := v1.Validate(panel, v1.ViewPanel); err != nil {
+		t.Fatalf("run form tree: %v", err)
+	}
+	panelW, panelH := panelSize(t)
+	for _, lint := range shelllint.Tree(panel, v1.ViewPanel, panelW, panelH) {
+		t.Errorf("run form fit: %s", lint)
+	}
+	for _, id := range []string{"name", "port", "env", "form:publish", "form:network", "form:cancel", "run-submit"} {
+		if findNode(panel, id) == nil {
+			t.Errorf("run form is missing %q", id)
+		}
+	}
+	name := findNode(panel, "name")
+	port := findNode(panel, "port")
+	env := findNode(panel, "env")
+	if name.Kind != v1.KindTextInput || name.Text != "web-1" || name.Reseed == 0 {
+		t.Errorf("name input = %+v", name)
+	}
+	if port.Kind != v1.KindTextInput || port.Text != "8080" {
+		t.Errorf("port input = %+v", port)
+	}
+	if env.Kind != v1.KindTextInput || !env.Multiline || env.Text != "A=one=two\nB=second" {
+		t.Errorf("env input = %+v", env)
+	}
+	if findNode(panel, "run-submit").Disabled {
+		t.Fatal("valid draft disabled Run")
+	}
+}
+
+func TestRunFormRejectsInvalidNamePortAndEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		field string
+		value string
+	}{
+		{"name", "bad name"},
+		{"name", "-leading"},
+		{"port", "0"},
+		{"port", "65536"},
+		{"port", "abc"},
+		{"env", "NO_EQUALS"},
+		{"env", "EMPTY="},
+		{"env", "1BAD=value"},
+	} {
+		t.Run(tc.field+"="+tc.value, func(t *testing.T) {
+			fd := &fakeDocker{
+				images:   []Image{{ID: "image1", Repository: "alpine", Tag: "3"}},
+				networks: []Network{{Name: "bridge", ID: "net1"}},
+			}
+			s := newRunSession(t, fd)
+			if !s.OpenRunForm(context.Background(), "image1") {
+				t.Fatal("could not open run form")
+			}
+			s.UpdateRunField(tc.field, tc.value)
+			if s.SubmitRun(context.Background()) {
+				t.Fatalf("invalid %s reached Docker", tc.field)
+			}
+			state := s.State()
+			if state.RunForm == nil || state.RunForm.Error == "" {
+				t.Fatalf("invalid draft has no inline error: %+v", state.RunForm)
+			}
+			if len(fd.runs) != 0 || findNode(PanelTreeForSession(state), "run-submit").Disabled != true {
+				t.Fatal("invalid draft reached Docker or left Run enabled")
+			}
+		})
+	}
+}
+
+func TestRunFormSubmitsEnvironmentSplitAtFirstEqualsAndOptionalFields(t *testing.T) {
+	fd := &fakeDocker{
+		images:   []Image{{ID: "image1", Repository: "alpine", Tag: "3"}},
+		networks: []Network{{Name: "bridge", ID: "net1"}},
+	}
+	s := newRunSession(t, fd)
+	if !s.OpenRunForm(context.Background(), "image1") {
+		t.Fatal("could not open run form")
+	}
+	if !s.UpdateRunField("env", "A=one=two\nB=second") {
+		t.Fatal("could not set environment")
+	}
+	s.portInUse = func(int) (bool, error) {
+		t.Fatal("preflight ran without a published port")
+		return false, nil
+	}
+	if !s.SubmitRun(context.Background()) {
+		t.Fatalf("valid environment rejected: %+v", s.State().RunForm)
+	}
+	if len(fd.runs) != 1 {
+		t.Fatalf("runs = %d, want one", len(fd.runs))
+	}
+	got := fd.runs[0]
+	if got.Image != "alpine:3" || got.Name != "" || got.Port != "" || got.Publish || got.Network != "bridge" || !slices.Equal(got.Environment, []string{"A=one=two", "B=second"}) {
+		t.Fatalf("run opts = %+v", got)
+	}
+	if slices.Contains(runArgs(got), "-p") {
+		t.Fatalf("empty port emitted a mapping: %v", runArgs(got))
+	}
+}
+
+func TestRunFormKeepsDockerFailureInline(t *testing.T) {
+	fd := &fakeDocker{
+		images:   []Image{{ID: "image1", Repository: "alpine", Tag: "3"}},
+		networks: []Network{{Name: "bridge", ID: "net1"}},
+		runErr:   errors.New("docker: image pull failed"),
+	}
+	s := newRunSession(t, fd)
+	if !s.OpenRunForm(context.Background(), "image1") {
+		t.Fatal("could not open run form")
+	}
+	if s.SubmitRun(context.Background()) {
+		t.Fatal("Docker run failure reported success")
+	}
+	draft := s.State().RunForm
+	if draft == nil || !strings.Contains(draft.Error, "image pull failed") {
+		t.Fatalf("Docker failure is not visible in the form: %+v", draft)
+	}
+}
+
+func TestRunFormRejectsMissingImageNetworkAndOversizedText(t *testing.T) {
+	t.Run("no networks", func(t *testing.T) {
+		fd := &fakeDocker{images: []Image{{ID: "image1", Repository: "alpine", Tag: "3"}}}
+		s := newRunSession(t, fd)
+		if !s.OpenRunForm(context.Background(), "image1") {
+			t.Fatal("could not open run form")
+		}
+		if s.State().RunForm.Error == "" || s.SubmitRun(context.Background()) || len(fd.runs) != 0 {
+			t.Fatal("form without a network should show an error and reject Run")
+		}
+		if node := findNode(PanelTreeForSession(s.State()), "run-submit"); node == nil || !node.Disabled {
+			t.Fatalf("Run enabled with no network: %+v", node)
+		}
+	})
+
+	t.Run("network removed from snapshot", func(t *testing.T) {
+		fd := &fakeDocker{
+			images:   []Image{{ID: "image1", Repository: "alpine", Tag: "3"}},
+			networks: []Network{{Name: "bridge", ID: "net1"}},
+		}
+		s := newRunSession(t, fd)
+		if !s.OpenRunForm(context.Background(), "image1") {
+			t.Fatal("could not open run form")
+		}
+		fd.networks = []Network{{Name: "custom", ID: "net2"}}
+		s.RefreshTab(context.Background(), ScopeNetworks)
+		if s.State().RunForm.Error == "" || !findNode(PanelTreeForSession(s.State()), "run-submit").Disabled {
+			t.Fatal("removed network did not invalidate and disable the open form")
+		}
+		if s.SubmitRun(context.Background()) || len(fd.runs) != 0 {
+			t.Fatal("unknown network reached Docker")
+		}
+		if s.State().RunForm.Error == "" {
+			t.Fatal("removed network has no inline error")
+		}
+	})
+
+	t.Run("image removed from snapshot", func(t *testing.T) {
+		fd := &fakeDocker{
+			images:   []Image{{ID: "image1", Repository: "alpine", Tag: "3"}},
+			networks: []Network{{Name: "bridge", ID: "net1"}},
+		}
+		s := newRunSession(t, fd)
+		if !s.OpenRunForm(context.Background(), "image1") {
+			t.Fatal("could not open run form")
+		}
+		fd.images = nil
+		s.RefreshTab(context.Background(), ScopeImages)
+		if s.State().RunForm.Error == "" || !findNode(PanelTreeForSession(s.State()), "run-submit").Disabled {
+			t.Fatal("removed image did not invalidate and disable the open form")
+		}
+		if s.SubmitRun(context.Background()) || len(fd.runs) != 0 {
+			t.Fatal("stale image reached Docker")
+		}
+		if s.State().RunForm.Error == "" {
+			t.Fatal("removed image has no inline error")
+		}
+	})
+
+	t.Run("text limit", func(t *testing.T) {
+		fd := &fakeDocker{
+			images:   []Image{{ID: "image1", Repository: "alpine", Tag: "3"}},
+			networks: []Network{{Name: "bridge", ID: "net1"}},
+		}
+		s := newRunSession(t, fd)
+		if !s.OpenRunForm(context.Background(), "image1") {
+			t.Fatal("could not open run form")
+		}
+		if !s.UpdateRunField("env", strings.Repeat("A", v1.MaxTextBytes)) {
+			t.Fatal("exact protocol limit rejected")
+		}
+		if s.UpdateRunField("env", strings.Repeat("A", v1.MaxTextBytes+1)) {
+			t.Fatal("oversized input accepted")
+		}
+		if got := len(s.State().RunForm.Environment); got != v1.MaxTextBytes {
+			t.Fatalf("environment bytes = %d, want the accepted limit %d", got, v1.MaxTextBytes)
+		}
+	})
+}
+
+func TestRunFormUsesPortPreflightOnlyForPublishedPort(t *testing.T) {
+	for _, occupied := range []bool{true, false} {
+		t.Run(fmt.Sprintf("occupied=%v", occupied), func(t *testing.T) {
+			fd := &fakeDocker{
+				images:   []Image{{ID: "image1", Repository: "alpine", Tag: "3"}},
+				networks: []Network{{Name: "bridge", ID: "net1"}},
+			}
+			s := newRunSession(t, fd)
+			if !s.OpenRunForm(context.Background(), "image1") {
+				t.Fatal("could not open run form")
+			}
+			if !s.UpdateRunField("port", "8080") {
+				t.Fatal("could not set host port")
+			}
+			s.ToggleRunPublish()
+			checks := 0
+			s.portInUse = func(port int) (bool, error) {
+				checks++
+				if port != 8080 {
+					t.Fatalf("preflight port = %d, want 8080", port)
+				}
+				return occupied, nil
+			}
+			if got := s.SubmitRun(context.Background()); got == occupied {
+				t.Fatalf("SubmitRun = %v with occupied=%v", got, occupied)
+			}
+			if checks != 1 {
+				t.Fatalf("preflight checks = %d, want one", checks)
+			}
+			if occupied {
+				if len(fd.runs) != 0 || !strings.Contains(s.State().RunForm.Error, "Port 8080 is already in use") {
+					t.Fatalf("occupied port reached Docker or has no useful error: runs=%v form=%+v", fd.runs, s.State().RunForm)
+				}
+				return
+			}
+			if len(fd.runs) != 1 || fd.runs[0].Port != "8080" || !fd.runs[0].Publish {
+				t.Fatalf("run opts = %+v, want published 8080", fd.runs)
+			}
+		})
+	}
+
+	fd := &fakeDocker{
+		images:   []Image{{ID: "image1", Repository: "alpine", Tag: "3"}},
+		networks: []Network{{Name: "bridge", ID: "net1"}},
+	}
+	s := newRunSession(t, fd)
+	if !s.OpenRunForm(context.Background(), "image1") {
+		t.Fatal("could not open run form")
+	}
+	s.UpdateRunField("port", "8080")
+	checks := 0
+	s.portInUse = func(int) (bool, error) { checks++; return false, nil }
+	if !s.SubmitRun(context.Background()) || checks != 0 {
+		t.Fatalf("unpublished port did not submit without preflight: checks=%d, form=%+v", checks, s.State().RunForm)
+	}
+}
+
+func TestPortPreflightParsesIPv4AndIPv6Fixtures(t *testing.T) {
+	tcp4 := readFixture(t, "tcp4")
+	tcp6 := readFixture(t, "tcp6")
+	readFile := func(path string) ([]byte, error) {
+		switch path {
+		case procTCP4Path:
+			return tcp4, nil
+		case procTCP6Path:
+			return tcp6, nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+	for _, tc := range []struct {
+		port int
+		want bool
+	}{{8080, true}, {8081, false}, {9090, true}} {
+		got, err := tcpPortInUse(tc.port, readFile)
+		if err != nil || got != tc.want {
+			t.Errorf("tcpPortInUse(%d) = %v, %v; want %v, nil", tc.port, got, err, tc.want)
+		}
+	}
+	if _, err := tcpPortInUse(8080, func(string) ([]byte, error) { return nil, os.ErrNotExist }); err == nil {
+		t.Fatal("missing /proc table accepted")
+	}
+	if _, err := procTCPHasListener([]byte("sl local\nmalformed row\n"), 8080); err == nil {
+		t.Fatal("malformed /proc row accepted")
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -256,6 +257,61 @@ func runArgs(opts RunOpts) []string {
 		args = append(args, opts.Image)
 	}
 	return args
+}
+
+const (
+	procTCP4Path = "/proc/net/tcp"
+	procTCP6Path = "/proc/net/tcp6"
+)
+
+func hostPortInUse(port int) (bool, error) {
+	return tcpPortInUse(port, os.ReadFile)
+}
+
+// tcpPortInUse reads both Linux TCP tables through a seam so fixture data can
+// prove the host-port preflight without depending on the test machine.
+func tcpPortInUse(port int, readFile func(string) ([]byte, error)) (bool, error) {
+	if port < 1 || port > 65535 {
+		return false, fmt.Errorf("port must be an integer from 1 to 65535")
+	}
+	if readFile == nil {
+		return false, errors.New("TCP table reader is unavailable")
+	}
+	for _, path := range []string{procTCP4Path, procTCP6Path} {
+		data, err := readFile(path)
+		if err != nil {
+			return false, fmt.Errorf("read %s: %w", path, err)
+		}
+		occupied, err := procTCPHasListener(data, port)
+		if err != nil || occupied {
+			return occupied, err
+		}
+	}
+	return false, nil
+}
+
+func procTCPHasListener(data []byte, port int) (bool, error) {
+	for lineNumber, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] == "sl" {
+			continue
+		}
+		if len(fields) < 4 {
+			return false, fmt.Errorf("malformed TCP table row %d", lineNumber+1)
+		}
+		colon := strings.LastIndexByte(fields[1], ':')
+		if colon < 0 || colon == len(fields[1])-1 {
+			return false, fmt.Errorf("malformed local address in TCP table row %d", lineNumber+1)
+		}
+		localPort, err := strconv.ParseUint(fields[1][colon+1:], 16, 16)
+		if err != nil {
+			return false, fmt.Errorf("invalid local port in TCP table row %d", lineNumber+1)
+		}
+		if int(localPort) == port && strings.EqualFold(fields[3], "0A") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func runDockerOutput(ctx context.Context, operation string, args ...string) ([]byte, error) {

@@ -93,6 +93,10 @@ func PanelTreeForSession(state SessionSnapshot) *v1.Node {
 	if len(status) != 0 {
 		col.Children = append(col.Children, &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: status})
 	}
+	if state.RunForm != nil {
+		col.Children = append(col.Children, runFormTree(*state.RunForm, state))
+		return col
+	}
 
 	statusState := tabStatus(state)
 	entities := panelEntities(state)
@@ -135,6 +139,53 @@ func PanelTreeForSession(state SessionSnapshot) *v1.Node {
 		col.Children = append(col.Children, entityDetail(*selected, state))
 	}
 	return col
+}
+
+func runFormTree(draft RunDraft, state SessionSnapshot) *v1.Node {
+	form := &v1.Node{Kind: v1.KindColumn, ID: "run-form", Gap: 6, Children: []*v1.Node{
+		{Kind: v1.KindText, Text: draft.ImageRef, Bold: true},
+		{Kind: v1.KindText, Text: "Container name (optional)", Tone: v1.ToneSubtle},
+		textInput("name", "Container name", draft.Name, false, true, draft.Reseed),
+		{Kind: v1.KindText, Text: "Host port (optional)", Tone: v1.ToneSubtle},
+		textInput("port", "Host port", draft.Port, false, true, draft.Reseed),
+		actionButton("form:publish", publishLabel(draft.Publish), publishLabel(draft.Publish), false),
+		{Kind: v1.KindText, Text: "Network", Tone: v1.ToneSubtle},
+		{Kind: v1.KindButton, ID: "form:network", Text: networkLabel(draft.Network),
+			Name: "Cycle network", Role: "button", Height: 32, Events: []v1.EventKind{v1.EventActivate}},
+		{Kind: v1.KindText, Text: "Environment (one KEY=value per line)", Tone: v1.ToneSubtle},
+		textInput("env", "Environment variables", draft.Environment, true, false, draft.Reseed),
+	}}
+	if draft.Error != "" {
+		form.Children = append(form.Children, &v1.Node{Kind: v1.KindText, Text: draft.Error, Tone: v1.ToneError})
+	}
+	busy := actionInFlight(state, ScopeImages, "run", draft.ImageID)
+	run := actionButton("run-submit", "Run", "Run "+draft.ImageRef, draft.Error != "" || busy)
+	run.Fill = "accent"
+	form.Children = append(form.Children, &v1.Node{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
+		actionButton("form:cancel", "Cancel", "Cancel image run", false),
+		run,
+	}})
+	return form
+}
+
+func textInput(id, name, value string, multiline, submitOnEnter bool, reseed uint64) *v1.Node {
+	return &v1.Node{Kind: v1.KindTextInput, ID: id, Text: value, Name: name, Role: "textbox",
+		Height: 40, Multiline: multiline, SubmitOnEnter: submitOnEnter, Reseed: reseed,
+		Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}}
+}
+
+func publishLabel(publish bool) string {
+	if publish {
+		return "Publish port: on"
+	}
+	return "Publish port: off"
+}
+
+func networkLabel(network string) string {
+	if network == "" {
+		return "Select network"
+	}
+	return "Network: " + network
 }
 
 func scopeButtons(selected Scope) *v1.Node {
@@ -269,13 +320,7 @@ func panelEntities(state SessionSnapshot) []panelEntity {
 		if !state.NetworkTab.Available {
 			return nil
 		}
-		networks := slices.Clone(state.Networks)
-		slices.SortFunc(networks, func(a, b Network) int {
-			if c := strings.Compare(a.Name, b.Name); c != 0 {
-				return c
-			}
-			return strings.Compare(a.ID, b.ID)
-		})
+		networks := sortedNetworks(state.Networks)
 		entities := make([]panelEntity, 0, len(networks))
 		for _, network := range networks {
 			entities = append(entities, panelEntity{

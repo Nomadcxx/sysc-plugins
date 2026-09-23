@@ -2,9 +2,15 @@ package minidocker
 
 import (
 	"context"
+	"fmt"
 	"regexp"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 type Scope string
@@ -31,6 +37,18 @@ type RemovalTarget struct {
 	ID    string
 }
 
+type RunDraft struct {
+	ImageID     string
+	ImageRef    string
+	Name        string
+	Port        string
+	Publish     bool
+	Network     string
+	Environment string
+	Error       string
+	Reseed      uint64
+}
+
 type actionKey struct {
 	scope Scope
 	verb  string
@@ -38,6 +56,9 @@ type actionKey struct {
 }
 
 var entityIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/@-]*$`)
+var containerNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+var decimalDigitsRE = regexp.MustCompile(`^[0-9]+$`)
+var envKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // SessionSnapshot is an immutable copy of the state used to render a view.
 type SessionSnapshot struct {
@@ -55,6 +76,7 @@ type SessionSnapshot struct {
 	ActingID       string
 	PendingRemoval *RemovalTarget
 	InFlight       map[actionKey]struct{}
+	RunForm        *RunDraft
 }
 
 // Session owns Docker snapshots and user interaction state. Docker calls run
@@ -72,6 +94,10 @@ type Session struct {
 	actErr         string
 	pendingRemoval *RemovalTarget
 	inFlight       map[actionKey]struct{}
+	defaultNetwork string
+	runForm        *RunDraft
+	formReseed     uint64
+	portInUse      func(int) (bool, error)
 }
 
 func NewSession(d Docker) *Session {
@@ -84,7 +110,9 @@ func NewSession(d Docker) *Session {
 			ScopeVolumes:    {},
 			ScopeNetworks:   {},
 		},
-		inFlight: make(map[actionKey]struct{}),
+		inFlight:       make(map[actionKey]struct{}),
+		defaultNetwork: "bridge",
+		portInUse:      hostPortInUse,
 	}
 }
 
@@ -97,6 +125,7 @@ func (s *Session) SetScope(scope Scope) bool {
 		s.scope = scope
 		s.selectedID = ""
 		s.pendingRemoval = nil
+		s.runForm = nil
 	}
 	s.mu.Unlock()
 	return true
@@ -145,6 +174,7 @@ func (s *Session) State() SessionSnapshot {
 		ActingID:       s.actingContainerLocked(),
 		PendingRemoval: cloneRemovalTarget(s.pendingRemoval),
 		InFlight:       cloneActionSet(s.inFlight),
+		RunForm:        cloneRunDraft(s.runForm),
 	}
 }
 
@@ -261,6 +291,330 @@ func cloneActionSet(actions map[actionKey]struct{}) map[actionKey]struct{} {
 	return copy
 }
 
+func cloneRunDraft(draft *RunDraft) *RunDraft {
+	if draft == nil {
+		return nil
+	}
+	copy := *draft
+	return &copy
+}
+
+// SetDefaultNetwork records the preferred network used by the next run form.
+func (s *Session) SetDefaultNetwork(name string) {
+	s.mu.Lock()
+	s.defaultNetwork = name
+	s.mu.Unlock()
+}
+
+// OpenRunForm opens a draft for the selected image. Port inspection is
+// optional; Docker can still run the image when inspect is unavailable.
+func (s *Session) OpenRunForm(ctx context.Context, id string) bool {
+	s.mu.Lock()
+	_, ok := s.selectedImageLocked(id)
+	if !ok {
+		s.mu.Unlock()
+		return false
+	}
+	loadNetworks := !s.tabs[ScopeNetworks].Available
+	s.mu.Unlock()
+	if loadNetworks {
+		s.RefreshTab(ctx, ScopeNetworks)
+	}
+
+	s.mu.Lock()
+	image, ok := s.selectedImageLocked(id)
+	if !ok {
+		s.mu.Unlock()
+		return false
+	}
+	ref := imageReference(image)
+	if !validEntityID(ref) {
+		s.mu.Unlock()
+		return false
+	}
+	s.formReseed++
+	draft := &RunDraft{
+		ImageID: id, ImageRef: ref, Network: s.defaultNetworkLocked(), Reseed: s.formReseed,
+	}
+	if draft.Network == "" {
+		draft.Error = s.noNetworkErrorLocked()
+	}
+	s.runForm = draft
+	s.mu.Unlock()
+
+	ports, err := s.docker.ImageExposedPorts(ctx, ref)
+	if err == nil {
+		slices.Sort(ports)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runForm == nil || s.runForm.Reseed != draft.Reseed || !s.tabs[ScopeImages].Available || !s.hasEntityLocked(ScopeImages, id) {
+		return false
+	}
+	if err == nil && s.runForm.Port == "" {
+		for _, port := range ports {
+			if port >= 1 && port <= 65535 {
+				s.runForm.Port = strconv.Itoa(port)
+				break
+			}
+		}
+	}
+	s.refreshRunFormErrorLocked()
+	return true
+}
+
+func (s *Session) selectedImageLocked(id string) (Image, bool) {
+	if s.scope != ScopeImages || s.selectedID != id || !s.tabs[ScopeImages].Available || !validEntityID(id) {
+		return Image{}, false
+	}
+	for _, image := range s.images {
+		if image.ID == id {
+			return image, true
+		}
+	}
+	return Image{}, false
+}
+
+func imageReference(image Image) string {
+	if image.Repository == "" || image.Repository == "<none>" || image.Tag == "" || image.Tag == "<none>" {
+		return image.ID
+	}
+	return image.Repository + ":" + image.Tag
+}
+
+func (s *Session) defaultNetworkLocked() string {
+	if !s.tabs[ScopeNetworks].Available || len(s.networks) == 0 {
+		return ""
+	}
+	networks := sortedNetworks(s.networks)
+	for _, network := range networks {
+		if network.Name == s.defaultNetwork {
+			return network.Name
+		}
+	}
+	return networks[0].Name
+}
+
+func (s *Session) noNetworkErrorLocked() string {
+	if err := s.tabs[ScopeNetworks].ListError; err != "" {
+		return err
+	}
+	return "No networks available"
+}
+
+func sortedNetworks(networks []Network) []Network {
+	sorted := slices.Clone(networks)
+	slices.SortFunc(sorted, func(a, b Network) int {
+		if c := strings.Compare(a.Name, b.Name); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	return sorted
+}
+
+// UpdateRunField stores a committed value from one of the fixed form inputs.
+func (s *Session) UpdateRunField(field, value string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runForm == nil {
+		return false
+	}
+	if len(value) > v1.MaxTextBytes {
+		s.runForm.Error = fmt.Sprintf("Input exceeds %d bytes", v1.MaxTextBytes)
+		return false
+	}
+	switch field {
+	case "name":
+		s.runForm.Name = value
+	case "port":
+		s.runForm.Port = value
+	case "env":
+		s.runForm.Environment = value
+	default:
+		return false
+	}
+	s.refreshRunFormErrorLocked()
+	return true
+}
+
+func (s *Session) ToggleRunPublish() {
+	s.mu.Lock()
+	if s.runForm != nil {
+		s.runForm.Publish = !s.runForm.Publish
+		s.refreshRunFormErrorLocked()
+	}
+	s.mu.Unlock()
+}
+
+func (s *Session) CycleRunNetwork() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runForm == nil {
+		return
+	}
+	if !s.tabs[ScopeNetworks].Available || len(s.networks) == 0 {
+		s.runForm.Network = ""
+		s.runForm.Error = s.noNetworkErrorLocked()
+		return
+	}
+	networks := sortedNetworks(s.networks)
+	for i, network := range networks {
+		if network.Name == s.runForm.Network {
+			s.runForm.Network = networks[(i+1)%len(networks)].Name
+			s.refreshRunFormErrorLocked()
+			return
+		}
+	}
+	s.runForm.Network = networks[0].Name
+	s.refreshRunFormErrorLocked()
+}
+
+func (s *Session) CancelRunForm() {
+	s.mu.Lock()
+	s.runForm = nil
+	s.mu.Unlock()
+}
+
+func (s *Session) refreshRunFormErrorLocked() {
+	if s.runForm == nil {
+		return
+	}
+	_, err := s.validateRunFormLocked(*s.runForm)
+	if err != nil {
+		s.runForm.Error = err.Error()
+	} else {
+		s.runForm.Error = ""
+	}
+}
+
+func (s *Session) validateRunFormLocked(draft RunDraft) (RunOpts, error) {
+	if s.scope != ScopeImages || !s.tabs[ScopeImages].Available || !s.hasEntityLocked(ScopeImages, draft.ImageID) {
+		return RunOpts{}, fmt.Errorf("selected image is no longer available")
+	}
+	if draft.ImageRef == "" || !validEntityID(draft.ImageRef) {
+		return RunOpts{}, fmt.Errorf("invalid image reference")
+	}
+	if draft.Name != "" && !containerNameRE.MatchString(draft.Name) {
+		return RunOpts{}, fmt.Errorf("container name must start with a letter or digit and contain only letters, digits, '.', '_' or '-'")
+	}
+	if draft.Port != "" {
+		if !decimalDigitsRE.MatchString(draft.Port) {
+			return RunOpts{}, fmt.Errorf("port must be an integer from 1 to 65535")
+		}
+		port, err := strconv.Atoi(draft.Port)
+		if err != nil || port < 1 || port > 65535 {
+			return RunOpts{}, fmt.Errorf("port must be an integer from 1 to 65535")
+		}
+	}
+	if len(draft.Environment) > v1.MaxTextBytes {
+		return RunOpts{}, fmt.Errorf("environment exceeds %d bytes", v1.MaxTextBytes)
+	}
+	environment, err := parseEnvironment(draft.Environment)
+	if err != nil {
+		return RunOpts{}, err
+	}
+	if !s.tabs[ScopeNetworks].Available || len(s.networks) == 0 {
+		return RunOpts{}, fmt.Errorf("%s", s.noNetworkErrorLocked())
+	}
+	knownNetwork := false
+	for _, network := range s.networks {
+		if network.Name == draft.Network {
+			knownNetwork = true
+			break
+		}
+	}
+	if !knownNetwork {
+		return RunOpts{}, fmt.Errorf("network %q is no longer available", draft.Network)
+	}
+	return RunOpts{
+		Image: draft.ImageRef, Name: draft.Name, Environment: environment,
+		Port: draft.Port, Publish: draft.Publish, Network: draft.Network,
+	}, nil
+}
+
+func parseEnvironment(text string) ([]string, error) {
+	if len(text) > v1.MaxTextBytes {
+		return nil, fmt.Errorf("environment exceeds %d bytes", v1.MaxTextBytes)
+	}
+	var environment []string
+	for i, line := range strings.Split(text, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || !envKeyRE.MatchString(key) || value == "" {
+			return nil, fmt.Errorf("environment line %d must be KEY=value with a non-empty value", i+1)
+		}
+		environment = append(environment, key+"="+value)
+	}
+	return environment, nil
+}
+
+func (s *Session) SubmitRun(ctx context.Context) bool {
+	s.mu.Lock()
+	if s.runForm == nil {
+		s.mu.Unlock()
+		return false
+	}
+	draft := *s.runForm
+	opts, err := s.validateRunFormLocked(draft)
+	if err != nil {
+		s.runForm.Error = err.Error()
+		s.mu.Unlock()
+		return false
+	}
+	key := actionKey{scope: ScopeImages, verb: "run", id: draft.ImageID}
+	if _, exists := s.inFlight[key]; exists {
+		s.mu.Unlock()
+		return false
+	}
+	s.inFlight[key] = struct{}{}
+	s.runForm.Error = ""
+	portInUse := s.portInUse
+	s.mu.Unlock()
+
+	if draft.Publish && draft.Port != "" {
+		port, _ := strconv.Atoi(draft.Port)
+		occupied, checkErr := portInUse(port)
+		if checkErr != nil {
+			s.finishRunAttempt(key, draft, fmt.Errorf("Port preflight failed: %w", checkErr))
+			return false
+		}
+		if occupied {
+			s.finishRunAttempt(key, draft, fmt.Errorf("Port %s is already in use on the host", draft.Port))
+			return false
+		}
+	}
+
+	err = s.docker.Run(ctx, opts)
+	s.finishRunAttempt(key, draft, err)
+	if err != nil {
+		return false
+	}
+	s.Refresh(ctx)
+	s.RefreshTab(ctx, ScopeImages)
+	return true
+}
+
+func (s *Session) finishRunAttempt(key actionKey, draft RunDraft, err error) {
+	s.mu.Lock()
+	delete(s.inFlight, key)
+	if s.runForm != nil && s.runForm.Reseed == draft.Reseed {
+		if err != nil {
+			s.runForm.Error = err.Error()
+		} else {
+			s.runForm = nil
+		}
+	} else if err != nil {
+		s.actErr = err.Error()
+	} else {
+		s.actErr = ""
+	}
+	s.mu.Unlock()
+}
+
 func (s *Session) finishRefresh(scope Scope, skipped int, err error, replace func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -287,6 +641,9 @@ func (s *Session) finishRefresh(scope Scope, skipped int, err error, replace fun
 	}
 	if s.pendingRemoval != nil && s.pendingRemoval.Scope == scope && !s.hasEntityLocked(scope, s.pendingRemoval.ID) {
 		s.pendingRemoval = nil
+	}
+	if s.runForm != nil && (scope == ScopeImages || scope == ScopeNetworks) {
+		s.refreshRunFormErrorLocked()
 	}
 }
 
