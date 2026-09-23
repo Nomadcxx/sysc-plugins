@@ -1,8 +1,8 @@
 # Mini Docker design
 
-Date: 2026-09-23 · Baseline: `main` after the audit tranche merge (`ddfc592`), plugin v0.3.0,
-shell pin `v0.0.0-20260923111103-dd221a064353` · Feeds: the implementation plan (written only
-after this design is signed off) · Research: `2026-09-23-mini-docker-research.md`.
+Date: 2026-09-23 · Implementation baseline: `c7c754b`, plugin v0.3.0, shell pin
+`v0.0.0-20260923111103-dd221a064353` · Feeds: the approved implementation plan
+`2026-09-23-mini-docker-parity-pass.md` · Research: `2026-09-23-mini-docker-research.md`.
 
 ## Goal
 
@@ -111,10 +111,10 @@ cancel, on confirm dispatch, on scope change, and when the entity leaves the sna
 survives a poll refresh (a 5 s tick must not disarm mid-decision). One armed row at a time.
 No setting; no modal.
 
-**In-flight.** While an action runs: the acting entity's buttons are `Disabled`, the status
-band shows `Working…`, and the poller's publishes continue. The state is keyed by action +
-entity ID, not by a global busy flag, so a hung action on one container does not lock the
-panel.
+**In-flight.** While an action runs: the acting entity's matching buttons are `Disabled`,
+the status band shows `Working…`, and the poller's publishes continue. The state is keyed by
+scope + action + entity ID, not by a global busy flag, so a hung action on one container does
+not lock the panel or unrelated entities.
 
 **Empty / loading / failure.**
 - Loading is shown only while there is no data for the active tab; a refresh over known data
@@ -123,10 +123,11 @@ panel.
 - Empty tab: one centred subtle line (`No containers`, `No images`, …), including the
   no-docker case with the diagnosis line above it.
 - Primary failure (`docker ps` fails / binary missing / daemon down): the status band carries
-  the diagnosis (`Docker daemon not running`, `docker command not found`), the list is empty,
-  and the bar pill's tone is `error`.
+  the diagnosis (`Docker daemon not running`, `docker command not found`), the rendered list
+  is empty, cached data is retained internally for recovery, mutations are rejected until a
+  successful refresh, and the bar pill's tone is `error`.
 - Secondary failures (images/volumes/networks) render in the status band for the tab they
-  belong to, never silently empty.
+  belong to and retain that tab's last successful rows, never silently empty.
 
 ## Data layer
 
@@ -135,7 +136,7 @@ panel.
 | Tab | Command |
 |---|---|
 | Containers | `docker ps -a --format '{{json .}}'` |
-| Images | `docker images --format '{{json .}}'` |
+| Images | `docker images --format '{{json .}}'` (including the Containers reference count) |
 | Volumes | `docker volume ls --format '{{json .}}'` |
 | Networks | `docker network ls --format '{{json .}}'` |
 | Port pre-select | `docker image inspect --format '{{json .Config.ExposedPorts}}' <image>` |
@@ -147,10 +148,11 @@ tests exercise (the tranche's test re-implemented the loop; a dropped line must 
 silently — the count of skipped lines surfaces as a subtle status note).
 
 **State model.** One `Session` per plugin process owning a snapshot per tab:
-`{available, loading, listErr, refreshedAt, items[]}`, plus `actErr`, `actingID`,
-`confirmID`, `selectedID`, `scope`, and per-tab list errors. Sorting is deterministic and
-testable: running-first then name (containers); `repo:tag` (images); name (volumes,
-networks).
+`{available, loading, listErr, refreshedAt, skippedLines, items[]}`, plus `actErr`,
+in-flight action keys (scope + verb + ID), `confirmID`, `selectedID`, `scope`, and the
+run-form draft. Sorting is deterministic and testable: running-first then name (containers);
+`repo:tag` (images); name (volumes, networks). The image `Containers` count disables
+removal while any container references that image.
 
 **Refresh.** Poll every `refresh_interval_seconds` (1–30, default 5). Containers refresh
 every tick — the bar pill depends on it. Other tabs refresh on first open, on the explicit
@@ -158,12 +160,11 @@ Refresh button, and on every tick **while they are the active tab**. A tab switc
 re-fetch a tab refreshed within the last 5 s. One refresh is in flight at a time; a click
 during a refresh coalesces into one more (the existing size-1 channel pattern).
 
-**Change detection.** `publish` computes a digest over the fields that affect the tree
-(availability, per-tab loading/errors, acting/selected/confirm IDs, scope, settings that
-change text, and each tab's item list) and skips the publish when nothing changed. This keeps
-revisions meaningful (the host's patch/resync machinery keys on them), keeps a 900-node tree
-off the wire every 5 s, and gives `view.resync` a natural trigger. Pinned by a test: a second
-identical poll produces no snapshot.
+**Change detection.** `publish` computes a digest of each rendered view and skips that
+view's publish when its tree is unchanged. This keeps revisions meaningful and avoids sending
+a large tree every 5 s. A new `ViewOpen` and every `view.resync` force a full snapshot;
+`view.resync` resets the revision to zero before publishing. A second identical poll is
+tested to produce no snapshot, while resync is tested to publish despite an unchanged digest.
 
 ## Actions
 
@@ -177,14 +178,18 @@ spawns — a stale row cannot dispatch `docker start <gone>`.
 | `tab:<containers\|images\|volumes\|networks>` | change scope |
 | `select:<id>` | select/deselect the entity (deselect clears the card) |
 | `start:<id>` `stop:<id>` `restart:<id>` `remove:<id>` | container action |
-| `run:<id>` `rmi:<id>` | image action (ID is the image reference) |
+| `run:<id>` `rmi:<id>` | open the run form for an image; arm image removal |
 | `volrm:<name>` `netrm:<id>` | volume/network action |
 | `confirm` `cancel` | arm/disarm the pending removal |
+| `run-submit` | submit the image and options retained in the run-form draft |
 | `refresh` `open` | poll now; open panel |
 
 Every ID half is validated against `^[A-Za-z0-9][A-Za-z0-9_.:/@-]*$` (image references carry
 `:`/`/`/`@`) before it can reach argv; anything else is dropped, not reported. The run form's
 free text is validated separately (§Run form).
+
+Text input change events carry the committed value in `InputEvent.Text`. The plugin retains
+name, port, and env drafts by node ID and validates them before dispatch.
 
 ## Run form (images tab)
 
@@ -197,7 +202,8 @@ snapshot's networks, starting at `default_network` — the wire has no select), 
 
 Validation before anything reaches argv: name `^[A-Za-z0-9][A-Za-z0-9_.-]*$`; port integer
 1–65535; env key `^[A-Za-z_][A-Za-z0-9_]*$` with a non-empty value; image reference non-empty
-and shape-checked. Unknown networks are rejected against the snapshot.
+and shape-checked. Unknown networks are rejected against the snapshot. Text input is bounded
+by the protocol's 64 KiB input limit.
 
 **Port preflight.** When a port is requested, the plugin first checks whether it is already
 listening: read `/proc/net/tcp` and `/proc/net/tcp6` for a LISTEN entry on that port (state
@@ -217,22 +223,20 @@ revived.
 | `refresh_interval_seconds` | int, 1–30 | 5 | poll cadence; changing it re-arms the ticker |
 | `status_mode` | select `always`/`running_only`/`hidden` | `always` | bar count: always, only while running, never (labels: Always / When running / Never) |
 | `default_network` | string | `bridge` | network the run form starts on |
-| `show_count` | bool | `true` | **tombstone** — see below; not rendered, not read |
 
-**The tombstone decision.** The host validates the *stored* settings map on every write
-(`applySettingLocked` → `CheckValues`, internal/plugin/settings.go:14-23), so a user who ever
-stored `show_count` under 0.2.0 can no longer change any setting for this plugin once the key
-is undeclared — the write is rejected outright. The schema is therefore additive-only until
-the shell prunes undeclared stored keys. Mitigation: `show_count` stays declared as a bool
-tombstone, hidden with `visible_when` on an impossible condition
-(`{"key":"refresh_interval_seconds","equals":-1}` — a valid int for the dependency, and
-unreachable because the interval's minimum is 1). It renders nothing, is never read, and
-keeps old stored values valid. The live config on this machine stores no mini-docker settings
-(checked), so this is insurance, not a rescue.
+The 2026-09-22 roadmap decision D1 deleted `show_count`; this design follows that signed
+decision and keeps the manifest at these three settings. The host validates the stored
+settings map on writes, so a pre-v0.3 configuration retaining `show_count` may cause later
+settings writes to be rejected until the shell prunes undeclared keys. The plugin cannot
+repair that host-owned migration. Record it as a shell-side risk; do not reintroduce a
+tombstone in this pass.
+
+Set `protocol.minor` to 4. The manifest uses node fields introduced through minor 4,
+including multiline text input. The handshake fallback version remains pinned to the
+manifest by the existing test.
 
 Renaming is likewise off the table: `refresh_interval_seconds` and `status_mode` keep their
-keys and their meanings. (The handshake's `fallbackVersion` stays pinned to the manifest by
-the existing test.)
+keys and their meanings.
 
 ## Icons and type
 
@@ -291,25 +295,25 @@ new icons — both are shell-side asks, not design requirements.
 | Compose grouping | none | none | yes (labels) | none (parked) | deliberate gap |
 | Logs / exec | none | none | terminal handoff | none (parked) | deliberate gap |
 | Bar pill | glyph + dot | glyph + count + dot | glyph + count | text + count, tone = failure | honest, plainer: no docker glyph in the catalogue |
-| Settings | 5 (incl. colour choices) | 7 (incl. colour choices) | 6 | 3 + 1 tombstone | smaller on purpose: tones replace colour choice, `show_count` is folded into `status_mode` |
+| Settings | 5 (incl. colour choices) | 7 (incl. colour choices) | 6 | 3 | smaller on purpose: tones replace colour choice; signed roadmap D1 keeps `show_count` deleted |
 
 **Verdict.** Feature parity with the lineage we ported, above it in three places (inline
 confirmation, `/proc` preflight, per-tab error surfacing) and deliberately below DMS in two
 (no events stream, no compose grouping). Not at parity with v5's visual richness: their panel
 carries custom glyph colours, a 15-icon vocabulary and a floating 860×620 box; ours draws
-from the shell's own catalogue and an attached 480×560 panel. Two divergences worth a second
-look before sign-off: the text-only bar pill (v5 shows a docker glyph), and dropping
-`show_count` from the UI while keeping it in the schema as a tombstone.
+from the shell's own catalogue and an attached 480×560 panel. The text-only bar pill (v5
+shows a docker glyph) is a known visual difference accepted for this pass. `show_count` stays
+deleted in accordance with signed roadmap decision D1.
 
 ## Shell-side notes (not requests, not filed)
 
 Kept as a list so the design depends on nothing that does not exist today: wire the `notify`
 capability; a container/image/volume/network glyph or alias registry; `include_settings`
 generalisation; checkbox/select/slider wire kinds; prune undeclared stored setting keys on
-load (the tombstone's real fix); deliver or drop list `scroll` events; reconcile the manifest
-protocol gate (6) with `host.hello` (1.7).
+load (the migration risk from deleting `show_count`); deliver or drop list `scroll` events;
+reconcile the manifest protocol gate (6) with `host.hello` (1.7).
 
-## Decisions for sign-off
+## Approved decisions
 
 | # | Decision |
 |---|---|
@@ -319,7 +323,8 @@ protocol gate (6) with `host.hello` (1.7).
 | D4 | Refresh: 5 s poll (setting), containers every tick, other tabs on open/click/while active; publish skips unchanged trees. |
 | D5 | Panel stays 480×560; list height computed from the status and card bands; fallback to 560 wide only if the lint matrix refuses a row. |
 | D6 | Run-image workflow: four fields with the v5 validation rules, cycling network button, `/proc/net/tcp` preflight, inspect-based port pre-select. |
-| D7 | Settings: additive-only; `default_network` added; `show_count` becomes a hidden tombstone so 0.2.0 stored values keep validating. |
+| D7 | Settings: declare `refresh_interval_seconds`, `status_mode`, and `default_network`; keep `show_count` deleted under signed roadmap D1. |
 | D8 | Verification: unit + harness + fit + the missing integration gate, and the live gate asserts reachability and validation while only logging counts. |
 
-Sign-off on these eight decisions is the gate to writing the implementation plan.
+These eight design decisions and the remaining plan-level choices were approved on
+2026-09-23 before implementation.

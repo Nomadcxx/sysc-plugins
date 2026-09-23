@@ -50,7 +50,8 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-22-mini-docker-tranche-review.md` | audit | Independent read of the tranche: verdict fix-first; its three items landed in `5991b68`. |
 | `2026-09-23-plugin-view-geometry-lint.md` | plan | Host-side node identity in layout rejections, a public `plugin/lint` built on the shell's own pipeline, and the plugin-repo tests and rules doc that use it — so a view that validates but cannot be drawn fails in `go test`, not on the desktop. |
 | `2026-09-23-mini-docker-research.md` | research | Prior-art research for the mini-docker redesign: the Noctalia v4/v5 and DMS managers read in full (pinned SHAs), the pinned shell's render vocabulary, surfaces, limits and icon catalogue, the v0.3.0 tranche's open findings, and the feature-disposition table the design will decide from. |
-| `2026-09-23-mini-docker-design.md` | design | The mini-docker redesign: four tabs with containers carried furthest, a scope row and detail card, inline armed confirmation, a `/proc/net/tcp` port preflight, additive-only settings with a `show_count` tombstone, and the verification contract — eight decisions awaiting sign-off. |
+| `2026-09-23-mini-docker-design.md` | design | Approved mini-docker parity design: four tabs, per-tab refresh and error behavior, safe actions, run-image form, protocol minor 4, and the signed deletion of `show_count`. |
+| `2026-09-23-mini-docker-parity-pass.md` | plan | Approved TDD implementation sequence for mini-docker parity, with exact files, focused verification, and task-boundary commits. |
 | `2026-09-23-wallpaper-depth-design.md` | design | The approved Wallpaper Depth design: a fixed shell-owned clock on the Bottom layer, per-output Depth Anything masks, destination-out composition, and two narrow wallpaper host calls. |
 | `2026-09-23-wallpaper-depth.md` | plan | The TDD implementation sequence for wire minor 7, wallpaper snapshot and mask calls, the Bottom-layer depth clock, serialized per-output inference, process gate, and bare-metal calibration. |
 
@@ -58,4 +59,4 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 
 | Branch | Holds |
 |---|---|
-| *(none — every document is on `main`)* | |
+| `feature/mini-docker-parity-pass` | `2026-09-23-mini-docker-design.md` (approval sync) · `2026-09-23-mini-docker-parity-pass.md` |
