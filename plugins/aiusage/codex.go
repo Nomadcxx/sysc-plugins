@@ -28,9 +28,9 @@ func (c *snapshotCollector) ID() string { return "codex" }
 // rawWindow is a rate_limits entry on the wire. used_percent is used, not
 // remaining; resets_at is unix seconds.
 type rawWindow struct {
-	UsedPercent   float64 `json:"used_percent"`
-	WindowMinutes int     `json:"window_minutes"`
-	ResetsAt      int64   `json:"resets_at"`
+	UsedPercent   *float64 `json:"used_percent"`
+	WindowMinutes int      `json:"window_minutes"`
+	ResetsAt      int64    `json:"resets_at"`
 }
 
 // snapshotRow is the JSONL record shape the collector consumes.
@@ -58,7 +58,8 @@ func (r snapshotRow) valid() (time.Time, bool) {
 	if rl.LimitID != "" && rl.LimitID != "codex" {
 		return time.Time{}, false
 	}
-	if rl.Primary == nil && rl.Secondary == nil {
+	if (rl.Primary == nil || rl.Primary.UsedPercent == nil) &&
+		(rl.Secondary == nil || rl.Secondary.UsedPercent == nil) {
 		return time.Time{}, false
 	}
 	ts, err := time.Parse(time.RFC3339, r.Timestamp)
@@ -218,11 +219,11 @@ func normalizeSnapshotWindows(row snapshotRow) []Window {
 		key string
 		raw *rawWindow
 	}{{"primary", rl.Primary}, {"secondary", rl.Secondary}} {
-		if slot.raw == nil {
+		if slot.raw == nil || slot.raw.UsedPercent == nil {
 			continue
 		}
 		w := Window{Key: slot.key, HasPercent: true, WindowMinutes: slot.raw.WindowMinutes}
-		w.UsedPercent = math.Max(0, math.Min(100, slot.raw.UsedPercent))
+		w.UsedPercent = math.Max(0, math.Min(100, *slot.raw.UsedPercent))
 		w.Label, w.ShortLabel = LabelForMinutes(slot.raw.WindowMinutes)
 		if w.Label == "" {
 			w.Label = strings.ToUpper(slot.key[:1]) + slot.key[1:]

@@ -22,6 +22,17 @@ func directEnv(home string, getenv func(string) string, keys map[string]string) 
 	}
 }
 
+func writeOpenCodeCopilotAuth(t *testing.T, home, access string) {
+	t.Helper()
+	path := filepath.Join(home, ".local", "share", "opencode", "auth.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"github-copilot":{"type":"oauth","access":"`+access+`","refresh":"do-not-use-refresh","expires":1}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // frozenNow is Wednesday 2026-09-16 noon UTC, so nextWeeklyReset lands on
 // the 21st.
 var frozenNow = time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
@@ -71,6 +82,30 @@ func TestCommandCodeCollector(t *testing.T) {
 	}
 }
 
+func TestCommandCodeInvalidQuotaIsFault(t *testing.T) {
+	for name, payload := range map[string]string{
+		"missing used": `{"windowLimits":{"fiveHour":{"cap":100}}}`,
+		"missing cap":  `{"windowLimits":{"fiveHour":{"used":10}}}`,
+		"zero cap":     `{"windowLimits":{"fiveHour":{"used":0,"cap":0}}}`,
+		"negative cap": `{"windowLimits":{"fiveHour":{"used":0,"cap":-1}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(payload))
+			}))
+			defer srv.Close()
+			c := &commandcodeCollector{
+				env:  directEnv("", func(string) string { return "" }, map[string]string{"commandcode": "k"}),
+				base: srv.URL,
+			}
+			rep, err := c.Fetch(t.Context())
+			if err == nil || rep.State != StateFault {
+				t.Fatalf("invalid quota = %+v, %v; want a fault", rep, err)
+			}
+		})
+	}
+}
+
 func TestCommandCodeKeyChain(t *testing.T) {
 	t.Parallel()
 
@@ -98,6 +133,15 @@ func TestCommandCodeKeyChain(t *testing.T) {
 	key, setupErr := c.key()
 	if setupErr != nil || key != "file-key" {
 		t.Fatalf("key = %q, %v; want the auth file", key, setupErr)
+	}
+}
+
+func TestCommandCodeSettingsKeyWins(t *testing.T) {
+	c := &commandcodeCollector{env: directEnv("", func(string) string { return "env-key" },
+		map[string]string{"commandcode": "settings-key"})}
+	key, setup := c.key()
+	if setup != nil || key != "settings-key" {
+		t.Fatalf("key = %q, %v; want plugin settings key", key, setup)
 	}
 }
 
@@ -152,6 +196,54 @@ func TestOllamaFractionsAndWeeklyReset(t *testing.T) {
 	rep, err = c.Fetch(t.Context())
 	if err != nil || rep.State != StateFresh {
 		t.Fatalf("me failure surfaced: %+v, %v", rep, err)
+	}
+}
+
+func TestOllamaMissingUsageIsFault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/usage" {
+			w.Write([]byte(`{"limits":{"weekly":{}}}`))
+			return
+		}
+		w.Write([]byte(`{"plan":"free"}`))
+	}))
+	defer srv.Close()
+	c := &ollamaCollector{
+		env:  directEnv("", func(string) string { return "" }, map[string]string{"ollama": "k"}),
+		base: srv.URL,
+	}
+	rep, err := c.Fetch(t.Context())
+	if err == nil || rep.State != StateFault {
+		t.Fatalf("missing weekly usage = %+v, %v; want a fault", rep, err)
+	}
+}
+
+func TestOllamaUndocumentedMonthlyShapeIsNoData(t *testing.T) {
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		if r.Method != http.MethodGet || r.URL.Path != "/api/usage" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			return
+		}
+		w.Write([]byte(`{"limits":{"monthly":{"models":[],"usage":1}}}`))
+	}))
+	defer srv.Close()
+	c := &ollamaCollector{
+		env:  directEnv("", func(string) string { return "" }, map[string]string{"ollama": "k"}),
+		base: srv.URL,
+	}
+	c.env.Client = srv.Client()
+
+	rep, err := c.Fetch(t.Context())
+	if err != nil || rep.State != StateNoData || len(rep.Windows) != 0 {
+		t.Fatalf("monthly response = %+v, %v; want no data without inferred units", rep, err)
+	}
+	if !strings.Contains(rep.Err, "unit") || !strings.Contains(rep.Err, "limit") {
+		t.Fatalf("monthly explanation = %q; want the unknown unit and limit called out", rep.Err)
+	}
+	if len(requests) != 1 || requests[0] != "GET /api/usage" {
+		t.Fatalf("requests = %v; want quota GET only", requests)
 	}
 }
 
@@ -296,6 +388,8 @@ func TestMinimaxKeyRejectedFault(t *testing.T) {
 
 func TestCopilotQuotaSnapshots(t *testing.T) {
 	t.Parallel()
+	home := t.TempDir()
+	writeOpenCodeCopilotAuth(t, home, "opencode-token")
 
 	var gotAuth, gotEditor, gotAPIVer string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -315,7 +409,7 @@ func TestCopilotQuotaSnapshots(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &copilotCollector{env: directEnv("", func(name string) string {
+	c := &copilotCollector{env: directEnv(home, func(name string) string {
 		if name == "GITHUB_TOKEN" {
 			return "gh-token"
 		}
@@ -352,10 +446,33 @@ func TestCopilotQuotaSnapshots(t *testing.T) {
 	}
 }
 
+func TestCopilotReadsOpenCodeOAuthAccessToken(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	writeOpenCodeCopilotAuth(t, home, "open-code-access")
+
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Write([]byte(`{"quota_snapshots":{"premium_interactions":{"unlimited":true}}}`))
+	}))
+	defer srv.Close()
+
+	c := &copilotCollector{env: directEnv(home, func(string) string { return "" }, nil), base: srv.URL, gh: func() string { return "" }}
+	rep, err := c.Fetch(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.State != StateFresh || gotAuth != "token open-code-access" {
+		t.Fatalf("state = %v, authorization = %q; want fresh with the stored access token", rep.State, gotAuth)
+	}
+}
+
 func TestCopilotMissingTokenIsSetup(t *testing.T) {
 	t.Parallel()
 
-	c := &copilotCollector{env: directEnv("", func(string) string { return "" }, nil),
+	c := &copilotCollector{env: directEnv(t.TempDir(), func(string) string { return "" }, nil),
 		base: "https://unused.invalid", gh: func() string { return "" }}
 	rep, err := c.Fetch(t.Context())
 	var setup *ErrSetup

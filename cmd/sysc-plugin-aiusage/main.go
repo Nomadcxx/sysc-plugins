@@ -42,26 +42,24 @@ func run(in, out *os.File) error {
 
 	var (
 		loop     *aiusage.Loop
-		cfg      aiusage.Config
-		inst     = aiusage.DefaultInstance()
+		settings = newSettingsState(minor)
 		selected string
 		ledger   = aiusage.Ledger{}
 	)
 
-	ensure := func(values map[string]any) {
-		cfg = resolveConfig(values, minor)
-		inst = resolveInstance(values)
+	ensure := func() {
 		if loop == nil {
-			loop = aiusage.NewLoop(registry(), cfg, aiusage.Env{}, paths.cache, paths.history)
+			loop = aiusage.NewLoop(registry(), settings.config, aiusage.Env{}, paths.cache, paths.history)
 			loop.WarmStart()
 		} else {
-			loop.Reconfigure(registry(), cfg)
+			loop.Reconfigure(registry(), settings.config)
 		}
 	}
 
 	type view struct {
-		kind v1.ViewKind
-		rev  uint64
+		kind     v1.ViewKind
+		rev      uint64
+		instance string
 	}
 	views := map[string]view{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -88,13 +86,13 @@ func run(in, out *os.File) error {
 			var root *v1.Node
 			switch v.kind {
 			case v1.ViewBar:
-				root = aiusage.BarTree(rep, inst, cfg, minor, time.Now())
+				root = aiusage.BarTree(rep, settings.instance(v.instance), settings.config, minor, time.Now())
 			case v1.ViewTooltip:
 				// The shell auto-opens this view under the bar widget; a
 				// text-only tree is what it can paint.
-				root = aiusage.TooltipTree(rep, inst, cfg, minor, time.Now())
+				root = aiusage.TooltipTree(rep, settings.instance(v.instance), settings.config, minor, time.Now())
 			default:
-				root = aiusage.PanelTree(rep, selected, hist, cfg, minor, time.Now())
+				root = aiusage.PanelTree(rep, selected, hist, settings.config, minor, time.Now())
 			}
 			v.rev++
 			views[id] = v
@@ -106,25 +104,27 @@ func run(in, out *os.File) error {
 		if loop == nil {
 			return
 		}
-		publish() // the refresh button reads busy while the round runs
 		loop.SetLoading(true)
+		publish() // publish after setting loading so the button sees busy
 		rep := loop.Round(ctx, force)
 		loop.SetLoading(false)
 		ac := aiusage.AlertConfig{
-			Warn: cfg.Warn, Crit: cfg.Crit,
-			PerProvider: cfg.AlertPerProvider,
-			Scope:       cfg.AlertScope,
-			Cooldown:    cfg.AlertCooldown,
+			Warn: settings.config.Warn, Crit: settings.config.Crit,
+			PerProvider: settings.config.AlertPerProvider,
+			Scope:       settings.config.AlertScope,
+			Cooldown:    settings.config.AlertCooldown,
 		}
-		for _, n := range aiusage.CheckAlerts(rep, ac, ledger, time.Now()) {
-			urgency := v1.UrgencyNormal
-			if n.Critical {
-				urgency = v1.UrgencyCritical
+		if settings.config.AlertsEnabled {
+			for _, n := range aiusage.CheckAlerts(rep, ac, ledger, time.Now()) {
+				urgency := v1.UrgencyNormal
+				if n.Critical {
+					urgency = v1.UrgencyCritical
+				}
+				_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{Summary: n.Summary, Body: n.Body, Urgency: urgency})
 			}
-			_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{Summary: n.Summary, Body: n.Body, Urgency: urgency})
-		}
-		if raw, err := json.Marshal(ledger); err == nil {
-			_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "alerts", Value: raw})
+			if raw, err := json.Marshal(ledger); err == nil {
+				_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "alerts", Value: raw})
+			}
 		}
 		publish()
 	}
@@ -163,19 +163,34 @@ func run(in, out *os.File) error {
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
+				if loop == nil {
+					ensure() // defaults are used only if no plugin settings arrived
+				}
 				if !started {
 					started = true
-					ensure(nil) // the first settings push fills real values
 					loadLedger()
 					// Warm-start aware: floors and the cross-instance cache
 					// guard decide who fetches; a reload inside the guard
 					// serves the cache and touches no endpoint.
 					round(false)
 				}
-				views[m.ViewID] = view{kind: m.View}
+				views[m.ViewID] = view{kind: m.View, instance: m.Instance}
 				publish()
 			case *v1.ViewClose:
+				closed := views[m.ViewID]
 				delete(views, m.ViewID)
+				if closed.instance != "" {
+					stillOpen := false
+					for _, v := range views {
+						if v.instance == closed.instance {
+							stillOpen = true
+							break
+						}
+					}
+					if !stillOpen {
+						settings.forgetInstance(closed.instance)
+					}
+				}
 			case *v1.ViewResync:
 				if v, ok := views[m.ViewID]; ok {
 					v.rev = 0
@@ -187,9 +202,9 @@ func run(in, out *os.File) error {
 				case m.Node == "open":
 					_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 				case m.Node == "refresh":
-					// Floors hold on a manual refresh: backoff is overridden
-					// by Force, the rate-limit discipline is not.
-					round(false)
+					// Manual refresh overrides cadence/backoff; the loop still
+					// defers providers inside a hard request floor.
+					round(true)
 				case m.Node == "export":
 					if path, err := loop.ExportCSV(""); err == nil {
 						_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{
@@ -214,9 +229,15 @@ func run(in, out *os.File) error {
 					publish()
 				}
 			case *v1.SettingsChanged:
-				ensure(m.Values)
-				schedule.Reset(cfg.Refresh)
-				round(true)
+				if settings.apply(m, minor) {
+					ensure()
+					schedule.Reset(settings.config.Refresh)
+					if started {
+						round(true)
+					}
+				} else if m.Scope == v1.ScopeInstance {
+					publish()
+				}
 			}
 		case <-clock.C:
 			gap := time.Since(lastTick)
@@ -230,9 +251,52 @@ func run(in, out *os.File) error {
 		case <-schedule.C:
 			lastTick = time.Now()
 			round(false)
-			schedule.Reset(cfg.Refresh)
+			schedule.Reset(settings.config.Refresh)
 		}
 	}
+}
+
+// settingsState keeps plugin-wide collection settings separate from each
+// widget placement's presentation preferences.
+type settingsState struct {
+	config    aiusage.Config
+	instances map[string]aiusage.Instance
+}
+
+func newSettingsState(minor int) *settingsState {
+	return &settingsState{
+		config:    resolveConfig(nil, minor),
+		instances: map[string]aiusage.Instance{},
+	}
+}
+
+// apply returns true only when plugin-wide settings changed and collectors
+// must be reconfigured.
+func (s *settingsState) apply(m *v1.SettingsChanged, minor int) bool {
+	if m == nil {
+		return false
+	}
+	switch m.Scope {
+	case v1.ScopePlugin:
+		s.config = resolveConfig(m.Values, minor)
+		return true
+	case v1.ScopeInstance:
+		if m.Instance != "" {
+			s.instances[m.Instance] = resolveInstance(m.Values)
+		}
+	}
+	return false
+}
+
+func (s *settingsState) instance(id string) aiusage.Instance {
+	if inst, ok := s.instances[id]; ok {
+		return inst
+	}
+	return aiusage.DefaultInstance()
+}
+
+func (s *settingsState) forgetInstance(id string) {
+	delete(s.instances, id)
 }
 
 // negotiate picks the highest minor the host offers, capped at the newest
@@ -256,6 +320,7 @@ func registry() aiusage.Registry {
 		"copilot":     aiusage.NewCopilot,
 		"minimax":     aiusage.NewMinimax,
 		"ollama":      aiusage.NewOllama,
+		"opencode-go": aiusage.NewOpenCodeGo,
 		"synthetic":   aiusage.NewSynthetic,
 	}
 }
@@ -305,6 +370,16 @@ func resolveConfig(values map[string]any, minor int) aiusage.Config {
 		cooldown = 1440
 	}
 	retention := i("history_retention", 2000)
+	if value, ok := values["history_retention"].(string); ok {
+		switch value {
+		case "500":
+			retention = 500
+		case "2000":
+			retention = 2000
+		case "10000":
+			retention = 10000
+		}
+	}
 	return aiusage.Config{
 		Track: map[string]bool{
 			"claude":      b("track_claude", true),
@@ -313,17 +388,21 @@ func resolveConfig(values map[string]any, minor int) aiusage.Config {
 			"copilot":     b("track_copilot", false),
 			"minimax":     b("track_minimax", false),
 			"ollama":      b("track_ollama", false),
+			"opencode-go": b("track_opencode_go", false),
 			"synthetic":   b("track_synthetic", false),
 		},
 		Keys: map[string]string{
-			"ollama":    s("ollama_api_key"),
-			"minimax":   s("minimax_api_key"),
-			"synthetic": s("synthetic_api_key"),
+			"commandcode": s("commandcode_api_key"),
+			"ollama":      s("ollama_api_key"),
+			"opencode-go": s("opencode_go_api_key"),
+			"minimax":     s("minimax_api_key"),
+			"synthetic":   s("synthetic_api_key"),
 		},
 		Refresh:          time.Duration(i("refresh_interval", 300)) * time.Second,
 		Warn:             warn,
 		Crit:             crit,
 		HostMinor:        minor,
+		AlertsEnabled:    b("alerts_enabled", true),
 		AlertPerProvider: perProvider,
 		AlertScope:       s("alert_window_scope"),
 		AlertCooldown:    time.Duration(cooldown) * time.Minute,

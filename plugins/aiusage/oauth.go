@@ -23,9 +23,10 @@ import (
 // endpoint rate-limits hard, so the loop never polls it faster than its
 // floor and never serves a fault from cache (stale data would mislead).
 type oauthUsageCollector struct {
-	env     Env
-	base    string // injectable for httptest
-	version string // the User-Agent version the endpoint expects
+	env             Env
+	base            string // injectable for httptest
+	version         string // the User-Agent version the endpoint expects
+	preferredSource string // last usable or next fallback source; avoids retaining the token
 }
 
 // NewOAuthUsage builds the oauth usage collector.
@@ -49,6 +50,18 @@ func (c *oauthUsageCollector) Floor() time.Duration { return 180 * time.Second }
 type tokenCand struct {
 	expiresAtMS int64
 	token       string
+	source      string
+}
+
+func openCodeAuthPath(env Env) string {
+	if path := env.getenv("OPENCODE_AUTH"); path != "" {
+		return path
+	}
+	dataDir := env.getenv("XDG_DATA_HOME")
+	if dataDir == "" {
+		dataDir = filepath.Join(env.home(), ".local", "share")
+	}
+	return filepath.Join(dataDir, "opencode", "auth.json")
 }
 
 // credentials reads the on-disk OAuth token. The path is recorded so the
@@ -71,6 +84,7 @@ func (c *oauthUsageCollector) credentials() ([]tokenCand, *ErrSetup) {
 			tokens = append(tokens, tokenCand{
 				expiresAtMS: file.ClaudeAiOauth.ExpiresAt,
 				token:       file.ClaudeAiOauth.AccessToken,
+				source:      "claude-cli",
 			})
 		}
 	}
@@ -78,14 +92,7 @@ func (c *oauthUsageCollector) credentials() ([]tokenCand, *ErrSetup) {
 	// Source 2: the opencode client's Anthropic OAuth token — either
 	// client's token serves the same endpoint, so switching tools no longer
 	// stales the widget (the DankClaudeUsage multi-source rule).
-	opencodePath := c.env.getenv("OPENCODE_AUTH")
-	if opencodePath == "" {
-		dataDir := c.env.getenv("XDG_DATA_HOME")
-		if dataDir == "" {
-			dataDir = filepath.Join(c.env.home(), ".local", "share")
-		}
-		opencodePath = filepath.Join(dataDir, "opencode", "auth.json")
-	}
+	opencodePath := openCodeAuthPath(c.env)
 	tried.Tried = append(tried.Tried, opencodePath)
 	if raw, err := os.ReadFile(opencodePath); err == nil {
 		var file struct {
@@ -99,6 +106,7 @@ func (c *oauthUsageCollector) credentials() ([]tokenCand, *ErrSetup) {
 			tokens = append(tokens, tokenCand{
 				expiresAtMS: file.Anthropic.Expires * 1000,
 				token:       file.Anthropic.Access,
+				source:      "opencode",
 			})
 		}
 	}
@@ -127,19 +135,25 @@ func (c *oauthUsageCollector) Fetch(ctx context.Context) (ProviderReport, error)
 		rep.Err = setup.Error()
 		return rep, setup
 	}
-	var lastErr string
-	for _, cand := range tokens {
-		windows, credits, msg := c.tryToken(ctx, cand.token)
-		if msg == "" {
-			rep.Windows = windows
-			rep.Credits = credits
-			rep.State = StateFresh
-			return rep, nil
+	index := 0
+	for i, cand := range tokens {
+		if cand.source == c.preferredSource {
+			index = i
+			break
 		}
-		lastErr = msg
 	}
+	cand := tokens[index]
+	windows, credits, msg := c.tryToken(ctx, cand.token)
+	if msg == "" {
+		c.preferredSource = cand.source
+		rep.Windows = windows
+		rep.Credits = credits
+		rep.State = StateFresh
+		return rep, nil
+	}
+	c.preferredSource = tokens[(index+1)%len(tokens)].source
 	rep.State = StateFault
-	rep.Err = Scrub(lastErr)
+	rep.Err = Scrub(msg)
 	return rep, fmt.Errorf("oauth usage: %s", rep.Err)
 }
 

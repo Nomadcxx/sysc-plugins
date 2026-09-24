@@ -112,6 +112,109 @@ func TestBarTreeValidatesAcrossStatesAndHosts(t *testing.T) {
 	}
 }
 
+func TestNeedsSetupDetailOffersRetry(t *testing.T) {
+	const setupErr = "setup required: plugin setting opencode_go_api_key; env OPENCODE_GO_API_KEY; /tmp/opencode/auth.json (opencode API key)"
+	report := Report{Providers: []ProviderReport{{
+		ID: "opencode-go", Name: "OpenCode Go", State: StateNeedsSetup, Err: setupErr,
+	}}}
+	tree := PanelTree(report, "opencode-go", nil, viewConfig(), 4, viewNow)
+	if findByID(tree, "retry:opencode-go") == nil {
+		t.Fatal("setup-required provider has no retry action")
+	}
+	for _, hint := range []string{
+		"No supported credential was found.",
+		"Settings are below.",
+		"Focus the provider row for credential options.",
+	} {
+		if findText(tree, hint) == nil {
+			t.Errorf("setup detail omits visible guidance %q", hint)
+		}
+	}
+	row := findByID(tree, "sel:opencode-go")
+	if row == nil || !strings.Contains(row.Tooltip, setupErr) {
+		t.Fatalf("provider tooltip lost credential-source detail: %+v", row)
+	}
+}
+
+func TestNoDataDetailShowsProviderExplanation(t *testing.T) {
+	const explanation = "Monthly usage is available, but its unit and limit are undocumented."
+	report := Report{Providers: []ProviderReport{{
+		ID: "ollama", Name: "Ollama", State: StateNoData, Err: explanation,
+	}}}
+	tree := PanelTree(report, "ollama", nil, viewConfig(), 4, viewNow)
+	msg := findText(tree, explanation)
+	if msg == nil {
+		t.Fatal("no-data detail hid the provider explanation")
+	}
+	if msg.MaxWidth != 320 {
+		t.Fatalf("no-data explanation max width = %d, want 320", msg.MaxWidth)
+	}
+}
+
+func TestPanelRefreshShowsBusyState(t *testing.T) {
+	tree := PanelTree(Report{Loading: true}, "", nil, viewConfig(), 4, viewNow)
+	button := findByID(tree, "refresh")
+	if button == nil || !button.Disabled || button.Text != "Refreshing…" {
+		t.Fatalf("busy refresh button = %+v", button)
+	}
+}
+
+func TestDeferredProviderUsesCompactStatusWithFullTooltip(t *testing.T) {
+	p := ProviderReport{Name: "Claude", State: StateFresh, DeferredUntil: viewNow.Add(time.Minute)}
+	status, _ := p.secondLine(viewConfig(), viewNow)
+	if status != "Wait" {
+		t.Fatalf("deferred status = %q", status)
+	}
+	if tooltip := rowTooltip(p, viewConfig(), viewNow); !strings.Contains(tooltip, "Refresh deferred · 1m") {
+		t.Fatalf("deferred tooltip = %q", tooltip)
+	}
+}
+
+func TestProviderRowsKeepNamesAndStatusesReadable(t *testing.T) {
+	window := Window{Key: "primary", Label: "Session", HasPercent: true,
+		UsedPercent: 10, WindowMinutes: 300, ResetsAt: viewNow.Add(time.Hour)}
+	cases := []struct {
+		name       string
+		provider   ProviderReport
+		status     string
+		tooltipHas string
+	}{
+		{"ready", ProviderReport{ID: "commandcode", Name: "Command Code", Plan: "Pro", State: StateFresh, UpdatedAt: viewNow, Windows: []Window{window}}, "Ready", "Pro"},
+		{"setup", ProviderReport{ID: "synthetic", Name: "Synthetic", State: StateNeedsSetup, Err: "credential missing"}, "Setup", "Needs setup"},
+		{"fault", ProviderReport{ID: "minimax", Name: "MiniMax", State: StateFault, Err: "request failed"}, "Error", "Read failed"},
+		{"no data", ProviderReport{ID: "opencode-go", Name: "OpenCode Go", State: StateNoData, Err: "OpenCode Go subscription required (HTTP 403)"}, "No data", "subscription required"},
+		{"deferred", ProviderReport{ID: "claude", Name: "Claude", State: StateFresh, DeferredUntil: viewNow.Add(time.Minute)}, "Wait", "Refresh deferred"},
+		{"stale", ProviderReport{ID: "ollama", Name: "Ollama", State: StateFresh, Stale: true, UpdatedAt: viewNow.Add(-3 * time.Minute)}, "Stale", "Stale"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			row := providerRow(tc.provider, false, viewConfig(), 7, viewNow)
+			if len(row.Children) != 4 {
+				t.Fatalf("provider row has %d children, want 4", len(row.Children))
+			}
+			name := row.Children[1]
+			status := row.Children[2].Children[0]
+			if got := len(name.Text) * 8; got > name.Width {
+				t.Errorf("provider name %q needs %dpx, control is %dpx", name.Text, got, name.Width)
+			}
+			if status.Text != tc.status {
+				t.Errorf("visible status = %q, want %q", status.Text, tc.status)
+			}
+			if got := len(status.Text) * 8; got > row.Children[2].Width {
+				t.Errorf("status %q needs %dpx, slot is %dpx", status.Text, got, row.Children[2].Width)
+			}
+			used := row.Children[0].Width + name.Width + row.Children[2].Width + row.Children[3].Width + row.Gap*3
+			if used > 290-2*row.Padding {
+				t.Errorf("provider controls use %dpx, list row has %dpx", used, 290-2*row.Padding)
+			}
+			if !strings.Contains(name.Tooltip, tc.provider.Name) || !strings.Contains(name.Tooltip, tc.tooltipHas) {
+				t.Errorf("tooltip %q omits provider or full status detail", name.Tooltip)
+			}
+		})
+	}
+}
+
 func treeHasAbsentMeter(n *v1.Node) bool {
 	if n == nil {
 		return false
@@ -352,6 +455,70 @@ func TestPanelTreeStructure(t *testing.T) {
 	}
 }
 
+func TestDetailSummaryPairsIdentityFreshnessAndGauge(t *testing.T) {
+	tree := PanelTree(viewReport(), "alpha", nil, viewConfig(), 4, viewNow)
+	summary := findByKey(tree, "provider-summary")
+	if summary == nil {
+		t.Fatal("provider summary row missing")
+	}
+	if findText(summary, "Alpha") == nil || findText(summary, "Updated just now · 12:00") == nil {
+		t.Fatal("provider identity and freshness are not grouped in the summary")
+	}
+	var gauge *v1.Node
+	var walk func(*v1.Node)
+	walk = func(n *v1.Node) {
+		if n.Kind == v1.KindGauge && n.Width == 64 {
+			gauge = n
+		}
+		for _, child := range n.Children {
+			walk(child)
+		}
+	}
+	walk(summary)
+	if gauge == nil || gauge.ValueText != "40%" {
+		t.Fatalf("summary gauge = %+v, want the headline usage gauge", gauge)
+	}
+}
+
+func TestPanelUsesFlatQuotaSectionsAndKeepsSelection(t *testing.T) {
+	tree := PanelTree(viewReport(), "alpha", []float64{20, 40}, viewConfig(), 4, viewNow)
+	selected := findByKey(tree, "provider-alpha")
+	unselected := findByKey(tree, "provider-beta")
+	if selected == nil || selected.Fill != "chip" || selected.Shape == "card" {
+		t.Fatalf("selected provider surface = %+v, want a chip selection without a card", selected)
+	}
+	if unselected == nil || unselected.Fill != "" || unselected.Shape == "card" {
+		t.Fatalf("unselected provider surface = %+v, want a flat row", unselected)
+	}
+	var filledCards int
+	var walk func(*v1.Node)
+	walk = func(n *v1.Node) {
+		if n.Fill == "card" || n.Shape == "card" {
+			filledCards++
+		}
+		for _, child := range n.Children {
+			walk(child)
+		}
+	}
+	walk(tree)
+	if filledCards != 0 {
+		t.Fatalf("panel contains %d repeated card surfaces", filledCards)
+	}
+	detail := findByKey(tree, "provider-detail")
+	if detail == nil {
+		t.Fatal("provider detail list missing")
+	}
+	separators := 0
+	for _, child := range detail.Children {
+		if child.Kind == v1.KindSeparator {
+			separators++
+		}
+	}
+	if separators != 1 {
+		t.Fatalf("quota section separators = %d, want one between the two windows", separators)
+	}
+}
+
 func TestPanelTreeSeparatorsAndMinorTwo(t *testing.T) {
 	t.Parallel()
 
@@ -371,8 +538,8 @@ func TestPanelTreeSeparatorsAndMinorTwo(t *testing.T) {
 		walk(tree)
 		return seps
 	}
-	if count(4) != 1 {
-		t.Fatalf("minor-4 separators = %d, want 1 (two rows)", count(4))
+	if count(4) != 2 {
+		t.Fatalf("minor-4 separators = %d, want one provider and one quota divider", count(4))
 	}
 	if count(3) != 0 {
 		t.Fatalf("minor-3 separators = %d, want 0", count(3))
@@ -413,6 +580,21 @@ func treeHasKey(n *v1.Node, key string) bool {
 		}
 	}
 	return false
+}
+
+func findByKey(n *v1.Node, key string) *v1.Node {
+	if n == nil {
+		return nil
+	}
+	if n.Key == key {
+		return n
+	}
+	for _, child := range n.Children {
+		if found := findByKey(child, key); found != nil {
+			return found
+		}
+	}
+	return nil
 }
 
 func TestDetailExhaustedNoticeAndTooltip(t *testing.T) {

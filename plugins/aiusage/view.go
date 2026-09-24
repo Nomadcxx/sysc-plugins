@@ -272,7 +272,7 @@ func fleetRollup(r Report, cfg Config, now time.Time) *v1.Node {
 	}
 	// Height includes padding: 42 is 26 of content plus the 2×8 the card
 	// insets, so the rollup stands as tall as a provider row.
-	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Fill: "card", Shape: "card", Padding: 8, Height: 42, Key: "fleet-rollup"}
+	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Padding: 8, Height: 42, Key: "fleet-rollup"}
 	row.Children = append(row.Children,
 		&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Avg %v%%", math.Round(total/float64(timed))), Bold: true, Width: 56})
 	if peak != nil {
@@ -297,14 +297,18 @@ func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor 
 	// panel box is 750×430 and the content overflows it, so each pane gets
 	// an explicit viewport (the scroll rule: it clips only with a height).
 	const paneHeight = 406 // panel 430 − root padding 24
+	refreshLabel := "Refresh"
+	if r.Loading {
+		refreshLabel = "Refreshing…"
+	}
 	list := &v1.Node{Kind: v1.KindList, Width: 290, Height: paneHeight, Gap: 2, Children: []*v1.Node{}}
 	list.Children = append(list.Children,
 		&v1.Node{Kind: v1.KindRow, Gap: 6, Height: 28, Children: []*v1.Node{
 			{Kind: v1.KindIcon, Icon: "ai-usage"},
 			{Kind: v1.KindText, Text: "AI Usage", Bold: true, Size: "title"},
-			&v1.Node{Kind: v1.KindButton, ID: "refresh", Text: "Refresh",
+			&v1.Node{Kind: v1.KindButton, ID: "refresh", Text: refreshLabel,
 				Name: "Refresh all providers", Role: "button",
-				Disabled: r.Loading, Tooltip: "Fetch every tracked provider now",
+				Disabled: r.Loading, Tooltip: "Refresh tracked providers now; providers inside a safe refresh window are deferred.",
 				Events: []v1.EventKind{v1.EventActivate}},
 		}})
 	// The fleet rollup: average load across timed quota windows, the peak
@@ -324,7 +328,7 @@ func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor 
 		list.Children = append(list.Children, providerRow(p, selected == p.ID, cfg, hostMinor, now))
 	}
 
-	detail := &v1.Node{Kind: v1.KindList, Width: 412, Height: paneHeight, Gap: 10, Children: detailPane(r, providers, selected, hist, cfg, hostMinor, now).Children}
+	detail := &v1.Node{Kind: v1.KindList, Key: "provider-detail", Width: 412, Height: paneHeight, Gap: 10, Children: detailPane(r, providers, selected, hist, cfg, hostMinor, now).Children}
 
 	// Column root (panel rule) with the side-by-side master/detail row as
 	// its single child.
@@ -360,7 +364,7 @@ func sortProviderRows(providers []ProviderReport, cfg Config) {
 }
 
 func providerRow(p ProviderReport, selected bool, cfg Config, hostMinor int, now time.Time) *v1.Node {
-	fill := "card"
+	fill := ""
 	if selected {
 		fill = "chip" // the selection tint
 	}
@@ -384,7 +388,7 @@ func providerRow(p ProviderReport, selected bool, cfg Config, hostMinor int, now
 
 	row := &v1.Node{
 		Kind: v1.KindRow, Key: "provider-" + p.ID,
-		Fill: fill, Shape: "card", Padding: 8, Gap: 6,
+		Fill: fill, Padding: 8, Gap: 4,
 		// Height includes padding: 42 is 26 of content — the monogram disc's
 		// square — plus the 2×8 the card insets.
 		Height: 42,
@@ -395,16 +399,19 @@ func providerRow(p ProviderReport, selected bool, cfg Config, hostMinor int, now
 		row.Stroke = 1
 		row.StrokeFill = "accent"
 	}
-	// Every child carries a fixed width: the pane is 274 logical pixels of
-	// content, and a row whose children measure naturally overflows it and
-	// fails layout. Fixed widths are the ai-usagebar rule.
+	// Every child carries a fixed width: the pane has 274px of content and
+	// these controls use 270px. The 112px name control fits "Command Code";
+	// compact statuses stay in 64px while the tooltip carries full detail.
 	row.Children = append(row.Children, monogram(p.ID))
 	row.Children = append(row.Children, &v1.Node{
 		Kind: v1.KindButton, ID: "sel:" + p.ID, Text: p.Name,
-		Name: "Show " + p.Name, Role: "button", Width: 88,
-		Tooltip: rowTooltip(p, now),
+		Name: "Show " + p.Name, Role: "button", Width: 112,
+		Tooltip: rowTooltip(p, cfg, now),
 		Events:  []v1.EventKind{v1.EventActivate},
 	})
+	// ponytail: the status lane holds up to eight bytes under the host's
+	// current text metric; complete state and error text stays in the tooltip
+	// and detail pane. Wider master-list space can remove this ceiling later.
 	row.Children = append(row.Children, &v1.Node{
 		Kind: v1.KindColumn, Gap: 2, Width: 64, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: secondLine, Tone: tone, Size: "caption"},
@@ -436,41 +443,70 @@ func (p ProviderReport) staleFor(cfg Config, now time.Time) bool {
 
 // secondLine is the row's status line: plan, or why there is no number.
 func (p ProviderReport) secondLine(cfg Config, now time.Time) (string, v1.Tone) {
+	if p.DeferredUntil.After(now) {
+		return "Wait", v1.ToneSubtle
+	}
 	switch p.State {
 	case StateNeedsSetup:
-		return "Needs setup", v1.ToneAccent
+		return "Setup", v1.ToneAccent
 	case StateFault:
-		return "Read failed", v1.ToneError
+		return "Error", v1.ToneError
 	case StateNoData:
-		return "No data yet", v1.ToneSubtle
+		return "No data", v1.ToneSubtle
+	default:
+		if p.staleFor(cfg, now) {
+			return "Stale", v1.ToneError
+		}
+		return "Ready", v1.ToneSubtle
+	}
+}
+
+func rowTooltip(p ProviderReport, cfg Config, now time.Time) string {
+	parts := []string{p.Name}
+	switch {
+	case p.DeferredUntil.After(now):
+		parts = append(parts, "Refresh deferred · "+humanizeAge(p.DeferredUntil.Sub(now)))
+	case p.State == StateNeedsSetup:
+		parts = append(parts, "Needs setup")
+		if p.Err != "" {
+			parts = append(parts, p.Err)
+		}
+	case p.State == StateFault:
+		parts = append(parts, "Read failed")
+		if p.Err != "" {
+			parts = append(parts, p.Err)
+		}
+	case p.State == StateNoData:
+		parts = append(parts, "No data yet")
+		if p.Err != "" {
+			parts = append(parts, p.Err)
+		}
 	default:
 		if p.staleFor(cfg, now) {
 			age := "just now"
 			if !p.UpdatedAt.IsZero() {
-				age = "Stale · " + humanizeAge(now.Sub(p.UpdatedAt)) + " ago"
+				age = humanizeAge(now.Sub(p.UpdatedAt)) + " ago"
 			}
-			return age, v1.ToneError
+			parts = append(parts, "Stale · "+age)
+		} else if p.Plan != "" {
+			parts = append(parts, p.Plan)
+		} else {
+			parts = append(parts, "Ready")
 		}
-		if p.Plan != "" {
-			return p.Plan, v1.ToneSubtle
-		}
-		return "", v1.ToneSubtle
 	}
-}
-
-func rowTooltip(p ProviderReport, now time.Time) string {
 	h := Headline(p.Windows)
 	if h == nil {
-		if p.Err != "" {
-			return p.Err
+		if p.State == StateFresh {
+			parts = append(parts, "no readings yet")
 		}
-		return "no readings yet"
+		return strings.Join(parts, " · ")
 	}
-	t := fmt.Sprintf("%s %v%%", h.Label, h.UsedPercent)
+	quota := fmt.Sprintf("%s %v%%", h.Label, h.UsedPercent)
 	if cd := FormatCountdown(h.ResetsAt, now); cd != "" {
-		t += " · resets in " + cd
+		quota += " · resets in " + cd
 	}
-	return t
+	parts = append(parts, quota)
+	return strings.Join(parts, " · ")
 }
 
 // detailPane renders the selected provider. An unknown or absent selection
@@ -493,17 +529,6 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 		return pane
 	}
 
-	// Header: identity and plan.
-	header := &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-		monogram(p.ID),
-		{Kind: v1.KindText, Text: p.Name, Bold: true, Size: "headline"},
-	}}
-	if p.Plan != "" {
-		header.Children = append(header.Children,
-			&v1.Node{Kind: v1.KindText, Text: p.Plan, Tone: v1.ToneSubtle, Size: "caption"})
-	}
-	pane.Children = append(pane.Children, header)
-
 	// Freshness line: age against the capture, stale in error tone.
 	freshness := "no readings yet"
 	tone := v1.ToneSubtle
@@ -514,21 +539,70 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 			tone = v1.ToneError
 		}
 	}
-	pane.Children = append(pane.Children,
-		&v1.Node{Kind: v1.KindText, Text: freshness, Tone: tone, Size: "caption"})
+
+	// Keep provider identity, freshness, and its headline gauge in one quiet
+	// summary band. The host supplies all colors; the gauge remains the only
+	// prominent quota surface.
+	identity := &v1.Node{Kind: v1.KindColumn, Gap: 2, Width: 258, Children: []*v1.Node{
+		{Kind: v1.KindText, Text: p.Name, Bold: true, Size: "headline", MaxWidth: 258},
+	}}
+	if p.Plan != "" {
+		identity.Children = append(identity.Children,
+			&v1.Node{Kind: v1.KindText, Text: p.Plan, Tone: v1.ToneSubtle, Size: "caption", MaxWidth: 258})
+	}
+	identity.Children = append(identity.Children,
+		&v1.Node{Kind: v1.KindText, Text: freshness, Tone: tone, Size: "caption", MaxWidth: 258})
+	header := &v1.Node{Kind: v1.KindRow, Key: "provider-summary", Gap: 8, Children: []*v1.Node{
+		monogram(p.ID), identity,
+	}}
+	h := Headline(p.Windows)
+	if p.State == StateFresh {
+		heroPct := "--"
+		heroValue := 0.0
+		heroAbsent := h == nil || !h.HasPercent
+		heroTone := v1.ToneSubtle
+		if h != nil && h.HasPercent {
+			heroPct = fmt.Sprintf("%.0f%%", h.UsedPercent)
+			heroValue = h.UsedPercent / 100
+			heroAbsent = false
+			heroTone = severityTone(h.UsedPercent, true, cfg)
+		}
+		if hostMinor >= 3 {
+			gauge := &v1.Node{
+				Kind: v1.KindGauge, Width: 64, Height: 64,
+				Value: heroValue, ValueText: heroPct, Absent: heroAbsent,
+				Name: "headline usage", Role: "img", Tone: heroTone, PinEnd: true,
+			}
+			if hostMinor >= 6 {
+				gauge.Animate = true
+				gauge.Key = "hero"
+			}
+			header.Children = append(header.Children, gauge)
+		} else {
+			header.Children = append(header.Children, &v1.Node{Kind: v1.KindColumn, Gap: 2, Width: 64, PinEnd: true, Children: []*v1.Node{
+				{Kind: v1.KindProgress, Value: heroValue, Height: 8, Width: 64, Tone: heroTone},
+				{Kind: v1.KindText, Text: heroPct, Size: "caption", Bold: true, Tone: heroTone, Tabular: true, Width: 64},
+			}})
+		}
+	}
+	pane.Children = append(pane.Children, header)
 
 	switch p.State {
 	case StateNeedsSetup:
-		msg := p.Err
-		if msg == "" {
-			msg = "no credential found"
-		}
+		// ponytail: keep the visible next step short; rowTooltip preserves the full credential-source diagnostics.
 		pane.Children = append(pane.Children, &v1.Node{
-			Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: 10, Gap: 4,
+			Kind: v1.KindColumn, Gap: 4,
 			Children: []*v1.Node{
-				{Kind: v1.KindText, Text: "Needs setup", Bold: true},
-				{Kind: v1.KindText, Text: msg, Tone: v1.ToneSubtle, Size: "caption"},
+				{Kind: v1.KindText, Text: "Needs setup", Bold: true, Tone: v1.ToneAccent},
+				{Kind: v1.KindText, Text: "No supported credential was found.", Tone: v1.ToneSubtle, Size: "caption"},
+				{Kind: v1.KindText, Text: "Settings are below.", Tone: v1.ToneSubtle, Size: "caption"},
+				{Kind: v1.KindText, Text: "Focus the provider row for credential options.", Tone: v1.ToneSubtle, Size: "caption"},
 			},
+		})
+		pane.Children = append(pane.Children, &v1.Node{
+			Kind: v1.KindButton, ID: "retry:" + p.ID, Text: "Retry",
+			Name: "Retry " + p.Name, Role: "button",
+			Events: []v1.EventKind{v1.EventActivate},
 		})
 		return pane
 	case StateFault:
@@ -539,7 +613,7 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 			// A record card shows the last numbers as dated text: a bar
 			// reads as a live reading, and nothing is reading. The numbers
 			// are the point; the date is the caveat.
-			card := &v1.Node{Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: 10, Gap: 2}
+			card := &v1.Node{Kind: v1.KindColumn, Key: "stale-reading", Gap: 2}
 			card.Children = append(card.Children, &v1.Node{Kind: v1.KindText,
 				Text: "Last reading, " + humanizeAge(now.Sub(p.UpdatedAt)) + " ago",
 				Bold: true, Size: "caption"})
@@ -562,43 +636,15 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 			Events: []v1.EventKind{v1.EventActivate}})
 		pane.Children = append(pane.Children, row)
 	case StateNoData:
+		msg := p.Err
+		if msg == "" {
+			msg = "No data yet — use the tool to record a snapshot."
+		}
 		pane.Children = append(pane.Children,
-			&v1.Node{Kind: v1.KindText, Text: "No data yet — use the tool to record a snapshot.", Tone: v1.ToneSubtle, Size: "caption"})
+			&v1.Node{Kind: v1.KindText, Text: msg, Tone: v1.ToneSubtle, Size: "caption", MaxWidth: 320})
 	}
 
-	h := Headline(p.Windows)
 	if p.State == StateFresh {
-		// Hero dial for the headline window — meter-plus-text on pre-3
-		// hosts, animated from minor six. A stale fault gets a record card
-		// instead: dated text, not gauges — nothing is reading.
-		heroPct := "--"
-		heroValue := 0.0
-		heroAbsent := h == nil || !h.HasPercent
-		heroTone := v1.ToneSubtle
-		if h != nil && h.HasPercent {
-			heroPct = fmt.Sprintf("%.0f%%", h.UsedPercent)
-			heroValue = h.UsedPercent / 100
-			heroAbsent = false
-			heroTone = severityTone(h.UsedPercent, true, cfg)
-		}
-		if hostMinor >= 3 {
-			gauge := &v1.Node{
-				Kind: v1.KindGauge, Width: 64, Height: 64,
-				Value: heroValue, ValueText: heroPct, Absent: heroAbsent,
-				Name: "headline usage", Role: "img", Tone: heroTone,
-			}
-			if hostMinor >= 6 {
-				gauge.Animate = true
-				gauge.Key = "hero"
-			}
-			pane.Children = append(pane.Children, gauge)
-		} else {
-			pane.Children = append(pane.Children, &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
-				{Kind: v1.KindProgress, Value: heroValue, Height: 8, MaxWidth: 200},
-				{Kind: v1.KindText, Text: heroPct, Size: "display", Bold: true, Tone: heroTone, Tabular: true},
-			}})
-		}
-
 		// Exhausted-quota notice: a window at or past one hundred blocks
 		// use, and the panel says so with the renew instant.
 		for _, w := range p.Windows {
@@ -612,7 +658,7 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 				line += " · renews " + w.ResetsAt.Format("Mon 15:04")
 			}
 			pane.Children = append(pane.Children, &v1.Node{
-				Kind: v1.KindColumn, Fill: "error-container", Shape: "card", Padding: 10,
+				Kind: v1.KindColumn, Fill: "error-container", Padding: 10,
 				Children: []*v1.Node{
 					{Kind: v1.KindText, Text: line, Tone: v1.ToneError, Bold: true},
 				},
@@ -623,7 +669,7 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 
 	// History card: the sparkline over recorded percents, with the trend.
 	if hostMinor >= 4 && p.State == StateFresh && len(hist) >= 2 {
-		card := &v1.Node{Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: 10, Gap: 4}
+		card := &v1.Node{Kind: v1.KindColumn, Key: "usage-history", Gap: 4}
 		values := make([]float64, 0, len(hist))
 		for _, pct := range hist {
 			values = append(values, pct/100)
@@ -634,11 +680,13 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 		pane.Children = append(pane.Children, card)
 	}
 
-	// One card per window — fresh reads only. A stale fault rendered its
-	// numbers as the record card above; drawing meters over them would read
-	// as a live reading, and nothing is reading.
+	// Flat quota sections use separators instead of stacking more card
+	// surfaces. A stale fault rendered its numbers as dated text above.
 	if p.State == StateFresh {
-		for _, w := range p.Windows {
+		for i, w := range p.Windows {
+			if i > 0 && hostMinor >= 4 {
+				pane.Children = append(pane.Children, &v1.Node{Kind: v1.KindSeparator})
+			}
 			pane.Children = append(pane.Children, windowCard(w, cfg, hostMinor, now))
 		}
 	}
@@ -667,7 +715,7 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 
 func windowCard(w Window, cfg Config, hostMinor int, now time.Time) *v1.Node {
 	tone := severityTone(w.UsedPercent, w.HasPercent, cfg)
-	card := &v1.Node{Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: 10, Gap: 4}
+	card := &v1.Node{Kind: v1.KindColumn, Key: "window-" + w.Key, Gap: 4}
 	pct := "--"
 	if w.HasPercent {
 		pct = fmt.Sprintf("%.0f%%", w.UsedPercent)

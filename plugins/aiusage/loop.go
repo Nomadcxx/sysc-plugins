@@ -14,21 +14,21 @@ import (
 )
 
 // Floored is implemented by collectors whose source rate-limits harder than
-// the refresh interval. The floor is scheduler-level: a floor-blocked round
-// is never scheduled at all, so it cannot error and cannot churn the stale
-// machinery.
+// the refresh interval. The floor is scheduler-level: even an explicit
+// refresh defers the request until it clears, avoiding needless errors.
 type Floored interface {
 	Floor() time.Duration
 }
 
 // Config is the resolved settings the loop and views run on.
 type Config struct {
-	Track     map[string]bool
-	Keys      map[string]string // pasted keys by provider id
-	Refresh   time.Duration
-	Warn      int
-	Crit      int
-	HostMinor int // negotiated at handshake; views consume it
+	Track         map[string]bool
+	Keys          map[string]string // pasted keys by provider id
+	Refresh       time.Duration
+	Warn          int
+	Crit          int
+	HostMinor     int // negotiated at handshake; views consume it
+	AlertsEnabled bool
 
 	// Alert surface: per-provider warn overrides ("provider:percent" CSV),
 	// which windows alert, and the re-fire cooldown.
@@ -62,20 +62,27 @@ type Loop struct {
 	collectors map[string]Collector
 	order      []string // sorted tracked ids, so rounds are deterministic
 	nextDue    map[string]time.Time
+	floorUntil map[string]time.Time
 	failures   map[string]int
 	lastGood   map[string]ProviderReport
+	latest     map[string]ProviderReport
 	last       Report
 }
 
 // NewLoop builds the loop and constructs a collector per tracked provider.
 func NewLoop(reg Registry, cfg Config, env Env, cachePath, historyPath string) *Loop {
+	if cfg.Keys != nil {
+		env.Keys = cfg.Keys
+	}
 	l := &Loop{
 		env: env, cfg: cfg,
 		cachePath: cachePath, historyPath: historyPath,
 		collectors: map[string]Collector{},
 		nextDue:    map[string]time.Time{},
+		floorUntil: map[string]time.Time{},
 		failures:   map[string]int{},
 		lastGood:   map[string]ProviderReport{},
+		latest:     map[string]ProviderReport{},
 	}
 	l.rebuild(reg)
 	return l
@@ -135,6 +142,7 @@ func (l *Loop) loadCache() Report {
 	}
 	for i := range r.Providers {
 		p := r.Providers[i]
+		l.latest[p.ID] = p
 		if p.State != StateFresh {
 			continue
 		}
@@ -147,6 +155,11 @@ func (l *Loop) loadCache() Report {
 		if due.Before(r.CapturedAt) {
 			due = r.CapturedAt
 		}
+		floorFrom := due.Add(l.floorOf(p.ID))
+		if guard := r.CapturedAt.Add(crossInstanceGuard); floorFrom.Before(guard) {
+			floorFrom = guard
+		}
+		l.floorUntil[p.ID] = floorFrom
 		due = due.Add(maxDuration(l.cfg.Refresh, l.floorOf(p.ID)))
 		if earliest := r.CapturedAt.Add(crossInstanceGuard); due.Before(earliest) {
 			due = earliest
@@ -191,13 +204,20 @@ func (l *Loop) Snapshot() Report {
 }
 
 // Round fetches every tracked provider once, serially, in sorted order.
-// force bypasses floors and backoff — a user who explicitly asked is never
-// refused. Returns the published snapshot.
+// force overrides ordinary cadence and retry backoff, but never a collector's
+// hard request floor or the cross-instance cache guard.
 func (l *Loop) Round(ctx context.Context, force bool) Report {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.env.now()
 	var providers []ProviderReport
+	appendLatest := func(id string) {
+		if p, ok := l.latest[id]; ok {
+			providers = append(providers, p)
+		} else if p, ok := l.lastGood[id]; ok {
+			providers = append(providers, p)
+		}
+	}
 	for _, id := range l.order {
 		col := l.collectors[id]
 		if col == nil {
@@ -207,14 +227,23 @@ func (l *Loop) Round(ctx context.Context, force bool) Report {
 		if f, ok := col.(Floored); ok {
 			floor = f.Floor()
 		}
-		if !force && now.Before(l.nextDue[id]) {
-			if lg, ok := l.lastGood[id]; ok {
-				providers = append(providers, lg)
+		if now.Before(l.floorUntil[id]) {
+			if p, ok := l.latest[id]; ok {
+				p.DeferredUntil = l.floorUntil[id]
+				l.latest[id] = p
+				providers = append(providers, p)
+			} else {
+				appendLatest(id)
 			}
+			continue
+		}
+		if !force && now.Before(l.nextDue[id]) {
+			appendLatest(id)
 			continue
 		}
 		rep, err := col.Fetch(ctx)
 		scrubProvider(&rep)
+		rep.DeferredUntil = time.Time{}
 		switch {
 		case isSetup(err):
 			// The instruction is the whole point of the card: never retain.
@@ -222,25 +251,42 @@ func (l *Loop) Round(ctx context.Context, force bool) Report {
 			rep.State = StateNeedsSetup
 			rep.Err = Scrub(err.Error())
 			l.nextDue[id] = now.Add(l.cfg.Refresh)
+			l.latest[id] = rep
 			providers = append(providers, rep)
 		case err != nil:
 			rep.State = StateFault
 			rep.Err = Scrub(err.Error())
+			l.floorUntil[id] = now.Add(floor)
 			l.failures[id]++
 			l.nextDue[id] = now.Add(l.backoffWait(id, floor))
 			// Last good carries forward — but only a snapshot that was
 			// itself error-free and non-empty counts as "good".
 			if lg, ok := l.lastGood[id]; ok && lg.State == StateFresh && len(lg.Windows) > 0 {
 				lg.Stale = true
+				l.latest[id] = lg
 				providers = append(providers, lg)
 			} else {
+				l.latest[id] = rep
 				providers = append(providers, rep)
 			}
 		default:
-			rep.State = StateFresh
+			if rep.State == 0 {
+				if len(rep.Windows) > 0 {
+					rep.State = StateFresh
+				} else {
+					rep.State = StateNoData
+				}
+			}
+			if rep.State == StateFresh && len(rep.Windows) == 0 {
+				rep.State = StateNoData
+			}
 			l.failures[id] = 0
 			l.nextDue[id] = now.Add(maxDuration(l.cfg.Refresh, floor))
-			l.lastGood[id] = rep
+			l.floorUntil[id] = now.Add(floor)
+			if rep.State == StateFresh && len(rep.Windows) > 0 {
+				l.lastGood[id] = rep
+			}
+			l.latest[id] = rep
 			providers = append(providers, rep)
 		}
 	}

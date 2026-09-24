@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -17,7 +18,8 @@ import (
 // copilot_internal/user endpoint. Quota snapshots are percent-remaining per
 // feature (premium requests, chat, completions), with the reset date at the
 // top level. Auth is the user's GitHub token: `gh auth token` first, then
-// the environment — the endpoint rejects unauthenticated reads.
+// the environment, then OpenCode's stored OAuth access token — the endpoint
+// rejects unauthenticated reads.
 type copilotCollector struct {
 	env  Env
 	base string
@@ -43,8 +45,8 @@ func probeGhToken() string {
 
 func (c *copilotCollector) ID() string { return "copilot" }
 
-// token resolves the GitHub credential: the gh CLI's stored token, then the
-// environment's. Every source tried is recorded for the setup card.
+// token resolves the GitHub credential: gh CLI, environment, then OpenCode.
+// Every source tried is recorded for the setup card.
 func (c *copilotCollector) token() (string, *ErrSetup) {
 	tried := []string{"gh auth token"}
 	probe := c.gh
@@ -59,6 +61,21 @@ func (c *copilotCollector) token() (string, *ErrSetup) {
 		tried = append(tried, "env "+name)
 		if v := c.env.getenv(name); v != "" {
 			return v, nil
+		}
+	}
+
+	opencodePath := openCodeAuthPath(c.env)
+	tried = append(tried, opencodePath+" (github-copilot)")
+	if raw, err := os.ReadFile(opencodePath); err == nil {
+		var file struct {
+			GitHubCopilot struct {
+				Type   string `json:"type"`
+				Access string `json:"access"`
+			} `json:"github-copilot"`
+		}
+		if json.Unmarshal(raw, &file) == nil && file.GitHubCopilot.Type == "oauth" && file.GitHubCopilot.Access != "" {
+			// ponytail: use OpenCode's access token only; run OpenCode to refresh it if it stops working.
+			return file.GitHubCopilot.Access, nil
 		}
 	}
 	return "", &ErrSetup{Tried: tried}

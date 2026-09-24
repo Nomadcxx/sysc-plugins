@@ -122,6 +122,20 @@ func TestSnapshotNoDataAndMissingHome(t *testing.T) {
 	}
 }
 
+func TestSnapshotRejectsMissingUsageValue(t *testing.T) {
+	home := t.TempDir()
+	writeSession(t, filepath.Join(home, "sessions"), "broken.jsonl",
+		`{"timestamp":"2026-09-19T12:00:00Z","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"window_minutes":300}}}}`+"\n",
+		base)
+	rep, err := NewSnapshot(homeEnv(home)).Fetch(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.State != StateNoData || len(rep.Windows) != 0 {
+		t.Fatalf("missing usage value = %+v; want no compatible snapshot", rep)
+	}
+}
+
 func TestSnapshotTailScanFindsDeepLine(t *testing.T) {
 	t.Parallel()
 

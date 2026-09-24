@@ -162,9 +162,9 @@ type commandcodeCredits struct {
 }
 
 type quotaWindow struct {
-	Used     float64 `json:"used"`
-	Cap      float64 `json:"cap"`
-	ResetsAt int64   `json:"resetsAt"` // unix ms
+	Used     *float64 `json:"used"`
+	Cap      *float64 `json:"cap"`
+	ResetsAt int64    `json:"resetsAt"` // unix ms
 }
 
 func (q *quotaWindow) window(key string, minutes int) Window {
@@ -176,10 +176,10 @@ func (q *quotaWindow) window(key string, minutes int) Window {
 		HasPercent:    true,
 		WindowMinutes: minutes,
 	}
-	if q.Cap > 0 {
-		w.UsedPercent = math.Max(0, math.Min(100, q.Used/q.Cap*100))
+	if *q.Cap > 0 {
+		w.UsedPercent = math.Max(0, math.Min(100, *q.Used / *q.Cap * 100))
 	}
-	w.DisplayValue = fmt.Sprintf("$%s / $%s", formatAmount(q.Used), formatAmount(q.Cap))
+	w.DisplayValue = fmt.Sprintf("$%s / $%s", formatAmount(*q.Used), formatAmount(*q.Cap))
 	if q.ResetsAt > 0 {
 		w.ResetsAt = time.UnixMilli(q.ResetsAt).UTC()
 	}
@@ -202,6 +202,18 @@ func (c *commandcodeCollector) Fetch(ctx context.Context) (ProviderReport, error
 	if err := bearerGet(ctx, c.env, c.base+"/alpha/billing/credits", key, &out); err != nil {
 		rep.State, rep.Err = StateFault, Scrub(faultMessage(err))
 		return rep, err
+	}
+	for _, w := range []*quotaWindow{out.WindowLimits.FiveHour, out.WindowLimits.Weekly} {
+		if w != nil && (w.Used == nil || w.Cap == nil) {
+			msg := "the credits endpoint returned an incomplete quota window"
+			rep.State, rep.Err = StateFault, msg
+			return rep, errors.New(msg)
+		}
+		if w != nil && *w.Cap <= 0 {
+			msg := "the credits endpoint returned a quota window with a nonpositive cap"
+			rep.State, rep.Err = StateFault, msg
+			return rep, errors.New(msg)
+		}
 	}
 	var wins []Window
 	if w := out.WindowLimits.FiveHour; w != nil {
@@ -277,16 +289,28 @@ func (c *ollamaCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 	var out struct {
 		Limits struct {
 			Session *struct {
-				Usage float64 `json:"usage"`
+				Usage *float64 `json:"usage"`
 			} `json:"session"`
 			Weekly *struct {
-				Usage float64 `json:"usage"`
+				Usage *float64 `json:"usage"`
 			} `json:"weekly"`
+			Monthly *json.RawMessage `json:"monthly"`
 		} `json:"limits"`
 	}
 	if err := bearerGet(ctx, c.env, c.base+"/api/usage", key, &out); err != nil {
 		rep.State, rep.Err = StateFault, Scrub(faultMessage(err))
 		return rep, err
+	}
+	if out.Limits.Session != nil && out.Limits.Session.Usage == nil ||
+		out.Limits.Weekly != nil && out.Limits.Weekly.Usage == nil {
+		msg := "the usage endpoint returned a quota without usage"
+		rep.State, rep.Err = StateFault, msg
+		return rep, errors.New(msg)
+	}
+	if out.Limits.Session == nil && out.Limits.Weekly == nil && out.Limits.Monthly != nil {
+		rep.State = StateNoData
+		rep.Err = "monthly usage is present, but its unit and quota limit are undocumented"
+		return rep, nil
 	}
 	now := c.env.now()
 	var wins []Window
@@ -295,14 +319,14 @@ func (c *ollamaCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 		wins = append(wins, Window{
 			Key: "primary", Label: "Session usage", ShortLabel: "S",
 			HasPercent:  true,
-			UsedPercent: math.Max(0, math.Min(100, out.Limits.Session.Usage*100)),
+			UsedPercent: math.Max(0, math.Min(100, *out.Limits.Session.Usage*100)),
 		})
 	}
 	if out.Limits.Weekly != nil {
 		wins = append(wins, Window{
 			Key: "secondary", Label: "Weekly", ShortLabel: "Wk",
 			HasPercent:    true,
-			UsedPercent:   math.Max(0, math.Min(100, out.Limits.Weekly.Usage*100)),
+			UsedPercent:   math.Max(0, math.Min(100, *out.Limits.Weekly.Usage*100)),
 			WindowMinutes: 10080,
 			ResetsAt:      nextWeeklyReset(now),
 		})

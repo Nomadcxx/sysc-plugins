@@ -48,9 +48,9 @@ func (c *syntheticCollector) key() (string, *ErrSetup) {
 // syntheticQuotas is the documented v2 payload.
 type syntheticQuotas struct {
 	Subscription struct {
-		Limit    float64 `json:"limit"`
-		Requests float64 `json:"requests"`
-		RenewsAt string  `json:"renewsAt"`
+		Limit    float64  `json:"limit"`
+		Requests *float64 `json:"requests"`
+		RenewsAt string   `json:"renewsAt"`
 	} `json:"subscription"`
 }
 
@@ -72,15 +72,20 @@ func (c *syntheticCollector) Fetch(ctx context.Context) (ProviderReport, error) 
 		rep.State, rep.Err = StateFault, msg
 		return rep, errors.New(msg)
 	}
+	if sub.Requests == nil {
+		msg := "the quotas endpoint carried no valid request usage"
+		rep.State, rep.Err = StateFault, msg
+		return rep, errors.New(msg)
+	}
 	w := Window{
 		Key:           "primary",
 		Label:         "Subscription",
 		ShortLabel:    "Sub",
 		HasPercent:    true,
-		UsedPercent:   math.Max(0, math.Min(100, sub.Requests/sub.Limit*100)),
+		UsedPercent:   math.Max(0, math.Min(100, *sub.Requests/sub.Limit*100)),
 		WindowMinutes: 0, // the period's length is not served; no elapsed, no pace
 		DisplayValue: fmt.Sprintf("%s / %s requests",
-			formatAmount(sub.Requests), formatAmount(sub.Limit)),
+			formatAmount(*sub.Requests), formatAmount(sub.Limit)),
 	}
 	if t, err := time.Parse(time.RFC3339Nano, sub.RenewsAt); err == nil {
 		w.ResetsAt = t.UTC()

@@ -25,6 +25,7 @@
             {"value": "copilot", "label": "Copilot"},
             {"value": "minimax", "label": "MiniMax"},
             {"value": "ollama", "label": "Ollama"},
+            {"value": "opencode-go", "label": "OpenCode Go"},
             {"value": "synthetic", "label": "Synthetic"}
           ]
         },
@@ -68,7 +69,7 @@
     }
   ],
   "panels": [
-    {"id": "panel", "width": 750, "height": 430, "placement": "attached"}
+    {"id": "panel", "width": 750, "height": 430, "placement": "attached", "include_settings": true}
   ],
   "settings": [
     {"key": "track_claude", "type": "bool", "label": "Track Claude", "default": true},
@@ -77,7 +78,15 @@
     {"key": "track_copilot", "type": "bool", "label": "Track Copilot", "default": false},
     {"key": "track_ollama", "type": "bool", "label": "Track Ollama", "default": false},
     {"key": "track_minimax", "type": "bool", "label": "Track MiniMax", "default": false},
+    {"key": "track_opencode_go", "type": "bool", "label": "Track OpenCode Go", "default": false},
     {"key": "track_synthetic", "type": "bool", "label": "Track Synthetic", "default": false},
+    {
+      "key": "commandcode_api_key",
+      "type": "string",
+      "label": "Command Code API key",
+      "default": "",
+      "visible_when": {"key": "track_commandcode", "equals": true}
+    },
     {
       "key": "ollama_api_key",
       "type": "string",
@@ -91,6 +100,13 @@
       "label": "MiniMax API key",
       "default": "",
       "visible_when": {"key": "track_minimax", "equals": true}
+    },
+    {
+      "key": "opencode_go_api_key",
+      "type": "string",
+      "label": "OpenCode Go API key",
+      "default": "",
+      "visible_when": {"key": "track_opencode_go", "equals": true}
     },
     {
       "key": "synthetic_api_key",

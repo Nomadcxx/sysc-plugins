@@ -116,11 +116,99 @@ func TestFloorSkipsWithoutChurn(t *testing.T) {
 		t.Fatalf("carried = %+v", rep.Providers)
 	}
 
+	// An explicit refresh overrides the ordinary cadence, not the provider's
+	// hard request floor.
+	manual := l.Round(t.Context(), true)
+	if slow.calls != 1 {
+		t.Fatalf("manual refresh crossed the provider floor: %d calls", slow.calls)
+	}
+	if len(manual.Providers) != 1 || !manual.Providers[0].DeferredUntil.Equal(base.Add(30*time.Minute)) {
+		t.Fatalf("manual refresh result = %+v, want provider deferred until its floor", manual.Providers)
+	}
+
 	// Past the floor the collector runs again.
 	*now = base.Add(31 * time.Minute)
 	l.Round(t.Context(), false)
 	if slow.calls != 2 {
 		t.Fatalf("post-floor calls = %d, want 2", slow.calls)
+	}
+}
+
+func TestNewLoopAppliesConfiguredKeysBeforeBuildingCollectors(t *testing.T) {
+	cfg := testConfig()
+	cfg.Track = map[string]bool{"alpha": true}
+	cfg.Keys = map[string]string{"alpha": "pasted-key"}
+	cache, history := loopPaths(t)
+	var got string
+	reg := Registry{"alpha": func(env Env) Collector {
+		got = env.key("alpha")
+		return &fakeCollector{id: "alpha", rep: freshRep("alpha")}
+	}}
+
+	NewLoop(reg, cfg, Env{}, cache, history)
+	if got != "pasted-key" {
+		t.Fatalf("collector key = %q, want configured key", got)
+	}
+}
+
+func TestManualRoundHonorsWarmCacheGuard(t *testing.T) {
+	env, now := loopEnv()
+	collector := &fakeCollector{id: "alpha", rep: freshRep("alpha")}
+	cfg := testConfig()
+	cfg.Track = map[string]bool{"alpha": true}
+	cache, history := loopPaths(t)
+	first := NewLoop(testRegistry(collector), cfg, env, cache, history)
+	first.Round(t.Context(), false)
+
+	reloaded := NewLoop(testRegistry(collector), cfg, env, cache, history)
+	reloaded.WarmStart()
+	*now = base.Add(time.Minute)
+	deferred := reloaded.Round(t.Context(), true)
+	if collector.calls != 1 || len(deferred.Providers) != 1 ||
+		!deferred.Providers[0].DeferredUntil.Equal(base.Add(crossInstanceGuard)) {
+		t.Fatalf("warm-cache manual round = calls %d, providers %+v", collector.calls, deferred.Providers)
+	}
+
+	*now = base.Add(crossInstanceGuard + time.Second)
+	reloaded.Round(t.Context(), true)
+	if collector.calls != 2 {
+		t.Fatalf("manual round after cache guard calls = %d, want 2", collector.calls)
+	}
+}
+
+func TestSetupReportSurvivesSkippedRounds(t *testing.T) {
+	env, now := loopEnv()
+	setup := &fakeCollector{id: "alpha", err: &ErrSetup{Tried: []string{"settings"}}}
+	cfg := testConfig()
+	cfg.Track = map[string]bool{"alpha": true}
+	cache, history := loopPaths(t)
+	l := NewLoop(testRegistry(setup), cfg, env, cache, history)
+
+	first := l.Round(t.Context(), false)
+	if len(first.Providers) != 1 || first.Providers[0].State != StateNeedsSetup {
+		t.Fatalf("initial setup report = %+v", first.Providers)
+	}
+	*now = base.Add(10 * time.Second)
+	second := l.Round(t.Context(), false)
+	if len(second.Providers) != 1 || second.Providers[0].State != StateNeedsSetup {
+		t.Fatalf("skipped-round report = %+v, want setup guidance retained", second.Providers)
+	}
+	if setup.calls != 1 {
+		t.Fatalf("not-due round retried setup collector: %d calls", setup.calls)
+	}
+}
+
+func TestRoundPreservesCollectorNoDataState(t *testing.T) {
+	env, _ := loopEnv()
+	noData := &fakeCollector{id: "alpha", rep: ProviderReport{ID: "alpha", State: StateNoData}}
+	cfg := testConfig()
+	cfg.Track = map[string]bool{"alpha": true}
+	cache, history := loopPaths(t)
+	l := NewLoop(testRegistry(noData), cfg, env, cache, history)
+
+	rep := l.Round(t.Context(), false)
+	if len(rep.Providers) != 1 || rep.Providers[0].State != StateNoData {
+		t.Fatalf("no-data report = %+v", rep.Providers)
 	}
 }
 

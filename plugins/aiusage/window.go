@@ -48,16 +48,17 @@ type Window struct {
 
 // ProviderReport is one provider's normalized snapshot.
 type ProviderReport struct {
-	ID        string
-	Name      string
-	Plan      string
-	Account   string
-	Windows   []Window
-	Credits   *float64
-	State     State
-	Stale     bool
-	UpdatedAt time.Time
-	Err       string // human-readable, secret-scrubbed
+	DeferredUntil time.Time `json:"-"`
+	ID            string
+	Name          string
+	Plan          string
+	Account       string
+	Windows       []Window
+	Credits       *float64
+	State         State
+	Stale         bool
+	UpdatedAt     time.Time
+	Err           string // human-readable, secret-scrubbed
 }
 
 // Report is the immutable snapshot views render.

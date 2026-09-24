@@ -90,3 +90,21 @@ func TestSyntheticMissingKeyAndZeroLimit(t *testing.T) {
 		t.Fatalf("zero limit = %+v, %v; want a fault", rep, err)
 	}
 }
+
+func TestSyntheticMissingRequestsIsFault(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"subscription":{"limit":135}}`))
+	}))
+	defer srv.Close()
+
+	c := &syntheticCollector{
+		env:  directEnv("", func(string) string { return "" }, map[string]string{"synthetic": "k"}),
+		base: srv.URL,
+	}
+	rep, err := c.Fetch(t.Context())
+	if err == nil || rep.State != StateFault {
+		t.Fatalf("missing request usage = %+v, %v; want a fault", rep, err)
+	}
+}
