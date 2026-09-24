@@ -77,6 +77,18 @@ Notes the hard way taught us:
 - The wire vocabulary has no grid or desktop-widget view kind; compose grids
   from rows/columns, and note that noctalia desktop widgets are not portable.
 
+## Releasing and third-party catalogs
+
+Tagging `<dir>-v<version>` (for example `timer-v1.4.0`) builds both arches,
+publishes a GitHub release, and opens a pull request against `main` with the
+regenerated `catalog.json` — the file sysc-shell's built-in `sysc` plugin
+source reads. `go run ./tools/catalog` (`package`, `update`, `validate`) is
+the tooling behind that workflow, and `make catalog-validate` runs the same
+check CI does. Any git repository can be its own plugin source by copying
+this tooling and keeping a `catalog.json` at its default branch's root. See
+[docs/publishing.md](docs/publishing.md) for the full guide, including
+`catalog-meta.json` fields and screenshot requirements.
+
 ## Attribution
 
 Plugins marked "port of noctalia ..." are Go rewrites of behavior originally
