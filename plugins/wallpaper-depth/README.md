@@ -82,3 +82,14 @@ during generation, change threshold and feather, clear the cache, apply a video
 wallpaper, cover the output with a foreign background surface, and stop the
 plugin while its panel is open. Confirm that stale clocks disappear and the
 shell stays responsive.
+
+### Recorded visual check (2026-09-24)
+
+On DP-1 at 3440×1440 and scale 1, `01. Solar Pulse.png` placed tree branches
+across the centered clock. Captures in `fill`, `stretch`, `original`, and
+`panscan` showed the branches continuing through the clock cutout, with no
+visible shift at the card edge. The original `space-planets-stars.jpg`
+assignments and shell config were restored after the run.
+
+This check compared native-resolution captures by eye; it did not measure a
+one-pixel error bound.

@@ -57,8 +57,9 @@ Degradation is for old hosts only — it is never an excuse to cut a wanted visu
 Token/cost/pricing math; sparkline or chart rendering (history data flows, visuals deferred);
 multi-account (`provider@label` identities); HTML scraping (opentracker's opencode path);
 desktop widgets (no wire view kind); animations; per-second countdown ticks (60 s clock);
-Gemini/Cursor/Kimi/OpenCode-go/Z.AI providers (the collector seam makes each one file +
-one table entry + one fixture later).
+Gemini/Cursor/Kimi/Z.AI providers (the collector seam makes each one file +
+one table entry + one fixture later). OpenCode Go moved into v1 with AIU-20
+(2026-09-24); see the remediation ledger for its opt-in setup and API contract.
 
 Also accepted simplifications, named so they read as decisions rather than drift
 (audit D/INFO): single chip ⇒ no `+N` overflow marker and no pinned-first sorting;
@@ -329,17 +330,19 @@ audit I5).
 | key | type | default | notes |
 |---|---|---|---|
 | `track_claude` / `track_codex` / `track_commandcode` | bool | true | proven paths |
-| `track_ollama` / `track_minimax` / `track_synthetic` | bool | false | need a pasted key; toggled on deliberately |
-| `ollama_api_key` / `minimax_api_key` / `synthetic_api_key` | string | "" | `visible_when {"key":"track_ollama","equals":true}` etc.; read into memory only (§10) |
+| `track_ollama` / `track_minimax` / `track_opencode_go` / `track_synthetic` | bool | false | opt-in; toggled on deliberately |
+| `ollama_api_key` / `minimax_api_key` / `opencode_go_api_key` / `synthetic_api_key` | string | "" | `visible_when` follows each provider's track toggle; read into memory only (§10) |
 | `refresh_interval` | int | 300 | min 60, max 3600 (seconds); the Claude 180 s floor is scheduler-level within (§4) |
 | `alerts_enabled` | bool | true | |
 | `warn_threshold` | int | 85 | min 50 max 99, `visible_when {"key":"alerts_enabled","equals":true}` |
 | `critical_threshold` | int | 95 | min 51 max 99 — 100 would collide with the fixed depleted ≥99 (audit I2); `visible_when {"key":"alerts_enabled","equals":true}` |
 
 Key resolution order per provider: pasted setting → env var (`OLLAMA_API_KEY`,
-`MINIMAX_API_KEY`, `SYNTHETIC_API_KEY`, `COMMAND_CODE_API_KEY`) → well-known file
-(`~/.minimax/api_key`, codexbar/opencode auth borrows where they exist). A pasted key
-wins (local plugin). Unlike the Luau original there is **no managed key file**: the
+`MINIMAX_API_KEY`, `OPENCODE_GO_API_KEY`, `SYNTHETIC_API_KEY`,
+`COMMAND_CODE_API_KEY`) → well-known file (`~/.minimax/api_key`, codexbar/OpenCode
+auth borrows where they exist). OpenCode Go reads only the `opencode` API-key
+entry; it does not refresh or write OpenCode credentials. A pasted key wins
+(local plugin). Unlike the Luau original there is **no managed key file**: the
 host owns settings persistence; clearing a field deletes it with no plugin-side residue.
 
 ## 9. sysc-shell side tasks

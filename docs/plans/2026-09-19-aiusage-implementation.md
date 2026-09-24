@@ -383,7 +383,7 @@ Token discovery: read `$HOME/.claude/.credentials.json`; candidates `[]tokenCand
 
 - [ ] **Step 1: Capture the real payload (no code)**
 
-With the user's key: `curl -sS -H "Authorization: Bearer $SYNTHETIC_API_KEY" https://api.synthetic.new/quotas | tee testdata/synthetic-quotas.json` — confirm the URL/headers against `dev.synthetic.new/docs/synthetic/quotas` first; prepend a provenance comment (endpoint + date). If the payload carries no per-window percents, the fixture still lands and the collector renders informational.
+With the user's key: `curl -sS -H "Authorization: Bearer $SYNTHETIC_API_KEY" https://api.synthetic.new/v2/quotas | tee testdata/synthetic-quotas.json` — confirm the URL/headers against `dev.synthetic.new/docs/synthetic/quotas` first; prepend a provenance comment (endpoint + date). If the payload carries no per-window percents, the fixture still lands and the collector renders informational.
 
 - [ ] **Step 2: Failing tests** — parse the captured shape into `Window`s per its real fields; no-percent payload ⇒ one informational window (`HasPercent:false`, `DisplayValue` from payload); missing key ⇒ `ErrSetup` listing setting, env, key-file paths tried.
 
