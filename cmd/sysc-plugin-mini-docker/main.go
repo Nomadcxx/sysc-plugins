@@ -247,6 +247,14 @@ func run(in *os.File, out *os.File) error {
 					sendMu.Unlock()
 				case msg.Node == "refresh" && current.kind == v1.ViewPanel:
 					queueRefresh(refreshRequest{containers: true, active: true})
+				case current.kind == v1.ViewPanel && (msg.Node == "page:previous" || msg.Node == "page:next"):
+					delta := 1
+					if msg.Node == "page:previous" {
+						delta = -1
+					}
+					if session.MovePage(delta) {
+						publish("")
+					}
 				case msg.Node == "form:publish" && current.kind == v1.ViewPanel:
 					session.ToggleRunPublish()
 					publish("")

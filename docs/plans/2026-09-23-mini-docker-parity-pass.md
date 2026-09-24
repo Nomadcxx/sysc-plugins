@@ -24,22 +24,35 @@ The repository has no AGENTS.md. The project-level register is docs/plans/README
 2. Use the already signed roadmap decision D1: show_count stays deleted. Do not add the design's contradictory hidden tombstone. Amend the design before implementation so it matches D1.
 3. Bump protocol.minor from 1 to 4 because the resulting manifest uses minor-2-and-later node fields, including Multiline. Update fallbackVersion with the manifest version.
 4. The pinned protocol's InputEvent carries committed text in Text on change/submit. The form must handle those events and retain its draft; click-only ParseAction dispatch cannot implement the form.
-5. The design permits actions on different entities concurrently. A single actingID cannot represent that state; use a set keyed by scope, action, and entity ID, and disable only matching controls.
+5. Mutations may run on different entities concurrently, but mutations on the same entity must serialize regardless of verb (for example, start plus remove). Keep in-flight keys by scope, action, and entity ID for rendering; reject and disable every mutation for an entity while any action for it is in flight.
 6. A single global digest can suppress a newly opened view. Track the last published tree per view ID, force the first snapshot after ViewOpen, and force the snapshot after ViewResync.
 7. Reset the polling timer when refresh_interval_seconds changes. The current time.After loop can wait out the old interval after a setting change.
 8. Match the design's host/container port mapping: publish with -p P:P. The previous draft's -p P does not honor the requested host-port preflight.
-9. Docker image JSON needs its Containers count to disable image removal while referenced. Include that field in parser fixtures and verify the installed Docker CLI template support in live acceptance; Docker remains the final authority and action errors must be shown.
+9. Docker image JSON needs its Containers count to disable image removal while referenced. Preserve field presence; absent or negative counts are unknown and cannot enable removal. Use repository:tag as the row, selection, and removal identity because several tags can share one image ID. Verify the installed Docker CLI template support in live acceptance; Docker remains the final authority and action errors must be shown.
 10. Keep the fit matrix in the existing TestViewsFitTheirHostSlots. It is an extension of an existing test, not a new duplicate.
 11. Reject list/inspect output over the 1 MiB cap instead of accepting a truncated snapshot. Stop an oversized child before waiting, since it can block on a full stdout pipe.
+
+### UI and entity audit amendments (2026-09-24)
+
+The detailed UI audit adds these implementation contracts:
+
+1. Image rows, selection, run forms, and removal use `repository:tag` as identity; dangling images fall back to the image ID. If a target plus its control prefix exceeds the wire ID limit, use a SHA-256-derived UI key and resolve it against the current snapshot. Removal still passes the full reference to `docker rmi`, so a shared image ID cannot collapse distinct tags or delete every tag at once.
+2. The image `Containers` value preserves field presence. Missing, null, or negative counts keep Remove disabled with an inline reason; only a known zero enables it.
+3. Every mutation requires a successful primary container refresh. The reason stays visible on secondary tabs, and their controls plus image Run stay disabled until recovery.
+4. A mutation disables every mutating control for the same entity while leaving other entities actionable.
+5. Existing shell-catalogue icons accompany scope and action labels. The environment editor is at least 80 px high, the port label explains the `P:P` mapping, and displayed errors are one line and bounded to the actual bar tooltip/panel widths.
+6. The confirmation action uses the shell's error-container fill. Initial secondary-tab views say Docker status is being checked, with mutations disabled until the primary list succeeds.
+7. Dynamic labels fit the fixed 480×560 panel and every accessible name stays within the protocol's identifier bound. Long volume names also use snapshot-resolved UI keys when needed.
+8. The final UI audit found that `+N more` disclosed rows without a way to reach them. Lists above 240 rows now use Previous/Next controls and an `Items x–y of n` range after the list. Page changes clear row details and confirmation; tab changes reset the page; refreshes clamp the page and clear details moved off-page.
 
 ## 2. Decisions and execution gate
 
 The four-tab scope and the delete-show_count decision are already in the signed 2026-09-22 roadmap. The design's D7 contradicted the signed setting decision. The owner approved the remaining design decisions and the plan-level choices below by asking to implement this plan on 2026-09-23; the design and this tracked copy record that approval:
 
 - Container sorting: running first, then name. Current code preserves Docker order within running/stopped groups; the new sort is a user-visible change.
-- Keep the rendered row cap at 150, as designed. The fit matrix must prove the 150-row case with a selected detail card fits MaxNodes and the 480×560 slot.
+- Keep the rendered row cap at 240. Four nodes per row leaves room for panel chrome, pagination, and a selected detail card under MaxNodes; the fit matrix proves this case and the 480×560 slot. Use Previous/Next controls with a visible range so capped rows stay reachable.
 - Failure rendering: while a refresh is running, retain the last successful tree and show Refreshing. On a primary container-list failure, follow the design: show the diagnosis and an empty actionable list, keep cached data internally for recovery, and reject mutations until a successful refresh. On a secondary-tab failure, show the per-tab error and retain any last successful rows.
-- Image-in-use display uses the Docker image listing's Containers count. If the installed Docker CLI does not expose it through the chosen JSON template, stop and revise the design before implementing a less reliable reference heuristic.
+- Image-in-use display uses only the Docker image listing's Containers count. If the installed Docker CLI omits it, preserve it as unknown and keep removal disabled; never guess a reference count from the container list.
 
 The signed D1 is not an open choice. Do not add a tombstone.
 
@@ -68,12 +81,13 @@ No sysc-shell changes, new dependencies, docker events subprocess, notifications
 - view.go remains a pure renderer. It must render from a copied Session snapshot and must not perform I/O.
 - main.go owns the poll timer, input routing, settings, per-view revisions/digests, and client calls. sendMu serializes every write; the existing mu continues to protect views/settings.
 - Reject an input aimed at an old view revision. Recheck scope and entity existence immediately before action dispatch, then validate the ID before argv construction.
-- In-flight state is keyed by scope + verb + ID. Repeated identical actions are rejected/disabled; actions on other entities remain available.
+- In-flight state is keyed by scope + verb + ID for display, but any second mutation against an entity with any in-flight mutation is rejected/disabled, even when the verbs differ; different entities remain available.
+- Every mutation, including on images, volumes, networks, and image runs, requires a successful primary container refresh. On primary failure the panel explains why and disables all mutation controls.
 - Only one refresh operation runs at a time. A size-one request channel coalesces clicks while polling is active.
 - Confirmation stores scope + ID, survives refresh while that entity exists, and clears on cancel, dispatch, scope change, or entity removal from its snapshot. Clear selection if its entity leaves a successful snapshot.
 - Refresh never blanks a populated panel while work is in flight. Action failures remain visible until a later successful action; list errors remain separate from action errors.
 - Publish only when that view's rendered state changes. A new view and ViewResync always get a full snapshot; resync resets its revision to zero first. ViewClose also drops the cached digest.
-- Keep the 150-row cap and prove every view state stays below MaxNodes and fits its host slot.
+- Keep the 240-row page cap, make later rows reachable through pagination, and prove every view state stays below MaxNodes and fits its host slot.
 
 ### Settings
 
@@ -93,7 +107,7 @@ Do not declare or read show_count.
 | tab:<containers\|images\|volumes\|networks> | Change scope; clear selection, form, and pending confirmation. |
 | select:<id> | Select/deselect the active tab's entity. |
 | start:<id>, stop:<id>, restart:<id>, remove:<id> | Container action or arm its remove confirmation. |
-| run:<image-id>, rmi:<image-id> | Open the selected image's run form; arm image removal. |
+| run:<image-reference>, rmi:<image-reference> | Open the selected image's run form; arm removal of that tag. |
 | volrm:<name>, netrm:<id> | Arm volume/network removal. |
 | confirm, cancel | Dispatch or clear the pending removal. |
 | name, port, env | Run-form text inputs; accept change events and retain InputEvent.Text. |
@@ -117,12 +131,12 @@ Omit absent options. Emit -p PORT:PORT only when publishing is enabled and a por
 | Networks | docker network ls --format '{{json .}}' | Name, ID, Driver, Scope |
 | Exposed ports | docker image inspect --format '{{json .Config.ExposedPorts}}' IMAGE | object keys such as 80/tcp |
 | Container actions | docker start ID; docker stop ID; docker restart ID; docker rm ID | no stdout required |
-| Image, volume, network remove | docker rmi ID; docker volume rm NAME; docker network rm ID | no stdout required |
+| Image, volume, network remove | docker rmi REPOSITORY:TAG (image ID only for dangling images); docker volume rm NAME; docker network rm ID | no stdout required |
 | Run | docker run -d [--name NAME] [-e K=V ...] [-p PORT:PORT] [--network NETWORK] IMAGE | no JSON output |
 
-Use a bounded stdout read for list and inspect commands and capture stderr for every command. Keep the existing 30-second list and 15-second action limits unless testing exposes a concrete need to change them. Image Containers is a Docker CLI template field, not a guessed count derived from container names. Parse a null or empty exposed-ports object as no preselection; only a valid TCP key yields a port.
+Use a bounded stdout read for list and inspect commands and capture stderr for every command. Keep the existing 30-second list and 15-second action limits unless testing exposes a concrete need to change them. Image Containers is a Docker CLI template field, not a guessed count derived from container names; missing or negative counts are unknown and disable removal. Parse a null or empty exposed-ports object as no preselection; only a valid TCP key yields a port.
 
-Container ordering is running first then name; image ordering is Repository:Tag; volumes and networks sort by Name. The approved design's 150-row cap applies to each active entity list.
+Container ordering is running first then name; image ordering is Repository:Tag; volumes and networks sort by Name. The approved design's 240-row cap applies to each active entity list.
 
 ## 4. Files
 
@@ -193,10 +207,10 @@ Run each task in the approved implementation worktree. For behavior changes, add
 
 **Files:** service.go, view.go, mini_docker_test.go.
 
-1. Add failing tree tests for scope buttons, selected rows, detail actions, empty/loading/error states, running-first/name sort, and overflow footer placement.
+1. Add failing tree tests for scope buttons, selected rows, detail actions, empty/loading/error states, running-first/name sort, and pagination placement/ranges.
 2. Render four-node selectable rows, the selected detail card, status band (including a subtle malformed-line count), and a list whose height is derived from visible bands.
-3. Keep 150 rows and put +N more below the list. Show Start only when stopped; Stop/Restart only when running; Remove only when stopped.
-4. Extend TestViewsFitTheirHostSlots to include the worst-case combination: 150 rows, selected card, overflow footer, and two status lines, plus empty/loading/error variants.
+3. Keep up to 240 rows per page and put Previous/Next controls with a visible range below longer lists. Show Start only when stopped; Stop/Restart only when running; Remove only when stopped.
+4. Extend TestViewsFitTheirHostSlots to include the worst-case combination: 240 rows, selected card, pagination, and two status lines, plus empty/loading/error variants.
 5. Run: go test ./plugins/mini-docker -run 'TestPanel|TestViewsFitTheirHostSlots' -count=1
 6. Expected: every tree validates and fits the configured 480×560 slot.
 7. Commit the container view.
@@ -280,7 +294,7 @@ Optional environment proof, only when a Docker daemon is available:
 
     go test -tags live -count=1 ./plugins/mini-docker/
 
-Manual acceptance on the Docker host: bar click opens the panel; all tabs load; a refresh does not blank known data; daemon/list errors are readable; a 150-row view fits and shows the overflow footer; remove requires confirmation; run validates network/env/port and shows Docker failures.
+Manual acceptance on the Docker host: bar click opens the panel; all tabs load; a refresh does not blank known data; daemon/list errors are readable; 200+ rows scroll within the node budget and rows beyond the 240-row page remain reachable through Previous/Next; remove requires confirmation; run validates network/env/port and shows Docker failures.
 
 ## 7. Risks and boundaries
 

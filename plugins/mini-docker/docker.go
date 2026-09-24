@@ -31,12 +31,36 @@ func (c Container) Running() bool { return c.State == "running" }
 
 // Image mirrors one JSON line of `docker images --format {{json .}}`.
 type Image struct {
-	Repository   string `json:"Repository"`
-	Tag          string `json:"Tag"`
-	ID           string `json:"ID"`
-	CreatedSince string `json:"CreatedSince"`
-	Size         string `json:"Size"`
-	Containers   int    `json:"Containers"`
+	Repository      string `json:"Repository"`
+	Tag             string `json:"Tag"`
+	ID              string `json:"ID"`
+	CreatedSince    string `json:"CreatedSince"`
+	Size            string `json:"Size"`
+	Containers      int    `json:"Containers"`
+	ContainersKnown bool   `json:"-"`
+}
+
+func (i *Image) UnmarshalJSON(data []byte) error {
+	var record struct {
+		Repository   string `json:"Repository"`
+		Tag          string `json:"Tag"`
+		ID           string `json:"ID"`
+		CreatedSince string `json:"CreatedSince"`
+		Size         string `json:"Size"`
+		Containers   *int   `json:"Containers"`
+	}
+	if err := json.Unmarshal(data, &record); err != nil {
+		return err
+	}
+	*i = Image{
+		Repository: record.Repository, Tag: record.Tag, ID: record.ID,
+		CreatedSince: record.CreatedSince, Size: record.Size,
+		ContainersKnown: record.Containers != nil,
+	}
+	if record.Containers != nil {
+		i.Containers = *record.Containers
+	}
+	return nil
 }
 
 // Volume mirrors one JSON line of `docker volume ls --format {{json .}}`.

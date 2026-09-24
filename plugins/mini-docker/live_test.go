@@ -32,6 +32,16 @@ func TestLiveListsAndTrees(t *testing.T) {
 				scope, status.Available, status.Loading, status.ListError)
 		}
 		counts[scope] = countTab(state, scope)
+		if scope == ScopeImages {
+			for _, image := range state.Images {
+				if !image.ContainersKnown {
+					t.Fatalf("live image %s:%s omitted the Containers reference count", image.Repository, image.Tag)
+				}
+			}
+			if len(state.Images) == 0 {
+				t.Log("live image reference count check skipped: Docker has no local images")
+			}
+		}
 		panel := PanelTreeForSession(state)
 		if err := v1.Validate(panel, v1.ViewPanel); err != nil {
 			t.Fatalf("live %s panel tree rejected: %v", scope, err)

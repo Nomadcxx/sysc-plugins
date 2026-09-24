@@ -380,10 +380,10 @@ func TestPluginMiniDockerGate(t *testing.T) {
 	h.waitView("bar-1", func(root *v1.Node) bool { return nodeText(root, "open") == "docker" })
 
 	h.click("panel-1", "tab:images")
-	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "select:sha256:image1") != nil })
-	h.click("panel-1", "select:sha256:image1")
-	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "run:sha256:image1") != nil })
-	h.click("panel-1", "run:sha256:image1")
+	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "select:alpine:3") != nil })
+	h.click("panel-1", "select:alpine:3")
+	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "run:alpine:3") != nil })
+	h.click("panel-1", "run:alpine:3")
 	form := h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "run-form") != nil })
 	if nodeText(form, "form:network") != "Network: custom" || nodeText(form, "port") != "8080" {
 		t.Fatalf("run form defaults: network=%q port=%q", nodeText(form, "form:network"), nodeText(form, "port"))

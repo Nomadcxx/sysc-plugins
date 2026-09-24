@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,15 @@ import (
 
 // fakeCLI answers instantly so the harness never touches a real daemon.
 type fakeCLI struct{}
+
+type pagedCLI struct {
+	fakeCLI
+	containers []minidocker.Container
+}
+
+func (c pagedCLI) List(context.Context) ([]minidocker.Container, int, error) {
+	return c.containers, 0, nil
+}
 
 func (fakeCLI) List(context.Context) ([]minidocker.Container, int, error) {
 	return []minidocker.Container{
@@ -564,6 +574,33 @@ func (h *pluginHarness) nextSnapshot(t *testing.T, viewID string, match func(wir
 	}
 }
 
+func (h *pluginHarness) settledSnapshot(t *testing.T, viewID string, match func(wireSnapshot) bool) wireSnapshot {
+	t.Helper()
+	latest := h.nextSnapshot(t, viewID, match)
+	quiet := time.NewTimer(100 * time.Millisecond)
+	defer quiet.Stop()
+	for {
+		select {
+		case snapshot, ok := <-h.snapshots:
+			if !ok {
+				t.Fatal("plugin output closed before the view settled")
+			}
+			if snapshot.ViewID == viewID && match(snapshot) {
+				latest = snapshot
+			}
+			if !quiet.Stop() {
+				select {
+				case <-quiet.C:
+				default:
+				}
+			}
+			quiet.Reset(100 * time.Millisecond)
+		case <-quiet.C:
+			return latest
+		}
+	}
+}
+
 func nodeByID(root *v1.Node, id string) *v1.Node {
 	if root == nil {
 		return nil
@@ -594,6 +631,39 @@ func treeHasText(root *v1.Node, text string) bool {
 	return false
 }
 
+func TestRunRoutesPaginationControls(t *testing.T) {
+	containers := make([]minidocker.Container, 243)
+	for i := range containers {
+		containers[i] = minidocker.Container{
+			ID: fmt.Sprintf("c%03d", i), Names: fmt.Sprintf("container-%03d", i), State: "exited",
+		}
+	}
+	h := startPluginHarness(t, pagedCLI{containers: containers})
+	h.host.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "panel", View: v1.ViewPanel, Entry: "panel"})
+	first := h.settledSnapshot(t, "panel", func(s wireSnapshot) bool {
+		return treeHasText(s.Root, "Items 1–240 of 243") && !treeHasText(s.Root, "Refreshing…")
+	})
+	if button := nodeByID(first.Root, "page:previous"); button == nil || !button.Disabled {
+		t.Fatalf("previous control on first page = %+v", button)
+	}
+	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "panel", Revision: first.Revision,
+		Node: "page:next", Event: v1.EventActivate})
+	last := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool {
+		return treeHasText(s.Root, "Items 241–243 of 243")
+	})
+	if row := nodeByID(last.Root, "select:c240"); row == nil {
+		t.Fatal("page-next did not make the remaining Docker row reachable")
+	}
+	if button := nodeByID(last.Root, "page:next"); button == nil || !button.Disabled {
+		t.Fatalf("next control on last page = %+v", button)
+	}
+	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "panel", Revision: last.Revision,
+		Node: "page:previous", Event: v1.EventActivate})
+	h.nextSnapshot(t, "panel", func(s wireSnapshot) bool {
+		return treeHasText(s.Root, "Items 1–240 of 243")
+	})
+}
+
 func TestRunRoutesTextInputAndRejectsStaleRevision(t *testing.T) {
 	release := make(chan struct{})
 	var releaseOnce sync.Once
@@ -621,12 +691,12 @@ func TestRunRoutesTextInputAndRejectsStaleRevision(t *testing.T) {
 		return treeHasText(s.Root, "Docker images")
 	})
 	finish()
-	imageSnapshot = h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return nodeByID(s.Root, "select:image1") != nil })
+	imageSnapshot = h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return nodeByID(s.Root, "select:alpine:3") != nil })
 	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "panel", Revision: imageSnapshot.Revision,
-		Node: "select:image1", Event: v1.EventActivate})
-	selected := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return nodeByID(s.Root, "run:image1") != nil })
+		Node: "select:alpine:3", Event: v1.EventActivate})
+	selected := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return nodeByID(s.Root, "run:alpine:3") != nil })
 	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "panel", Revision: selected.Revision,
-		Node: "run:image1", Event: v1.EventActivate})
+		Node: "run:alpine:3", Event: v1.EventActivate})
 	form := h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return nodeByID(s.Root, "name") != nil })
 	if got := nodeByID(form.Root, "form:network"); got == nil || got.Text != "Network: custom" {
 		t.Fatalf("default network not applied to run form: %+v", got)
