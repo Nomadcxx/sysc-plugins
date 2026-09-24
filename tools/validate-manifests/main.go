@@ -14,12 +14,13 @@ import (
 )
 
 type manifest struct {
-	Schema   int    `json:"schema"`
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Version  string `json:"version"`
-	Exec     string `json:"exec"`
-	Protocol struct {
+	Schema      int    `json:"schema"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Version     string `json:"version"`
+	Exec        string `json:"exec"`
+	Protocol    struct {
 		Major int `json:"major"`
 		Minor int `json:"minor"`
 	} `json:"protocol"`
@@ -61,6 +62,7 @@ var allowedCapabilities = map[string]bool{
 	"panels":        true,
 	"settings":      true,
 	"state":         true,
+	"wallpaper":     true,
 }
 
 var allowedSettingTypes = map[string]bool{

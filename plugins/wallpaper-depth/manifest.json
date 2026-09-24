@@ -2,6 +2,7 @@
   "schema": 1,
   "id": "org.sysc.wallpaper-depth",
   "name": "Wallpaper Depth",
+  "description": "Generates a depth mask for the current image wallpaper to place foreground scenery over a centred desktop clock.",
   "version": "1.0.0",
   "protocol": {"major": 1, "minor": 7},
   "exec": "bin/sysc-plugin-wallpaper-depth",

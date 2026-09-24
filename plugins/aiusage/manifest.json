@@ -2,6 +2,7 @@
   "schema": 1,
   "id": "org.sysc.aiusage",
   "name": "AI Usage",
+  "description": "Shows AI coding-assistant usage quotas in the bar with a detail panel and threshold alerts.",
   "version": "0.1.0",
   "protocol": {"major": 1, "minor": 4},
   "exec": "bin/sysc-plugin-aiusage",

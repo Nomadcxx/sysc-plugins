@@ -2,6 +2,7 @@
   "schema": 1,
   "id": "org.sysc.screen-recorder",
   "name": "Screen Recorder",
+  "description": "Records the screen or a window to video from the bar, with optional audio and a replay buffer.",
   "version": "1.0.0",
   "protocol": {"major": 1, "minor": 0},
   "exec": "bin/sysc-plugin-screen-recorder",

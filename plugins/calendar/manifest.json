@@ -2,6 +2,7 @@
   "schema": 1,
   "id": "org.sysc.calendar",
   "name": "Calendar",
+  "description": "A calendar in the bar with today's date and a navigable month panel.",
   "version": "0.2.0",
   "protocol": {
     "major": 1,

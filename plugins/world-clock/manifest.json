@@ -2,6 +2,7 @@
   "schema": 1,
   "id": "org.sysc.world-clock",
   "name": "World Clock",
+  "description": "Shows the time in a list of world time zones you choose, in the bar panel.",
   "version": "1.2.0",
   "protocol": {
     "major": 1,

@@ -2,6 +2,7 @@
   "schema": 1,
   "id": "org.sysc.timer",
   "name": "Pomodoro Timer",
+  "description": "A Pomodoro timer in the bar with work and break sessions.",
   "version": "1.4.0",
   "protocol": {"major": 1, "minor": 3},
   "exec": "bin/sysc-plugin-timer",
