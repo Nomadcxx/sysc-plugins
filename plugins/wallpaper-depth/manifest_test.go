@@ -17,9 +17,10 @@ func TestManifestContract(t *testing.T) {
 		Protocol     struct{ Major, Minor int } `json:"protocol"`
 		Capabilities []string                   `json:"capabilities"`
 		Panels       []struct {
-			ID     string `json:"id"`
-			Width  int    `json:"width"`
-			Height int    `json:"height"`
+			ID              string `json:"id"`
+			Width           int    `json:"width"`
+			Height          int    `json:"height"`
+			IncludeSettings bool   `json:"include_settings"`
 		} `json:"panels"`
 		Settings []struct {
 			Key     string          `json:"key"`
@@ -92,5 +93,8 @@ func TestManifestContract(t *testing.T) {
 	}
 	if len(manifest.Panels) != 1 || manifest.Panels[0].ID != "panel" || manifest.Panels[0].Width != 500 || manifest.Panels[0].Height != 560 {
 		t.Errorf("panel declaration = %+v, want panel 500x560", manifest.Panels)
+	}
+	if len(manifest.Panels) == 1 && !manifest.Panels[0].IncludeSettings {
+		t.Error("panel does not opt in to the host settings controls")
 	}
 }

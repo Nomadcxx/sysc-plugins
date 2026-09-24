@@ -164,6 +164,7 @@ type controllerEvent struct {
 	outputs  []Output
 	settings Settings
 	output   string
+	all      bool
 }
 
 type outputState struct {
@@ -242,6 +243,9 @@ func (c *Controller) Setup()      { c.send(controllerEvent{kind: string(operatio
 func (c *Controller) ClearCache() { c.send(controllerEvent{kind: string(operationClearCache)}) }
 func (c *Controller) Generate(output string) {
 	c.send(controllerEvent{kind: string(operationGenerate), output: output})
+}
+func (c *Controller) GenerateAll() {
+	c.send(controllerEvent{kind: string(operationGenerate), all: true})
 }
 
 func (c *Controller) send(event controllerEvent) {
@@ -330,7 +334,11 @@ func (s *controllerState) handle(c *Controller, event controllerEvent) {
 	case string(operationSetup):
 		s.enqueueControl(operationSetup)
 	case string(operationGenerate):
-		s.generate(c, event.output)
+		if event.all {
+			s.generateAll(c)
+		} else {
+			s.generate(c, event.output)
+		}
 	case string(operationClearCache):
 		s.clearCache(c)
 	}
@@ -445,6 +453,19 @@ func (s *controllerState) generate(c *Controller, name string) {
 	row.row.Error = ""
 	row.row.Status = "waiting"
 	s.enqueueGenerate(row, true)
+}
+
+func (s *controllerState) generateAll(c *Controller) {
+	names := make([]string, 0, len(s.rows))
+	for name, row := range s.rows {
+		if row.output.State == "image" && row.output.WallpaperPath != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		s.generate(c, name)
+	}
 }
 
 func (s *controllerState) clearCache(c *Controller) {

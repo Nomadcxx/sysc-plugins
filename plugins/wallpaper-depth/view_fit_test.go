@@ -40,7 +40,11 @@ func TestViewsFitAtHostSizes(t *testing.T) {
 		},
 		"cache hit": {
 			Checked: true, Helper: ready, Settings: settings,
-			Rows: []OutputRow{{Output: "DP-1", State: "image", WallpaperPath: "/wall.jpg", Status: "ready", MaskPath: "/mask.png", CacheHit: true}},
+			Rows: []OutputRow{{Output: "DP-1", State: "image", WallpaperPath: "/wall.jpg", Status: "ready", MaskPath: "/mask.png", CacheHit: true, ElapsedMs: 1280}},
+		},
+		"output error": {
+			Checked: true, Helper: ready, Settings: settings,
+			Rows: []OutputRow{{Output: "DP-1", State: "image", WallpaperPath: "/wall.jpg", Status: "error", Error: "inference failed: model output was invalid"}},
 		},
 		"busy buttons": {
 			Checked: true, Helper: ready, Busy: true, Operation: string(operationGenerate), Settings: settings,
@@ -101,7 +105,10 @@ func TestPanelRendersRequiredStatesAndOutputRows(t *testing.T) {
 		{"ready empty", ControllerSnapshot{Checked: true, Helper: ready, Settings: settings}, []string{"No outputs"}},
 		{"helper error", ControllerSnapshot{Checked: true, Error: "helper status failed"}, []string{"helper status failed"}},
 		{"cache hit", ControllerSnapshot{Checked: true, Helper: ready, Settings: settings,
-			Rows: []OutputRow{{Output: "DP-1", State: "image", Status: "ready", CacheHit: true}}}, []string{"cached"}},
+			Rows: []OutputRow{{Output: "DP-1", State: "image", Status: "ready", CacheHit: true, ElapsedMs: 1280}}}, []string{"cached", "1.3 s"}},
+		{"bulk action", ControllerSnapshot{Checked: true, Helper: ready, Settings: settings,
+			Rows: []OutputRow{{Output: "DP-1", State: "image", WallpaperPath: "/wall.jpg", Status: "waiting"}}}, []string{"Generate masks"}},
+		{"setup disclosure", ControllerSnapshot{Checked: true, Settings: settings}, []string{"Python runtime setup needed", "Depth model download needed", "99 MB", "internet is needed once", "stay local"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -122,20 +129,55 @@ func TestPanelRendersRequiredStatesAndOutputRows(t *testing.T) {
 		{Output: "DP-5", State: "image", Status: "waiting"},
 	}}
 	body := viewText(PanelTree(rows))
-	for _, want := range []string{"DP-1", "Processing", "DP-2", "Ready", "DP-3", "Video", "DP-4", "Covered", "DP-5", "Waiting"} {
+	for _, want := range []string{"Outputs", "Settings below", "Automatic on", "DP-1", "Processing", "DP-2", "Ready", "DP-3", "Video", "DP-4", "Covered", "DP-5", "Waiting"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("output panel %q missing %q", body, want)
 		}
 	}
 }
 
+func TestOutputRowOffersGenerateOnlyForCurrentImage(t *testing.T) {
+	tests := []struct {
+		name string
+		row  OutputRow
+		want bool
+	}{
+		{name: "current image", row: OutputRow{Output: "DP-1", State: "image", WallpaperPath: "/wall.jpg"}, want: true},
+		{name: "missing wallpaper path", row: OutputRow{Output: "DP-1", State: "image"}},
+		{name: "video", row: OutputRow{Output: "DP-1", State: "video", WallpaperPath: "/movie.mp4"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := false
+			walkView(outputRow(tc.row, false), func(node *v1.Node) {
+				got = got || node.ID == "generate-"+tc.row.Output
+			})
+			if got != tc.want {
+				t.Fatalf("Generate action present = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPanelActionIdentityStaysStableAndBusyActionsDisable(t *testing.T) {
 	ready := HelperStatus{Ready: true, RuntimeReady: true, ModelReady: true}
 	base := ControllerSnapshot{Checked: true, Helper: ready, Settings: Settings{AutoGenerate: true, Threshold: 30, Feather: 8},
-		Rows: []OutputRow{{Output: "DP-1", State: "image", Status: "waiting"}}}
+		Rows: []OutputRow{{Output: "DP-1", State: "image", WallpaperPath: "/wall.jpg", Status: "waiting"}}}
 	busy := base
 	busy.Busy, busy.Operation = true, string(operationGenerate)
 	baseIDs, busyIDs := interactiveIDs(PanelTree(base)), interactiveIDs(PanelTree(busy))
+	if !slices.Contains(baseIDs, "generate-all") {
+		t.Fatalf("panel actions %v missing the bulk Generate action", baseIDs)
+	}
+	var bulk *v1.Node
+	walkView(PanelTree(base), func(node *v1.Node) {
+		if node.ID == "generate-all" {
+			bulk = node
+		}
+	})
+	if bulk == nil || bulk.Fill != "accent" {
+		t.Fatalf("bulk action = %+v, want the primary accent action", bulk)
+	}
 	if !slices.Equal(baseIDs, busyIDs) {
 		t.Fatalf("panel action IDs changed while busy: %v vs %v", baseIDs, busyIDs)
 	}
