@@ -869,6 +869,26 @@ For `fill`, `stretch`, `original`, and `panscan`, compare a distinct mask edge a
 
 Expected: the cutout follows the visible source edge within one physical pixel. If `panscan` differs, capture gSlapper's observed mapping in a failing table case before changing `DepthGeometry`.
 
+**Measured blocker (2026-09-24, `sysc-501`):** gSlapper 1.5.2 received each
+configured mode, but DP-1 captures showed byte-identical wallpaper pixels for
+`fill`, `stretch`, `original`, and `panscan`. Its image path enables
+`fill_mode` by default and the explicit non-fill parsers do not reliably
+clear it. The shell mask transform therefore moved while the visible wallpaper
+remained in fill geometry.
+
+Repair and repeat this step before acceptance:
+
+1. In gSlapper, add a runnable check that explicit `stretch`, `original`,
+   and `panscan=1.0` override the image fill default, then clear the competing
+   mode flags at the option parser's ownership boundary.
+2. Build and install that gSlapper revision and prove the four wallpaper
+   captures use distinct documented geometry.
+3. Add a failing shell table case for gSlapper's contain-style
+   `panscan=1.0` mapping. The current `DepthGeometry` treats panscan as fill;
+   change it only after the repaired renderer establishes the live reference.
+4. Repeat the four DP-1 captures and require the mask edge to track the seated
+   figure within one physical pixel.
+
 **Step 4: Exercise stale and failure paths**
 
 - change wallpaper while generation is running;
