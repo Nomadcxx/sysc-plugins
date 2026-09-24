@@ -51,7 +51,7 @@ The plugin queries only the visible range plus the next-event lookahead window. 
 
 - EDS unavailable or no configured sources: show one actionable setup state, not a blank calendar.
 - Source/query error: keep the last successful EDS snapshot visible when available, label it stale, and offer refresh. Never present a failed refresh as an empty calendar.
-- Calendar changes are read-only. Meeting URLs accept only `http` or `https`; event-app URIs are constructed from escaped EDS identifiers and launched without a shell.
+- Calendar changes are read-only. Meeting URLs accept only `http` or `https` and are opened by the shell without invoking a command shell.
 - Calendar filters and view preference use namespaced plugin state. Event contents and credentials are not copied into that state.
 - Every interactive node has a stable ID/name, respects the current view revision, and fits the declared panel dimensions. Text remains readable at host theme sizes; color is never the only event distinction.
 
