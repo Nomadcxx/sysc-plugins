@@ -29,6 +29,10 @@ func main() {
 	switch verb {
 	case "package":
 		err = runPackage(args)
+	case "update":
+		err = runUpdate(args)
+	case "validate":
+		err = runValidate(args)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -47,5 +51,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: catalog <verb> [flags]
 
 verbs:
-  package  -plugin <dir> -arch <amd64|arm64> -out <dist>`)
+  package  -plugin <dir> -arch <amd64|arm64> -out <dist>
+  update   -tag <dir>-v<version> -dist <dir> [-now RFC3339]
+  validate [-community] [-fetch]`)
 }

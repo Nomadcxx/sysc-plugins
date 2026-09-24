@@ -12,7 +12,7 @@ PLUGINS := \
 
 USER_PLUGIN_ROOT := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/sysc-shell/plugins
 
-.PHONY: build install test vet fmt validate clean
+.PHONY: build install test vet fmt validate catalog-validate clean
 
 build:
 	@set -e; for entry in $(PLUGINS); do \
@@ -40,6 +40,9 @@ fmt:
 
 validate:
 	go run ./tools/validate-manifests
+
+catalog-validate:
+	go run ./tools/catalog validate
 
 clean:
 	rm -rf plugins/*/bin

@@ -22,3 +22,5 @@ jobs:
         run: make build
       - name: validate manifests
         run: go run ./tools/validate-manifests
+      - name: validate catalog
+        run: go run ./tools/catalog validate

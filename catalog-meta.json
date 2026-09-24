@@ -1,0 +1,62 @@
+{
+  "org.sysc.aiusage": {
+    "category": "monitoring",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
+  "org.sysc.calendar": {
+    "category": "productivity",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
+  "org.sysc.github-notifications": {
+    "category": "productivity",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
+  "org.sysc.kdeconnect": {
+    "category": "utilities",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
+  "org.sysc.mini-docker": {
+    "category": "system",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
+  "org.sysc.notes": {
+    "category": "productivity",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
+  "org.sysc.screen-recorder": {
+    "category": "media",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
+  "org.sysc.timer": {
+    "category": "productivity",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
+  "org.sysc.wallpaper-depth": {
+    "category": "appearance",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
+  "org.sysc.world-clock": {
+    "category": "utilities",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  }
+}
