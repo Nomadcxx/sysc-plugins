@@ -2,7 +2,6 @@ package wallpaperdepth
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -11,7 +10,7 @@ import (
 func BarTree(snapshot ControllerSnapshot) *v1.Node {
 	tone := v1.ToneNormal
 	switch {
-	case snapshot.Error != "":
+	case snapshot.Error != "" || hasOutputError(snapshot):
 		tone = v1.ToneError
 	case snapshot.Busy:
 		tone = v1.ToneAccent
@@ -29,13 +28,25 @@ func TooltipTree(snapshot ControllerSnapshot) *v1.Node {
 	state, tone := helperState(snapshot)
 	outputs := "No wallpaper outputs"
 	if len(snapshot.Rows) != 0 {
-		outputs = fmt.Sprintf("%d wallpaper outputs", len(snapshot.Rows))
+		ready := 0
+		for _, row := range snapshot.Rows {
+			if row.Status == "ready" {
+				ready++
+			}
+		}
+		outputs = fmt.Sprintf("%d wallpaper outputs · %d ready", len(snapshot.Rows), ready)
 	}
-	return &v1.Node{Kind: v1.KindColumn, Gap: 4, Children: []*v1.Node{
+	children := []*v1.Node{
 		{Kind: v1.KindText, Text: "Wallpaper Depth", Size: "title"},
 		{Kind: v1.KindText, Text: state, Tone: tone},
 		{Kind: v1.KindText, Text: outputs, Tone: v1.ToneSubtle},
-	}}
+	}
+	if errors := outputErrorCount(snapshot); errors != 0 {
+		children = append(children, &v1.Node{
+			Kind: v1.KindText, Text: fmt.Sprintf("%d output errors", errors), Tone: v1.ToneError,
+		})
+	}
+	return &v1.Node{Kind: v1.KindColumn, Gap: 4, Children: children}
 }
 
 func PanelTree(snapshot ControllerSnapshot) *v1.Node {
@@ -50,24 +61,49 @@ func PanelTree(snapshot ControllerSnapshot) *v1.Node {
 	}
 	if snapshot.Error != "" {
 		setupChildren = append(setupChildren, &v1.Node{Kind: v1.KindText, Text: snapshot.Error, Tone: v1.ToneError})
+	} else if snapshot.Checked && snapshot.Operation == "" {
+		runtime := "Python runtime setup needed"
+		if snapshot.Helper.RuntimeReady {
+			runtime = "Python runtime ready"
+		}
+		model := "Depth model download needed"
+		if snapshot.Helper.ModelReady {
+			model = "Depth model ready"
+		}
+		setupChildren = append(setupChildren,
+			&v1.Node{Kind: v1.KindText, Text: runtime, Tone: v1.ToneSubtle},
+			&v1.Node{Kind: v1.KindText, Text: model, Tone: v1.ToneSubtle},
+		)
+		if !snapshot.Helper.ModelReady {
+			setupChildren = append(setupChildren,
+				&v1.Node{Kind: v1.KindText, Text: "First setup downloads the 99 MB model; internet is needed once.", Tone: v1.ToneSubtle},
+				&v1.Node{Kind: v1.KindText, Text: "Wallpaper images stay local during inference.", Tone: v1.ToneSubtle},
+			)
+		}
 	}
+	setupChildren = append(setupChildren, &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+		actionButton("check", "Check", "Check helper status", snapshot.Busy),
+		actionButton("setup", "Run setup", "Set up the local runtime and model", snapshot.Busy),
+	}})
 	setupCard := &v1.Node{Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: 10, Gap: 4, Children: setupChildren}
+	canGenerateAll := !snapshot.Busy && snapshot.Helper.Ready && hasImageOutputs(snapshot)
+	generateAll := actionButton("generate-all", "Generate masks", "Generate depth masks for every image wallpaper", !canGenerateAll)
+	if canGenerateAll {
+		generateAll.Fill = "accent"
+	}
 
 	return &v1.Node{Kind: v1.KindColumn, Gap: 8, Children: []*v1.Node{
 		{Kind: v1.KindText, Text: "Wallpaper Depth", Size: "title"},
 		{Kind: v1.KindText, Text: "Local depth masks reveal foreground scenery over the centred clock."},
 		setupCard,
-		{Kind: v1.KindRow, Gap: 12, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: "Automatic " + automatic},
-			{Kind: v1.KindText, Text: "Threshold " + strconv.Itoa(snapshot.Settings.Threshold)},
-			{Kind: v1.KindText, Text: "Feather " + strconv.Itoa(snapshot.Settings.Feather)},
-		}},
+		{Kind: v1.KindText, Text: "Outputs", Size: "label", Bold: true},
 		outputList(snapshot),
 		{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-			actionButton("check", "Check", "Check helper status", snapshot.Busy),
-			actionButton("setup", "Run setup", "Set up the local runtime and model", snapshot.Busy),
+			generateAll,
 			actionButton("clear-cache", "Clear cache", "Clear generated depth masks", snapshot.Busy),
 		}},
+		{Kind: v1.KindSeparator},
+		{Kind: v1.KindText, Text: fmt.Sprintf("Settings below · Automatic %s · Threshold %d · Feather %d", automatic, snapshot.Settings.Threshold, snapshot.Settings.Feather), Tone: v1.ToneSubtle},
 	}}
 }
 
@@ -97,23 +133,58 @@ func outputList(snapshot ControllerSnapshot) *v1.Node {
 			children = append(children, outputRow(row, snapshot.Busy || !snapshot.Helper.Ready))
 		}
 	}
-	return &v1.Node{Kind: v1.KindList, Height: 250, Gap: 6, Events: []v1.EventKind{v1.EventScroll}, Children: children}
+	return &v1.Node{Kind: v1.KindList, Height: 180, Gap: 6, Events: []v1.EventKind{v1.EventScroll}, Children: children}
+}
+
+func hasImageOutputs(snapshot ControllerSnapshot) bool {
+	for _, row := range snapshot.Rows {
+		if row.State == "image" && row.WallpaperPath != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func outputRow(row OutputRow, disabled bool) *v1.Node {
 	status, tone := outputStatus(row)
+	var generate *v1.Node
+	if row.State == "image" && row.WallpaperPath != "" {
+		generate = &v1.Node{
+			Kind: v1.KindButton, ID: "generate-" + row.Output,
+			Text: "Generate", Name: "Generate depth mask for " + row.Output, Role: "button",
+			Disabled: disabled, Events: []v1.EventKind{v1.EventActivate},
+		}
+	}
+	if row.Error != "" {
+		header := []*v1.Node{{Kind: v1.KindText, Text: row.Output}}
+		if generate != nil {
+			header = append(header, generate)
+		}
+		return &v1.Node{Kind: v1.KindColumn, Gap: 2, Padding: 6, Children: []*v1.Node{
+			{Kind: v1.KindRow, Gap: 8, Children: header},
+			{Kind: v1.KindText, Text: status, Tone: tone},
+		}}
+	}
 	children := []*v1.Node{
 		{Kind: v1.KindText, Text: row.Output},
 		{Kind: v1.KindText, Text: status, Tone: tone},
 	}
-	if row.State == "image" {
-		children = append(children, &v1.Node{
-			Kind: v1.KindButton, ID: "generate-" + row.Output,
-			Text: "Generate", Name: "Generate depth mask for " + row.Output, Role: "button",
-			Disabled: disabled, Events: []v1.EventKind{v1.EventActivate},
-		})
+	if generate != nil {
+		children = append(children, generate)
 	}
 	return &v1.Node{Kind: v1.KindRow, Height: 40, Padding: 6, Gap: 8, Children: children}
+}
+
+func hasOutputError(snapshot ControllerSnapshot) bool { return outputErrorCount(snapshot) != 0 }
+
+func outputErrorCount(snapshot ControllerSnapshot) int {
+	count := 0
+	for _, row := range snapshot.Rows {
+		if row.Error != "" || row.Status == "error" {
+			count++
+		}
+	}
+	return count
 }
 
 func outputStatus(row OutputRow) (string, v1.Tone) {
@@ -124,10 +195,18 @@ func outputStatus(row OutputRow) (string, v1.Tone) {
 	case "processing":
 		return "Processing", v1.ToneAccent
 	case "ready":
+		status := "Ready"
 		if row.CacheHit {
-			return "Ready · cached", v1.ToneAccent
+			status += " · cached"
 		}
-		return "Ready", v1.ToneAccent
+		if row.ElapsedMs > 0 {
+			if row.ElapsedMs >= 1000 {
+				status += fmt.Sprintf(" · %.1f s", float64(row.ElapsedMs)/1000)
+			} else {
+				status += fmt.Sprintf(" · %d ms", row.ElapsedMs)
+			}
+		}
+		return status, v1.ToneAccent
 	case "waiting":
 		return "Waiting", v1.ToneSubtle
 	case "error":

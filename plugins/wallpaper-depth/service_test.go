@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -107,6 +108,41 @@ func TestControllerManualGenerateWorksWhenAutomaticGenerationIsOff(t *testing.T)
 	waitSnapshot(t, c, func(s ControllerSnapshot) bool { return rowStatus(s, "DP-1") == "ready" })
 	if got := runner.Count(); got != 2 {
 		t.Fatalf("manual generation helper calls = %d, want status plus one generate", got)
+	}
+}
+
+func TestControllerGenerateAllQueuesCurrentImagesInOutputOrder(t *testing.T) {
+	runner := newBlockingRunner()
+	c, _ := newReadyController(t, runner)
+	c.SetSettings(Settings{AutoGenerate: false, Threshold: 30, Feather: 8})
+	c.Poll([]Output{
+		{Name: "DP-3", State: "image", WallpaperPath: "/wall-c.jpg"},
+		{Name: "DP-2", State: "video", WallpaperPath: "/movie.mp4"},
+		{Name: "DP-1", State: "image", WallpaperPath: "/wall-a.jpg"},
+		{Name: "DP-4", State: "image"},
+	})
+	waitSnapshot(t, c, func(s ControllerSnapshot) bool {
+		return !s.Busy && len(s.Rows) == 4 && rowStatus(s, "DP-1") == "waiting" && rowStatus(s, "DP-3") == "waiting"
+	})
+
+	before := runner.Count()
+	c.GenerateAll()
+	waitSnapshot(t, c, func(s ControllerSnapshot) bool {
+		return !s.Busy && rowStatus(s, "DP-1") == "ready" && rowStatus(s, "DP-3") == "ready" &&
+			rowStatus(s, "DP-2") == "unsupported" && rowStatus(s, "DP-4") == "waiting"
+	})
+
+	var paths []string
+	for _, call := range runner.Calls()[before:] {
+		if len(call) != 0 && call[0] == "generate" {
+			paths = append(paths, pathArg(call))
+		}
+	}
+	if !slices.Equal(paths, []string{"/wall-a.jpg", "/wall-c.jpg"}) {
+		t.Fatalf("GenerateAll paths = %v, want current image paths in output order", paths)
+	}
+	if runner.MaxActive() != 1 {
+		t.Fatalf("concurrent helper calls = %d, want 1", runner.MaxActive())
 	}
 }
 

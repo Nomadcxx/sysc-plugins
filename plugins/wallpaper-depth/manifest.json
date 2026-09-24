@@ -9,7 +9,7 @@
   "requires": {"commands": ["python3"]},
   "services": [{"id": "wallpaper-depth"}],
   "widgets": [{"id": "bar", "settings": []}],
-  "panels": [{"id": "panel", "width": 500, "height": 560, "placement": "attached"}],
+  "panels": [{"id": "panel", "width": 500, "height": 560, "placement": "attached", "include_settings": true}],
   "settings": [
     {"key": "auto_generate", "type": "bool", "label": "Generate on wallpaper change", "default": true},
     {"key": "threshold", "type": "int", "label": "Threshold", "default": 30, "min": 0, "max": 100},

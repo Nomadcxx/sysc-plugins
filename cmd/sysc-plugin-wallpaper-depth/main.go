@@ -410,6 +410,8 @@ func handleInput(ctx context.Context, client *serializedClient, controller *wall
 		controller.Check()
 	case "setup":
 		controller.Setup()
+	case "generate-all":
+		controller.GenerateAll()
 	case "clear-cache":
 		controller.ClearCache()
 	default:
