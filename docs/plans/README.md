@@ -1,6 +1,6 @@
 # Design and Plan Register
 
-Last updated: 2026-09-23.
+Last updated: 2026-09-24.
 
 Every design, plan, and handover this project has produced, with where it lives and what it is for.
 Add a row here in the same commit that adds a document. A document that is not in this register is
@@ -42,6 +42,9 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-22-kdeconnect-live-test-round.md` | plan | Plan D Task 8 runbook — build, deploy, and manually exercise the plugin on the laptop against a real phone; matrix, rollback, bd closes. |
 | `2026-09-22-kdeconnect-live-failure-audit-handover.md` | handover | Commission for the live-failure audit: root-cause the three deployed symptoms, commission gap-analysis and hallmark sub-audits, then write the redesign plan. |
 | `2026-09-23-plugin-view-geometry-lint.md` | plan | Host-side node identity in layout rejections, a public `plugin/lint` built on the shell's own pipeline, and the plugin-repo tests and rules doc that use it — so a view that validates but cannot be drawn fails in `go test`, not on the desktop. |
+| `2026-09-23-wallpaper-depth-design.md` | design | Approved design for a shell-owned desktop clock with per-output depth masks and wallpaper-aware placement. |
+| `2026-09-23-wallpaper-depth.md` | plan | Implementation sequence for wallpaper snapshots, mask registration, the depth clock, inference, integration gate, and bare-metal calibration. |
+| `2026-09-24-wallpaper-depth-gap-closure.md` | plan | Reuse host settings controls, add queued mask generation and setup details, then finish the Wallpaper Depth panel. |
 
 ## Documents on branches
 
