@@ -60,4 +60,4 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-23-wallpaper-depth-design.md` | design | The approved Wallpaper Depth design: a fixed shell-owned clock on the Bottom layer, per-output Depth Anything masks, destination-out composition, and two narrow wallpaper host calls. |
 | `2026-09-23-wallpaper-depth.md` | plan | The TDD implementation sequence for wire minor 7, wallpaper snapshot and mask calls, the Bottom-layer depth clock, serialized per-output inference, process gate, and bare-metal calibration. |
 | `2026-09-24-wallpaper-depth-gap-closure.md` | plan | Reuse the host settings renderer, add queued bulk mask generation and setup/result detail, then polish the Wallpaper Depth panel. |
-| `2026-09-24-notes-design.md` | design | Approved redesign of Notes as a searchable Markdown workspace for one configured Obsidian vault folder, with quick capture and save-failure safety. |
+| `2026-09-24-notes-design.md` | design | Approved Notes manager plus shell-owned floating sticky surfaces for a configured Obsidian vault folder, including the bounded plugin surface contract, pin layers, and save-failure safety. |
