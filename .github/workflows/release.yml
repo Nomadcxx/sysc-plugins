@@ -28,7 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          if [[ "$tag" =~ ^(.+)-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+          if [[ "$tag" =~ ^([a-z0-9][a-z0-9-]*)-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             echo "dir=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
             echo "version=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
           else
