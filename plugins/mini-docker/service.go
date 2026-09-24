@@ -2,6 +2,8 @@ package minidocker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"slices"
@@ -20,6 +22,8 @@ const (
 	ScopeImages     Scope = "images"
 	ScopeVolumes    Scope = "volumes"
 	ScopeNetworks   Scope = "networks"
+	// maxPanelRows bounds the wire tree and determines the session's page size.
+	maxPanelRows = 240
 )
 
 // TabStatus describes the last successful snapshot and any refresh in flight.
@@ -63,6 +67,7 @@ var envKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // SessionSnapshot is an immutable copy of the state used to render a view.
 type SessionSnapshot struct {
 	Scope          Scope
+	Page           int
 	SelectedID     string
 	Containers     []Container
 	Images         []Image
@@ -88,6 +93,7 @@ type Session struct {
 	refreshMu      sync.Mutex
 	docker         Docker
 	scope          Scope
+	page           int
 	selectedID     string
 	tabs           map[Scope]TabStatus
 	containers     []Container
@@ -126,6 +132,7 @@ func (s *Session) SetScope(scope Scope) bool {
 	s.mu.Lock()
 	if s.scope != scope {
 		s.scope = scope
+		s.page = 0
 		s.selectedID = ""
 		s.pendingRemoval = nil
 		s.runForm = nil
@@ -134,9 +141,67 @@ func (s *Session) SetScope(scope Scope) bool {
 	return true
 }
 
+// MovePage changes the active list page and drops details tied to the old
+// page, including any armed destructive confirmation.
+func (s *Session) MovePage(delta int) bool {
+	if delta != -1 && delta != 1 {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.tabs[s.scope].Available {
+		return false
+	}
+	page := s.page + delta
+	if page < 0 || page > lastPageForCount(s.entityCountLocked(s.scope)) {
+		return false
+	}
+	s.page = page
+	s.selectedID = ""
+	s.pendingRemoval = nil
+	return true
+}
+
+func (s *Session) entityCountLocked(scope Scope) int {
+	switch scope {
+	case ScopeContainers:
+		return len(s.containers)
+	case ScopeImages:
+		return len(s.images)
+	case ScopeVolumes:
+		return len(s.volumes)
+	case ScopeNetworks:
+		return len(s.networks)
+	default:
+		return 0
+	}
+}
+
+func lastPageForCount(count int) int {
+	if count <= 0 {
+		return 0
+	}
+	return (count - 1) / maxPanelRows
+}
+
+func pageBounds(count, page int) (start, end int) {
+	last := lastPageForCount(count)
+	if page < 0 {
+		page = 0
+	} else if page > last {
+		page = last
+	}
+	start = page * maxPanelRows
+	end = min(start+maxPanelRows, count)
+	return start, end
+}
+
 func (s *Session) Select(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.scope == ScopeImages || s.scope == ScopeVolumes {
+		id = s.resolveEntityIDLocked(s.scope, id)
+	}
 	if !validEntityID(id) || !s.tabs[s.scope].Available || !s.hasEntityLocked(s.scope, id) {
 		return false
 	}
@@ -164,6 +229,7 @@ func (s *Session) State() SessionSnapshot {
 	defer s.mu.Unlock()
 	return SessionSnapshot{
 		Scope:          s.scope,
+		Page:           s.page,
 		SelectedID:     s.selectedID,
 		Containers:     append([]Container(nil), s.containers...),
 		Images:         append([]Image(nil), s.images...),
@@ -265,7 +331,7 @@ func (s *Session) hasEntityLocked(scope Scope, id string) bool {
 		}
 	case ScopeImages:
 		for _, item := range s.images {
-			if item.ID == id {
+			if imageReference(item) == id {
 				return true
 			}
 		}
@@ -280,6 +346,15 @@ func (s *Session) hasEntityLocked(scope Scope, id string) bool {
 			if item.ID == id {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func (s *Session) entityActionInFlightLocked(scope Scope, id string) bool {
+	for key := range s.inFlight {
+		if key.scope == scope && key.id == id {
+			return true
 		}
 	}
 	return false
@@ -330,6 +405,7 @@ func (s *Session) SetDefaultNetwork(name string) {
 // optional; Docker can still run the image when inspect is unavailable.
 func (s *Session) OpenRunForm(ctx context.Context, id string) bool {
 	s.mu.Lock()
+	id = s.resolveEntityIDLocked(ScopeImages, id)
 	_, ok := s.selectedImageLocked(id)
 	if !ok {
 		s.mu.Unlock()
@@ -342,6 +418,7 @@ func (s *Session) OpenRunForm(ctx context.Context, id string) bool {
 	}
 
 	s.mu.Lock()
+	id = s.resolveEntityIDLocked(ScopeImages, id)
 	image, ok := s.selectedImageLocked(id)
 	if !ok {
 		s.mu.Unlock()
@@ -388,7 +465,7 @@ func (s *Session) selectedImageLocked(id string) (Image, bool) {
 		return Image{}, false
 	}
 	for _, image := range s.images {
-		if image.ID == id {
+		if imageReference(image) == id {
 			return image, true
 		}
 	}
@@ -400,6 +477,35 @@ func imageReference(image Image) string {
 		return image.ID
 	}
 	return image.Repository + ":" + image.Tag
+}
+
+// entityNodeKey keeps Docker targets intact while shortening only IDs that
+// would exceed the wire node-ID budget once a control prefix is added.
+func entityNodeKey(scope Scope, id string) string {
+	if len("select:")+len(id) <= v1.MaxIdentBytes {
+		return id
+	}
+	digest := sha256.Sum256([]byte(string(scope) + "\x00" + id))
+	return "entity-" + hex.EncodeToString(digest[:])
+}
+
+func (s *Session) resolveEntityIDLocked(scope Scope, id string) string {
+	switch scope {
+	case ScopeImages:
+		for _, image := range s.images {
+			ref := imageReference(image)
+			if id == ref || id == entityNodeKey(scope, ref) {
+				return ref
+			}
+		}
+	case ScopeVolumes:
+		for _, volume := range s.volumes {
+			if id == volume.Name || id == entityNodeKey(scope, volume.Name) {
+				return volume.Name
+			}
+		}
+	}
+	return id
 }
 
 func (s *Session) defaultNetworkLocked() string {
@@ -509,6 +615,9 @@ func (s *Session) refreshRunFormErrorLocked() {
 }
 
 func (s *Session) validateRunFormLocked(draft RunDraft) (RunOpts, error) {
+	if !s.tabs[ScopeContainers].Available {
+		return RunOpts{}, fmt.Errorf("Docker status unavailable; refresh containers before running an image")
+	}
 	if s.scope != ScopeImages || !s.tabs[ScopeImages].Available || !s.hasEntityLocked(ScopeImages, draft.ImageID) {
 		return RunOpts{}, fmt.Errorf("selected image is no longer available")
 	}
@@ -593,7 +702,7 @@ func (s *Session) SubmitRunWithStart(ctx context.Context, started func()) bool {
 		return false
 	}
 	key := actionKey{scope: ScopeImages, verb: "run", id: draft.ImageID}
-	if _, exists := s.inFlight[key]; exists {
+	if s.entityActionInFlightLocked(key.scope, key.id) {
 		s.mu.Unlock()
 		return false
 	}
@@ -666,15 +775,98 @@ func (s *Session) finishRefresh(scope Scope, skipped int, err error, replace fun
 	status.RefreshedAt = time.Now()
 	s.tabs[scope] = status
 	replace()
+	if s.scope == scope {
+		if last := lastPageForCount(s.entityCountLocked(scope)); s.page > last {
+			s.page = last
+			s.selectedID = ""
+			s.pendingRemoval = nil
+		}
+	}
 	if s.scope == scope && s.selectedID != "" && !s.hasEntityLocked(scope, s.selectedID) {
 		s.selectedID = ""
 	}
 	if s.pendingRemoval != nil && s.pendingRemoval.Scope == scope && !s.hasEntityLocked(scope, s.pendingRemoval.ID) {
 		s.pendingRemoval = nil
 	}
-	if s.runForm != nil && (scope == ScopeImages || scope == ScopeNetworks) {
+	if s.scope == scope && s.selectedID != "" && !s.entityVisibleOnPageLocked(scope, s.selectedID) {
+		s.selectedID = ""
+	}
+	if s.scope == scope && s.pendingRemoval != nil && !s.entityVisibleOnPageLocked(scope, s.pendingRemoval.ID) {
+		s.pendingRemoval = nil
+	}
+	if s.runForm != nil && (scope == ScopeContainers || scope == ScopeImages || scope == ScopeNetworks) {
 		s.refreshRunFormErrorLocked()
 	}
+}
+
+func (s *Session) entityVisibleOnPageLocked(scope Scope, id string) bool {
+	start, end := pageBounds(s.entityCountLocked(scope), s.page)
+	switch scope {
+	case ScopeContainers:
+		for _, item := range sortedContainers(s.containers)[start:end] {
+			if item.ID == id {
+				return true
+			}
+		}
+	case ScopeImages:
+		for _, item := range sortedImages(s.images)[start:end] {
+			if imageReference(item) == id {
+				return true
+			}
+		}
+	case ScopeVolumes:
+		for _, item := range sortedVolumes(s.volumes)[start:end] {
+			if item.Name == id {
+				return true
+			}
+		}
+	case ScopeNetworks:
+		for _, item := range sortedNetworks(s.networks)[start:end] {
+			if item.ID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sortedImages(images []Image) []Image {
+	sorted := slices.Clone(images)
+	slices.SortFunc(sorted, func(a, b Image) int {
+		if c := strings.Compare(a.Repository+":"+a.Tag, b.Repository+":"+b.Tag); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	return sorted
+}
+
+func sortedVolumes(volumes []Volume) []Volume {
+	sorted := slices.Clone(volumes)
+	slices.SortFunc(sorted, func(a, b Volume) int {
+		if c := strings.Compare(a.Name, b.Name); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Driver, b.Driver)
+	})
+	return sorted
+}
+
+func sortedContainers(containers []Container) []Container {
+	sorted := slices.Clone(containers)
+	slices.SortFunc(sorted, func(a, b Container) int {
+		if a.Running() != b.Running() {
+			if a.Running() {
+				return -1
+			}
+			return 1
+		}
+		if c := strings.Compare(a.Names, b.Names); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	return sorted
 }
 
 // Act accepts only a current, eligible container action. It snapshots the
@@ -706,7 +898,7 @@ func (s *Session) ActWithStart(ctx context.Context, action, id string, started f
 		s.mu.Unlock()
 		return
 	}
-	if _, exists := s.inFlight[key]; exists {
+	if s.entityActionInFlightLocked(key.scope, key.id) {
 		s.mu.Unlock()
 		return
 	}
@@ -745,10 +937,12 @@ func (s *Session) ArmRemoval(id string) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.tabs[s.scope].Available || !s.canRemoveLocked(s.scope, id) {
-		return false
+	if s.scope == ScopeImages {
+		id = s.resolveEntityIDLocked(s.scope, id)
+	} else if s.scope == ScopeVolumes {
+		id = s.resolveEntityIDLocked(s.scope, id)
 	}
-	if _, exists := s.inFlight[actionKey{scope: s.scope, verb: removeVerb(s.scope), id: id}]; exists {
+	if !s.tabs[s.scope].Available || !s.tabs[ScopeContainers].Available || !s.canRemoveLocked(s.scope, id) {
 		return false
 	}
 	s.pendingRemoval = &RemovalTarget{Scope: s.scope, ID: id}
@@ -773,13 +967,13 @@ func (s *Session) ConfirmRemovalWithStart(ctx context.Context, started func()) {
 	s.mu.Lock()
 	target := s.pendingRemoval
 	s.pendingRemoval = nil
-	if target == nil || target.Scope != s.scope || !s.tabs[target.Scope].Available || !s.canRemoveLocked(target.Scope, target.ID) {
+	if target == nil || target.Scope != s.scope || !s.tabs[ScopeContainers].Available || !s.tabs[target.Scope].Available || !s.canRemoveLocked(target.Scope, target.ID) {
 		s.mu.Unlock()
 		return
 	}
 	verb := removeVerb(target.Scope)
 	key := actionKey{scope: target.Scope, verb: verb, id: target.ID}
-	if _, exists := s.inFlight[key]; exists {
+	if s.entityActionInFlightLocked(key.scope, key.id) {
 		s.mu.Unlock()
 		return
 	}
@@ -826,7 +1020,7 @@ func removeVerb(scope Scope) string {
 }
 
 func (s *Session) canRemoveLocked(scope Scope, id string) bool {
-	if !s.hasEntityLocked(scope, id) {
+	if !s.tabs[ScopeContainers].Available || !s.tabs[scope].Available || !s.hasEntityLocked(scope, id) || s.entityActionInFlightLocked(scope, id) {
 		return false
 	}
 	switch scope {
@@ -838,8 +1032,8 @@ func (s *Session) canRemoveLocked(scope Scope, id string) bool {
 		}
 	case ScopeImages:
 		for _, item := range s.images {
-			if item.ID == id {
-				return item.Containers <= 0
+			if imageReference(item) == id {
+				return item.ContainersKnown && item.Containers == 0
 			}
 		}
 	case ScopeVolumes:

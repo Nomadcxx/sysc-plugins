@@ -69,16 +69,16 @@ then the diagnosis when unavailable (`docker daemon not running`).
 |---|---|---|
 | Header | `Docker containers` (title, bold) + `Refresh` button, `PinEnd` | 28 |
 | Scope row | four buttons: Containers · Images · Volumes · Networks, selected one `Fill: accent` | 28 |
-| Status | at most two lines: the action error (tone error) and the list error for the active tab (tone error); `Working…` (subtle) while an action is in flight | 0–40 |
+| Status | at most two single-line messages: action and active-tab errors, or the primary Docker diagnosis on secondary tabs; `Working…` (subtle) while an action is in flight | 0–40 |
 | Entity list | `KindList`, scroll, `Gap 4`; rows are buttons | 320–400, state-dependent |
-| Overflow footer | `+N more` (subtle) **below** the list — fixes the v0.3.0 inversion | 16 |
-| Detail card | selected entity: name (bold), one or two `subtle` lines, action row; hidden when nothing is selected | 0–112 |
+| Pagination | Previous/Next buttons and `Items x–y of n` below the list when more than 240 rows exist | 28 |
+| Detail card | selected entity: name (bold), summary, action row; when Remove is disabled by container state, image use/count, or a built-in network, a `subtle` reason line explains why | 0–128 |
 
-Height arithmetic: fixed chrome is 160 (32 padding, 28 header, 28 scope, 16 footer, five 8
-gaps, and a 16 reserve), so `list = 400 − status − card`, floored at 200: 400 with neither,
-380 with one status line, 288 with the card, 268 with the card and one status line, 248 with
-two. The implementation computes the list height from the bands it is actually publishing
-rather than hardcoding it, and the fit test lints every combination at 480×560.
+The implementation computes list height from the status lines and detail card it is
+publishing, with a 200 px floor. A normal card uses 112 px; a card with a removal explanation
+uses 128 px. Pagination appears only when needed. The fit test lays out the worst case — 240
+rows, two status lines, pagination, and a selected detail card — through the host's actual
+pipeline at 480×560.
 
 **Panel box.** Keep 480×560 (house sizes run 360–750 wide; 480 holds a four-button scope row
 plus an entity row with three actions — the fit test is the proof). Widening to 560 is the
@@ -92,8 +92,21 @@ form; the bands above it stay. No modal exists on this wire; a form is a tree sw
 **Entity row (selectable).** `button` (ID `select:<id>`, `Fill: card` when selected else
 `outline`, `Radius 10`, `Padding 8`) wrapping a column of two texts: line 1 `name`
 (bold; tone `accent` when running — the state indication a dot would have carried), line 2
-`image · status` (`subtle`, `caption`) — 4 nodes per row. Buttons may hold only
+`image · status` (`subtle`, `caption`) — 4 nodes per row. Image rows use `repository:tag`
+as their identity and removal target, falling back to the image ID only for dangling
+images. Multiple tags sharing a digest therefore remain independently selectable and
+removable. If the full target plus a control prefix exceeds the wire ID limit, the panel
+uses a SHA-256-derived key and resolves it against the current snapshot before selection or
+mutation; Docker still receives the full target. Visible entity labels are compacted to the
+panel width, and accessible names stay within the wire limit. Buttons may hold only
 non-interactive children; this row complies, and the fit test pins the width.
+
+**Pagination.** Lists show at most 240 sorted rows per page. When more rows exist, Previous
+and Next controls follow the list with a visible `Items x–y of n` range; the controls disable
+at their respective ends. Page changes clear the selected detail and any armed removal,
+scope changes return to page one, and refreshes clamp a now-invalid page. A refresh also clears
+selection or confirmation if sorting moved that entity off the visible page. Every row remains
+reachable without exceeding the protocol node limit.
 
 **Detail card.** Name (bold), `image · status · id` (subtle), action row (`Gap 4`, buttons
 `Height 28`). Action sets per tab:
@@ -101,7 +114,7 @@ non-interactive children; this row complies, and the fit test pins the width.
 | Tab | Actions | Enabled when |
 |---|---|---|
 | Containers | Start · Stop · Restart · Remove | Start only when not running; Stop/Restart only when running; Remove only when not running |
-| Images | Run · Remove | Remove disabled while any container references the image (running or stopped — docker refuses either way) |
+| Images | Run · Remove | Remove enabled only when Docker supplied a nonnegative `Containers` count of zero; referenced or unknown counts disable it |
 | Volumes | Remove | always |
 | Networks | Remove | disabled for `bridge`, `host`, `none` |
 
@@ -111,10 +124,10 @@ cancel, on confirm dispatch, on scope change, and when the entity leaves the sna
 survives a poll refresh (a 5 s tick must not disarm mid-decision). One armed row at a time.
 No setting; no modal.
 
-**In-flight.** While an action runs: the acting entity's matching buttons are `Disabled`,
+**In-flight.** While an action runs: every mutating button for that entity is `Disabled`,
 the status band shows `Working…`, and the poller's publishes continue. The state is keyed by
-scope + action + entity ID, not by a global busy flag, so a hung action on one container does
-not lock the panel or unrelated entities.
+scope + action + entity ID, while dispatch rejects any second mutation for that same entity.
+A hung action on one entity does not lock the panel or unrelated entities.
 
 **Empty / loading / failure.**
 - Loading is shown only while there is no data for the active tab; a refresh over known data
@@ -124,10 +137,13 @@ not lock the panel or unrelated entities.
   no-docker case with the diagnosis line above it.
 - Primary failure (`docker ps` fails / binary missing / daemon down): the status band carries
   the diagnosis (`Docker daemon not running`, `docker command not found`), the rendered list
-  is empty, cached data is retained internally for recovery, mutations are rejected until a
-  successful refresh, and the bar pill's tone is `error`.
+  is empty, cached data is retained internally for recovery, every mutation across every tab
+  is disabled and rejected until a successful container refresh, and the bar pill's tone is
+  `error`. Secondary tabs keep showing the primary diagnosis while those actions are disabled.
 - Secondary failures (images/volumes/networks) render in the status band for the tab they
   belong to and retain that tab's last successful rows, never silently empty.
+- Displayed Docker errors collapse whitespace and are clipped to one line in the panel and
+  tooltip, preserving the useful leading diagnosis without breaking the two-line surface.
 
 ## Data layer
 
@@ -141,7 +157,7 @@ over-limit output rejected rather than returned as a partial list):
 | Volumes | `docker volume ls --format '{{json .}}'` |
 | Networks | `docker network ls --format '{{json .}}'` |
 | Port pre-select | `docker image inspect --format '{{json .Config.ExposedPorts}}' <image>` |
-| Actions | `docker start\|stop\|restart\|rm <id>`, `docker rmi <id>`, `docker volume rm <name>`, `docker network rm <id>` |
+| Actions | `docker start\|stop\|restart\|rm <id>`, `docker rmi <repository:tag or image ID>`, `docker volume rm <name>`, `docker network rm <id>` |
 | Run | `docker run -d [--name <n>] [-e K=V …] [-p P:P] [--network <net>] <image>` |
 
 Containers' line parser moves into `parseContainers([]byte)` so production parsing is what the
@@ -152,8 +168,9 @@ silently — the count of skipped lines surfaces as a subtle status note).
 `{available, loading, listErr, refreshedAt, skippedLines, items[]}`, plus `actErr`,
 in-flight action keys (scope + verb + ID), `confirmID`, `selectedID`, `scope`, and the
 run-form draft. Sorting is deterministic and testable: running-first then name (containers);
-`repo:tag` (images); name (volumes, networks). The image `Containers` count disables
-removal while any container references that image.
+`repo:tag` (images); name (volumes, networks). Image rows and actions use `repository:tag`
+rather than the shared image ID. The image `Containers` field tracks whether the count was
+present; removal is disabled when the count is absent, negative, or positive.
 
 **Refresh.** Poll every `refresh_interval_seconds` (1–30, default 5). Containers refresh
 every tick — the bar pill depends on it. Other tabs refresh on first open, on the explicit
@@ -195,11 +212,13 @@ name, port, and env drafts by node ID and validates them before dispatch.
 ## Run form (images tab)
 
 Fields, in order: image line (bold `repo:tag`), container name (`text_input`, optional),
-port (`text_input`, optional, 1–65535), publish toggle (a button that flips
+port (`text_input`, optional, 1–65535; labelled “Port (host and container)” because the
+mapping is `P:P`), publish toggle (a button that flips
 `Publish port: on/off` — the wire has no checkbox), network (a button that cycles through the
 snapshot's networks, starting at `default_network` — the wire has no select), environment
-(`text_input` multiline, one `K=V` per line), inline error line (tone `error`), then
-`Cancel` + `Run` (`Fill: accent`, disabled while busy or invalid).
+(`text_input` multiline, at least 80 px high, one `K=V` per line), inline error line (tone
+`error`), then `Cancel` + `Run` (`Fill: accent`, disabled while busy, invalid, or the
+primary container snapshot is unavailable).
 
 Validation before anything reaches argv: name `^[A-Za-z0-9][A-Za-z0-9_.-]*$`; port integer
 1–65535; env key `^[A-Za-z_][A-Za-z0-9_]*$` with a non-empty value; image reference non-empty
@@ -245,11 +264,17 @@ Catalogue-verified names only (project font, then Material); an unknown name fai
 
 | Use | Icon |
 |---|---|
-| Scope: Containers · Images · Volumes · Networks | `widgets` · `wallpaper` · `folder_open` · `lan` |
+| Scope buttons: Containers · Images · Volumes · Networks | `widgets` · `wallpaper` · `folder_open` · `lan` |
 | Start · Stop · Restart | `play_arrow` · `pause` · `restart_alt` |
 | Remove · Confirm remove · Cancel | `delete` · `check` · `close` |
-| Refresh · Back from form | `refresh` · `chevron_left` |
+| Refresh · Cancel form | `refresh` · `close` |
 | Bar pill | none (text only) |
+
+Each action button and scope button pairs its catalogue icon with its visible label. Labels
+stay present so icons reinforce recognition and accessible control names.
+
+Buttons pair these catalogue icons with their visible labels. Labels remain present so the
+icons reinforce recognition without replacing control names or accessible text.
 
 Sizes: `title` for the panel header and the selected entity's name, `body` for rows,
 `caption` + `subtle` for secondary lines. Tones: `error` for failures and the unavailable
@@ -278,7 +303,8 @@ new icons — both are shell-side asks, not design requirements.
    are logged; no host-specific count is asserted, correcting the earlier gate's claim. Manual
    acceptance on the machine with Docker:
    pill click opens the panel; the list survives a refresh with docker hung; the daemon-down
-   line is readable; 200+ containers scroll and stay under the node budget; start/stop works
+   line is readable; 200+ containers scroll and stay under the node budget; rows beyond the
+   240-row page remain reachable through the range and Previous/Next controls; start/stop works
    and a failure is visible; a remove requires the second click.
 
 ## Parity against the reference prior art

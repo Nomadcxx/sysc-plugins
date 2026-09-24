@@ -403,7 +403,7 @@ func TestSessionSelectsCurrentEntityInEveryScope(t *testing.T) {
 		id    string
 	}{
 		{ScopeContainers, "container1"},
-		{ScopeImages, "sha256:image1"},
+		{ScopeImages, "nginx:latest"},
 		{ScopeVolumes, "volume1"},
 		{ScopeNetworks, "network1"},
 	} {
@@ -416,10 +416,106 @@ func TestSessionSelectsCurrentEntityInEveryScope(t *testing.T) {
 	}
 }
 
+func TestSessionMovesPagesAndClearsSelectionAndConfirmation(t *testing.T) {
+	containers := make([]Container, maxPanelRows*2+3)
+	for i := range containers {
+		containers[i] = Container{ID: fmt.Sprintf("c%03d", i), Names: fmt.Sprintf("container-%03d", i), State: "exited"}
+	}
+	s := NewSession(&fakeDocker{containers: containers})
+	s.Refresh(context.Background())
+	if !s.Select("c000") || !s.ArmRemoval("c000") {
+		t.Fatal("could not select and arm the first row")
+	}
+	if !s.MovePage(1) {
+		t.Fatal("could not move to page two")
+	}
+	state := s.State()
+	if state.Page != 1 || state.SelectedID != "" || state.PendingRemoval != nil {
+		t.Fatalf("page navigation retained stale selection state: %+v", state)
+	}
+	if !s.MovePage(1) || s.State().Page != 2 {
+		t.Fatal("could not move to the final page")
+	}
+	if s.MovePage(1) {
+		t.Fatal("moved past the final page")
+	}
+	if !s.MovePage(-1) || s.State().Page != 1 || !s.MovePage(-1) || s.State().Page != 0 {
+		t.Fatal("could not return to page one")
+	}
+	if s.MovePage(-1) || s.MovePage(0) {
+		t.Fatal("accepted an out-of-range page move")
+	}
+}
+
+func TestSessionClampsPageWhenRefreshShrinksListAndScopeChanges(t *testing.T) {
+	containers := make([]Container, maxPanelRows*2+1)
+	for i := range containers {
+		containers[i] = Container{ID: fmt.Sprintf("c%03d", i), Names: fmt.Sprintf("container-%03d", i), State: "exited"}
+	}
+	fd := &fakeDocker{containers: containers}
+	s := NewSession(fd)
+	s.Refresh(context.Background())
+	if !s.MovePage(1) || !s.MovePage(1) {
+		t.Fatal("could not move to the final page")
+	}
+	fd.containers = fd.containers[:2]
+	s.Refresh(context.Background())
+	if got := s.State().Page; got != 0 {
+		t.Fatalf("page after list shrank = %d, want 0", got)
+	}
+	fd.containers = containers[:maxPanelRows+1]
+	s.Refresh(context.Background())
+	if !s.MovePage(1) {
+		t.Fatal("could not move to page two before scope change")
+	}
+	if !s.SetScope(ScopeImages) || s.State().Page != 0 {
+		t.Fatalf("scope change did not reset page: %+v", s.State())
+	}
+}
+
+func TestSessionClearsDetailsWhenRefreshMovesEntityToAnotherPage(t *testing.T) {
+	containers := make([]Container, maxPanelRows+1)
+	for i := range containers {
+		containers[i] = Container{
+			ID: fmt.Sprintf("c%03d", i), Names: fmt.Sprintf("container-%03d", i), State: "exited",
+		}
+	}
+	fd := &fakeDocker{containers: containers}
+	s := NewSession(fd)
+	s.Refresh(context.Background())
+	if !s.Select("c239") || !s.ArmRemoval("c239") {
+		t.Fatal("could not select and arm the last row on page one")
+	}
+	fd.containers = append(fd.containers, Container{
+		ID: "new", Names: "container-238a", State: "exited",
+	})
+	s.Refresh(context.Background())
+	state := s.State()
+	if state.SelectedID != "" || state.PendingRemoval != nil {
+		t.Fatalf("refresh kept details for a row now off-page: %+v", state)
+	}
+}
+
 type gatedStartDocker struct {
 	*fakeDocker
 	entered chan struct{}
 	release chan struct{}
+}
+
+type gatedStopDocker struct {
+	*fakeDocker
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (d *gatedStopDocker) Stop(ctx context.Context, id string) error {
+	close(d.entered)
+	select {
+	case <-d.release:
+		return d.fakeDocker.Stop(ctx, id)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (d *gatedStartDocker) Start(ctx context.Context, id string) error {
@@ -470,6 +566,296 @@ func TestSessionAllowsDifferentEntitiesDuringAnAction(t *testing.T) {
 	}
 }
 
+func TestSessionBlocksConflictingMutationsForOneEntity(t *testing.T) {
+	started := &gatedStartDocker{
+		fakeDocker: &fakeDocker{containers: []Container{{ID: "a1", Names: "web", State: "exited"}}},
+		entered:    make(chan struct{}), release: make(chan struct{}),
+	}
+	s := NewSession(started)
+	s.Refresh(context.Background())
+	done := make(chan struct{})
+	go func() {
+		s.Act(context.Background(), "start", "a1")
+		close(done)
+	}()
+	select {
+	case <-started.entered:
+	case <-time.After(time.Second):
+		t.Fatal("start did not enter Docker")
+	}
+	if s.ArmRemoval("a1") {
+		t.Fatal("remove confirmation armed while start was in flight")
+	}
+	close(started.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("start did not finish")
+	}
+
+	stopped := &gatedStopDocker{
+		fakeDocker: &fakeDocker{containers: []Container{{ID: "b2", Names: "db", State: "running"}}},
+		entered:    make(chan struct{}), release: make(chan struct{}),
+	}
+	s = NewSession(stopped)
+	s.Refresh(context.Background())
+	done = make(chan struct{})
+	go func() {
+		s.Act(context.Background(), "stop", "b2")
+		close(done)
+	}()
+	select {
+	case <-stopped.entered:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not enter Docker")
+	}
+	s.Act(context.Background(), "restart", "b2")
+	if slices.Contains(stopped.actions, "restart:b2") {
+		t.Fatalf("restart overlapped stop: %v", stopped.actions)
+	}
+	close(stopped.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not finish")
+	}
+}
+
+func TestImagesUseTagReferencesAsRowAndRemovalIDs(t *testing.T) {
+	fd := &fakeDocker{
+		containers: []Container{{ID: "c1", Names: "web", State: "exited"}},
+		images: []Image{
+			{ID: "sha256:shared", Repository: "acme/web", Tag: "v1", Containers: 0, ContainersKnown: true},
+			{ID: "sha256:shared", Repository: "acme/web", Tag: "latest", Containers: 0, ContainersKnown: true},
+		},
+	}
+	s := NewSession(fd)
+	s.Refresh(context.Background())
+	s.RefreshTab(context.Background(), ScopeImages)
+	s.SetScope(ScopeImages)
+
+	panel := PanelTreeForSession(s.State())
+	if findNode(panel, "select:acme/web:v1") == nil || findNode(panel, "select:acme/web:latest") == nil {
+		t.Fatal("two tags sharing an image ID did not get unique row IDs")
+	}
+	if !s.Select("acme/web:v1") || !s.ArmRemoval("acme/web:v1") {
+		t.Fatal("could not select and arm one image tag")
+	}
+	s.ConfirmRemoval(context.Background())
+	if !slices.Contains(fd.actions, "rmi:acme/web:v1") {
+		t.Fatalf("image removal did not target only the selected tag: %v", fd.actions)
+	}
+}
+
+func TestMissingImageReferenceCountCannotBeRemoved(t *testing.T) {
+	images, skipped := parseImages([]byte(`{"Repository":"alpine","Tag":"3","ID":"sha256:alpine"}`))
+	if skipped != 0 || len(images) != 1 {
+		t.Fatalf("parseImages returned %d images and %d skipped lines", len(images), skipped)
+	}
+	fd := &fakeDocker{
+		containers: []Container{{ID: "c1", Names: "web", State: "exited"}},
+		images:     images,
+	}
+	s := NewSession(fd)
+	s.Refresh(context.Background())
+	s.RefreshTab(context.Background(), ScopeImages)
+	s.SetScope(ScopeImages)
+	if !s.Select("alpine:3") {
+		t.Fatal("could not select image with missing reference count")
+	}
+	if s.ArmRemoval("alpine:3") {
+		t.Fatal("image with unknown container reference count was removable")
+	}
+	panel := PanelTreeForSession(s.State())
+	if button := findNode(panel, "rmi:alpine:3"); button == nil || !button.Disabled {
+		t.Fatalf("image remove button is not disabled for an unknown reference count: %+v", button)
+	}
+	if !containsText(panel, "Container use unknown · removal disabled") {
+		t.Fatal("image detail does not explain the disabled remove action")
+	}
+}
+
+func TestSecondaryMutationsRequireSuccessfulPrimaryRefresh(t *testing.T) {
+	fd := &fakeDocker{
+		containers: []Container{{ID: "c1", Names: "web", State: "exited"}},
+		images:     []Image{{ID: "sha256:alpine", Repository: "alpine", Tag: "3", Containers: 0}},
+		volumes:    []Volume{{Name: "cache"}},
+		networks:   []Network{{ID: "custom", Name: "custom"}},
+	}
+	s := NewSession(fd)
+	s.Refresh(context.Background())
+	s.RefreshTab(context.Background(), ScopeImages)
+	s.RefreshTab(context.Background(), ScopeVolumes)
+	s.RefreshTab(context.Background(), ScopeNetworks)
+	fd.listErr = errors.New("Docker daemon not running")
+	s.Refresh(context.Background())
+
+	s.Act(context.Background(), "start", "c1")
+	s.SetScope(ScopeImages)
+	if !s.Select("alpine:3") {
+		t.Fatal("could not select image")
+	}
+	if s.ArmRemoval("alpine:3") {
+		t.Fatal("image removal was allowed while the primary refresh was unavailable")
+	}
+	if !s.OpenRunForm(context.Background(), "alpine:3") {
+		t.Fatal("opening the non-mutating run form should remain available")
+	}
+	if s.SubmitRun(context.Background()) {
+		t.Fatal("image run was allowed while the primary refresh was unavailable")
+	}
+	s.SetScope(ScopeVolumes)
+	if !s.Select("cache") {
+		t.Fatal("could not select volume")
+	}
+	if s.ArmRemoval("cache") {
+		t.Fatal("volume removal was allowed while the primary refresh was unavailable")
+	}
+	s.mu.Lock()
+	s.pendingRemoval = &RemovalTarget{Scope: ScopeVolumes, ID: "cache"}
+	s.mu.Unlock()
+	s.ConfirmRemoval(context.Background())
+	s.SetScope(ScopeNetworks)
+	if !s.Select("custom") {
+		t.Fatal("could not select network")
+	}
+	if s.ArmRemoval("custom") {
+		t.Fatal("network removal was allowed while the primary refresh was unavailable")
+	}
+	if len(fd.actions) != 0 || len(fd.runs) != 0 {
+		t.Fatalf("mutations reached Docker during primary failure: actions=%v runs=%v", fd.actions, fd.runs)
+	}
+
+	state := s.State()
+	panel := PanelTreeForSession(state)
+	if !containsText(panel, "Docker daemon not running") {
+		t.Fatal("secondary tab did not explain why actions are disabled")
+	}
+	if button := findNode(panel, "netrm:custom"); button == nil || !button.Disabled {
+		t.Fatalf("network remove button is not disabled during primary failure: %+v", button)
+	}
+}
+
+func TestPrimaryFailureDisablesEveryTabMutationControl(t *testing.T) {
+	cases := []struct {
+		name  string
+		state SessionSnapshot
+		ids   []string
+	}{
+		{
+			name: "images",
+			state: SessionSnapshot{
+				Scope: ScopeImages, SelectedID: "alpine:3",
+				Images:       []Image{{ID: "sha256:alpine", Repository: "alpine", Tag: "3", ContainersKnown: true}},
+				ImageTab:     TabStatus{Available: true},
+				ContainerTab: TabStatus{ListError: "Docker daemon not running"},
+			},
+			ids: []string{"run:alpine:3", "rmi:alpine:3"},
+		},
+		{
+			name: "volumes",
+			state: SessionSnapshot{
+				Scope: ScopeVolumes, SelectedID: "cache", Volumes: []Volume{{Name: "cache"}},
+				VolumeTab:    TabStatus{Available: true},
+				ContainerTab: TabStatus{ListError: "Docker daemon not running"},
+			},
+			ids: []string{"volrm:cache"},
+		},
+		{
+			name: "networks",
+			state: SessionSnapshot{
+				Scope: ScopeNetworks, SelectedID: "n1", Networks: []Network{{ID: "n1", Name: "custom"}},
+				NetworkTab:   TabStatus{Available: true},
+				ContainerTab: TabStatus{ListError: "Docker daemon not running"},
+			},
+			ids: []string{"netrm:n1"},
+		},
+		{
+			name: "run form",
+			state: SessionSnapshot{
+				Scope: ScopeImages, ImageTab: TabStatus{Available: true},
+				ContainerTab: TabStatus{ListError: "Docker daemon not running"},
+				RunForm:      &RunDraft{ImageID: "alpine:3", ImageRef: "alpine:3"},
+			},
+			ids: []string{"run-submit"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			panel := PanelTreeForSession(tc.state)
+			if !containsText(panel, "Docker daemon not running") {
+				t.Fatal("panel omitted the primary failure reason")
+			}
+			for _, id := range tc.ids {
+				if node := findNode(panel, id); node == nil || !node.Disabled {
+					t.Errorf("mutation %s is enabled during primary failure: %+v", id, node)
+				}
+			}
+		})
+	}
+}
+
+func TestDisplayedErrorsAreSingleLineAndBounded(t *testing.T) {
+	long := "daemon failed\n" + strings.Repeat("connection refused while contacting docker.sock ", 4)
+	state := SessionSnapshot{
+		Scope: ScopeImages, ContainerTab: TabStatus{ListError: long}, ImageTab: TabStatus{Available: true},
+		ActionError: long,
+		RunForm:     &RunDraft{ImageID: "alpine:3", ImageRef: "alpine:3", Error: long},
+	}
+	tip := TooltipTreeForSession(state, 0)
+	for _, line := range tip.Children {
+		if strings.ContainsAny(line.Text, "\r\n") || len([]rune(line.Text)) > 36 {
+			t.Fatalf("tooltip line is not compact: %q", line.Text)
+		}
+	}
+	panel := PanelTreeForSession(state)
+	walkNodes(panel, func(node *v1.Node) {
+		if node.Tone == v1.ToneError && (strings.ContainsAny(node.Text, "\r\n") || len([]rune(node.Text)) > 56) {
+			t.Errorf("panel error is not compact: %q", node.Text)
+		}
+	})
+}
+
+func TestRunFormClarifiesPortMappingAndShowsMultilineEnvironment(t *testing.T) {
+	panel := PanelTreeForSession(SessionSnapshot{
+		Scope:   ScopeImages,
+		RunForm: &RunDraft{ImageID: "alpine:3", ImageRef: "alpine:3", Network: "bridge"},
+	})
+	if !containsText(panel, "Port (host and container, optional)") {
+		t.Fatal("run form does not explain that it maps the same port inside and outside")
+	}
+	env := findNode(panel, "env")
+	if env == nil || !env.Multiline || env.Height < 80 {
+		t.Fatalf("environment field is not a usable multiline editor: %+v", env)
+	}
+}
+
+func TestActionAndTabButtonsUseCatalogueIcons(t *testing.T) {
+	state := SessionSnapshot{
+		Scope: ScopeContainers, Containers: []Container{{ID: "c1", Names: "web", State: "running"}},
+		SelectedID: "c1", ContainerTab: TabStatus{Available: true},
+	}
+	panel := PanelTreeForSession(state)
+	want := map[string]string{
+		"refresh": "refresh", "tab:containers": "widgets", "tab:images": "wallpaper",
+		"tab:volumes": "folder_open", "tab:networks": "lan",
+		"stop:c1": "pause", "restart:c1": "restart_alt", "remove:c1": "delete",
+	}
+	for id, icon := range want {
+		node := findNode(panel, id)
+		if node == nil || node.Icon != icon {
+			t.Errorf("button %s icon = %q, want %q", id, nodeIcon(node), icon)
+		}
+	}
+}
+
+func nodeIcon(node *v1.Node) string {
+	if node == nil {
+		return "<missing>"
+	}
+	return node.Icon
+}
+
 func TestSessionConfirmsCurrentScopedRemoval(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -483,8 +869,8 @@ func TestSessionConfirmsCurrentScopedRemoval(t *testing.T) {
 			fd: &fakeDocker{containers: []Container{{ID: "b2", Names: "db", State: "exited"}}},
 		},
 		{
-			name: "image", scope: ScopeImages, id: "sha256:image", want: "rmi:sha256:image",
-			fd: &fakeDocker{images: []Image{{ID: "sha256:image", Repository: "alpine", Tag: "3"}}},
+			name: "image", scope: ScopeImages, id: "alpine:3", want: "rmi:alpine:3",
+			fd: &fakeDocker{images: []Image{{ID: "sha256:image", Repository: "alpine", Tag: "3", ContainersKnown: true}}},
 		},
 		{
 			name: "volume", scope: ScopeVolumes, id: "cache", want: "volrm:cache",
@@ -497,7 +883,11 @@ func TestSessionConfirmsCurrentScopedRemoval(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if len(tc.fd.containers) == 0 {
+				tc.fd.containers = []Container{{ID: "primary", Names: "primary", State: "exited"}}
+			}
 			s := NewSession(tc.fd)
+			s.Refresh(context.Background())
 			s.RefreshTab(context.Background(), tc.scope)
 			s.SetScope(tc.scope)
 			if !s.ArmRemoval(tc.id) {
@@ -518,11 +908,15 @@ func TestSessionConfirmsCurrentScopedRemoval(t *testing.T) {
 }
 
 func TestSessionRemovalConfirmationCancelsOnCancelScopeChangeOrMissingEntity(t *testing.T) {
-	fd := &fakeDocker{images: []Image{{ID: "sha256:image", Repository: "alpine", Tag: "3"}}}
+	fd := &fakeDocker{
+		containers: []Container{{ID: "c1", Names: "web", State: "exited"}},
+		images:     []Image{{ID: "sha256:image", Repository: "alpine", Tag: "3", ContainersKnown: true}},
+	}
 	s := NewSession(fd)
+	s.Refresh(context.Background())
 	s.RefreshTab(context.Background(), ScopeImages)
 	s.SetScope(ScopeImages)
-	if !s.ArmRemoval("sha256:image") {
+	if !s.ArmRemoval("alpine:3") {
 		t.Fatal("could not arm image removal")
 	}
 	s.RefreshTab(context.Background(), ScopeImages)
@@ -533,7 +927,7 @@ func TestSessionRemovalConfirmationCancelsOnCancelScopeChangeOrMissingEntity(t *
 	if s.State().PendingRemoval != nil {
 		t.Fatal("cancel left removal armed")
 	}
-	if !s.ArmRemoval("sha256:image") {
+	if !s.ArmRemoval("alpine:3") {
 		t.Fatal("could not arm image removal again")
 	}
 	s.SetScope(ScopeVolumes)
@@ -541,7 +935,7 @@ func TestSessionRemovalConfirmationCancelsOnCancelScopeChangeOrMissingEntity(t *
 		t.Fatal("scope change left removal armed")
 	}
 	s.SetScope(ScopeImages)
-	if !s.ArmRemoval("sha256:image") {
+	if !s.ArmRemoval("alpine:3") {
 		t.Fatal("could not arm image removal after returning to its tab")
 	}
 	fd.images = nil
@@ -556,11 +950,15 @@ func TestSessionRemovalConfirmationCancelsOnCancelScopeChangeOrMissingEntity(t *
 }
 
 func TestSessionRechecksRemovalEligibilityBeforeDispatch(t *testing.T) {
-	fd := &fakeDocker{images: []Image{{ID: "sha256:image", Repository: "alpine", Tag: "3"}}}
+	fd := &fakeDocker{
+		containers: []Container{{ID: "c1", Names: "web", State: "exited"}},
+		images:     []Image{{ID: "sha256:image", Repository: "alpine", Tag: "3", ContainersKnown: true}},
+	}
 	s := NewSession(fd)
+	s.Refresh(context.Background())
 	s.RefreshTab(context.Background(), ScopeImages)
 	s.SetScope(ScopeImages)
-	if !s.ArmRemoval("sha256:image") {
+	if !s.ArmRemoval("alpine:3") {
 		t.Fatal("could not arm image removal")
 	}
 	fd.images[0].Containers = 1
@@ -577,7 +975,7 @@ func TestSessionRechecksRemovalEligibilityBeforeDispatch(t *testing.T) {
 func TestSessionDoesNotArmIneligibleOrStaleRemovals(t *testing.T) {
 	fd := &fakeDocker{
 		containers: []Container{{ID: "running1", Names: "web", State: "running"}},
-		images:     []Image{{ID: "sha256:used", Repository: "nginx", Tag: "latest", Containers: 1}},
+		images:     []Image{{ID: "sha256:used", Repository: "nginx", Tag: "latest", Containers: 1, ContainersKnown: true}},
 		networks: []Network{
 			{ID: "bridge1", Name: "bridge"},
 			{ID: "host1", Name: "host"},
@@ -593,7 +991,7 @@ func TestSessionDoesNotArmIneligibleOrStaleRemovals(t *testing.T) {
 		case ScopeContainers:
 			ids = append(ids, "running1")
 		case ScopeImages:
-			ids = append(ids, "sha256:used")
+			ids = append(ids, "nginx:latest")
 		case ScopeNetworks:
 			ids = append(ids, "bridge1", "host1", "none1")
 		}
@@ -616,10 +1014,11 @@ func TestSessionDoesNotArmIneligibleOrStaleRemovals(t *testing.T) {
 func newRunSession(t *testing.T, fd *fakeDocker) *Session {
 	t.Helper()
 	s := NewSession(fd)
+	s.Refresh(context.Background())
 	s.RefreshTab(context.Background(), ScopeImages)
 	s.RefreshTab(context.Background(), ScopeNetworks)
 	s.SetScope(ScopeImages)
-	if len(fd.images) == 0 || !s.Select(fd.images[0].ID) {
+	if len(fd.images) == 0 || !s.Select(imageReference(fd.images[0])) {
 		t.Fatal("could not select test image")
 	}
 	return s
@@ -637,11 +1036,11 @@ func TestRunFormOpensForSelectedImageAndPreselectsPortAndNetwork(t *testing.T) {
 	}
 	s := newRunSession(t, fd)
 	s.SetDefaultNetwork("custom")
-	if !s.OpenRunForm(context.Background(), "sha256:image") {
+	if !s.OpenRunForm(context.Background(), "nginx:latest") {
 		t.Fatal("could not open run form")
 	}
 	draft := s.State().RunForm
-	if draft == nil || draft.ImageID != "sha256:image" || draft.ImageRef != "nginx:latest" {
+	if draft == nil || draft.ImageID != "nginx:latest" || draft.ImageRef != "nginx:latest" {
 		t.Fatalf("run draft identity = %+v", draft)
 	}
 	if draft.Port != "80" || draft.Publish {
@@ -652,14 +1051,14 @@ func TestRunFormOpensForSelectedImageAndPreselectsPortAndNetwork(t *testing.T) {
 	}
 
 	fd.exposedErrs = map[string]error{"nginx:latest": errors.New("inspect failed")}
-	if !s.OpenRunForm(context.Background(), "sha256:image") {
+	if !s.OpenRunForm(context.Background(), "nginx:latest") {
 		t.Fatal("inspect failure should not prevent opening the form")
 	}
 	if got := s.State().RunForm.Port; got != "" {
 		t.Fatalf("port after inspect failure = %q, want empty", got)
 	}
 	s.SetDefaultNetwork("missing")
-	if !s.OpenRunForm(context.Background(), "sha256:image") {
+	if !s.OpenRunForm(context.Background(), "nginx:latest") {
 		t.Fatal("could not reopen run form with fallback network")
 	}
 	if got := s.State().RunForm.Network; got != "bridge" {
@@ -673,9 +1072,10 @@ func TestRunFormLoadsNetworksWhenNoSnapshotExists(t *testing.T) {
 		networks: []Network{{Name: "bridge", ID: "net1"}},
 	}
 	s := NewSession(fd)
+	s.Refresh(context.Background())
 	s.RefreshTab(context.Background(), ScopeImages)
 	s.SetScope(ScopeImages)
-	if !s.Select("image1") || !s.OpenRunForm(context.Background(), "image1") {
+	if !s.Select("alpine:3") || !s.OpenRunForm(context.Background(), "alpine:3") {
 		t.Fatal("could not open run form")
 	}
 	state := s.State()
@@ -691,7 +1091,7 @@ func TestRunFormDraftEditsAndRendersInputs(t *testing.T) {
 		exposedPorts: map[string][]int{"alpine:3": {80}},
 	}
 	s := newRunSession(t, fd)
-	if !s.OpenRunForm(context.Background(), "image1") {
+	if !s.OpenRunForm(context.Background(), "alpine:3") {
 		t.Fatal("could not open run form")
 	}
 	for field, value := range map[string]string{
@@ -760,7 +1160,7 @@ func TestRunFormRejectsInvalidNamePortAndEnvironment(t *testing.T) {
 				networks: []Network{{Name: "bridge", ID: "net1"}},
 			}
 			s := newRunSession(t, fd)
-			if !s.OpenRunForm(context.Background(), "image1") {
+			if !s.OpenRunForm(context.Background(), "alpine:3") {
 				t.Fatal("could not open run form")
 			}
 			s.UpdateRunField(tc.field, tc.value)
@@ -784,7 +1184,7 @@ func TestRunFormSubmitsEnvironmentSplitAtFirstEqualsAndOptionalFields(t *testing
 		networks: []Network{{Name: "bridge", ID: "net1"}},
 	}
 	s := newRunSession(t, fd)
-	if !s.OpenRunForm(context.Background(), "image1") {
+	if !s.OpenRunForm(context.Background(), "alpine:3") {
 		t.Fatal("could not open run form")
 	}
 	if !s.UpdateRunField("env", "A=one=two\nB=second") {
@@ -816,7 +1216,7 @@ func TestRunFormKeepsDockerFailureInline(t *testing.T) {
 		runErr:   errors.New("docker: image pull failed"),
 	}
 	s := newRunSession(t, fd)
-	if !s.OpenRunForm(context.Background(), "image1") {
+	if !s.OpenRunForm(context.Background(), "alpine:3") {
 		t.Fatal("could not open run form")
 	}
 	if s.SubmitRun(context.Background()) {
@@ -832,7 +1232,7 @@ func TestRunFormRejectsMissingImageNetworkAndOversizedText(t *testing.T) {
 	t.Run("no networks", func(t *testing.T) {
 		fd := &fakeDocker{images: []Image{{ID: "image1", Repository: "alpine", Tag: "3"}}}
 		s := newRunSession(t, fd)
-		if !s.OpenRunForm(context.Background(), "image1") {
+		if !s.OpenRunForm(context.Background(), "alpine:3") {
 			t.Fatal("could not open run form")
 		}
 		if s.State().RunForm.Error == "" || s.SubmitRun(context.Background()) || len(fd.runs) != 0 {
@@ -849,7 +1249,7 @@ func TestRunFormRejectsMissingImageNetworkAndOversizedText(t *testing.T) {
 			networks: []Network{{Name: "bridge", ID: "net1"}},
 		}
 		s := newRunSession(t, fd)
-		if !s.OpenRunForm(context.Background(), "image1") {
+		if !s.OpenRunForm(context.Background(), "alpine:3") {
 			t.Fatal("could not open run form")
 		}
 		fd.networks = []Network{{Name: "custom", ID: "net2"}}
@@ -871,7 +1271,7 @@ func TestRunFormRejectsMissingImageNetworkAndOversizedText(t *testing.T) {
 			networks: []Network{{Name: "bridge", ID: "net1"}},
 		}
 		s := newRunSession(t, fd)
-		if !s.OpenRunForm(context.Background(), "image1") {
+		if !s.OpenRunForm(context.Background(), "alpine:3") {
 			t.Fatal("could not open run form")
 		}
 		fd.images = nil
@@ -893,7 +1293,7 @@ func TestRunFormRejectsMissingImageNetworkAndOversizedText(t *testing.T) {
 			networks: []Network{{Name: "bridge", ID: "net1"}},
 		}
 		s := newRunSession(t, fd)
-		if !s.OpenRunForm(context.Background(), "image1") {
+		if !s.OpenRunForm(context.Background(), "alpine:3") {
 			t.Fatal("could not open run form")
 		}
 		if !s.UpdateRunField("env", strings.Repeat("A", v1.MaxTextBytes)) {
@@ -916,7 +1316,7 @@ func TestRunFormUsesPortPreflightOnlyForPublishedPort(t *testing.T) {
 				networks: []Network{{Name: "bridge", ID: "net1"}},
 			}
 			s := newRunSession(t, fd)
-			if !s.OpenRunForm(context.Background(), "image1") {
+			if !s.OpenRunForm(context.Background(), "alpine:3") {
 				t.Fatal("could not open run form")
 			}
 			if !s.UpdateRunField("port", "8080") {
@@ -954,7 +1354,7 @@ func TestRunFormUsesPortPreflightOnlyForPublishedPort(t *testing.T) {
 		networks: []Network{{Name: "bridge", ID: "net1"}},
 	}
 	s := newRunSession(t, fd)
-	if !s.OpenRunForm(context.Background(), "image1") {
+	if !s.OpenRunForm(context.Background(), "alpine:3") {
 		t.Fatal("could not open run form")
 	}
 	s.UpdateRunField("port", "8080")
@@ -1011,18 +1411,22 @@ func (d *blockedImageRemovalDocker) Rmi(ctx context.Context, id string) error {
 	return d.fakeDocker.Rmi(ctx, id)
 }
 
-func TestSessionConsumesConfirmationBeforeRemovalAndDisablesOnlyThatKey(t *testing.T) {
+func TestSessionConsumesConfirmationBeforeRemovalAndDisablesSameEntityMutations(t *testing.T) {
 	fd := &blockedImageRemovalDocker{
-		fakeDocker: &fakeDocker{images: []Image{
-			{ID: "sha256:image1", Repository: "alpine", Tag: "3"},
-			{ID: "sha256:image2", Repository: "nginx", Tag: "latest"},
-		}},
+		fakeDocker: &fakeDocker{
+			containers: []Container{{ID: "c1", Names: "web", State: "exited"}},
+			images: []Image{
+				{ID: "sha256:image1", Repository: "alpine", Tag: "3", ContainersKnown: true},
+				{ID: "sha256:image2", Repository: "nginx", Tag: "latest", ContainersKnown: true},
+			},
+		},
 		entered: make(chan struct{}), release: make(chan struct{}),
 	}
 	s := NewSession(fd)
+	s.Refresh(context.Background())
 	s.RefreshTab(context.Background(), ScopeImages)
 	s.SetScope(ScopeImages)
-	if !s.Select("sha256:image1") || !s.ArmRemoval("sha256:image1") {
+	if !s.Select("alpine:3") || !s.ArmRemoval("alpine:3") {
 		t.Fatal("could not select and arm image removal")
 	}
 	done := make(chan struct{})
@@ -1040,20 +1444,20 @@ func TestSessionConsumesConfirmationBeforeRemovalAndDisablesOnlyThatKey(t *testi
 		t.Fatalf("confirmation still armed while Docker is running: %+v", state.PendingRemoval)
 	}
 	panel := PanelTreeForSession(state)
-	if node := findNode(panel, "rmi:sha256:image1"); node == nil || !node.Disabled {
+	if node := findNode(panel, "rmi:alpine:3"); node == nil || !node.Disabled {
 		t.Fatalf("matching remove action not disabled in flight: %+v", node)
 	}
-	if node := findNode(panel, "run:sha256:image1"); node == nil || node.Disabled {
-		t.Fatalf("unrelated action for the same image disabled: %+v", node)
+	if node := findNode(panel, "run:alpine:3"); node == nil || !node.Disabled {
+		t.Fatalf("conflicting run action for the same image remained enabled: %+v", node)
 	}
-	if node := findNode(panel, "select:sha256:image2"); node == nil || node.Disabled {
+	if node := findNode(panel, "select:nginx:latest"); node == nil || node.Disabled {
 		t.Fatalf("unrelated image cannot be selected while action is running: %+v", node)
 	}
-	if !s.Select("sha256:image2") {
+	if !s.Select("nginx:latest") {
 		t.Fatal("could not select unrelated image during removal")
 	}
 	panel = PanelTreeForSession(s.State())
-	if node := findNode(panel, "rmi:sha256:image2"); node == nil || node.Disabled {
+	if node := findNode(panel, "rmi:nginx:latest"); node == nil || node.Disabled {
 		t.Fatalf("unrelated image remove action disabled: %+v", node)
 	}
 	close(fd.release)
@@ -1066,16 +1470,17 @@ func TestSessionConsumesConfirmationBeforeRemovalAndDisablesOnlyThatKey(t *testi
 
 func TestPanelShowsInlineRemovalConfirmation(t *testing.T) {
 	state := SessionSnapshot{
-		Scope: ScopeImages, SelectedID: "sha256:image",
-		Images:         []Image{{ID: "sha256:image", Repository: "alpine", Tag: "3"}},
+		Scope: ScopeImages, SelectedID: "alpine:3",
+		Images:         []Image{{ID: "sha256:image", Repository: "alpine", Tag: "3", ContainersKnown: true}},
+		ContainerTab:   TabStatus{Available: true},
 		ImageTab:       TabStatus{Available: true},
-		PendingRemoval: &RemovalTarget{Scope: ScopeImages, ID: "sha256:image"},
+		PendingRemoval: &RemovalTarget{Scope: ScopeImages, ID: "alpine:3"},
 	}
 	panel := PanelTreeForSession(state)
 	if findNode(panel, "confirm") == nil || findNode(panel, "cancel") == nil {
 		t.Fatal("confirmation card is missing confirm or cancel controls")
 	}
-	if findNode(panel, "rmi:sha256:image") != nil {
+	if findNode(panel, "rmi:alpine:3") != nil {
 		t.Fatal("armed removal still shows the original remove action")
 	}
 }
@@ -1101,11 +1506,15 @@ func TestParseImages(t *testing.T) {
 	if len(images) != 2 || skipped != 1 {
 		t.Fatalf("images=%d skipped=%d, want 2 and 1", len(images), skipped)
 	}
-	if images[0].Repository != "nginx" || images[0].Tag != "latest" || images[0].Containers != 2 {
+	if images[0].Repository != "nginx" || images[0].Tag != "latest" || images[0].Containers != 2 || !images[0].ContainersKnown {
 		t.Fatalf("first image = %+v", images[0])
 	}
-	if images[1].Repository != "<none>" || images[1].Containers != -1 {
+	if images[1].Repository != "<none>" || images[1].Containers != -1 || !images[1].ContainersKnown {
 		t.Fatalf("second image = %+v", images[1])
+	}
+	missing, skipped := parseImages([]byte(`{"Repository":"alpine","Tag":"3","ID":"sha256:alpine"}`))
+	if skipped != 0 || len(missing) != 1 || missing[0].ContainersKnown {
+		t.Fatalf("missing image reference count = %+v, skipped=%d; want unknown", missing, skipped)
 	}
 }
 
@@ -1492,14 +1901,8 @@ func TestPanelListScrollsAndCaps(t *testing.T) {
 	if len(list.Children) != maxPanelRows {
 		t.Fatalf("list rows = %d, want %d", len(list.Children), maxPanelRows)
 	}
-	more := false
-	walkNodes(panel, func(n *v1.Node) {
-		if n.Text == fmt.Sprintf("+%d more", len(containers)-maxPanelRows) {
-			more = true
-		}
-	})
-	if !more {
-		t.Fatalf("no +%d more line", len(containers)-maxPanelRows)
+	if findNode(panel, "pagination") == nil || !containsText(panel, "Items 1–240 of 300") {
+		t.Fatal("overflow rows are not reachable through visible pagination")
 	}
 	// A handful of containers must not gain the cap line.
 	small := PanelTree(true, false, "", "", "", containers[:3])
@@ -1609,22 +2012,24 @@ func TestPanelRendersSortedImageVolumeAndNetworkDetails(t *testing.T) {
 		{
 			name: "images",
 			state: SessionSnapshot{
-				Scope: ScopeImages, SelectedID: "sha256:used",
+				Scope: ScopeImages, SelectedID: "zulu:latest",
+				ContainerTab: TabStatus{Available: true},
 				Images: []Image{
-					{ID: "sha256:used", Repository: "zulu", Tag: "latest", Size: "40MB", Containers: 1},
+					{ID: "sha256:used", Repository: "zulu", Tag: "latest", Size: "40MB", Containers: 1, ContainersKnown: true},
 					{ID: "sha256:free", Repository: "alpine", Tag: "3", Size: "8MB"},
 				},
 				ImageTab: TabStatus{Available: true},
 			},
-			wantRows: []string{"select:sha256:free", "select:sha256:used"},
+			wantRows: []string{"select:alpine:3", "select:zulu:latest"},
 			detail:   "detail",
-			removeID: "rmi:sha256:used", removeOff: true,
+			removeID: "rmi:zulu:latest", removeOff: true,
 			wantText: []string{"alpine:3", "zulu:latest", "sha256:used · 40MB"},
 		},
 		{
 			name: "volumes",
 			state: SessionSnapshot{
 				Scope: ScopeVolumes, SelectedID: "z-data",
+				ContainerTab: TabStatus{Available: true},
 				Volumes: []Volume{
 					{Name: "z-data", Driver: "local", Scope: "local", Mountpoint: "/var/lib/docker/volumes/z-data"},
 					{Name: "a-cache", Driver: "local", Scope: "local"},
@@ -1650,7 +2055,7 @@ func TestPanelRendersSortedImageVolumeAndNetworkDetails(t *testing.T) {
 			wantRows: []string{"select:custom-a", "select:builtin", "select:custom-z"},
 			detail:   "detail",
 			removeID: "netrm:builtin", removeOff: true,
-			wantText: []string{"bridge", "a-custom", "z-custom"},
+			wantText: []string{"bridge", "a-custom", "z-custom", "Built-in network · removal disabled"},
 		},
 	}
 
@@ -1708,6 +2113,9 @@ func TestPanelSelectionAndContainerDetailActions(t *testing.T) {
 			}
 			if findNode(panel, "detail") == nil {
 				t.Fatal("selected row has no detail card")
+			}
+			if tc.name == "running" && !containsText(panel, "Stop this container before removing it") {
+				t.Fatal("running container detail does not explain why Remove is disabled")
 			}
 			var got []string
 			for _, id := range tc.want {
@@ -1771,23 +2179,228 @@ func TestPanelEmptyLoadingAndFailureStates(t *testing.T) {
 	}
 }
 
-func TestPanelOverflowFooterFollowsList(t *testing.T) {
+func TestSecondaryTabShowsDockerLoadingState(t *testing.T) {
+	panel := PanelTreeForSession(SessionSnapshot{
+		Scope: ScopeImages, SelectedID: "alpine:latest",
+		Images:       []Image{{ID: "sha256:alpine", Repository: "alpine", Tag: "latest", ContainersKnown: true}},
+		ImageTab:     TabStatus{Available: true},
+		ContainerTab: TabStatus{Loading: true},
+	})
+	var checking *v1.Node
+	walkNodes(panel, func(node *v1.Node) {
+		if node.Text == "Checking Docker status…" {
+			checking = node
+		}
+	})
+	if checking == nil || checking.Tone != v1.ToneSubtle {
+		t.Fatalf("Docker loading message = %+v, want subtle Checking Docker status…", checking)
+	}
+	for _, id := range []string{"run:alpine:latest", "rmi:alpine:latest"} {
+		button := findNode(panel, id)
+		if button == nil || !button.Disabled {
+			t.Errorf("%s = %+v, want disabled until containers refresh", id, button)
+		}
+	}
+}
+
+func TestPanelPaginationFollowsList(t *testing.T) {
 	containers := make([]Container, maxPanelRows+3)
 	for i := range containers {
 		containers[i] = Container{ID: fmt.Sprintf("c%03d", i), Names: fmt.Sprintf("container-%03d", i), State: "running"}
 	}
 	panel := PanelTreeForSession(SessionSnapshot{Scope: ScopeContainers, Containers: containers, ContainerTab: TabStatus{Available: true}})
-	listIndex, footerIndex := -1, -1
+	listIndex, paginationIndex := -1, -1
 	for i, node := range panel.Children {
 		if node.Kind == v1.KindList {
 			listIndex = i
 		}
-		if strings.HasPrefix(node.Text, "+") {
-			footerIndex = i
+		if node.ID == "pagination" {
+			paginationIndex = i
 		}
 	}
-	if listIndex < 0 || footerIndex <= listIndex {
-		t.Fatalf("list index=%d overflow footer index=%d; footer must follow list", listIndex, footerIndex)
+	if listIndex < 0 || paginationIndex <= listIndex {
+		t.Fatalf("list index=%d pagination index=%d; navigation must follow list", listIndex, paginationIndex)
+	}
+	previous, next := findNode(panel, "page:previous"), findNode(panel, "page:next")
+	if previous == nil || !previous.Disabled || next == nil || next.Disabled {
+		t.Fatalf("first page controls = previous:%+v next:%+v", previous, next)
+	}
+	if !containsText(panel, "Items 1–240 of 243") {
+		t.Fatal("pagination does not show the visible range and total")
+	}
+
+	lastPage := PanelTreeForSession(SessionSnapshot{
+		Scope: ScopeContainers, Page: 1, Containers: containers,
+		ContainerTab: TabStatus{Available: true},
+	})
+	list := findKind(lastPage, v1.KindList)
+	if list == nil || len(list.Children) != 3 || list.Children[0].ID != "select:c240" ||
+		!containsText(lastPage, "Items 241–243 of 243") {
+		t.Fatalf("last page did not expose the remaining rows and range: list=%+v", list)
+	}
+	previous, next = findNode(lastPage, "page:previous"), findNode(lastPage, "page:next")
+	if previous == nil || previous.Disabled || next == nil || !next.Disabled {
+		t.Fatalf("last page controls = previous:%+v next:%+v", previous, next)
+	}
+}
+
+func TestRemovalConfirmationHighlightsDestructiveConfirm(t *testing.T) {
+	panel := PanelTreeForSession(SessionSnapshot{
+		Scope: ScopeContainers, SelectedID: "c1",
+		Containers:     []Container{{ID: "c1", Names: "web", State: "exited"}},
+		ContainerTab:   TabStatus{Available: true},
+		PendingRemoval: &RemovalTarget{Scope: ScopeContainers, ID: "c1"},
+	})
+	confirm := findNode(panel, "confirm")
+	if confirm == nil || confirm.Fill != "error-container" {
+		t.Fatalf("confirm button = %+v, want error-container fill", confirm)
+	}
+}
+
+func TestLongDockerNamesFitAccessibleAndRenderedTextLimits(t *testing.T) {
+	name := strings.Repeat("container-name-", 24)
+	panel := PanelTreeForSession(SessionSnapshot{
+		Scope: ScopeContainers, SelectedID: "c1",
+		Containers:   []Container{{ID: "c1", Names: name, Image: "example/web:latest", State: "running", Status: "Up"}},
+		ContainerTab: TabStatus{Available: true},
+	})
+	if err := v1.Validate(panel, v1.ViewPanel); err != nil {
+		t.Fatalf("long Docker name makes panel invalid: %v", err)
+	}
+	row := findNode(panel, "select:c1")
+	if row == nil || len(row.Name) > v1.MaxIdentBytes {
+		t.Fatalf("row accessible name = %+v, limit %d bytes", row, v1.MaxIdentBytes)
+	}
+	if got := row.Children[0].Children[0].Text; len(got) > 54 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("row name text = %q, want compact text with an ellipsis", got)
+	}
+	for _, id := range []string{"stop:c1", "restart:c1", "remove:c1"} {
+		button := findNode(panel, id)
+		if button == nil || len(button.Name) > v1.MaxIdentBytes {
+			t.Errorf("%s accessible name = %+v, limit %d bytes", id, button, v1.MaxIdentBytes)
+		}
+	}
+}
+
+func TestLongNetworkNameFitsRunFormControl(t *testing.T) {
+	panel := PanelTreeForSession(SessionSnapshot{
+		Scope: ScopeImages,
+		RunForm: &RunDraft{
+			ImageID: "nginx:latest", ImageRef: "nginx:latest",
+			Network: strings.Repeat("network-", 12),
+		},
+	})
+	button := findNode(panel, "form:network")
+	if button == nil || len(button.Text) > 44 || !strings.HasSuffix(button.Text, "…") {
+		t.Fatalf("network control label = %+v, want compact label within the icon button width", button)
+	}
+}
+
+func TestLongImageReferencesUseWireSafeKeysAndResolveActions(t *testing.T) {
+	ref := strings.Repeat("a", 255) + ":" + strings.Repeat("b", 128)
+	fd := &fakeDocker{
+		containers: []Container{{ID: "c1", Names: "web", State: "exited"}},
+		images:     []Image{{ID: "sha256:long", Repository: strings.Repeat("a", 255), Tag: strings.Repeat("b", 128), ContainersKnown: true}},
+		networks:   []Network{{ID: "bridge", Name: "bridge"}},
+	}
+	s := NewSession(fd)
+	ctx := context.Background()
+	s.Refresh(ctx)
+	s.RefreshTab(ctx, ScopeImages)
+	s.RefreshTab(ctx, ScopeNetworks)
+	s.SetScope(ScopeImages)
+
+	panel := PanelTreeForSession(s.State())
+	list := findKind(panel, v1.KindList)
+	if list == nil || len(list.Children) != 1 {
+		t.Fatalf("image rows = %+v", list)
+	}
+	selectID := list.Children[0].ID
+	imageKey := strings.TrimPrefix(selectID, "select:")
+	if len(selectID) > v1.MaxIdentBytes {
+		t.Fatalf("image row ID is %d bytes, limit %d", len(selectID), v1.MaxIdentBytes)
+	}
+	if err := v1.Validate(panel, v1.ViewPanel); err != nil {
+		t.Fatalf("long image reference makes panel invalid: %v", err)
+	}
+	rowText := list.Children[0].Children[0].Children[0].Text
+	if !strings.Contains(rowText, "…") || !strings.HasSuffix(rowText, strings.Repeat("b", 20)) {
+		t.Fatalf("long image row label = %q, want leading and tag-end identity", rowText)
+	}
+	if !s.Select(imageKey) {
+		t.Fatal("image row key did not select the referenced image")
+	}
+	selected := PanelTreeForSession(s.State())
+	for _, prefix := range []string{"run:", "rmi:"} {
+		if node := findNode(selected, prefix+imageKey); node == nil || len(node.ID) > v1.MaxIdentBytes {
+			t.Errorf("%s action is missing or too long: %+v", prefix, node)
+		}
+	}
+	if action, id, ok := ParseAction("rmi:" + imageKey); !ok || action != "rmi" || id != imageKey {
+		t.Fatalf("long image remove node parses as %q %q %v", action, id, ok)
+	}
+	if !s.OpenRunForm(ctx, imageKey) {
+		t.Fatal("image row key did not open the run form")
+	}
+	if draft := s.State().RunForm; draft == nil || draft.ImageRef != ref {
+		t.Fatalf("run form image = %+v, want full reference", draft)
+	}
+	form := PanelTreeForSession(s.State())
+	formNode := findNode(form, "run-form")
+	if formNode == nil || !strings.HasSuffix(formNode.Children[0].Text, strings.Repeat("b", 20)) {
+		t.Fatalf("run form image label = %+v, want tag-end identity", formNode)
+	}
+	s.CancelRunForm()
+	if !s.ArmRemoval(imageKey) {
+		t.Fatal("image row key did not arm removal")
+	}
+	s.ConfirmRemoval(ctx)
+	if !slices.Contains(fd.actions, "rmi:"+ref) {
+		t.Fatalf("Docker actions = %v, want full image reference removal", fd.actions)
+	}
+}
+
+func TestLongVolumeNamesUseWireSafeKeysAndResolveRemoval(t *testing.T) {
+	name := strings.Repeat("cache-volume-", 24)
+	fd := &fakeDocker{
+		containers: []Container{{ID: "c1", Names: "web", State: "exited"}},
+		volumes:    []Volume{{Name: name, Driver: "local", Scope: "local"}},
+	}
+	s := NewSession(fd)
+	ctx := context.Background()
+	s.Refresh(ctx)
+	s.RefreshTab(ctx, ScopeVolumes)
+	s.SetScope(ScopeVolumes)
+
+	panel := PanelTreeForSession(s.State())
+	list := findKind(panel, v1.KindList)
+	if list == nil || len(list.Children) != 1 {
+		t.Fatalf("volume rows = %+v", list)
+	}
+	selectID := list.Children[0].ID
+	volumeKey := strings.TrimPrefix(selectID, "select:")
+	if len(selectID) > v1.MaxIdentBytes {
+		t.Fatalf("volume row ID is %d bytes, limit %d", len(selectID), v1.MaxIdentBytes)
+	}
+	if err := v1.Validate(panel, v1.ViewPanel); err != nil {
+		t.Fatalf("long volume name makes panel invalid: %v", err)
+	}
+	if !s.Select(volumeKey) {
+		t.Fatal("volume row key did not select the named volume")
+	}
+	selected := PanelTreeForSession(s.State())
+	if node := findNode(selected, "volrm:"+volumeKey); node == nil || len(node.ID) > v1.MaxIdentBytes {
+		t.Fatalf("volume remove action is missing or too long: %+v", node)
+	}
+	if action, id, ok := ParseAction("volrm:" + volumeKey); !ok || action != "volrm" || id != volumeKey {
+		t.Fatalf("long volume remove node parses as %q %q %v", action, id, ok)
+	}
+	if !s.ArmRemoval(volumeKey) {
+		t.Fatal("volume row key did not arm removal")
+	}
+	s.ConfirmRemoval(ctx)
+	if !slices.Contains(fd.actions, "volrm:"+name) {
+		t.Fatalf("Docker actions = %v, want full volume name removal", fd.actions)
 	}
 }
 
@@ -1951,10 +2564,13 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 	}
 
 	runForm := PanelTreeForSession(SessionSnapshot{
-		Scope: ScopeImages, ImageTab: TabStatus{Available: true},
-		NetworkTab: TabStatus{Available: true},
+		Scope:        ScopeImages,
+		ContainerTab: TabStatus{ListError: "Docker daemon not running\nrefresh required"},
+		ImageTab:     TabStatus{Available: true},
+		ActionError:  "docker action timed out",
+		NetworkTab:   TabStatus{Available: true},
 		RunForm: &RunDraft{
-			ImageID: "sha256:image001", ImageRef: "registry.example/team/api:latest",
+			ImageID: "registry.example/team/api:latest", ImageRef: "registry.example/team/api:latest",
 			Name: "api-1", Port: "8080", Publish: true, Network: "bridge",
 			Environment: "A=one\nB=two=three", Error: "docker: run failed", Reseed: 1,
 		},
@@ -1980,8 +2596,8 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 	if findNode(panel, "detail") == nil || findNode(panel, "select:c001") == nil {
 		t.Fatal("worst-case panel is missing selected detail or row")
 	}
-	if !containsText(panel, "+10 more") {
-		t.Fatal("worst-case panel is missing the overflow footer")
+	if !containsText(panel, "Items 1–240 of 250") {
+		t.Fatal("worst-case panel is missing its visible range")
 	}
 	for _, f := range shelllint.Tree(panel, v1.ViewPanel, panelW, panelH) {
 		t.Errorf("worst-case panel: %s", f)
@@ -2014,10 +2630,10 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 		{
 			name: "images confirmation",
 			state: SessionSnapshot{
-				Scope: ScopeImages, SelectedID: "sha256:image001", Images: imageRows,
+				Scope: ScopeImages, SelectedID: "image001:latest", Images: imageRows,
 				ImageTab:       TabStatus{Available: true, ListError: "last refresh failed"},
 				ActionError:    "remove action failed",
-				PendingRemoval: &RemovalTarget{Scope: ScopeImages, ID: "sha256:image001"},
+				PendingRemoval: &RemovalTarget{Scope: ScopeImages, ID: "image001:latest"},
 			},
 		},
 		{
@@ -2044,8 +2660,8 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 		if findNode(panel, "detail") == nil || findNode(panel, "confirm") == nil || findNode(panel, "cancel") == nil {
 			t.Errorf("%s is missing confirmation details", tc.name)
 		}
-		if !containsText(panel, "+1 more") {
-			t.Errorf("%s is missing its overflow footer", tc.name)
+		if !containsText(panel, "Items 1–240 of 241") {
+			t.Errorf("%s is missing pagination range", tc.name)
 		}
 		for _, f := range shelllint.Tree(panel, v1.ViewPanel, panelW, panelH) {
 			t.Errorf("%s: %s", tc.name, f)

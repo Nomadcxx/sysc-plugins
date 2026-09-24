@@ -2,9 +2,9 @@ package minidocker
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -68,7 +68,7 @@ func TooltipTreeForSession(state SessionSnapshot, running int) *v1.Node {
 	root := TooltipTree(TooltipText(running, state.ContainerTab.Available))
 	if !state.ContainerTab.Available && state.ContainerTab.ListError != "" {
 		root.Children = append(root.Children, &v1.Node{Kind: v1.KindText,
-			Text: state.ContainerTab.ListError, Tone: v1.ToneError})
+			Text: compactDisplayText(state.ContainerTab.ListError, 35), Tone: v1.ToneError})
 	}
 	return root
 }
@@ -95,7 +95,7 @@ func PanelTreeForSession(state SessionSnapshot) *v1.Node {
 		{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: "Docker " + string(state.Scope), Size: "title", Bold: true},
 			{Kind: v1.KindButton, ID: "refresh", Text: "Refresh", Name: "Refresh " + string(state.Scope), Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}},
+				Icon: "refresh", Events: []v1.EventKind{v1.EventActivate}},
 		}},
 	}}
 
@@ -111,7 +111,9 @@ func PanelTreeForSession(state SessionSnapshot) *v1.Node {
 
 	statusState := tabStatus(state)
 	entities := panelEntities(state)
-	selected := selectedEntity(state, entities)
+	start, end := pageBounds(len(entities), state.Page)
+	visibleEntities := entities[start:end]
+	selected := selectedEntity(state, visibleEntities)
 	selectedID := state.SelectedID
 	if state.PendingRemoval != nil && state.PendingRemoval.Scope == state.Scope {
 		selectedID = state.PendingRemoval.ID
@@ -119,7 +121,7 @@ func PanelTreeForSession(state SessionSnapshot) *v1.Node {
 	showLoading := statusState.Loading && !statusState.Available
 	listHeight := 400 - 20*len(status)
 	if selected != nil {
-		listHeight -= 112
+		listHeight -= entityDetailHeight(*selected)
 	}
 	if listHeight < 200 {
 		listHeight = 200
@@ -130,10 +132,6 @@ func PanelTreeForSession(state SessionSnapshot) *v1.Node {
 	} else if !statusState.Available || len(entities) == 0 {
 		list.Children = append(list.Children, &v1.Node{Kind: v1.KindText, Text: emptyTabText(state.Scope), Tone: v1.ToneSubtle})
 	}
-	visibleEntities := entities
-	if len(entities) > maxPanelRows {
-		visibleEntities = entities[:maxPanelRows]
-	}
 	for _, entity := range visibleEntities {
 		if entity.Scope == ScopeContainers {
 			list.Children = append(list.Children, containerRow(*entity.container, selectedID))
@@ -143,8 +141,7 @@ func PanelTreeForSession(state SessionSnapshot) *v1.Node {
 	}
 	col.Children = append(col.Children, list)
 	if len(entities) > maxPanelRows {
-		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText,
-			Text: fmt.Sprintf("+%d more", len(entities)-maxPanelRows), Tone: v1.ToneSubtle})
+		col.Children = append(col.Children, paginationTree(start, end, len(entities), state.Page))
 	}
 	if selected != nil {
 		col.Children = append(col.Children, entityDetail(*selected, state))
@@ -152,25 +149,33 @@ func PanelTreeForSession(state SessionSnapshot) *v1.Node {
 	return col
 }
 
+func paginationTree(start, end, total, page int) *v1.Node {
+	return &v1.Node{Kind: v1.KindRow, ID: "pagination", Gap: 8, Children: []*v1.Node{
+		actionButton("page:previous", "Previous", "Previous page", page == 0),
+		{Kind: v1.KindText, Text: fmt.Sprintf("Items %d–%d of %d", start+1, end, total), Tone: v1.ToneSubtle},
+		actionButton("page:next", "Next", "Next page", end == total),
+	}}
+}
+
 func runFormTree(draft RunDraft, state SessionSnapshot) *v1.Node {
 	form := &v1.Node{Kind: v1.KindColumn, ID: "run-form", Gap: 6, Children: []*v1.Node{
-		{Kind: v1.KindText, Text: draft.ImageRef, Bold: true},
+		{Kind: v1.KindText, Text: compactImageReference(draft.ImageRef, maxPanelTextBytes), Bold: true},
 		{Kind: v1.KindText, Text: "Container name (optional)", Tone: v1.ToneSubtle},
 		textInput("name", "Container name", draft.Name, false, true, draft.Reseed),
-		{Kind: v1.KindText, Text: "Host port (optional)", Tone: v1.ToneSubtle},
-		textInput("port", "Host port", draft.Port, false, true, draft.Reseed),
+		{Kind: v1.KindText, Text: "Port (host and container, optional)", Tone: v1.ToneSubtle},
+		textInput("port", "Port, 1–65535", draft.Port, false, true, draft.Reseed),
 		actionButton("form:publish", publishLabel(draft.Publish), publishLabel(draft.Publish), false),
 		{Kind: v1.KindText, Text: "Network", Tone: v1.ToneSubtle},
-		{Kind: v1.KindButton, ID: "form:network", Text: networkLabel(draft.Network),
+		{Kind: v1.KindButton, ID: "form:network", Text: networkLabel(draft.Network), Icon: "lan",
 			Name: "Cycle network", Role: "button", Height: 32, Events: []v1.EventKind{v1.EventActivate}},
 		{Kind: v1.KindText, Text: "Environment (one KEY=value per line)", Tone: v1.ToneSubtle},
 		textInput("env", "Environment variables", draft.Environment, true, false, draft.Reseed),
 	}}
 	if draft.Error != "" {
-		form.Children = append(form.Children, &v1.Node{Kind: v1.KindText, Text: draft.Error, Tone: v1.ToneError})
+		form.Children = append(form.Children, &v1.Node{Kind: v1.KindText, Text: compactDisplayText(draft.Error, maxPanelTextBytes), Tone: v1.ToneError})
 	}
-	busy := actionInFlight(state, ScopeImages, "run", draft.ImageID)
-	run := actionButton("run-submit", "Run", "Run "+draft.ImageRef, draft.Error != "" || busy)
+	busy := entityActionInFlight(state, ScopeImages, draft.ImageID)
+	run := actionButton("run-submit", "Run", "Run "+draft.ImageRef, draft.Error != "" || busy || !state.ContainerTab.Available)
 	run.Fill = "accent"
 	form.Children = append(form.Children, &v1.Node{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
 		actionButton("form:cancel", "Cancel", "Cancel image run", false),
@@ -180,8 +185,12 @@ func runFormTree(draft RunDraft, state SessionSnapshot) *v1.Node {
 }
 
 func textInput(id, name, value string, multiline, submitOnEnter bool, reseed uint64) *v1.Node {
+	height := 40
+	if multiline {
+		height = 80
+	}
 	return &v1.Node{Kind: v1.KindTextInput, ID: id, Text: value, Name: name, Role: "textbox",
-		Height: 40, Multiline: multiline, SubmitOnEnter: submitOnEnter, Reseed: reseed,
+		Height: height, Multiline: multiline, SubmitOnEnter: submitOnEnter, Reseed: reseed,
 		Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}}
 }
 
@@ -196,11 +205,15 @@ func networkLabel(network string) string {
 	if network == "" {
 		return "Select network"
 	}
-	return "Network: " + network
+	return compactDisplayText("Network: "+network, maxPanelButtonTextBytes)
 }
 
 func scopeButtons(selected Scope) *v1.Node {
 	buttons := &v1.Node{Kind: v1.KindRow, Gap: 4}
+	icons := map[Scope]string{
+		ScopeContainers: "widgets", ScopeImages: "wallpaper",
+		ScopeVolumes: "folder_open", ScopeNetworks: "lan",
+	}
 	for _, scope := range []Scope{ScopeContainers, ScopeImages, ScopeVolumes, ScopeNetworks} {
 		label := strings.ToUpper(string(scope[:1])) + string(scope[1:])
 		fill := "outline"
@@ -209,7 +222,7 @@ func scopeButtons(selected Scope) *v1.Node {
 		}
 		buttons.Children = append(buttons.Children, &v1.Node{Kind: v1.KindButton,
 			ID: "tab:" + string(scope), Text: label, Name: label + " tab", Role: "button",
-			Fill: fill, Height: 28, Events: []v1.EventKind{v1.EventActivate}})
+			Icon: icons[scope], Fill: fill, Height: 28, Events: []v1.EventKind{v1.EventActivate}})
 	}
 	return buttons
 }
@@ -222,8 +235,20 @@ func panelStatus(state SessionSnapshot) []*v1.Node {
 		}
 	}
 	active := tabStatus(state)
-	appendLine(state.ActionError, v1.ToneError)
-	appendLine(active.ListError, v1.ToneError)
+	appendLine(compactDisplayText(state.ActionError, maxPanelTextBytes), v1.ToneError)
+	if state.Scope != ScopeContainers && !state.ContainerTab.Available {
+		if state.ContainerTab.Loading {
+			appendLine("Checking Docker status…", v1.ToneSubtle)
+		} else {
+			primaryError := state.ContainerTab.ListError
+			if primaryError == "" {
+				primaryError = "Actions disabled until containers refresh"
+			}
+			appendLine(compactDisplayText(primaryError, maxPanelTextBytes), v1.ToneError)
+		}
+	} else {
+		appendLine(compactDisplayText(active.ListError, maxPanelTextBytes), v1.ToneError)
+	}
 	if len(status) < 2 {
 		switch {
 		case hasInFlightScope(state, state.Scope) || state.Scope == ScopeContainers && state.ActingID != "":
@@ -264,13 +289,14 @@ func emptyTabText(scope Scope) string {
 }
 
 type panelEntity struct {
-	Scope      Scope
-	ID         string
-	Name       string
-	Summary    string
-	Referenced int
-	Builtin    bool
-	container  *Container
+	Scope               Scope
+	ID                  string
+	Name                string
+	Summary             string
+	Referenced          int
+	ReferenceCountKnown bool
+	Builtin             bool
+	container           *Container
 }
 
 func panelEntities(state SessionSnapshot) []panelEntity {
@@ -293,18 +319,14 @@ func panelEntities(state SessionSnapshot) []panelEntity {
 		if !state.ImageTab.Available {
 			return nil
 		}
-		images := slices.Clone(state.Images)
-		slices.SortFunc(images, func(a, b Image) int {
-			if c := strings.Compare(a.Repository+":"+a.Tag, b.Repository+":"+b.Tag); c != 0 {
-				return c
-			}
-			return strings.Compare(a.ID, b.ID)
-		})
+		images := sortedImages(state.Images)
 		entities := make([]panelEntity, 0, len(images))
 		for _, image := range images {
+			ref := imageReference(image)
 			entities = append(entities, panelEntity{
-				Scope: state.Scope, ID: image.ID, Name: image.Repository + ":" + image.Tag,
-				Summary: image.ID + " · " + image.Size, Referenced: image.Containers,
+				Scope: state.Scope, ID: ref, Name: ref,
+				Summary: compactDisplayText(image.ID, 22) + " · " + image.Size, Referenced: image.Containers,
+				ReferenceCountKnown: image.ContainersKnown,
 			})
 		}
 		return entities
@@ -312,13 +334,7 @@ func panelEntities(state SessionSnapshot) []panelEntity {
 		if !state.VolumeTab.Available {
 			return nil
 		}
-		volumes := slices.Clone(state.Volumes)
-		slices.SortFunc(volumes, func(a, b Volume) int {
-			if c := strings.Compare(a.Name, b.Name); c != 0 {
-				return c
-			}
-			return strings.Compare(a.Driver, b.Driver)
-		})
+		volumes := sortedVolumes(state.Volumes)
 		entities := make([]panelEntity, 0, len(volumes))
 		for _, volume := range volumes {
 			entities = append(entities, panelEntity{
@@ -367,12 +383,12 @@ func entityRow(entity panelEntity, selectedID string) *v1.Node {
 	if entity.ID == selectedID {
 		fill = "card"
 	}
-	return &v1.Node{Kind: v1.KindButton, ID: "select:" + entity.ID,
-		Name: "Select " + entity.Name, Role: "button", Fill: fill, Radius: 10, Padding: 8, Height: 54,
+	return &v1.Node{Kind: v1.KindButton, ID: "select:" + entityNodeKey(entity.Scope, entity.ID),
+		Name: boundedAccessibleName("Select " + entity.Name + "; " + entity.Summary), Role: "button", Fill: fill, Radius: 10, Padding: 8, Height: 54,
 		Events: []v1.EventKind{v1.EventActivate}, Children: []*v1.Node{{
 			Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
-				{Kind: v1.KindText, Text: entity.Name, Bold: true},
-				{Kind: v1.KindText, Text: entity.Summary, Tone: v1.ToneSubtle},
+				{Kind: v1.KindText, Text: compactEntityName(entity), Bold: true},
+				{Kind: v1.KindText, Text: compactDisplayText(entity.Summary, maxPanelTextBytes), Tone: v1.ToneSubtle},
 			},
 		}},
 	}
@@ -380,7 +396,7 @@ func entityRow(entity panelEntity, selectedID string) *v1.Node {
 
 func entityDetail(entity panelEntity, state SessionSnapshot) *v1.Node {
 	if state.PendingRemoval != nil && state.PendingRemoval.Scope == entity.Scope && state.PendingRemoval.ID == entity.ID {
-		return removalConfirmation(entity)
+		return removalConfirmation(entity, state)
 	}
 	if entity.Scope == ScopeContainers {
 		return containerDetail(*entity.container, state)
@@ -388,49 +404,70 @@ func entityDetail(entity panelEntity, state SessionSnapshot) *v1.Node {
 	actions := &v1.Node{Kind: v1.KindRow, Gap: 4}
 	switch entity.Scope {
 	case ScopeImages:
+		removeDisabled := !imageReferenceCountAllowsRemoval(entity) || !state.ContainerTab.Available || entityActionInFlight(state, ScopeImages, entity.ID)
+		removeName := "Remove image " + entity.Name
+		if !imageReferenceCountAllowsRemoval(entity) {
+			removeName = "Cannot remove image " + entity.Name + ": container use is unknown or nonzero"
+		}
 		actions.Children = append(actions.Children,
-			actionButton("run:"+entity.ID, "Run", "Run "+entity.Name, actionInFlight(state, ScopeImages, "run", entity.ID)),
-			actionButton("rmi:"+entity.ID, "Remove", "Remove image "+entity.Name,
-				entity.Referenced > 0 || actionInFlight(state, ScopeImages, "rmi", entity.ID)),
+			actionButton("run:"+entityNodeKey(entity.Scope, entity.ID), "Run", "Run "+entity.Name,
+				entityActionInFlight(state, ScopeImages, entity.ID) || !state.ContainerTab.Available),
+			actionButton("rmi:"+entityNodeKey(entity.Scope, entity.ID), "Remove", removeName, removeDisabled),
 		)
 	case ScopeVolumes:
 		actions.Children = append(actions.Children,
-			actionButton("volrm:"+entity.ID, "Remove", "Remove volume "+entity.Name,
-				actionInFlight(state, ScopeVolumes, "volrm", entity.ID)),
+			actionButton("volrm:"+entityNodeKey(entity.Scope, entity.ID), "Remove", "Remove volume "+entity.Name,
+				entityActionInFlight(state, ScopeVolumes, entity.ID) || !state.ContainerTab.Available),
 		)
 	case ScopeNetworks:
+		removeName := "Remove network " + entity.Name
+		if entity.Builtin {
+			removeName = "Cannot remove built-in network " + entity.Name
+		}
 		actions.Children = append(actions.Children,
-			actionButton("netrm:"+entity.ID, "Remove", "Remove network "+entity.Name,
-				entity.Builtin || actionInFlight(state, ScopeNetworks, "netrm", entity.ID)),
+			actionButton("netrm:"+entity.ID, "Remove", removeName,
+				entity.Builtin || entityActionInFlight(state, ScopeNetworks, entity.ID) || !state.ContainerTab.Available),
 		)
 	}
+	children := []*v1.Node{
+		{Kind: v1.KindText, Text: compactEntityName(entity), Bold: true},
+		{Kind: v1.KindText, Text: compactDisplayText(entity.Summary, maxPanelTextBytes), Tone: v1.ToneSubtle},
+		{Kind: v1.KindText, Text: compactDisplayText(entity.ID, maxPanelTextBytes), Tone: v1.ToneSubtle},
+	}
+	if entity.Scope == ScopeImages && !imageReferenceCountAllowsRemoval(entity) {
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: imageReferenceCountNote(entity), Tone: v1.ToneSubtle})
+	}
+	if entity.Scope == ScopeNetworks && entity.Builtin {
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: "Built-in network · removal disabled", Tone: v1.ToneSubtle})
+	}
+	children = append(children, actions)
 	return &v1.Node{Kind: v1.KindColumn, ID: "detail", Fill: "card", Radius: 10,
-		Padding: 8, Gap: 4, Height: 112, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: entity.Name, Bold: true},
-			{Kind: v1.KindText, Text: entity.Summary, Tone: v1.ToneSubtle},
-			{Kind: v1.KindText, Text: entity.ID, Tone: v1.ToneSubtle},
-			actions,
-		}}
+		Padding: 8, Gap: 4, Height: entityDetailHeight(entity), Children: children}
 }
 
-func removalConfirmation(entity panelEntity) *v1.Node {
+func removalConfirmation(entity panelEntity, state SessionSnapshot) *v1.Node {
+	busy := entityActionInFlight(state, entity.Scope, entity.ID) || !state.ContainerTab.Available
 	return &v1.Node{Kind: v1.KindColumn, ID: "detail", Fill: "card", Radius: 10,
 		Padding: 8, Gap: 4, Height: 112, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: "Remove " + entity.Name + "?", Bold: true},
-			{Kind: v1.KindText, Text: entity.ID, Tone: v1.ToneSubtle},
+			{Kind: v1.KindText, Text: compactMiddleText("Remove "+entity.Name+"?", maxPanelTextBytes), Bold: true},
+			{Kind: v1.KindText, Text: compactDisplayText(entity.ID, maxPanelTextBytes), Tone: v1.ToneSubtle},
 			{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
-				actionButton("confirm", "Confirm remove", "Confirm remove "+entity.Name, false),
+				confirmRemovalButton(entity.Name, busy),
 				actionButton("cancel", "Cancel", "Cancel removal of "+entity.Name, false),
 			}},
 		}}
 }
 
-func actionInFlight(state SessionSnapshot, scope Scope, verb, id string) bool {
+func entityActionInFlight(state SessionSnapshot, scope Scope, id string) bool {
 	if state.InFlight == nil && scope == ScopeContainers && state.ActingID == id {
 		return true
 	}
-	_, exists := state.InFlight[actionKey{scope: scope, verb: verb, id: id}]
-	return exists
+	for key := range state.InFlight {
+		if key.scope == scope && key.id == id {
+			return true
+		}
+	}
+	return false
 }
 
 func hasInFlightScope(state SessionSnapshot, scope Scope) bool {
@@ -442,26 +479,12 @@ func hasInFlightScope(state SessionSnapshot, scope Scope) bool {
 	return false
 }
 
-func sortedContainers(containers []Container) []Container {
-	sorted := slices.Clone(containers)
-	slices.SortFunc(sorted, func(a, b Container) int {
-		if a.Running() != b.Running() {
-			if a.Running() {
-				return -1
-			}
-			return 1
-		}
-		if c := strings.Compare(a.Names, b.Names); c != 0 {
-			return c
-		}
-		return strings.Compare(a.ID, b.ID)
-	})
-	return sorted
-}
+// maxPanelTextBytes fits the host's 8-pixel byte metric inside the detail
+// card's 432-pixel content width (480 panel − 32 root padding − 16 card).
+const maxPanelTextBytes = 54
 
-// maxPanelRows keeps the worst-case tree (6 nodes per row) inside the
-// host's MaxNodes budget of 1024; the overflow is summarized in a footer.
-const maxPanelRows = 150
+// maxPanelButtonTextBytes reserves width for the network icon and button inset.
+const maxPanelButtonTextBytes = 44
 
 func containerRow(c Container, selectedID string) *v1.Node {
 	tone := v1.ToneNormal
@@ -472,46 +495,164 @@ func containerRow(c Container, selectedID string) *v1.Node {
 	if c.ID == selectedID {
 		fill = "card"
 	}
-	return &v1.Node{Kind: v1.KindButton, ID: "select:" + c.ID, Name: "Select " + c.Names,
+	return &v1.Node{Kind: v1.KindButton, ID: "select:" + c.ID,
+		Name: boundedAccessibleName("Select " + c.Names + "; image " + c.Image + "; status " + c.Status),
 		Role: "button", Fill: fill, Radius: 10, Padding: 8, Height: 54,
 		Events: []v1.EventKind{v1.EventActivate}, Children: []*v1.Node{{
 			Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
-				{Kind: v1.KindText, Text: c.Names, Tone: tone, Bold: true},
-				{Kind: v1.KindText, Text: c.Image + " · " + c.Status, Tone: v1.ToneSubtle},
+				{Kind: v1.KindText, Text: compactDisplayText(c.Names, maxPanelTextBytes), Tone: tone, Bold: true},
+				{Kind: v1.KindText, Text: compactContainerInfo(c.Image, c.Status), Tone: v1.ToneSubtle},
 			},
 		}},
 	}
 }
 
 func containerDetail(c Container, state SessionSnapshot) *v1.Node {
-	info := c.Image + " · " + c.Status
 	actions := &v1.Node{Kind: v1.KindRow, Gap: 4}
 	if c.Running() {
 		actions.Children = append(actions.Children,
-			actionButton("stop:"+c.ID, "Stop", "Stop "+c.Names, actionInFlight(state, ScopeContainers, "stop", c.ID)),
-			actionButton("restart:"+c.ID, "Restart", "Restart "+c.Names, actionInFlight(state, ScopeContainers, "restart", c.ID)),
+			actionButton("stop:"+c.ID, "Stop", "Stop "+c.Names, entityActionInFlight(state, ScopeContainers, c.ID)),
+			actionButton("restart:"+c.ID, "Restart", "Restart "+c.Names, entityActionInFlight(state, ScopeContainers, c.ID)),
 		)
 	} else {
 		actions.Children = append(actions.Children,
 			actionButton("start:"+c.ID, "Start", "Start "+c.Names,
-				actionInFlight(state, ScopeContainers, "start", c.ID)),
+				entityActionInFlight(state, ScopeContainers, c.ID)),
 		)
 	}
 	actions.Children = append(actions.Children,
 		actionButton("remove:"+c.ID, "Remove", "Remove "+c.Names,
-			c.Running() || actionInFlight(state, ScopeContainers, "remove", c.ID)))
+			c.Running() || entityActionInFlight(state, ScopeContainers, c.ID)))
+	children := []*v1.Node{
+		{Kind: v1.KindText, Text: compactDisplayText(c.Names, maxPanelTextBytes), Bold: true},
+		{Kind: v1.KindText, Text: compactContainerInfo(c.Image, c.Status), Tone: v1.ToneSubtle},
+		{Kind: v1.KindText, Text: compactDisplayText(c.ID, maxPanelTextBytes), Tone: v1.ToneSubtle},
+	}
+	if c.Running() {
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: "Stop this container before removing it", Tone: v1.ToneSubtle})
+	}
+	children = append(children, actions)
 	return &v1.Node{Kind: v1.KindColumn, ID: "detail", Fill: "card", Radius: 10,
-		Padding: 8, Gap: 4, Height: 112, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: c.Names, Bold: true},
-			{Kind: v1.KindText, Text: info, Tone: v1.ToneSubtle},
-			{Kind: v1.KindText, Text: c.ID, Tone: v1.ToneSubtle},
-			actions,
-		}}
+		Padding: 8, Gap: 4, Height: entityDetailHeight(panelEntity{Scope: ScopeContainers, container: &c}), Children: children}
 }
 
 func actionButton(id, label, name string, disabled bool) *v1.Node {
-	return &v1.Node{Kind: v1.KindButton, ID: id, Text: label, Name: name, Role: "button",
-		Height: 28, Disabled: disabled, Events: []v1.EventKind{v1.EventActivate}}
+	return &v1.Node{Kind: v1.KindButton, ID: id, Text: label, Name: boundedAccessibleName(name), Role: "button",
+		Icon: actionIcon(id), Height: 28, Disabled: disabled, Events: []v1.EventKind{v1.EventActivate}}
+}
+
+func confirmRemovalButton(name string, disabled bool) *v1.Node {
+	button := actionButton("confirm", "Confirm remove", "Confirm remove "+name, disabled)
+	button.Fill = "error-container"
+	return button
+}
+
+func boundedAccessibleName(name string) string {
+	return compactMiddleText(strings.Join(strings.Fields(name), " "), v1.MaxIdentBytes)
+}
+
+func compactContainerInfo(image, status string) string {
+	suffix := " · " + compactDisplayText(status, 24)
+	return compactDisplayText(image, maxPanelTextBytes-len(suffix)) + suffix
+}
+
+func compactEntityName(entity panelEntity) string {
+	if entity.Scope == ScopeImages {
+		return compactImageReference(entity.Name, maxPanelTextBytes)
+	}
+	return compactDisplayText(entity.Name, maxPanelTextBytes)
+}
+
+func actionIcon(id string) string {
+	switch {
+	case id == "refresh":
+		return "refresh"
+	case id == "confirm":
+		return "check"
+	case id == "cancel", id == "form:cancel":
+		return "close"
+	case strings.HasPrefix(id, "start:") || strings.HasPrefix(id, "run:") || id == "run-submit":
+		return "play_arrow"
+	case strings.HasPrefix(id, "stop:"):
+		return "pause"
+	case strings.HasPrefix(id, "restart:"):
+		return "restart_alt"
+	case strings.HasPrefix(id, "remove:") || strings.HasPrefix(id, "rmi:") || strings.HasPrefix(id, "volrm:") || strings.HasPrefix(id, "netrm:"):
+		return "delete"
+	default:
+		return ""
+	}
+}
+
+func imageReferenceCountAllowsRemoval(entity panelEntity) bool {
+	return entity.ReferenceCountKnown && entity.Referenced == 0
+}
+
+func imageReferenceCountNote(entity panelEntity) string {
+	if !entity.ReferenceCountKnown || entity.Referenced < 0 {
+		return "Container use unknown · removal disabled"
+	}
+	count := "containers"
+	if entity.Referenced == 1 {
+		count = "container"
+	}
+	return fmt.Sprintf("Used by %d %s · removal disabled", entity.Referenced, count)
+}
+
+func entityDetailHeight(entity panelEntity) int {
+	switch entity.Scope {
+	case ScopeImages:
+		if !imageReferenceCountAllowsRemoval(entity) {
+			return 128
+		}
+	case ScopeNetworks:
+		if entity.Builtin {
+			return 128
+		}
+	case ScopeContainers:
+		if entity.container != nil && entity.container.Running() {
+			return 128
+		}
+	}
+	return 112
+}
+
+func compactDisplayText(text string, maxBytes int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) <= maxBytes {
+		return text
+	}
+	const ellipsis = "…"
+	budget := maxBytes - len(ellipsis)
+	var compact strings.Builder
+	for _, r := range text {
+		if compact.Len()+utf8.RuneLen(r) > budget {
+			break
+		}
+		compact.WriteRune(r)
+	}
+	return compact.String() + ellipsis
+}
+
+func compactImageReference(ref string, maxBytes int) string {
+	return compactMiddleText(ref, maxBytes)
+}
+
+func compactMiddleText(text string, maxBytes int) string {
+	if len(text) <= maxBytes {
+		return text
+	}
+	const ellipsis = "…"
+	budget := maxBytes - len(ellipsis)
+	prefixBytes := budget / 2
+	for prefixBytes > 0 && !utf8.RuneStart(text[prefixBytes]) {
+		prefixBytes--
+	}
+	suffixStart := len(text) - (budget - prefixBytes)
+	for suffixStart < len(text) && !utf8.RuneStart(text[suffixStart]) {
+		suffixStart++
+	}
+	return text[:prefixBytes] + ellipsis + text[suffixStart:]
 }
 
 // actionPrefixes drives ParseAction; each entry pairs a node-ID prefix with
