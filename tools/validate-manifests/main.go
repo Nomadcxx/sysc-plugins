@@ -46,10 +46,13 @@ type manifest struct {
 }
 
 // setting is one manifest settings row, at plugin scope or inside a widget.
+// It mirrors the host's wireSetting field for field: the decode is strict, so
+// a field the host accepts and this omits fails a manifest the shell loads.
 type setting struct {
 	Key         string         `json:"key"`
 	Type        string         `json:"type"`
 	Label       string         `json:"label"`
+	Description string         `json:"description"`
 	Default     any            `json:"default"`
 	Min         any            `json:"min"`
 	Max         any            `json:"max"`
