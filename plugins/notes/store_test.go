@@ -1,155 +1,258 @@
 package notes
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
-func TestStoreExpandsHomeAndRejectsEscapes(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	dir := filepath.Join(home, "Notes")
-	s, err := Open("~/Notes", "md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Dir != dir {
-		t.Fatalf("dir = %q, want expanded %q", s.Dir, dir)
-	}
-	if _, _, err := s.Read("../etc/passwd.md"); err == nil {
-		t.Fatal("escaped parent was accepted")
-	}
-	if _, _, err := s.Read("sub/note.md"); err == nil {
-		t.Fatal("nested path was accepted")
-	}
-	if err := s.Save("note.txt", "x"); err == nil {
-		t.Fatal("wrong extension was accepted")
-	}
-}
-
-func TestStoreScratchpadListOrderAndPins(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	if name, err := s.Scratchpad(); err != nil || name != "scratchpad.md" {
-		t.Fatalf("scratchpad = %q %v", name, err)
-	}
-	mustSave(t, s, "b.md", "b")
-	mustSave(t, s, "a.md", "a")
-	if err := s.SetPinned("b.md", true); err != nil {
-		t.Fatal(err)
-	}
-	notes, err := s.List(false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(notes) != 2 || notes[0].Name != "b.md" || notes[1].Name != "a.md" {
-		t.Fatalf("list = %+v, want pinned b then a", notes)
-	}
-	if notes[0].Pinned != true || notes[1].Pinned {
-		t.Fatalf("pin flags = %+v", notes)
-	}
-}
-
-func TestStoreCreateSanitizesAndAvoidsCollisions(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	s.now = func() time.Time { return time.Date(2026, 9, 2, 15, 4, 5, 0, time.UTC) }
-	n1, err := s.Create()
-	if err != nil || n1 != "2026-09-02 15.04.05.md" {
-		t.Fatalf("create = %q %v", n1, err)
-	}
-	n2, err := s.Create()
-	if err != nil || n2 == n1 {
-		t.Fatalf("collision reuse %q %v", n2, err)
-	}
-	if err := s.Rename(n1, "ok.md"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Rename("ok.md", "../x.md"); err == nil {
-		t.Fatal("rename escape accepted")
-	}
-	if err := s.Rename("ok.md", n2); err == nil {
-		t.Fatal("rename onto existing accepted")
-	}
-}
-
-func TestStoreAtomicSaveSurvivesFailure(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	mustSave(t, s, "n.md", "keep")
-	if err := os.Chmod(s.Dir, 0555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(s.Dir, 0755) })
-	if err := s.Save("n.md", "lost"); err == nil {
-		t.Fatal("save into a read-only directory succeeded")
-	}
-	_ = os.Chmod(s.Dir, 0755)
-	got, _, err := s.Read("n.md")
-	if err != nil || got != "keep" {
-		t.Fatalf("after failed save: %q %v", got, err)
-	}
-}
-
-func TestStoreDeleteAndExternalProbe(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	mustSave(t, s, "n.md", "old")
-	kind, body, err := s.Probe("n.md", "old", false)
-	if err != nil || kind != Unchanged || body != "" {
-		t.Fatalf("unchanged: %s %q %v", kind, body, err)
-	}
-	mustSave(t, s, "n.md", "new")
-	kind, body, err = s.Probe("n.md", "old", false)
-	if err != nil || kind != CleanReload || body != "new" {
-		t.Fatalf("clean: %s %q %v", kind, body, err)
-	}
-	kind, body, err = s.Probe("n.md", "typed", true)
-	if err != nil || kind != DirtyConflict || body != "new" {
-		t.Fatalf("dirty: %s %q %v", kind, body, err)
-	}
-	if err := s.Delete("n.md"); err != nil {
-		t.Fatal(err)
-	}
-	kind, _, err = s.Probe("n.md", "typed", true)
-	if err != nil || kind != Deleted {
-		t.Fatalf("deleted: %s %v", kind, err)
-	}
-}
-
-func TestStoreRejectsSymlinkEscape(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	outside := filepath.Join(t.TempDir(), "secret.md")
-	if err := os.WriteFile(outside, []byte("nope"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(s.Dir, "trap.md")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := s.Read("trap.md"); err == nil {
-		t.Fatal("symlink escape was read")
-	}
-	if err := s.Save("trap.md", "x"); err == nil {
-		t.Fatal("symlink escape was written")
-	}
-}
-
-func openStore(t *testing.T) *Store {
-	t.Helper()
+func TestStoreSearchFavoritesAndDirectChildren(t *testing.T) {
 	s, err := Open(t.TempDir(), "md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	if err := s.Create("alpha.md", "Plan the launch\nremember the checklist"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create("beta.md", "A quiet afternoon"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Dir, ".hidden.md"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(s.Dir, "folder.md"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Favorite("beta.md", true); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.List("checklist", false)
+	if err != nil || len(items) != 1 || items[0].Name != "alpha.md" {
+		t.Fatalf("search = %#v, %v", items, err)
+	}
+	items, err = s.List("", true)
+	if err != nil || len(items) != 2 || items[0].Name != "beta.md" || !items[0].Favorite {
+		t.Fatalf("favorites first = %#v, %v", items, err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "outside"), filepath.Join(s.Dir, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.List("", false); err == nil {
+		t.Fatal("symlink note was silently followed or ignored")
+	}
+	if err := s.Delete("../outside.md"); err == nil {
+		t.Fatal("path traversal was accepted")
+	}
 }
 
-func mustSave(t *testing.T, s *Store, name, body string) {
-	t.Helper()
-	if err := s.Save(name, body); err != nil {
+func TestSaveIfUnchangedPreservesExternalEdit(t *testing.T) {
+	s, err := Open(t.TempDir(), "md")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if err := s.Create("plan.md", "Obsidian version"); err != nil {
+		t.Fatal(err)
+	}
+	conflict, err := s.SaveIfUnchanged("plan.md", "stale version", "Notes version")
+	if !errors.Is(err, errNoteChanged) || conflict != "Obsidian version" {
+		t.Fatalf("stale save = %q, %v", conflict, err)
+	}
+	body, _, err := s.Read("plan.md")
+	if err != nil || body != "Obsidian version" {
+		t.Fatalf("external edit changed to %q, %v", body, err)
+	}
+}
+
+func TestAtomicWriteCheckKeepsExternalReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "note.md")
+	if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := atomicWriteChecked(path, []byte("Notes version"), 0o600, func() error {
+		if err := os.WriteFile(path, []byte("Obsidian version"), 0o600); err != nil {
+			return err
+		}
+		return errNoteChanged
+	})
+	if !errors.Is(err, errNoteChanged) {
+		t.Fatalf("checked atomic write error = %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil || string(body) != "Obsidian version" {
+		t.Fatalf("external replacement = %q, %v", body, err)
+	}
+}
+
+func TestRenameDoesNotReplaceDestination(t *testing.T) {
+	s, err := Open(t.TempDir(), "md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create("draft.md", "draft"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create("plan.md", "existing plan"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Rename("draft.md", "plan.md"); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("rename over existing note = %v", err)
+	}
+	for name, want := range map[string]string{"draft.md": "draft", "plan.md": "existing plan"} {
+		body, _, err := s.Read(name)
+		if err != nil || body != want {
+			t.Errorf("%s = %q, %v; want %q", name, body, err, want)
+		}
+	}
+}
+
+func TestFailedFavoriteWriteRollsBackMemoryState(t *testing.T) {
+	s, err := Open(t.TempDir(), "md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create("plan.md", "Plan"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(s.Dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Favorite("plan.md", true); err == nil {
+		t.Fatal("favorite succeeded with a missing notes folder")
+	}
+	if s.IsFavorite("plan.md") {
+		t.Fatal("failed favorite write changed in-memory state")
+	}
+}
+
+func TestCaptureNamesDoNotOverwriteWithinOneSecond(t *testing.T) {
+	s, err := Open(t.TempDir(), "md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := func() time.Time { return time.Date(2026, 9, 24, 12, 34, 56, 0, time.UTC) }
+	sess := NewSession(s, now)
+	if err := sess.Capture("one"); err != nil {
+		t.Fatal(err)
+	}
+	first := sess.Snap().Current
+	if err := sess.Capture("two"); err != nil {
+		t.Fatal(err)
+	}
+	second := sess.Snap().Current
+	if first == second || first != "note-2026-09-24-123456.md" || second != "note-2026-09-24-123456-02.md" {
+		t.Fatalf("capture names = %q and %q", first, second)
+	}
+	body, _, err := s.Read(first)
+	if err != nil || body != "one" {
+		t.Fatalf("first note = %q, %v", body, err)
+	}
+}
+
+func TestSessionConflictKeepLocalAndCleanExternalReload(t *testing.T) {
+	s, err := Open(t.TempDir(), "md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create("plan.md", "base"); err != nil {
+		t.Fatal(err)
+	}
+	nowAt := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	sess := NewSession(s, func() time.Time { return nowAt })
+	if err := sess.Open("plan.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Type("local version"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save("plan.md", "edited in Obsidian"); err != nil {
+		t.Fatal(err)
+	}
+	nowAt = nowAt.Add(time.Second)
+	sess.Tick()
+	if got := sess.Snap(); !got.Conflict || got.ConflictBody != "edited in Obsidian" || !got.Dirty {
+		t.Fatalf("conflict snapshot = %+v", got)
+	}
+	if err := sess.KeepLocal(""); err != nil {
+		t.Fatal(err)
+	}
+	nowAt = nowAt.Add(time.Second)
+	sess.Tick()
+	body, _, err := s.Read("plan.md")
+	if err != nil || body != "local version" {
+		t.Fatalf("kept body = %q, %v", body, err)
+	}
+	if err := s.Save("plan.md", "changed cleanly in Obsidian"); err != nil {
+		t.Fatal(err)
+	}
+	if got := sess.Snap(); got.Body != "changed cleanly in Obsidian" || got.Dirty {
+		t.Fatalf("clean external edit = %+v", got)
+	}
+}
+
+func TestFailedFlushRetainsBufferAndBlocksNavigation(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, "md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create("note.md", "disk"); err != nil {
+		t.Fatal(err)
+	}
+	sess := NewSession(s, time.Now)
+	if err := sess.Open("note.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Type("local text that must survive"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "note.md")); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("untouched"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "note.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Back(); err == nil {
+		t.Fatal("back discarded a buffer after save failed")
+	}
+	got := sess.Snap()
+	if got.Current != "note.md" || got.Body != "local text that must survive" || !got.Dirty || got.SaveError == "" {
+		t.Fatalf("buffer not retained: %+v", got)
+	}
+	if body, err := os.ReadFile(outside); err != nil || string(body) != "untouched" {
+		t.Fatalf("outside file changed: %q, %v", body, err)
+	}
+}
+
+func TestRenameAndConfirmedDelete(t *testing.T) {
+	s, err := Open(t.TempDir(), "md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Create("draft.md", "content"); err != nil {
+		t.Fatal(err)
+	}
+	sess := NewSession(s, time.Now)
+	if err := sess.Open("draft.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Rename("Roadmap"); err != nil {
+		t.Fatal(err)
+	}
+	if got := sess.Snap(); got.Current != "Roadmap.md" || got.Title != "Roadmap" {
+		t.Fatalf("renamed state = %+v", got)
+	}
+	sess.ProposeDelete("Roadmap.md")
+	name, err := sess.ConfirmDeleteName()
+	if err != nil || name != "Roadmap.md" {
+		t.Fatalf("confirm delete = %q, %v", name, err)
+	}
+	if _, _, err := s.Read(name); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted note still exists: %v", err)
 	}
 }

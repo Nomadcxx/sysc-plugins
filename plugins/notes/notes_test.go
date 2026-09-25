@@ -6,6 +6,14 @@ import (
 	"time"
 )
 
+func TestUnavailableStoreKeepsFolderErrorVisible(t *testing.T) {
+	sess := NewSession(nil, time.Now)
+	sess.ReportError("Could not open notes folder: test failure")
+	if got := sess.Snap().LibraryError; got != "Could not open notes folder: test failure" {
+		t.Fatalf("folder error = %q", got)
+	}
+}
+
 func TestSessionListCreateOpenAndBack(t *testing.T) {
 	t.Parallel()
 	s, now := testSession(t)
