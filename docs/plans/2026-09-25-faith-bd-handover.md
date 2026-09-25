@@ -26,7 +26,7 @@ file and its register row (AGENTS.md handover rule).
 
 ## Open items: create as open issues
 
-1. **Merge the shell glyphs and re-pin (gate).** Merge sysc-shell `5260c75` to `main`, re-pin
+1. **Merge the shell glyphs and re-pin (gate).** Merge sysc-shell `5260c75` and `f5ef69d` (PR 14) to `main`, re-pin
    sysc-plugins to the merge commit, and tag `faith-v0.1.0` only after a shell release carries
    it. An older shell refuses the bar: an unknown icon fails conversion.
 2. **Live Niri check (plan Task 13 step 3).** This has not been run. Check that:
