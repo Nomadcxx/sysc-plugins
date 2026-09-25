@@ -41,6 +41,11 @@ type manifest struct {
 		Height          int    `json:"height"`
 		Placement       string `json:"placement"`
 		IncludeSettings bool   `json:"include_settings"`
+		Shortcuts       []struct {
+			Key       string   `json:"key"`
+			Modifiers []string `json:"modifiers,omitempty"`
+			Node      string   `json:"node"`
+		} `json:"shortcuts,omitempty"`
 	} `json:"panels"`
 	Settings []setting `json:"settings"`
 }
@@ -61,11 +66,15 @@ type setting struct {
 }
 
 var allowedCapabilities = map[string]bool{
-	"notifications": true,
-	"panels":        true,
-	"settings":      true,
-	"state":         true,
-	"wallpaper":     true,
+	"notifications":     true,
+	"panels":            true,
+	"settings":          true,
+	"state":             true,
+	"wallpaper":         true,
+	"floating_surfaces": true,
+	"clipboard-read":    true,
+	"clipboard-write":   true,
+	"open-url":          true,
 }
 
 var allowedSettingTypes = map[string]bool{
