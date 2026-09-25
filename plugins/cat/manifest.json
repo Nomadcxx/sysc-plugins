@@ -4,7 +4,7 @@
   "name": "Cat",
   "description": "An animated cat in the bar that walks and gallops with CPU load, and grooms, stretches and naps while the machine idles.",
   "version": "1.0.0",
-  "protocol": {"major": 1, "minor": 8},
+  "protocol": {"major": 1, "minor": 9},
   "exec": "bin/sysc-plugin-cat",
   "capabilities": ["panels", "settings"],
   "requires": {"commands": []},

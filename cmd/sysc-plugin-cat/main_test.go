@@ -48,11 +48,17 @@ func startPlugin(t *testing.T) *host {
 		}
 		hostOut.Close()
 	})
-	h.send(&v1.HostHello{Supported: []v1.Version{{Major: 1, Minor: 8}},
+	h.send(&v1.HostHello{Supported: []v1.Version{{Major: 1, Minor: 9}, {Major: 1, Minor: 8}},
 		Plugin:       v1.Identity{ID: "org.sysc.cat", Name: "Cat", Version: "1.0.0"},
 		Capabilities: []string{"panels", "settings"}, Limits: v1.DefaultLimits})
-	if _, ok := h.next(time.Second).(*v1.PluginHello); !ok {
+	hello, ok := h.next(time.Second).(*v1.PluginHello)
+	if !ok {
 		t.Fatal("no plugin.hello")
+	}
+	// The sprite fields need minor 9; a plugin that settled for less would
+	// be refused its own views.
+	if hello.Protocol != (v1.Version{Major: 1, Minor: 9}) {
+		t.Fatalf("negotiated %+v, want 1.9", hello.Protocol)
 	}
 	return h
 }

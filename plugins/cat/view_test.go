@@ -222,8 +222,9 @@ func TestDefaultsMatchTheManifest(t *testing.T) {
 	}
 }
 
-// v1MinorIconSize is the protocol minor that carries icon_size.
-const v1MinorIconSize = 8
+// v1MinorIconSize is the protocol minor that carries icon_size, frames and
+// cycle_ms.
+const v1MinorIconSize = 9
 
 func TestParseSettingsClampsAndMapsTones(t *testing.T) {
 	t.Parallel()
