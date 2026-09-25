@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -44,9 +45,11 @@ func main() {
 
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.0.0"})); err != nil {
+	hello, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.0.0"}))
+	if err != nil {
 		return err
 	}
+	canReadClipboard := slices.Contains(hello.Capabilities, "clipboard-read")
 	var sess *notes.Session
 	ensure := func() *notes.Session {
 		if sess == nil {
@@ -121,7 +124,7 @@ func run(in *os.File, out *os.File) error {
 				}
 				tree = notes.StickyTree(doc, v.color, v.pinned)
 			default:
-				tree = notes.PanelTree(snap)
+				tree = notes.PanelTree(snap, canReadClipboard)
 			}
 			_ = c.Snapshot(id, v.rev, tree)
 		}
@@ -309,6 +312,19 @@ func handlePanel(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.I
 	case m.Node == "capture-save":
 		if strings.TrimSpace(snap.CaptureText) != "" {
 			fail(sess.Capture(snap.CaptureText))
+		}
+	case m.Node == "clipboard-import":
+		var result v1.ClipboardReadResult
+		if err := call(ctx, c, v1.CallClipboardRead, v1.ClipboardReadParams{}, &result); err != nil {
+			fail(err)
+		} else if result.Text == "" {
+			sess.ReportError("The clipboard has no plain text")
+		} else {
+			sess.SetCaptureText(result.Text)
+		}
+	case m.Node == "launcher-capture":
+		if strings.TrimSpace(m.Text) != "" {
+			fail(sess.Capture(m.Text))
 		}
 	case m.Node == "scratch":
 		fail(sess.OpenScratch())

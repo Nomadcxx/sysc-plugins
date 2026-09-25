@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,10 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/plugins/notes"
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-func TestPluginNotesGateCreateEditAutosaveRenamePinDeleteReopen(t *testing.T) {
+func TestPluginNotesGateCreateEditAutosaveRenameFavoriteDelete(t *testing.T) {
 	h := startNotes(t)
 	h.openPanel()
 	h.click("new")
@@ -32,20 +34,44 @@ func TestPluginNotesGateCreateEditAutosaveRenamePinDeleteReopen(t *testing.T) {
 	waitFile(t, filepath.Join(h.notes, "kept.md"), "café")
 
 	h.click("back")
-	h.waitNode(func(n *v1.Node) bool { return findID(n, "pin:kept.md") != nil })
-	h.click("pin:kept.md")
+	favoriteID := "fav:" + notes.Token("kept.md")
+	h.waitNode(func(n *v1.Node) bool { return findID(n, favoriteID) != nil })
+	h.click(favoriteID)
+	h.waitNode(func(n *v1.Node) bool {
+		button := findID(n, favoriteID)
+		return button != nil && button.Text == "★"
+	})
 	waitPinned(t, h.notes, "kept.md")
 
-	h.click("open:kept.md")
+	h.click("open:" + notes.Token("kept.md"))
 	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "body") == "café" })
-
-	h.click("back")
-	h.click("rm:kept.md")
+	h.click("delete-current")
+	h.waitNode(func(n *v1.Node) bool { return findID(n, "confirm-delete") != nil })
 	h.click("confirm-delete")
 	h.waitNode(func(n *v1.Node) bool { return findID(n, "new") != nil && findID(n, "open:kept.md") == nil })
 	if _, err := os.Stat(filepath.Join(h.notes, "kept.md")); !os.IsNotExist(err) {
 		t.Fatalf("delete left the file: %v", err)
 	}
+}
+
+func TestPluginNotesGateImportsClipboardAndAcceptsLauncherCapture(t *testing.T) {
+	h := startNotes(t)
+	h.mu.Lock()
+	h.clipboardText = "Imported from the clipboard"
+	h.mu.Unlock()
+	h.openPanel()
+	if findID(h.lastRoot(), "clipboard-import") == nil {
+		t.Fatal("clipboard import action missing despite the granted capability")
+	}
+	h.click("clipboard-import")
+	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "capture") == "Imported from the clipboard" })
+	h.click("capture-save")
+	root := h.waitNode(func(n *v1.Node) bool { return nodeText(n, "body") == "Imported from the clipboard" })
+	waitFile(t, filepath.Join(h.notes, nodeText(root, "title")+".md"), "Imported from the clipboard")
+
+	h.event("launcher-capture", v1.EventSubmit, "Captured with /nt")
+	root = h.waitNode(func(n *v1.Node) bool { return nodeText(n, "body") == "Captured with /nt" })
+	waitFile(t, filepath.Join(h.notes, nodeText(root, "title")+".md"), "Captured with /nt")
 }
 
 func TestPluginNotesGateExternalChangeAndReadOnly(t *testing.T) {
@@ -65,6 +91,7 @@ func TestPluginNotesGateExternalChangeAndReadOnly(t *testing.T) {
 	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "body") == "disk" })
 
 	h.change("body", "typed")
+	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "save-state") == "Unsaved changes · autosaving" })
 	if err := os.WriteFile(path, []byte("other"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +102,7 @@ func TestPluginNotesGateExternalChangeAndReadOnly(t *testing.T) {
 	h.waitNode(func(n *v1.Node) bool { return findID(n, "reload") == nil && nodeText(n, "body") == "typed" })
 
 	h.change("body", "kept")
+	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "save-state") == "Unsaved changes · autosaving" })
 	if err := os.Chmod(h.notes, 0o555); err != nil {
 		t.Fatal(err)
 	}
@@ -98,14 +126,15 @@ func TestPluginNotesGateExternalChangeAndReadOnly(t *testing.T) {
 }
 
 type notesHost struct {
-	t     *testing.T
-	notes string
-	enc   *v1.Encoder
-	mu    sync.Mutex
-	root  *v1.Node
-	rev   uint64
-	slots map[string]viewSlot
-	wake  chan struct{}
+	t             *testing.T
+	notes         string
+	clipboardText string
+	enc           *v1.Encoder
+	mu            sync.Mutex
+	root          *v1.Node
+	rev           uint64
+	slots         map[string]viewSlot
+	wake          chan struct{}
 }
 
 func startNotes(t *testing.T) *notesHost {
@@ -170,7 +199,14 @@ func startNotes(t *testing.T) *notesHost {
 			}
 			switch m := msg.(type) {
 			case *v1.HostCall:
-				_ = h.send(&v1.HostReply{ID: m.ID, OK: true})
+				reply := &v1.HostReply{ID: m.ID, OK: true}
+				if m.Call == v1.CallClipboardRead {
+					h.mu.Lock()
+					clipboard := h.clipboardText
+					h.mu.Unlock()
+					reply.Result, _ = json.Marshal(v1.ClipboardReadResult{Text: clipboard})
+				}
+				_ = h.send(reply)
 			case *v1.ViewSnapshot:
 				h.mu.Lock()
 				slot, monitored := h.slots[m.ViewID]
@@ -188,9 +224,9 @@ func startNotes(t *testing.T) *notesHost {
 		}
 	}()
 	if err := h.send(&v1.HostHello{
-		Supported:    []v1.Version{{Major: 1, Minor: 0}},
+		Supported:    []v1.Version{{Major: 1, Minor: 8}},
 		Plugin:       v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.0.0"},
-		Capabilities: []string{"notifications", "panels", "settings", "state"},
+		Capabilities: []string{"notifications", "panels", "settings", "state", "clipboard-read"},
 		Limits:       v1.DefaultLimits,
 	}); err != nil {
 		t.Fatal(err)
