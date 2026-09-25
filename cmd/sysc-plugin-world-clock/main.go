@@ -3,34 +3,92 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
-	"github.com/Nomadcxx/sysc-plugins/plugins/world-clock"
+	worldclock "github.com/Nomadcxx/sysc-plugins/plugins/world-clock"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
+const maxSuggestions = 5
+
 func main() {
-	if err := run(os.Stdin, os.Stdout); err != nil {
+	env := environment{now: time.Now, local: time.Local, index: worldclock.OpenSystemIndex("/usr/share/zoneinfo")}
+	if err := runPlugin(os.Stdin, os.Stdout, env); err != nil {
 		os.Exit(1)
 	}
 }
 
-func run(in *os.File, out *os.File) error {
+type environment struct {
+	now   func() time.Time
+	local *time.Location
+	index *worldclock.Index
+}
+
+type settings struct {
+	hour24 bool
+	mode   worldclock.BarMode
+	cycle  time.Duration
+}
+
+func defaultSettings() settings {
+	return settings{hour24: true, mode: worldclock.BarPrimary, cycle: 15 * time.Second}
+}
+
+// apply takes the values the host sent; a missing or mistyped key keeps its
+// current value, and cycle_seconds is clamped to the manifest's 3–120.
+func (s *settings) apply(values map[string]any) {
+	if v, ok := values["hour24"].(bool); ok {
+		s.hour24 = v
+	}
+	if v, ok := values["bar_mode"].(string); ok {
+		if m, ok := worldclock.ParseBarMode(v); ok {
+			s.mode = m
+		}
+	}
+	if v, ok := values["cycle_seconds"].(float64); ok {
+		v = min(max(v, 3), 120)
+		s.cycle = time.Duration(v) * time.Second
+	}
+}
+
+// nextMinute is the wait until the next wall-clock minute boundary.
+func nextMinute(now time.Time) time.Duration {
+	return now.Truncate(time.Minute).Add(time.Minute).Sub(now)
+}
+
+type view struct {
+	kind v1.ViewKind
+	rev  uint64
+}
+
+type session struct {
+	env         environment
+	client      *v1.Client
+	store       *worldclock.Store
+	settings    settings
+	views       map[string]view
+	query       string
+	queryReseed uint64
+	renameDraft string
+	renameGen   uint64
+	addErr      string
+	saveErr     string
+	cycle       int
+}
+
+func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.world-clock", Name: "World Clock", Version: "1.2.0"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.world-clock", Name: "World Clock", Version: "2.0.0"})); err != nil {
 		return err
 	}
-	clk := worldclock.New()
-	type view struct {
-		kind v1.ViewKind
-		rev  uint64
-	}
-	views := map[string]view{}
-	draft := ""
+	s := &session{env: env, client: c, store: worldclock.NewStore(), settings: defaultSettings(), views: map[string]view{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	incoming := make(chan v1.Message, 8)
@@ -44,141 +102,289 @@ func run(in *os.File, out *os.File) error {
 			incoming <- msg
 		}
 	}()
-	restore(ctx, c, clk)
-	ticks := time.NewTicker(time.Second)
-	defer ticks.Stop()
+	s.restore(ctx)
 
-	snapshot := func() {
-		readings := clk.Readings(time.Now())
-		first := worldclock.Reading{}
-		if len(readings) > 0 {
-			first = readings[0]
+	minute := time.NewTimer(nextMinute(env.now()))
+	defer minute.Stop()
+	var cycle *time.Ticker
+	var cycleC <-chan time.Time
+	resetCycle := func() {
+		if cycle != nil {
+			cycle.Stop()
+			cycle, cycleC = nil, nil
 		}
-		for id, v := range views {
-			v.rev++
-			views[id] = v
-			switch v.kind {
-			case v1.ViewBar:
-				_ = c.Snapshot(id, v.rev, worldclock.BarTree(first))
-			case v1.ViewTooltip:
-				_ = c.Snapshot(id, v.rev, worldclock.TooltipTree(first))
-			default:
-				_ = c.Snapshot(id, v.rev, worldclock.PanelTree(readings, clk.PendingAdd(), clk.PendingRemove(), draft))
-			}
+		if s.settings.mode == worldclock.BarCycle {
+			cycle = time.NewTicker(s.settings.cycle)
+			cycleC = cycle.C
 		}
 	}
-	patchTimes := func() {
-		readings := clk.Readings(time.Now())
-		repl := worldclock.TimePatch(readings)
-		for id, v := range views {
-			if v.rev == 0 {
-				continue
-			}
-			next := v.rev + 1
-			if err := c.Patch(id, v.rev, next, repl); err != nil {
-				continue
-			}
-			v.rev = next
-			views[id] = v
+	defer func() {
+		if cycle != nil {
+			cycle.Stop()
 		}
-	}
+	}()
 
-	snapshot()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticks.C:
-			patchTimes()
+		case <-minute.C:
+			s.tick()
+			minute.Reset(nextMinute(env.now()))
+		case <-cycleC:
+			s.cycle++
+			s.patchBars()
 		case msg := <-incoming:
 			switch m := msg.(type) {
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
-				views[m.ViewID] = view{kind: m.View}
-				snapshot()
+				s.views[m.ViewID] = view{kind: m.View}
+				s.snapshot(m.ViewID)
 			case *v1.ViewClose:
-				delete(views, m.ViewID)
+				delete(s.views, m.ViewID)
 			case *v1.ViewResync:
-				if v, ok := views[m.ViewID]; ok {
+				if v, ok := s.views[m.ViewID]; ok {
 					v.rev = 0
-					views[m.ViewID] = v
+					s.views[m.ViewID] = v
+					s.snapshot(m.ViewID)
 				}
-				snapshot()
 			case *v1.InputEvent:
-				handle(ctx, c, clk, &draft, m)
-				snapshot()
+				s.handle(ctx, m)
+				s.snapshotAll()
 			case *v1.SettingsChanged:
-				if raw, ok := m.Values["hour24"]; ok {
-					switch v := raw.(type) {
-					case bool:
-						clk.SetHour24(v)
-					case float64:
-						clk.SetHour24(v != 0)
-					}
-					snapshot()
-				}
+				s.settings.apply(m.Values)
+				s.cycle = 0
+				resetCycle()
+				s.snapshotAll()
 			}
 		}
 	}
 }
 
-func handle(ctx context.Context, c *v1.Client, clk *worldclock.Clock, draft *string, m *v1.InputEvent) {
-	switch {
-	case m.Node == "open":
-		_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
-	case m.Node == "zone":
-		*draft = m.Text
-		if m.Event == v1.EventSubmit {
-			_ = clk.ProposeAdd(strings.TrimSpace(*draft))
-		}
-	case m.Node == "add":
-		_ = clk.ProposeAdd(strings.TrimSpace(*draft))
-	case m.Node == "confirm-add":
-		clk.ConfirmAdd()
-		*draft = ""
-		save(ctx, c, clk)
-	case m.Node == "confirm-remove":
-		clk.ConfirmRemove()
-		save(ctx, c, clk)
-	case m.Node == "cancel":
-		clk.CancelPending()
-	case strings.HasPrefix(m.Node, "rm:"):
-		clk.ProposeRemove(strings.TrimPrefix(m.Node, "rm:"))
-	case strings.HasPrefix(m.Node, "drop:") && m.Event == v1.EventDrop:
-		insert, _ := strconv.Atoi(strings.TrimPrefix(m.Node, "drop:"))
-		zones := clk.Zones()
-		from := -1
-		for i, z := range zones {
-			if z == m.Text {
-				from = i
-				break
-			}
-		}
-		if from >= 0 {
-			_ = clk.Reorder(from, insert)
-			save(ctx, c, clk)
-		}
-	}
-}
-
-func save(ctx context.Context, c *v1.Client, clk *worldclock.Clock) {
-	raw, _ := json.Marshal(clk.Zones())
-	_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "zones", Value: raw})
-}
-
-func restore(ctx context.Context, c *v1.Client, clk *worldclock.Clock) {
-	reply, err := c.Call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "zones"})
+func (s *session) restore(ctx context.Context) {
+	reply, err := s.client.Call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "zones"})
 	if err != nil || !reply.OK {
 		return
 	}
 	var result v1.StateGetResult
-	if err := json.Unmarshal(reply.Result, &result); err != nil || !result.Found {
+	if json.Unmarshal(reply.Result, &result) != nil || !result.Found {
 		return
 	}
-	var zones []string
-	if err := json.Unmarshal(result.Value, &zones); err != nil {
+	// An undecodable value keeps the defaults in memory; nothing is written
+	// until the user changes something, so the stored value is not clobbered.
+	if zones, err := worldclock.Decode(result.Value); err == nil {
+		s.store.Load(zones)
+	}
+}
+
+func (s *session) save(ctx context.Context) {
+	raw, err := worldclock.Encode(s.store.Zones())
+	if err == nil {
+		var reply v1.HostReply
+		reply, err = s.client.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "zones", Value: raw})
+		if err == nil && !reply.OK {
+			err = errors.New(reply.Error)
+		}
+	}
+	if err != nil {
+		s.saveErr = "Couldn't save zones"
 		return
 	}
-	clk.Restore(zones)
+	s.saveErr = ""
+}
+
+func (s *session) readings() []worldclock.Reading {
+	return s.store.Readings(s.env.now(), s.env.local, s.settings.hour24)
+}
+
+func (s *session) suggestions() []worldclock.Suggestion {
+	if strings.TrimSpace(s.query) == "" {
+		return nil
+	}
+	var out []worldclock.Suggestion
+	for _, m := range s.env.index.Search(s.query, maxSuggestions*2) {
+		if s.store.Has(m.ID) {
+			continue
+		}
+		rel := ""
+		if r, err := worldclock.Read(worldclock.Zone{ID: m.ID}, s.env.now(), s.env.local, s.settings.hour24); err == nil {
+			rel = r.Relative
+		}
+		out = append(out, worldclock.Suggestion{ID: m.ID, Title: worldclock.SuggestionTitle(m, rel)})
+		if len(out) == maxSuggestions {
+			break
+		}
+	}
+	return out
+}
+
+func (s *session) panelState(readings []worldclock.Reading) worldclock.PanelState {
+	errText := s.saveErr
+	if errText == "" {
+		errText = s.addErr
+	}
+	notice := ""
+	if s.env.index.Limited() {
+		notice = "Limited search: tz tables not found"
+	}
+	return worldclock.PanelState{
+		Readings: readings, Query: s.query, QueryReseed: s.queryReseed, Suggestions: s.suggestions(),
+		PendingDelete: s.store.PendingDelete(), Renaming: s.store.Renaming(),
+		RenameDraft: s.renameDraft, RenameReseed: s.renameGen, Error: errText, Notice: notice,
+	}
+}
+
+func (s *session) tree(kind v1.ViewKind, readings []worldclock.Reading) *v1.Node {
+	onBar := worldclock.OnBar(readings)
+	switch kind {
+	case v1.ViewBar:
+		return worldclock.Bar(s.settings.mode, onBar, s.cycle)
+	case v1.ViewTooltip:
+		return worldclock.Tooltip(onBar)
+	}
+	return worldclock.Panel(s.panelState(readings))
+}
+
+func (s *session) snapshot(id string) {
+	v := s.views[id]
+	v.rev++
+	s.views[id] = v
+	_ = s.client.Snapshot(id, v.rev, s.tree(v.kind, s.readings()))
+}
+
+func (s *session) snapshotAll() {
+	for id := range s.views {
+		s.snapshot(id)
+	}
+}
+
+func (s *session) patch(id string, repl []v1.Replacement) {
+	v := s.views[id]
+	if v.rev == 0 {
+		s.snapshot(id)
+		return
+	}
+	if err := s.client.Patch(id, v.rev, v.rev+1, repl); err != nil {
+		return
+	}
+	v.rev++
+	s.views[id] = v
+}
+
+// tick is the minute update: keyed patches where the tree shape is stable,
+// snapshots where it is not (tooltips, panels showing suggestions).
+func (s *session) tick() {
+	readings := s.readings()
+	for id, v := range s.views {
+		switch {
+		case v.kind == v1.ViewBar:
+			s.patch(id, []v1.Replacement{{Key: "bar", Node: worldclock.BarButton(s.settings.mode, worldclock.OnBar(readings), s.cycle)}})
+		case v.kind == v1.ViewPanel && s.query == "":
+			s.patch(id, worldclock.PanelPatch(readings, s.store.Renaming()))
+		default:
+			s.snapshot(id)
+		}
+	}
+}
+
+func (s *session) patchBars() {
+	onBar := worldclock.OnBar(s.readings())
+	for id, v := range s.views {
+		if v.kind == v1.ViewBar {
+			s.patch(id, []v1.Replacement{{Key: "bar", Node: worldclock.BarButton(s.settings.mode, onBar, s.cycle)}})
+		}
+	}
+}
+
+func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
+	node := m.Node
+	id := node[strings.Index(node, ":")+1:]
+	switch {
+	case node == "open":
+		_, _ = s.client.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
+	case node == "search":
+		s.query, s.addErr = m.Text, ""
+		if m.Event == v1.EventSubmit {
+			s.addTop(ctx)
+		}
+	case node == "add":
+		s.addTop(ctx)
+	case strings.HasPrefix(node, "pick:"):
+		s.addPick(ctx, id)
+	case strings.HasPrefix(node, "drop:") && m.Event == v1.EventDrop:
+		if at, err := strconv.Atoi(id); err == nil && s.store.Reorder(m.Text, at) {
+			s.save(ctx)
+		}
+	case strings.HasPrefix(node, "bar:"):
+		if s.store.ToggleBar(id) {
+			s.cycle = 0
+			s.save(ctx)
+		}
+	case strings.HasPrefix(node, "edit:"):
+		s.store.StartRename(id)
+		s.renameDraft = s.store.Label(id)
+		s.renameGen++
+	case strings.HasPrefix(node, "label:"):
+		s.renameDraft = m.Text
+		if m.Event == v1.EventSubmit {
+			s.commitRename(ctx)
+		}
+	case node == "rename-ok":
+		s.commitRename(ctx)
+	case node == "rename-cancel", node == "del-cancel":
+		s.store.CancelEdit()
+	case strings.HasPrefix(node, "del:"):
+		s.store.ProposeDelete(id)
+	case node == "del-ok":
+		if s.store.ConfirmDelete() {
+			s.save(ctx)
+		}
+	}
+}
+
+func (s *session) addTop(ctx context.Context) {
+	q := strings.TrimSpace(s.query)
+	if q == "" {
+		return
+	}
+	top := s.env.index.Search(q, 1)
+	if len(top) == 0 {
+		s.addErr = fmt.Sprintf("No zone matches %q", q)
+		return
+	}
+	s.add(ctx, top[0])
+}
+
+func (s *session) addPick(ctx context.Context, id string) {
+	for _, m := range s.env.index.Search(s.query, maxSuggestions*2) {
+		if m.ID == id {
+			s.add(ctx, m)
+			return
+		}
+	}
+	s.add(ctx, worldclock.Match{ID: id, City: worldclock.ShortLabel(id)})
+}
+
+func (s *session) add(ctx context.Context, m worldclock.Match) {
+	label := ""
+	if m.Alias {
+		label = m.City
+	}
+	switch err := s.store.Add(m.ID, label); {
+	case errors.Is(err, worldclock.ErrDuplicate):
+		s.addErr = m.City + " is already in the list"
+	case err != nil:
+		s.addErr = fmt.Sprintf("No zone matches %q", strings.TrimSpace(s.query))
+	default:
+		s.query, s.addErr = "", ""
+		s.queryReseed++
+		s.save(ctx)
+	}
+}
+
+func (s *session) commitRename(ctx context.Context) {
+	if id := s.store.Renaming(); id != "" && s.store.Rename(id, s.renameDraft) {
+		s.save(ctx)
+	}
 }

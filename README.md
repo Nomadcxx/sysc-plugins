@@ -30,7 +30,7 @@ After `make install`, enable plugins from sysc-shell's Plugins manager panel
 | Screen Recorder | `org.sysc.screen-recorder` | first sweep | extracted from sysc-shell |
 | Notes | `org.sysc.notes` | first sweep | extracted from sysc-shell |
 | Timer | `org.sysc.timer` | UI rebuild started | extracted from sysc-shell + noctalia deltas |
-| World Clock | `org.sysc.world-clock` | first sweep | extracted from sysc-shell + noctalia deltas |
+| World Clock | `org.sysc.world-clock` | 2.0.0 redesign | city search, labels, bar modes; see docs/plans/2026-09-25-world-clock-design.md |
 | Calendar | `org.sysc.calendar` | first sweep | port of the built-in clock-panel calendar |
 | GitHub Notifications | `org.sysc.github-notifications` | 0.2.0 | port of noctalia community plugin |
 | Mini Docker | `org.sysc.mini-docker` | 0.2.0 | port of noctalia community plugin |
