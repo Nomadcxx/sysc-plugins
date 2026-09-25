@@ -32,29 +32,31 @@ The plugin is named Faith: `org.sysc.faith`, directory `plugins/faith`, executab
    add their own prayers to it rather than replacing it.
 5. **No immediate repeats.** Prayers are drawn from a shuffle bag persisted in plugin state. The
    bag refills when empty and when the tradition setting changes.
-6. **Scripture comes from the Free Use Bible API.** `https://bible.helloao.org/api/` needs no key,
-   has no rate limit, and its licence permits any use. The plugin reads the simplified chapter
-   format (`{translation}/{book}/{chapter}.simple.json`), in which each verse is one string.
+6. **Scripture is bundled.** The full text of three public-domain translations ships inside the
+   plugin: the Berean Standard Bible (BSB, default), the World English Bible (WEB), and the King
+   James Version (KJV, 1769). Each is a gzip-compressed tab-separated file of about 1.3 MB,
+   embedded with `go:embed` and decompressed only when that translation is selected. A generator
+   builds the files from pinned sources: USFM for BSB and WEB from `HelloAOLab/bible-api`, and
+   the KJV JSON from `scrollmapper/bible_databases`. All three use the 66-book Protestant canon.
+   Verse counts come from each translation's own text, not from a shared table.
 7. **Verse selection has three modes.** `verse_mode` is `pool` (default: random from a bundled
-   list of about 365 devotional references), `daily` (one pool entry per calendar date, the same
-   for every user), or `bible` (uniform random over every verse in the translation). A reference
-   may be a range, such as Romans 8:38–39.
-8. **The bundled pool works offline.** The pool's text in the default translation is generated at
-   authoring time by a `go generate` tool and committed. Other translations, commentary, and
-   cross-references need the network; when it fails the panel falls back to the bundled text and
-   says so.
-9. **A short translation list.** `translation` offers a handful of English translations, BSB
-   (default; public domain since 2023), KJV, and WEB, plus any others whose API licence entry
-   permits redistribution. The implementation plan fixes the exact API IDs against
-   `available_translations.json` before any code names them.
-10. **Commentary replaces tafsir.** The panel's commentary section shows the verse's entry from
-    an API commentary (`adam-clarke` by default, `tyndale` selectable), fetched on demand. An
-    entry can run to thousands of words, so the panel shows at most 40 wrapped lines and says
-    when it has shortened one.
-11. **Cross-references are new.** The reference has no equivalent. Up to five references from the
-    `open-cross-ref` dataset appear as buttons, highest score first; activating one navigates the
-    panel to it. The dataset is CC BY 4.0, so the section carries a subtle "OpenBible.info"
-    credit and the README credits it too.
+   list of 365 devotional references), `daily` (one pool entry per calendar date, the same for
+   every user), or `bible` (uniform random over every verse in the translation). A reference may
+   be a range, such as Romans 8:38–39.
+8. **Offline first.** Verses, navigation, every verse mode, cross-references, and prayers need no
+   network. Commentary is the only online feature. When it cannot be fetched, its section says so
+   in one subtle line and nothing else changes.
+9. **Three translations.** `translation` selects `BSB`, `WEB`, or `KJV`. The KJV is public domain
+   everywhere except the United Kingdom, where Crown letters patent apply; the README says so.
+10. **Commentary replaces tafsir.** With `show_commentary` on (the default), opening the panel
+    fetches the verse's entry from Adam Clarke's commentary (public domain) through the Free Use
+    Bible API (`/api/c/adam-clarke/{book}/{chapter}.json`). The plugin keeps fetched chapters in
+    memory only. An entry can run to thousands of words, so the panel shows at most 40 wrapped
+    lines and says when it has shortened one.
+11. **Cross-references are new.** The reference has no equivalent. The five highest-voted
+    OpenBible.info cross-references for each verse are bundled (the 2024-11-04 snapshot, CC BY)
+    and appear as buttons; activating one moves the panel to it. The section carries a subtle
+    "OpenBible.info" credit and the README credits it too.
 12. **The plugin wraps text itself.** The protocol has no text wrapping and the host measures
     text at eight pixels per byte. Verse, prayer excerpt, and commentary are broken into lines at
     `floor(content width / 8)` bytes on word boundaries, one text node per line. The panel body
@@ -115,16 +117,15 @@ checked by `plugin/lint` at 440×460.
 | `tradition` | select | `ecumenical` | Adds Catholic or Orthodox prayers to the ecumenical pool. |
 | `verse_mode` | select | `pool` | `pool`, `daily`, or `bible`. |
 | `refresh_minutes` | int | `30` | New verse interval in `pool` and `bible` modes; 0 disables. Ignored in `daily`. |
-| `translation` | select | BSB | Scripture translation. |
-| `commentary` | select | `adam-clarke` | Commentary source. |
+| `translation` | select | `BSB` | `BSB`, `WEB`, or `KJV`. |
+| `show_commentary` | bool | `true` | Fetch Adam Clarke's commentary when the panel opens. |
 | `show_reference` | bool | `false` | Show the verse reference beside the cross. |
 | `prayer_seconds` | int | `30` | Prayer notification timeout, 0–300. |
 
 ## State
 
-Plugin state holds the current reference, the prayer shuffle bag, and a bounded cache of fetched
-chapters (verse text only, not the API JSON), evicted oldest first to stay under the host's
-per-value and total limits.
+Plugin state holds the current reference and the prayer shuffle bag. Scripture needs no cache,
+and commentary is held in memory only.
 
 ## Prayer corpus
 
@@ -142,5 +143,5 @@ The plan lists every entry with the edition its text is taken from.
 
 ## Non-goals
 
-A desktop card, audio playback (the API offers chapter audio), a liturgical calendar, reading
+A desktop card, audio playback, the deuterocanonical books, a liturgical calendar, reading
 plans, and languages other than English. Each is a later design if wanted.
