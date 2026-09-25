@@ -2,11 +2,11 @@
   "schema": 1,
   "id": "org.sysc.world-clock",
   "name": "World Clock",
-  "description": "Shows the time in a list of world time zones you choose, in the bar panel.",
-  "version": "1.2.0",
+  "description": "Search and manage labelled world clocks in the bar and panel.",
+  "version": "2.0.0",
   "protocol": {
     "major": 1,
-    "minor": 2
+    "minor": 7
   },
   "exec": "bin/sysc-plugin-world-clock",
   "capabilities": [
@@ -37,11 +37,14 @@
     }
   ],
   "settings": [
-    {
-      "key": "hour24",
-      "type": "bool",
-      "label": "24-hour clock",
-      "default": true
-    }
+    {"key": "hour24", "type": "bool", "label": "24-hour clock", "default": true},
+    {"key": "bar_mode", "type": "select", "label": "Bar shows", "default": "primary",
+      "options": [
+        {"value": "icon", "label": "Globe only"},
+        {"value": "primary", "label": "First clock"},
+        {"value": "all", "label": "As many clocks as fit"},
+        {"value": "cycle", "label": "Cycle through clocks"}
+      ]},
+    {"key": "cycle_seconds", "type": "int", "label": "Cycle interval (seconds)", "default": 15, "min": 3, "max": 120}
   ]
 }
