@@ -37,6 +37,7 @@ After `make install`, enable plugins from sysc-shell's Plugins manager panel
 | Wallpaper Depth | `org.sysc.wallpaper-depth` | 1.0.0 | port of noctalia official plugin |
 | Phone Connect | `org.sysc.kdeconnect` | 0.1.0 skeleton | port of DMS DankKDEConnect |
 | AI Usage | `org.sysc.aiusage` | 0.1.0 | new; patterns ported from noctalia ai-usagebar + DMS usage widgets |
+| Faith | `org.sysc.faith` | 0.1.0 | new; behavior from the noctalia quranwidget community plugin |
 
 "First sweep" means working but early: these plugins were generated before
 much of the shell's plugin infrastructure existed, and their views are

@@ -8,7 +8,8 @@ PLUGINS := \
 	sysc-plugin-mini-docker:mini-docker \
 	sysc-plugin-wallpaper-depth:wallpaper-depth \
 	sysc-plugin-aiusage:aiusage \
-	sysc-plugin-kdeconnect:kdeconnect
+	sysc-plugin-kdeconnect:kdeconnect \
+	sysc-plugin-faith:faith
 
 USER_PLUGIN_ROOT := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/sysc-shell/plugins
 

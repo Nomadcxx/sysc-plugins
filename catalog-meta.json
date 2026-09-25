@@ -11,6 +11,12 @@
     "license": "MIT",
     "homepage": "https://github.com/Nomadcxx/sysc-plugins"
   },
+  "org.sysc.faith": {
+    "category": "utilities",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
   "org.sysc.github-notifications": {
     "category": "productivity",
     "author": "Nomadcxx",
