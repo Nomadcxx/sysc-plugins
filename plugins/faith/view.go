@@ -23,8 +23,16 @@ func XrefNode(i int) string { return fmt.Sprintf("%s%d", nodeXrefPrefix, i) }
 // wrapped for the list's content width at the host's eight pixels per byte.
 const (
 	panelPadding    = 16
-	panelListHeight = 340
-	panelLineBytes  = 50
+	panelListHeight = 344
+	verseLineBytes  = 36
+	noteLineBytes   = 52
+	cardPadding     = 14
+	controlSize     = 36
+	controlPadding  = 12
+	chipHeight      = 30
+	chipPadding     = 10
+	chipGap         = 6
+	chipRowWidth    = 380
 	tooltipLines    = 2
 	tooltipBytes    = 33
 	// MaxCommentaryLines caps a commentary entry in the panel.
@@ -87,80 +95,113 @@ func TooltipTree(ref Ref, verse string) *v1.Node {
 	return &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: children}
 }
 
-// PanelTree is the reading panel: the reference and controls stay put, and
-// the verse, commentary, and cross-references scroll beneath them.
+// PanelTree is the reading panel: the reference above a scrolling list that
+// holds the verse in a card, the commentary, and the cross-references, with
+// the controls fixed along the foot.
 func PanelTree(m PanelModel) *v1.Node {
 	header := &v1.Node{Kind: v1.KindRow, PinEnd: true, Gap: 8, Children: []*v1.Node{
-		{Kind: v1.KindText, Key: "ref", Text: m.Ref.String(), Tone: v1.ToneAccent, Bold: true, Size: "title"},
+		{Kind: v1.KindText, Key: "ref", Text: m.Ref.String(), Tone: v1.ToneAccent, Bold: true, Size: "headline"},
 		{Kind: v1.KindText, Text: m.Translation, Tone: v1.ToneSubtle, Size: "caption"},
 	}}
-	controls := &v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
-		iconButton(NodePrev, "chevron_left", "Previous verse", !m.CanPrev),
-		iconButton(NodeNext, "chevron_right", "Next verse", !m.CanNext),
-		iconButton(NodeNew, "refresh", "New verse", false),
-	}}
-	if m.CanRead {
-		controls.Children = append(controls.Children, iconButton(NodeRead, "menu_book", "Read the chapter in a browser", false))
-	}
 
-	body := &v1.Node{Kind: v1.KindList, Key: "body", Height: panelListHeight, Gap: 4}
-	for _, l := range Wrap(m.Verse, panelLineBytes) {
-		body.Children = append(body.Children, &v1.Node{Kind: v1.KindText, Text: l})
+	card := &v1.Node{Kind: v1.KindColumn, Key: "verse", Fill: "card", Radius: 12, Padding: cardPadding, Gap: 4}
+	for _, l := range Wrap(m.Verse, verseLineBytes) {
+		card.Children = append(card.Children, &v1.Node{Kind: v1.KindText, Text: l, Size: "title"})
 	}
+	body := &v1.Node{Kind: v1.KindList, Key: "body", Height: panelListHeight, Gap: 6, Children: []*v1.Node{card}}
 	if m.Commentary != CommentaryOff {
-		body.Children = append(body.Children, &v1.Node{Kind: v1.KindSeparator}, sectionHead("description", "Commentary"))
+		body.Children = append(body.Children, sectionHead("description", "Commentary · Adam Clarke"))
 		body.Children = append(body.Children, commentaryNodes(m)...)
 	}
-	body.Children = append(body.Children, &v1.Node{Kind: v1.KindSeparator}, sectionHead("link", "See also"))
+	body.Children = append(body.Children, sectionHead("link", "See also"))
 	if len(m.Xrefs) == 0 {
 		body.Children = append(body.Children, subtle("No cross-references for this verse."))
 	}
-	for i, r := range m.Xrefs {
-		body.Children = append(body.Children, &v1.Node{
-			Kind: v1.KindButton, ID: XrefNode(i), Text: r.String(),
-			Name: "Go to " + r.String(), Role: "button", Events: []v1.EventKind{v1.EventActivate},
-		})
-	}
+	body.Children = append(body.Children, chipRows(m.Xrefs)...)
 	body.Children = append(body.Children, subtle("Cross-references: OpenBible.info, CC BY"))
 
-	return &v1.Node{Kind: v1.KindColumn, Padding: panelPadding, Gap: 8, Children: []*v1.Node{header, controls, body}}
+	nav := &v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
+		squareButton(NodePrev, "chevron_left", "Previous verse", !m.CanPrev),
+		squareButton(NodeNext, "chevron_right", "Next verse", !m.CanNext),
+		labelButton(NodeNew, "refresh", "New verse", "New verse"),
+	}}
+	controls := nav
+	if m.CanRead {
+		controls = &v1.Node{Kind: v1.KindRow, PinEnd: true, Gap: 6, Children: []*v1.Node{
+			nav, labelButton(NodeRead, "menu_book", "Read chapter", "Read the chapter in a browser"),
+		}}
+	}
+	return &v1.Node{Kind: v1.KindColumn, Padding: panelPadding, Gap: 10, Children: []*v1.Node{header, body, controls}}
+}
+
+// chipRows packs cross-reference chips into rows that fit the list's width,
+// measuring each the way the host does: eight pixels a byte plus padding.
+func chipRows(refs []Ref) []*v1.Node {
+	var rows []*v1.Node
+	var row *v1.Node
+	used := 0
+	for i, r := range refs {
+		label := r.String()
+		w := len(label)*8 + 2*chipPadding
+		if row == nil || used+chipGap+w > chipRowWidth {
+			row = &v1.Node{Kind: v1.KindRow, Gap: chipGap}
+			rows = append(rows, row)
+			used = -chipGap
+		}
+		used += chipGap + w
+		row.Children = append(row.Children, &v1.Node{
+			Kind: v1.KindButton, ID: XrefNode(i), Text: label, Fill: "chip",
+			Height: chipHeight, Padding: chipPadding,
+			Name: "Go to " + label, Role: "button", Events: []v1.EventKind{v1.EventActivate},
+		})
+	}
+	return rows
 }
 
 func commentaryNodes(m PanelModel) []*v1.Node {
 	switch m.Commentary {
 	case CommentaryLoading:
-		return []*v1.Node{subtle("Loading Adam Clarke's commentary…")}
+		return []*v1.Node{subtle("Loading…")}
 	case CommentaryNone:
 		return []*v1.Node{subtle("Adam Clarke has no note on this verse.")}
 	case CommentaryUnavailable:
 		return []*v1.Node{subtle("Commentary unavailable offline.")}
 	}
-	lines := Wrap(m.Note, panelLineBytes)
+	lines := Wrap(m.Note, noteLineBytes)
 	shortened := len(lines) > MaxCommentaryLines
 	if shortened {
 		lines = lines[:MaxCommentaryLines]
 	}
-	out := make([]*v1.Node, 0, len(lines)+2)
+	out := make([]*v1.Node, 0, len(lines)+1)
 	for _, l := range lines {
-		out = append(out, &v1.Node{Kind: v1.KindText, Text: l})
+		out = append(out, &v1.Node{Kind: v1.KindText, Text: l, Tone: v1.ToneSubtle, Size: "caption"})
 	}
 	if shortened {
 		out = append(out, subtle("Shortened. The full note is online."))
 	}
-	return append(out, subtle("Adam Clarke (1762–1832), public domain"))
+	return out
 }
 
-func iconButton(id, icon, name string, disabled bool) *v1.Node {
+// squareButton is an icon-only control at the panel's control size.
+func squareButton(id, icon, name string, disabled bool) *v1.Node {
 	return &v1.Node{
-		Kind: v1.KindButton, ID: id, Key: id, Icon: icon, Name: name, Role: "button",
-		Disabled: disabled, Events: []v1.EventKind{v1.EventActivate},
+		Kind: v1.KindButton, ID: id, Key: id, Icon: icon, Name: name, Role: "button", Fill: "soft",
+		Width: controlSize, Height: controlSize, Disabled: disabled, Events: []v1.EventKind{v1.EventActivate},
+	}
+}
+
+// labelButton is an icon and a label at the panel's control size.
+func labelButton(id, icon, text, name string) *v1.Node {
+	return &v1.Node{
+		Kind: v1.KindButton, ID: id, Key: id, Icon: icon, Text: text, Name: name, Role: "button", Fill: "soft",
+		Height: controlSize, Padding: controlPadding, Events: []v1.EventKind{v1.EventActivate},
 	}
 }
 
 func sectionHead(icon, title string) *v1.Node {
 	return &v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
 		{Kind: v1.KindIcon, Icon: icon},
-		{Kind: v1.KindText, Text: title, Bold: true},
+		{Kind: v1.KindText, Text: title, Tone: v1.ToneSubtle, Size: "label", Bold: true},
 	}}
 }
 

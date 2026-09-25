@@ -93,16 +93,23 @@ naming the source ("Matthew 6:9–13, BSB"). Urgency is `low`. Timeout comes fro
 
 ### Panel
 
-Attached, 440×460 in the manifest. From the top:
+Attached, 440×460 in the manifest. The layout is option A ("Scripture card"), chosen on
+2026-09-25 from three options rendered through sysc-shell's painter. From the top:
 
-1. Header row: reference (title, accent) and translation abbreviation (caption, subtle, pinned
-   end).
-2. Control row: previous verse, next verse, new verse, and "Read chapter" in the browser
-   (`xdg-open` to biblehub.com). It stays above the scrolling list so the controls never scroll
-   away.
-3. A `list` holding the verse text (wrapped); then a separator and "Commentary" with the entry
-   (wrapped, at most 40 lines) or a one-line status; then a separator and "See also" with up to
-   five cross-reference buttons and the OpenBible.info credit.
+1. Header row: reference (headline, accent) and translation abbreviation (caption, subtle,
+   pinned end).
+2. A `list` holding:
+   - the verse in a `card`-filled, rounded column at title size;
+   - "Commentary · Adam Clarke" with the entry in subtle caption text (at most 40 lines) or a
+     one-line status;
+   - "See also" with cross-references as chips, packed into rows by their measured width, and
+     the OpenBible.info credit.
+3. A control row pinned to the foot: square 36px previous and next buttons and a 36px "New
+   verse" button, with "Read chapter" (biblehub.com via `xdg-open`) pinned to the end. Every
+   control uses the `soft` fill and 12px of horizontal padding.
+
+The panel draws no background of its own, so it inherits the shell's backdrop blur when the
+theme enables it, like every other panel.
 
 The previous and next buttons are disabled at Genesis 1:1 and Revelation 22:21. Every layout is
 checked by `plugin/lint` at 440×460.
