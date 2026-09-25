@@ -1,6 +1,6 @@
 # Design and Plan Register
 
-Last updated: 2026-09-24.
+Last updated: 2026-09-25.
 
 Every design, plan, and handover this project has produced, with where it lives and what it is for.
 Add a row here in the same commit that adds a document. A document that is not in this register is
@@ -65,3 +65,6 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-25-world-clock-design.md` | design | Approved World Clock redesign: audit of v1.2.0, city search, relative-to-local readings, labelled zones with bar visibility, four bar modes, minute-aligned ticking, and the two shell glyphs it needs. |
 | `2026-09-25-world-clock.md` | plan | Test-first sequence for the World Clock redesign: shell glyphs and pin repair, zone model and migration, search index, relative readings, panel, bar modes, event loop, and live acceptance. |
 | `2026-09-25-world-clock-handover.md` | handover | Open: the World Clock review's deferred minor findings (D1–D10) plus a user-approved polish and visual round, with deploy state, constraints, and acceptance. |
+| `2026-09-25-faith-design.md` | design | Faith, a Christian devotional plugin: a cross bar glyph that gives a bundled public-domain prayer on click, and a verse panel over the Free Use Bible API with commentary and cross-references. |
+| `2026-09-25-faith.md` | plan | The offline-first Faith TDD sequence: the shell glyphs (landed), a generator that bundles BSB, WEB, KJV and OpenBible cross-references, the store and pool, the commentary client, prayers, views, the process wiring, the gate, and a closing bd handover. |
+| `2026-09-25-faith-bd-handover.md` | handover | Faith work to record in bd: completed tasks with commits and suggested close reasons, the shell-release gate, the live check, and sandbox-only failures that predate the work. |

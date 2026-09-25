@@ -1,0 +1,39 @@
+{
+    "commentary": {
+        "id": "adam-clarke",
+        "name": "Adam Clarke Bible Commentary",
+        "licenseUrl": "https://creativecommons.org/publicdomain/mark/1.0/",
+        "englishName": "Adam Clarke Bible Commentary",
+        "language": "eng"
+    },
+    "book": {"id": "GEN", "commentaryId": "adam-clarke", "name": "Genesis", "commonName": "Genesis", "order": 1, "numberOfChapters": 50},
+    "thisChapterLink": "/api/c/adam-clarke/GEN/1.json",
+    "nextChapterApiLink": "/api/c/adam-clarke/GEN/2.json",
+    "previousChapterApiLink": null,
+    "numberOfVerses": 31,
+    "chapter": {
+        "number": 1,
+        "introduction": "The creation of the heavens and the earth.",
+        "content": [
+            {
+                "type": "verse",
+                "number": 1,
+                "content": [
+                    "God in the beginning created the heavens and the earth - Bereshith bara Elohim.\nIn the beginning - Before the creative acts mentioned in this chapter all was Eternity."
+                ]
+            },
+            {
+                "type": "verse",
+                "number": 2,
+                "content": [
+                    {"text": "Without form, and void -"},
+                    " the original materials of all things.",
+                    {"lineBreak": true},
+                    {"noteId": 3},
+                    {"heading": "The Spirit"},
+                    "The Spirit of God moved."
+                ]
+            }
+        ]
+    }
+}
