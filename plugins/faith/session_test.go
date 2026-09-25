@@ -190,6 +190,10 @@ func TestPersistedRoundTrip(t *testing.T) {
 	if s2.ref.Key() != "ROM 8:38-39" || s2.bag.Pos != 1 || s2.bag.Last != s.bag.Last {
 		t.Fatalf("restored %s, bag %+v", s2.ref.Key(), s2.bag)
 	}
+	s2.Restore(Persisted{Ref: &Ref{}})
+	if s2.ref.Key() != "ROM 8:38-39" {
+		t.Fatal("a zero reference (a stored null) replaced the current one")
+	}
 	s2.Restore(Persisted{Ref: &Ref{Book: 99, Chapter: 1, Verse: 1}})
 	if s2.ref.Key() != "ROM 8:38-39" {
 		t.Fatal("a corrupt reference replaced the current one")

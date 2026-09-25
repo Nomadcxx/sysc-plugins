@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -28,6 +29,26 @@ func TestWrap(t *testing.T) {
 				t.Fatalf("Wrap(%q, %d) = %q, want %q", tc.in, tc.max, got, tc.want)
 			}
 		})
+	}
+}
+
+// A word that opens with continuation bytes has no rune boundary to cut
+// at; the split must still make progress rather than spin.
+func TestWrapTerminatesOnInvalidUTF8(t *testing.T) {
+	done := make(chan []string, 1)
+	go func() { done <- Wrap("\x80\x80\x80\x80\x80\x80\x80\x80\x80 ok", 4) }()
+	select {
+	case got := <-done:
+		if len(got) != 3 || !strings.HasSuffix(got[2], "ok") {
+			t.Fatalf("got %q", got)
+		}
+		for _, l := range got {
+			if len(l) > 4 {
+				t.Fatalf("line %q exceeds the limit", l)
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Wrap did not terminate on invalid UTF-8")
 	}
 }
 

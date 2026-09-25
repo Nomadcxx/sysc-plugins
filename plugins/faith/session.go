@@ -199,6 +199,10 @@ func (s *Session) Input(ev *v1.InputEvent, now time.Time) []Effect {
 	return nil
 }
 
+// pray draws the next prayer. A Scripture prayer whose passage the current
+// translation lacks is skipped, and its turn in the bag is spent, rather than
+// sending an empty notification; every bundled passage exists in all three
+// translations (TestPrayerCorpusIsWellFormed), so this is a guard, not a path.
 func (s *Session) pray() []Effect {
 	for range len(Prayers) {
 		p := s.bag.Draw(s.rng, s.settings.Tradition)

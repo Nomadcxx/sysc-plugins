@@ -87,3 +87,28 @@ func TestCommentaryCacheIsBounded(t *testing.T) {
 		t.Fatalf("cache holds %d chapters, want %d", c.Cached(), commentaryChapters)
 	}
 }
+
+func TestCommentaryCacheEvictsTheLeastRecentlyUsed(t *testing.T) {
+	srv, hits := commentaryServer(t)
+	c := NewCommentary(srv.URL + "/api")
+	get := func(ch int) {
+		t.Helper()
+		if _, _, err := c.Entry(context.Background(), Ref{Book: 1, Chapter: ch, Verse: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for ch := 1; ch <= commentaryChapters; ch++ {
+		get(ch)
+	}
+	get(1)                      // Exodus 1 is now the most recently used.
+	get(commentaryChapters + 1) // so Exodus 2 is the one evicted.
+	before := hits.Load()
+	get(1)
+	if hits.Load() != before {
+		t.Fatal("a recently used chapter was evicted")
+	}
+	get(2)
+	if hits.Load() != before+1 {
+		t.Fatal("the least recently used chapter was kept")
+	}
+}

@@ -31,7 +31,7 @@ type StatusError struct{ Code int }
 func (e *StatusError) Error() string { return fmt.Sprintf("faith: commentary: HTTP %d", e.Code) }
 
 // Commentary fetches Adam Clarke's commentary a chapter at a time and keeps
-// the most recent chapters in memory.
+// the most recently used chapters in memory.
 type Commentary struct {
 	Base string
 	HTTP *http.Client
@@ -59,6 +59,9 @@ func (c *Commentary) Entry(ctx context.Context, r Ref) (text string, found bool,
 	key := fmt.Sprintf("%s/%d", Books[r.Book].Code, r.Chapter)
 	c.mu.Lock()
 	ch, ok := c.cache[key]
+	if ok {
+		c.touch(key)
+	}
 	c.mu.Unlock()
 	if !ok {
 		ch, err = c.fetch(ctx, r)
@@ -71,10 +74,22 @@ func (c *Commentary) Entry(ctx context.Context, r Ref) (text string, found bool,
 	return text, found, nil
 }
 
+// touch moves key to the most recently used end. The caller holds c.mu.
+func (c *Commentary) touch(key string) {
+	for i, k := range c.order {
+		if k == key {
+			c.order = append(append(c.order[:i:i], c.order[i+1:]...), key)
+			return
+		}
+	}
+}
+
 func (c *Commentary) store(key string, ch map[int]string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.cache[key]; !ok {
+	if _, ok := c.cache[key]; ok {
+		c.touch(key)
+	} else {
 		c.order = append(c.order, key)
 	}
 	c.cache[key] = ch

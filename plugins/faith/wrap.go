@@ -26,6 +26,12 @@ func Wrap(text string, maxBytes int) []string {
 				for cut > 0 && !utf8.RuneStart(word[cut]) {
 					cut--
 				}
+				if cut == 0 {
+					// No rune starts inside the line: the word opens with
+					// stray continuation bytes. Cut at the byte limit so
+					// the loop always advances.
+					cut = maxBytes
+				}
 				out = append(out, word[:cut])
 				word = word[cut:]
 			}

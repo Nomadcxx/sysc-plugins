@@ -306,6 +306,28 @@ func TestRestartRestoresTheBag(t *testing.T) {
 	})
 }
 
+func TestShutdownFlushesPendingState(t *testing.T) {
+	state := map[string]json.RawMessage{}
+	h := startPlugin(t, state, offline())
+	h.open("bar-1", v1.ViewBar)
+	h.waitFor("the bar", func() bool { return h.roots["bar-1"] != nil })
+	h.input("bar-1", "cross", v1.EventActivate, "")
+	if err := h.send(&v1.HostShutdown{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-h.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("plugin did not exit")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var bag struct{ Pos int }
+	if json.Unmarshal(state["bag"], &bag) != nil || bag.Pos != 1 {
+		t.Fatalf("the prayer before shutdown was not saved: bag = %s", state["bag"])
+	}
+}
+
 func TestSettingsChangeTheBar(t *testing.T) {
 	h := startPlugin(t, nil, offline())
 	h.open("bar-1", v1.ViewBar)

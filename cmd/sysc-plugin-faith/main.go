@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"os"
@@ -38,6 +40,7 @@ func main() {
 		},
 	}
 	if err := run(os.Stdin, os.Stdout, opt); err != nil {
+		fmt.Fprintln(os.Stderr, "sysc-plugin-faith:", err)
 		os.Exit(1)
 	}
 }
@@ -180,6 +183,9 @@ func run(in io.Reader, out io.Writer, opt options) error {
 			}
 			switch m := msg.(type) {
 			case *v1.HostShutdown:
+				// A prayer or a step just before shutdown must still reach
+				// host state; the deferred cancel would abort its write.
+				saves.flush(time.Second)
 				return nil
 			case *v1.ViewOpen:
 				views[m.ViewID] = &view{kind: m.View}
@@ -224,6 +230,10 @@ func restore(ctx context.Context, c *v1.Client) faith.Persisted {
 		if json.Unmarshal(reply.Result, &res) != nil || !res.Found {
 			return false
 		}
+		// A stored null decodes cleanly into a zero value; it is no state.
+		if bytes.Equal(bytes.TrimSpace(res.Value), []byte("null")) {
+			return false
+		}
 		return json.Unmarshal(res.Value, dst) == nil
 	}
 	var ref faith.Ref
@@ -238,15 +248,19 @@ func restore(ctx context.Context, c *v1.Client) faith.Persisted {
 }
 
 // saver writes the latest state on its own goroutine; a burst of saves
-// collapses into the last one.
+// collapses into the last one. write serialises a write with flush, so a
+// flush never races the goroutine for the same pending state.
 type saver struct {
+	c       *v1.Client
+	ctx     context.Context
 	mu      sync.Mutex
 	pending *faith.Persisted
 	signal  chan struct{}
+	write   sync.Mutex
 }
 
 func newSaver(ctx context.Context, c *v1.Client) *saver {
-	s := &saver{signal: make(chan struct{}, 1)}
+	s := &saver{c: c, ctx: ctx, signal: make(chan struct{}, 1)}
 	go func() {
 		for {
 			select {
@@ -254,22 +268,7 @@ func newSaver(ctx context.Context, c *v1.Client) *saver {
 				return
 			case <-s.signal:
 			}
-			s.mu.Lock()
-			p := s.pending
-			s.pending = nil
-			s.mu.Unlock()
-			if p == nil {
-				continue
-			}
-			for key, val := range map[string]any{keyRef: p.Ref, keyBag: p.Bag} {
-				raw, err := json.Marshal(val)
-				if err != nil {
-					continue
-				}
-				cctx, done := context.WithTimeout(ctx, 3*time.Second)
-				_, _ = c.Call(cctx, v1.CallStateSet, v1.StateSetParams{Key: key, Value: raw})
-				done()
-			}
+			s.drain(ctx, 3*time.Second)
 		}
 	}()
 	return s
@@ -282,5 +281,34 @@ func (s *saver) put(p faith.Persisted) {
 	select {
 	case s.signal <- struct{}{}:
 	default:
+	}
+}
+
+// flush writes any pending state now, waiting at most timeout per key.
+func (s *saver) flush(timeout time.Duration) {
+	s.drain(context.WithoutCancel(s.ctx), timeout)
+}
+
+func (s *saver) drain(ctx context.Context, timeout time.Duration) {
+	s.write.Lock()
+	defer s.write.Unlock()
+	s.mu.Lock()
+	p := s.pending
+	s.pending = nil
+	s.mu.Unlock()
+	if p == nil {
+		return
+	}
+	for _, kv := range []struct {
+		key string
+		val any
+	}{{keyRef, p.Ref}, {keyBag, p.Bag}} {
+		raw, err := json.Marshal(kv.val)
+		if err != nil {
+			continue
+		}
+		cctx, done := context.WithTimeout(ctx, timeout)
+		_, _ = s.c.Call(cctx, v1.CallStateSet, v1.StateSetParams{Key: kv.key, Value: raw})
+		done()
 	}
 }
