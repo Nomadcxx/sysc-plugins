@@ -62,15 +62,24 @@ func Decode(raw []byte) ([]Zone, error) {
 		if json.Unmarshal(item, &id) == nil {
 			z = Zone{ID: id, OnBar: true}
 		} else {
-			var o struct {
-				ID    string `json:"id"`
-				Label string `json:"label"`
-				OnBar *bool  `json:"on_bar"`
-			}
-			if json.Unmarshal(item, &o) != nil {
+			var fields map[string]json.RawMessage
+			if json.Unmarshal(item, &fields) != nil {
 				continue
 			}
-			z = Zone{ID: o.ID, Label: clampLabel(o.Label), OnBar: o.OnBar == nil || *o.OnBar}
+			if json.Unmarshal(fields["id"], &id) != nil {
+				continue
+			}
+			z = Zone{ID: id, OnBar: true}
+			var label string
+			if json.Unmarshal(fields["label"], &label) == nil {
+				z.Label = clampLabel(label)
+			}
+			var onBar any
+			if json.Unmarshal(fields["on_bar"], &onBar) == nil {
+				if value, ok := onBar.(bool); ok {
+					z.OnBar = value
+				}
+			}
 		}
 		if !ValidZone(z.ID) || seen[z.ID] {
 			continue

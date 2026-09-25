@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -238,7 +239,7 @@ func (s *session) suggestions() []worldclock.Suggestion {
 		return nil
 	}
 	var out []worldclock.Suggestion
-	for _, m := range s.env.index.Search(s.query, maxSuggestions*2) {
+	for _, m := range s.searchMatches(maxSuggestions) {
 		if s.store.Has(m.ID) {
 			continue
 		}
@@ -254,19 +255,41 @@ func (s *session) suggestions() []worldclock.Suggestion {
 	return out
 }
 
+// searchMatches returns enough ranked results to skip every added zone while
+// still finding the first five visible suggestions.
+func (s *session) searchMatches(limit int) []worldclock.Match {
+	return s.env.index.Search(s.query, len(s.store.Zones())+limit)
+}
+
+func (s *session) noSuggestionsText() string {
+	matches := s.searchMatches(1)
+	if len(matches) == 0 {
+		return "No matching zone"
+	}
+	return matches[0].City + " is already in the list"
+}
+
 func (s *session) panelState(readings []worldclock.Reading) worldclock.PanelState {
-	errText := s.saveErr
-	if errText == "" {
-		errText = s.addErr
+	var errs []string
+	if s.saveErr != "" {
+		errs = append(errs, s.saveErr)
+	}
+	if s.addErr != "" {
+		errs = append(errs, s.addErr)
 	}
 	notice := ""
 	if s.env.index.Limited() {
 		notice = "Limited search: tz tables not found"
 	}
+	suggestions := s.suggestions()
+	noMatches := ""
+	if s.query != "" && len(suggestions) == 0 {
+		noMatches = s.noSuggestionsText()
+	}
 	return worldclock.PanelState{
-		Readings: readings, Query: s.query, QueryReseed: s.queryReseed, Suggestions: s.suggestions(),
+		Readings: readings, Query: s.query, QueryReseed: s.queryReseed, Suggestions: suggestions,
 		PendingDelete: s.store.PendingDelete(), Renaming: s.store.Renaming(),
-		RenameDraft: s.renameDraft, RenameReseed: s.renameGen, Error: errText, Notice: notice,
+		RenameDraft: s.renameDraft, RenameReseed: s.renameGen, Errors: errs, NoMatches: noMatches, HideNoMatches: s.addErr != "", Notice: notice,
 	}
 }
 
@@ -351,7 +374,7 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	node := m.Node
 	id := node[strings.Index(node, ":")+1:]
 	switch {
-	case node == "open":
+	case node == "open" && m.Event == v1.EventActivate:
 		_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
 	case node == "search":
 		if m.Revision < s.searchFloor[m.ViewID] {
@@ -367,7 +390,9 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 		s.addPick(ctx, id)
 	case strings.HasPrefix(node, "drop:") && m.Event == v1.EventDrop:
 		s.ensureLoaded(ctx)
+		before := s.store.Zones()
 		if at, err := strconv.Atoi(id); err == nil && s.store.Reorder(m.Text, at) {
+			s.resetCycleIfBarChanged(before)
 			s.save(ctx)
 		}
 	case strings.HasPrefix(node, "bar:"):
@@ -393,7 +418,9 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 		s.store.ProposeDelete(id)
 	case node == "del-ok":
 		s.ensureLoaded(ctx)
+		before := s.store.Zones()
 		if s.store.ConfirmDelete() {
+			s.resetCycleIfBarChanged(before)
 			s.save(ctx)
 		}
 	}
@@ -404,12 +431,18 @@ func (s *session) addTop(ctx context.Context) {
 	if q == "" {
 		return
 	}
-	top := s.env.index.Search(q, 1)
-	if len(top) == 0 {
+	matches := s.searchMatches(1)
+	if len(matches) == 0 {
 		s.addErr = fmt.Sprintf("No zone matches %q", q)
 		return
 	}
-	s.add(ctx, top[0])
+	for _, m := range matches {
+		if !s.store.Has(m.ID) {
+			s.add(ctx, m)
+			return
+		}
+	}
+	s.addErr = matches[0].City + " is already in the list"
 }
 
 func (s *session) addPick(ctx context.Context, id string) {
@@ -424,6 +457,7 @@ func (s *session) addPick(ctx context.Context, id string) {
 
 func (s *session) add(ctx context.Context, m worldclock.Match) {
 	s.ensureLoaded(ctx)
+	before := s.store.Zones()
 	label := ""
 	if m.Alias {
 		label = m.City
@@ -434,9 +468,25 @@ func (s *session) add(ctx context.Context, m worldclock.Match) {
 	case err != nil:
 		s.addErr = fmt.Sprintf("No zone matches %q", strings.TrimSpace(s.query))
 	default:
+		s.resetCycleIfBarChanged(before)
 		s.query, s.addErr = "", ""
 		s.queryReseed++
 		s.save(ctx)
+	}
+}
+
+func (s *session) resetCycleIfBarChanged(before []worldclock.Zone) {
+	barIDs := func(zones []worldclock.Zone) []string {
+		var ids []string
+		for _, z := range zones {
+			if z.OnBar {
+				ids = append(ids, z.ID)
+			}
+		}
+		return ids
+	}
+	if !slices.Equal(barIDs(before), barIDs(s.store.Zones())) {
+		s.cycle = 0
 	}
 }
 

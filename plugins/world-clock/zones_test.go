@@ -43,6 +43,22 @@ func TestDecodeObjectsDefaultsOnBarAndClampsLabel(t *testing.T) {
 	}
 }
 
+func TestDecodeKeepsZonesWithMalformedOptionalFields(t *testing.T) {
+	t.Parallel()
+	got, err := Decode([]byte(`[{"id":"Asia/Tokyo","label":5,"on_bar":false},{"id":"Europe/Paris","label":"Office","on_bar":"yes"},{"id":"Australia/Sydney","label":null,"on_bar":null},{"id":5,"label":"bad id"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Zone{
+		{ID: "Asia/Tokyo", OnBar: false},
+		{ID: "Europe/Paris", Label: "Office", OnBar: true},
+		{ID: "Australia/Sydney", OnBar: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("zones = %+v, want %+v", got, want)
+	}
+}
+
 func TestDecodeEmptyListStaysEmpty(t *testing.T) {
 	t.Parallel()
 	got, err := Decode([]byte(`[]`))

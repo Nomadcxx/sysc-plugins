@@ -36,12 +36,12 @@ func loadLocation(id string) (*time.Location, error) {
 }
 
 func Read(z Zone, now time.Time, local *time.Location, hour24 bool) (Reading, error) {
-	if !ValidZone(z.ID) {
+	if z.ID == "" || z.ID == "Local" {
 		return Reading{}, fmt.Errorf("%w: %q", ErrInvalidZone, z.ID)
 	}
 	loc, err := loadLocation(z.ID)
 	if err != nil {
-		return Reading{}, err
+		return Reading{}, fmt.Errorf("%w: %q", ErrInvalidZone, z.ID)
 	}
 	there, here := now.In(loc), now.In(local)
 	_, zoneOff := there.Zone()

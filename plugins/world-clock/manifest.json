@@ -41,7 +41,7 @@
       "options": [
         {"value": "icon", "label": "Globe only"},
         {"value": "primary", "label": "First clock"},
-        {"value": "all", "label": "All bar clocks"},
+        {"value": "all", "label": "As many clocks as fit"},
         {"value": "cycle", "label": "Cycle through clocks"}
       ]},
     {"key": "cycle_seconds", "type": "int", "label": "Cycle interval (seconds)", "default": 15, "min": 3, "max": 120}

@@ -115,7 +115,11 @@ func NewIndex(zoneTab, isoTab, tzdata io.Reader) *Index {
 	})
 	eachLine(tzdata, func(line string) {
 		if f := strings.Fields(line); len(f) == 3 && f[0] == "L" {
-			ix.ids[fold(f[2])] = f[2]
+			target, name := f[1], f[2]
+			if strings.Contains(name, "/") || name == "UTC" {
+				ix.ids[fold(name)] = target
+			}
+			ix.add(Match{ID: target, City: ShortLabel(name), Country: ix.country[target], Alias: true})
 		}
 	})
 	ix.ids["utc"] = "UTC"
@@ -143,6 +147,7 @@ func (ix *Index) Limited() bool { return ix.limited }
 const (
 	rankExactID = iota
 	rankExactName
+	rankExactCountry
 	rankCityPrefix
 	rankAliasPrefix
 	rankCountry
@@ -153,6 +158,8 @@ func (e entry) rank(q string) (int, bool) {
 	switch {
 	case e.cityKey == q:
 		return rankExactName, true
+	case e.countryKey != "" && e.countryKey == q:
+		return rankExactCountry, true
 	case !e.Alias && wordPrefix(e.cityKey, q):
 		return rankCityPrefix, true
 	case e.Alias && wordPrefix(e.cityKey, q):

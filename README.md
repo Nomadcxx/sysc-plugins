@@ -30,7 +30,7 @@ After `make install`, enable plugins from sysc-shell's Plugins manager panel
 | Screen Recorder | `org.sysc.screen-recorder` | first sweep | extracted from sysc-shell |
 | Notes | `org.sysc.notes` | first sweep | extracted from sysc-shell |
 | Timer | `org.sysc.timer` | UI rebuild started | extracted from sysc-shell + noctalia deltas |
-| World Clock | `org.sysc.world-clock` | 2.0.0 redesign | city search, labels, bar modes; see docs/plans/2026-09-25-world-clock-design.md |
+| World Clock | `org.sysc.world-clock` | 2.0.0 redesign | city search, labels, bar modes; requires sysc-shell commit `f77226a` or later; see docs/plans/2026-09-25-world-clock-design.md |
 | Calendar | `org.sysc.calendar` | first sweep | port of the built-in clock-panel calendar |
 | GitHub Notifications | `org.sysc.github-notifications` | 0.2.0 | port of noctalia community plugin |
 | Mini Docker | `org.sysc.mini-docker` | 0.2.0 | port of noctalia community plugin |
@@ -45,6 +45,8 @@ against the noctalia plugins as prior art (layout, density, interaction
 patterns), now that iteration happens in this repo. The 0.1.0 ports are
 skeletons by design. Wallpaper Depth 1.0.0 tracks active image wallpapers and
 supplies depth masks for the shell's centred clock.
+
+World Clock 2.0.0 stores zones as objects. Version 1.2.0 cannot read that state; its next save overwrites the zone list.
 
 The protocol grew for this work: plugin/v1 minor 1 adds `subtle` and
 `accent` text tones (muted foreground and theme accent) and the host now

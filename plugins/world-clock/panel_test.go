@@ -64,9 +64,9 @@ func TestPanelLintEveryState(t *testing.T) {
 		"empty":       {},
 		"zones":       {Readings: sampleReadings()},
 		"eight":       {Readings: many},
-		"error":       {Readings: sampleReadings(), Error: "Couldn't save zones", Notice: "Limited search: tz tables not found"},
+		"error":       {Readings: sampleReadings(), Errors: []string{"Couldn't save zones"}, Notice: "Limited search: tz tables not found"},
 		"suggestions": {Query: "to", Suggestions: []Suggestion{{ID: "Asia/Tokyo", Title: "Tokyo · Japan · +9h"}, {ID: "America/Toronto", Title: "Toronto · Canada · −14h"}}},
-		"no-match":    {Query: "zzz"},
+		"no-match":    {Query: "zzz", NoMatches: "No matching zone"},
 		"renaming":    {Readings: sampleReadings(), Renaming: "Asia/Tokyo", RenameDraft: "Office"},
 		"deleting":    {Readings: sampleReadings(), PendingDelete: "UTC"},
 	}
@@ -148,7 +148,7 @@ func TestPanelInlineEdits(t *testing.T) {
 
 func TestPanelErrorAndNotice(t *testing.T) {
 	t.Parallel()
-	root := lintPanel(t, "error", PanelState{Error: "Couldn't save zones", Notice: "Limited search: tz tables not found"})
+	root := lintPanel(t, "error", PanelState{Errors: []string{"Couldn't save zones"}, Notice: "Limited search: tz tables not found"})
 	if !hasText(root, "Couldn't save zones", v1.ToneError) || !hasText(root, "Limited search: tz tables not found", v1.ToneSubtle) {
 		t.Fatal("error or notice missing")
 	}

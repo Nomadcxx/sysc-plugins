@@ -5,15 +5,17 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	worldclock "github.com/Nomadcxx/sysc-plugins/plugins/world-clock"
+	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-const zoneTab = "JP\t+353916+1394441\tAsia/Tokyo\nAU\t-3352+15113\tAustralia/Sydney\n"
-const isoTab = "AU\tAustralia\nJP\tJapan\n"
+const zoneTab = "JP\t+353916+1394441\tAsia/Tokyo\nAU\t-3352+15113\tAustralia/Sydney\nDE\t+5230+01322\tEurope/Berlin\nBM\t+3217-06446\tAtlantic/Bermuda\n"
+const isoTab = "AU\tAustralia\nJP\tJapan\nDE\tGermany\nBM\tBermuda\n"
 
 type harness struct {
 	t       *testing.T
@@ -21,6 +23,7 @@ type harness struct {
 	lines   chan []byte
 	done    chan error
 	stopped bool
+	nowMu   sync.Mutex
 	now     time.Time
 }
 
@@ -45,7 +48,7 @@ func startWith(t *testing.T, tweak func(*environment), getReply func(v1.HostCall
 	h := &harness{t: t, host: host, lines: make(chan []byte, 64), done: make(chan error, 1)}
 	h.now = time.Date(2026, 9, 15, 12, 0, 30, 0, time.UTC)
 	env := environment{
-		now: func() time.Time { return h.now }, local: time.UTC,
+		now: h.currentTime, local: time.UTC,
 		index:       worldclock.NewIndex(strings.NewReader(zoneTab), strings.NewReader(isoTab), nil),
 		callTimeout: 2 * time.Second,
 	}
@@ -74,6 +77,18 @@ func startWith(t *testing.T, tweak func(*environment), getReply func(v1.HostCall
 	return h
 }
 
+func (h *harness) currentTime() time.Time {
+	h.nowMu.Lock()
+	defer h.nowMu.Unlock()
+	return h.now
+}
+
+func (h *harness) advanceTime(d time.Duration) {
+	h.nowMu.Lock()
+	h.now = h.now.Add(d)
+	h.nowMu.Unlock()
+}
+
 func (h *harness) send(message any) {
 	h.t.Helper()
 	data, err := json.Marshal(message)
@@ -86,6 +101,10 @@ func (h *harness) send(message any) {
 }
 
 func (h *harness) next() []byte {
+	return h.nextWithin(3 * time.Second)
+}
+
+func (h *harness) nextWithin(timeout time.Duration) []byte {
 	h.t.Helper()
 	select {
 	case line, ok := <-h.lines:
@@ -93,7 +112,7 @@ func (h *harness) next() []byte {
 			h.t.Fatal("plugin output closed")
 		}
 		return line
-	case <-time.After(3 * time.Second):
+	case <-time.After(timeout):
 		h.t.Fatal("timed out waiting for plugin output")
 		return nil
 	}
@@ -102,7 +121,7 @@ func (h *harness) next() []byte {
 func (h *harness) nextCall(kind v1.CallKind) v1.HostCall {
 	h.t.Helper()
 	for {
-		line := h.next()
+		line := h.nextWithin(5 * time.Second)
 		var call v1.HostCall
 		if messageType(line) == v1.TypeHostCall && json.Unmarshal(line, &call) == nil && call.Call == kind {
 			return call
@@ -118,6 +137,17 @@ func (h *harness) snapshotWhere(ok func(*v1.Node) bool) v1.ViewSnapshot {
 		var s v1.ViewSnapshot
 		if messageType(line) == v1.TypeViewSnapshot && json.Unmarshal(line, &s) == nil && ok(s.Root) {
 			return s
+		}
+	}
+}
+
+func (h *harness) patchWhere(ok func(v1.ViewPatch) bool) v1.ViewPatch {
+	h.t.Helper()
+	for {
+		line := h.nextWithin(5 * time.Second)
+		var p v1.ViewPatch
+		if messageType(line) == v1.TypeViewPatch && json.Unmarshal(line, &p) == nil && ok(p) {
+			return p
 		}
 	}
 }
@@ -203,6 +233,27 @@ func TestPickSuggestionAddsZoneAndClearsSearch(t *testing.T) {
 	}
 }
 
+func TestBarOpenOnlyActivatesOnRelease(t *testing.T) {
+	h := start(t, nil)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "b", View: v1.ViewBar, Entry: "bar"})
+	h.snapshotWhere(func(n *v1.Node) bool { return find(n, "open") != nil })
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "b", Node: "open", Event: v1.EventPointer, Button: v1.ButtonPrimary})
+
+	select {
+	case line := <-h.lines:
+		var call v1.HostCall
+		if messageType(line) == v1.TypeHostCall && json.Unmarshal(line, &call) == nil && call.Call == v1.CallPanelOpen {
+			h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true})
+			t.Fatal("bar press opened the panel before release")
+		}
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "b", Node: "open", Event: v1.EventActivate})
+	call := h.nextCall(v1.CallPanelOpen)
+	h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true})
+}
+
 func TestSubmitDuplicateShowsError(t *testing.T) {
 	h := start(t, nil)
 	p := h.openPanel()
@@ -212,6 +263,46 @@ func TestSubmitDuplicateShowsError(t *testing.T) {
 	h.snapshotWhere(func(n *v1.Node) bool { return contains(n, `No zone matches "qqqq"`) })
 }
 
+func TestAddUsesFirstVisibleSuggestion(t *testing.T) {
+	for _, submit := range []bool{true, false} {
+		name := "add button"
+		if submit {
+			name = "Enter"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := start(t, nil)
+			p := h.openPanel()
+			h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "search", Event: v1.EventChange, Text: "ber"})
+			s := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "pick:Atlantic/Bermuda") != nil })
+			if !strings.Contains(find(s.Root, "pick:Atlantic/Bermuda").Text, "Bermuda") {
+				t.Fatal("Bermuda is not the first visible suggestion")
+			}
+			if submit {
+				h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: s.Revision, Node: "search", Event: v1.EventSubmit, Text: "ber"})
+			} else {
+				h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: s.Revision, Node: "add", Event: v1.EventActivate})
+			}
+			call := h.nextCall(v1.CallStateSet)
+			var params v1.StateSetParams
+			_ = json.Unmarshal(call.Params, &params)
+			h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true})
+			if strings.Count(string(params.Value), `"id":"Atlantic/Bermuda"`) != 1 || strings.Count(string(params.Value), `"id":"Europe/Berlin"`) != 1 {
+				t.Fatalf("added a hidden search result instead of the first visible suggestion: %s", params.Value)
+			}
+		})
+	}
+}
+
+func TestAllAddedSearchShowsCityInsteadOfNoMatches(t *testing.T) {
+	h := start(t, nil)
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "search", Event: v1.EventChange, Text: "tokyo"})
+	s := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "search") != nil && find(n, "search").Text == "tokyo" })
+	if !contains(s.Root, "Tokyo is already in the list") || contains(s.Root, "No matching zone") {
+		t.Fatalf("all-added state should explain the matching city: %+v", s.Root)
+	}
+}
+
 func TestFailedSaveShowsError(t *testing.T) {
 	h := start(t, nil)
 	p := h.openPanel()
@@ -219,6 +310,36 @@ func TestFailedSaveShowsError(t *testing.T) {
 	call := h.nextCall(v1.CallStateSet)
 	h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: false, Error: "disk full"})
 	h.snapshotWhere(func(n *v1.Node) bool { return contains(n, "Couldn't save zones") })
+}
+
+func TestSaveAndAddErrorsBothRenderInOrderAndFit(t *testing.T) {
+	h := start(t, nil)
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "bar:UTC", Event: v1.EventActivate})
+	call := h.nextCall(v1.CallStateSet)
+	h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: false, Error: "disk full"})
+	saved := h.snapshotWhere(func(n *v1.Node) bool { return contains(n, "Couldn't save zones") })
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: saved.Revision, Node: "search", Event: v1.EventSubmit, Text: "tokyo"})
+	panel := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "search") != nil && find(n, "search").Text == "tokyo" })
+
+	saveIndex, addIndex := -1, -1
+	for i, child := range panel.Root.Children {
+		if child.Kind != v1.KindText {
+			continue
+		}
+		switch child.Text {
+		case "Couldn't save zones":
+			saveIndex = i
+		case "Tokyo is already in the list":
+			addIndex = i
+		}
+	}
+	if saveIndex < 0 || addIndex < 0 || saveIndex >= addIndex {
+		t.Fatalf("save and add errors missing or out of order: %+v", panel.Root.Children)
+	}
+	if findings := shelllint.Tree(panel.Root, v1.ViewPanel, worldclock.PanelWidth, worldclock.PanelHeight); len(findings) != 0 {
+		t.Fatalf("two-error panel does not fit: %v", findings)
+	}
 }
 
 func TestStoredEmptyListStaysEmpty(t *testing.T) {
@@ -256,6 +377,59 @@ func TestSettingsSwitchBarMode(t *testing.T) {
 	h.snapshotWhere(func(n *v1.Node) bool { return find(n, "open") != nil && find(n, "open").Icon == "public" })
 }
 
+func startCyclingHarness(t *testing.T) *harness {
+	t.Helper()
+	h := start(t, nil)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "b", View: v1.ViewBar, Entry: "bar"})
+	h.snapshotWhere(func(n *v1.Node) bool { return find(n, "open") != nil })
+	h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopePlugin, Values: map[string]any{"bar_mode": "cycle", "cycle_seconds": 3.0}})
+	h.snapshotWhere(func(n *v1.Node) bool { return find(n, "open") != nil && find(n, "open").Text == "UTC 12:00" })
+	h.patchWhere(func(p v1.ViewPatch) bool {
+		return p.ViewID == "b" && len(p.Replacements) == 1 && p.Replacements[0].Key == "bar" && p.Replacements[0].Node.Text == "New York 08:00"
+	})
+	return h
+}
+
+func TestCycleResetsAfterAddingOnBarZone(t *testing.T) {
+	h := startCyclingHarness(t)
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "search", Event: v1.EventChange, Text: "syd"})
+	s := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "pick:Australia/Sydney") != nil })
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: s.Revision, Node: "pick:Australia/Sydney", Event: v1.EventActivate})
+	call := h.nextCall(v1.CallStateSet)
+	h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true})
+	bar := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "open") != nil })
+	if got := find(bar.Root, "open").Text; got != "UTC 12:00" {
+		t.Fatalf("bar after adding a zone = %q, want cycle to reset to UTC", got)
+	}
+}
+
+func TestCycleResetsAfterDeletingOnBarZone(t *testing.T) {
+	h := startCyclingHarness(t)
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "del:America/New_York", Event: v1.EventActivate})
+	d := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "del-ok") != nil })
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: d.Revision, Node: "del-ok", Event: v1.EventActivate})
+	call := h.nextCall(v1.CallStateSet)
+	h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true})
+	bar := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "open") != nil })
+	if got := find(bar.Root, "open").Text; got != "UTC 12:00" {
+		t.Fatalf("bar after deleting a zone = %q, want cycle to reset to UTC", got)
+	}
+}
+
+func TestCycleResetsAfterReorderingOnBarZones(t *testing.T) {
+	h := startCyclingHarness(t)
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "drop:0", Event: v1.EventDrop, Text: "Asia/Tokyo"})
+	call := h.nextCall(v1.CallStateSet)
+	h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true})
+	bar := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "open") != nil })
+	if got := find(bar.Root, "open").Text; got != "Tokyo 21:00" {
+		t.Fatalf("bar after reordering zones = %q, want cycle to reset to Tokyo", got)
+	}
+}
+
 func TestSettingsApplyIgnoresBadValues(t *testing.T) {
 	s := defaultSettings()
 	s.apply(map[string]any{"hour24": "yes", "bar_mode": "sideways", "cycle_seconds": "fast"})
@@ -285,6 +459,79 @@ func TestTickFollowsTheWallClockMinute(t *testing.T) {
 	now = now.Add(47 * time.Minute)
 	if !s.maybeTick() {
 		t.Fatal("did not tick after the wall clock moved on")
+	}
+}
+
+func TestMinuteTickPatchesStableViewsAndSnapshotsTooltip(t *testing.T) {
+	h := start(t, nil)
+	for _, v := range []struct {
+		id   string
+		kind v1.ViewKind
+	}{{"b", v1.ViewBar}, {"p", v1.ViewPanel}, {"t", v1.ViewTooltip}} {
+		h.send(v1.ViewOpen{Type: "view.open", ViewID: v.id, View: v.kind, Entry: "test"})
+		h.snapshotWhere(func(s *v1.Node) bool { return true })
+	}
+	h.advanceTime(time.Minute)
+
+	patches := map[string]v1.ViewPatch{}
+	snapshots := map[string]v1.ViewSnapshot{}
+	for range 3 {
+		line := h.nextWithin(8 * time.Second)
+		switch messageType(line) {
+		case v1.TypeViewPatch:
+			var p v1.ViewPatch
+			if err := json.Unmarshal(line, &p); err != nil {
+				t.Fatal(err)
+			}
+			patches[p.ViewID] = p
+		case v1.TypeViewSnapshot:
+			var s v1.ViewSnapshot
+			if err := json.Unmarshal(line, &s); err != nil {
+				t.Fatal(err)
+			}
+			snapshots[s.ViewID] = s
+		default:
+			t.Fatalf("unexpected tick message: %s", line)
+		}
+	}
+	bar := patches["b"]
+	if len(bar.Replacements) != 1 || bar.Replacements[0].Key != "bar" {
+		t.Fatalf("bar replacements = %+v", bar.Replacements)
+	}
+	panel := patches["p"]
+	keys := map[string]bool{}
+	for _, replacement := range panel.Replacements {
+		keys[replacement.Key] = true
+	}
+	for _, id := range worldclock.DefaultZones {
+		for _, prefix := range []string{"clock:", "meta:", "sky:"} {
+			if !keys[prefix+id] {
+				t.Errorf("stable panel patch missing %s%s", prefix, id)
+			}
+		}
+	}
+	tooltip, ok := snapshots["t"]
+	if !ok || !contains(tooltip.Root, "UTC 12:01 · Same time") {
+		t.Fatalf("tooltip did not receive the new snapshot: %+v", tooltip)
+	}
+}
+
+func TestMinuteTickSnapshotsPanelWithQuery(t *testing.T) {
+	h := start(t, nil)
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "search", Event: v1.EventChange, Text: "syd"})
+	searching := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "pick:Australia/Sydney") != nil })
+	h.advanceTime(time.Minute)
+	line := h.nextWithin(8 * time.Second)
+	if messageType(line) != v1.TypeViewSnapshot {
+		t.Fatalf("query panel update = %s, want full snapshot", line)
+	}
+	var snapshot v1.ViewSnapshot
+	if err := json.Unmarshal(line, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ViewID != "p" || snapshot.Revision <= searching.Revision || find(snapshot.Root, "pick:Australia/Sydney") == nil {
+		t.Fatalf("query panel snapshot = %+v", snapshot)
 	}
 }
 

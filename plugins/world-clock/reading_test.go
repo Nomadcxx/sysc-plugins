@@ -92,6 +92,16 @@ func TestReadLabelAndInvalidZone(t *testing.T) {
 	}
 }
 
+func TestReadRejectsEmptyAndLocalZones(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	for _, id := range []string{"", "Local"} {
+		if _, err := Read(Zone{ID: id}, now, time.UTC, true); err == nil {
+			t.Errorf("Read(%q) succeeded", id)
+		}
+	}
+}
+
 func TestDaytimeBounds(t *testing.T) {
 	t.Parallel()
 	for hour, want := range map[int]bool{5: false, 6: true, 17: true, 18: false} {

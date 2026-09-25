@@ -3,6 +3,7 @@ package worldclock
 import (
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -52,9 +53,8 @@ func TestSearchAliasCarriesItsName(t *testing.T) {
 
 func TestSearchRanksExactBeforePrefixBeforeAlias(t *testing.T) {
 	t.Parallel()
-	// "os": Oslo is a city prefix (rank 2), the alias Osaka -> Asia/Tokyo is an
-	// alias prefix (rank 3), and "buenOS aires" / "lOS angeles" only contain it
-	// in their ids (rank 5, ordered by city).
+	// "os": Oslo is a city prefix, the alias Osaka -> Asia/Tokyo is an alias
+	// prefix, and "buenOS aires" / "lOS angeles" only contain it in their ids.
 	got := matchIDs(fixtureIndex(t).Search("os", 5))
 	want := []string{"Europe/Oslo", "Asia/Tokyo", "America/Argentina/Buenos_Aires", "America/Los_Angeles"}
 	if !reflect.DeepEqual(got, want) {
@@ -66,6 +66,50 @@ func TestSearchCountryName(t *testing.T) {
 	t.Parallel()
 	if got := matchIDs(fixtureIndex(t).Search("norway", 5)); !reflect.DeepEqual(got, []string{"Europe/Oslo"}) {
 		t.Fatalf("norway = %v", got)
+	}
+}
+
+func TestSearchWholeCountryRanksBeforeCityPrefix(t *testing.T) {
+	t.Parallel()
+	ix := fixtureIndex(t)
+	for query, want := range map[string]string{"india": "Asia/Kolkata", "georgia": "Asia/Tbilisi", "par": "America/Paramaribo"} {
+		got := ix.Search(query, 5)
+		if len(got) == 0 || got[0].ID != want {
+			t.Errorf("%s first match = %+v, want %s", query, got, want)
+		}
+	}
+}
+
+func TestSearchLinkNamesUseCanonicalTargetsAndCityAliases(t *testing.T) {
+	t.Parallel()
+	ix := fixtureIndex(t)
+	for query, want := range map[string]string{
+		"us/eastern": "America/New_York",
+		"kiev":       "Europe/Kyiv",
+		"calcutta":   "Asia/Kolkata",
+		"bombay":     "Asia/Kolkata",
+		"est":        "America/Panama",
+		"cet":        "Europe/Brussels",
+	} {
+		got := ix.Search(query, 5)
+		if len(got) == 0 || got[0].ID != want {
+			t.Errorf("%s first match = %+v, want %s", query, got, want)
+		}
+		for _, m := range got {
+			if !strings.Contains(m.ID, "/") && m.ID != "UTC" {
+				t.Errorf("%s returned bare zone id %q", query, m.ID)
+			}
+		}
+	}
+	got := ix.Search("gmt", 5)
+	ids := matchIDs(got)
+	if !reflect.DeepEqual(ids, []string{"Etc/GMT", "UTC"}) {
+		t.Errorf("gmt = %v, want Etc/GMT and UTC", ids)
+	}
+	for _, query := range []string{"kiev", "calcutta", "bombay"} {
+		if got := ix.Search(query, 1); len(got) != 1 || !got[0].Alias {
+			t.Errorf("%s did not preserve its link name as the city alias: %+v", query, got)
+		}
 	}
 }
 
@@ -83,7 +127,7 @@ func TestSearchExactIDAndLinkCaseInsensitive(t *testing.T) {
 	if got := ix.Search("asia/tokyo", 5); len(got) == 0 || got[0].ID != "Asia/Tokyo" {
 		t.Fatalf("exact id = %+v", got)
 	}
-	if got := ix.Search("us/eastern", 5); len(got) == 0 || got[0].ID != "US/Eastern" {
+	if got := ix.Search("us/eastern", 5); len(got) == 0 || got[0].ID != "America/New_York" {
 		t.Fatalf("link = %+v", got)
 	}
 	// Not in any table but a valid id verbatim.

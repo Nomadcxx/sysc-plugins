@@ -74,7 +74,7 @@ From the final branch review, graded Minor and deferred. Each needs a failing te
 | D7 | `Decode` drops a whole zone object when one field has the wrong type (`"label": 5`), and the next save makes the loss permanent. | `plugins/world-clock/zones.go:70` | Decode each object leniently: read `id` as a string, keep the zone with defaults when `label` or `on_bar` is mistyped. |
 | D8 | Downgrading to 1.2.0 cannot read the object shape, and its next save overwrites the list. | docs | State in the README or release notes that 2.0.0's state migration is one-way. No code change. |
 | D9 | No loop-level test that the minute tick sends keyed patches (`bar`, `clock:`, `meta:`, `sky:`) and snapshots tooltips and panels that have a query. | `cmd/sysc-plugin-world-clock/main_test.go` | Drive `maybeTick` through the harness: set `h.now` forward a minute, trigger a tick (expose a test hook, or send the event the loop polls on), and assert the `view.patch` message's keys per view kind. |
-| D10 | "All clocks" bar mode fits only 1–2 clocks at 240 px (28-byte budget). | `plugins/world-clock/bar.go:22`, `:65` | Covered by Part 2 (bar density). At minimum, make the setting label or description honest. |
+| D10 | The all-clocks bar mode fits only 1–2 clocks at 240 px (28-byte budget). | `plugins/world-clock/bar.go:22`, `:65` | Done: the setting is labelled `As many clocks as fit`; rendering still prioritizes full labels and times. |
 
 D3 examples, using `/usr/share/zoneinfo`:
 - `india` → Indianapolis first, so Enter adds Indianapolis.
@@ -124,11 +124,9 @@ Areas to examine (candidates, not decisions):
    - Chips are full-width `soft` buttons with `City · Country · +9h`.
    - Consider right-aligning the offset (a two-child PinEnd row inside the button) and bolding the
      matched city.
-6. **Bar density (D10).**
-   - Options: drop the separator to a single space pair, show `Tokyo 21:04` as `TYO 21:04`
-     (needs an abbreviation rule and user approval), or show times only with labels in the tooltip
-     (Noctalia does this on vertical bars).
-   - Decide with the user before building.
+6. **Bar density (D10, resolved).** The setting says `As many clocks as fit`; the mode keeps full
+   labels and times and omits trailing entries once the 28-byte width budget is reached. Rendering
+   was left unchanged to preserve named-zone legibility.
 7. **Empty and error states.**
    - The empty state is a single subtle line.
    - Consider a short hint with two example cities as suggestion chips.
@@ -153,8 +151,17 @@ Constraints for any visual change:
 
 1. Both world-clock packages pass with `-race -p 2`; every new behavior has a test that failed first.
 2. `plugin/lint` passes for every state listed above, including `hour24=false`.
-3. The user has approved the visual direction before it was built, and confirms the result from their
-   own screenshots of: the default panel, suggestions (`mum`), rename, delete confirm, empty, the
-   bar in all four modes, and the tooltip.
+3. Live screenshot review of the default panel, suggestions (`mum`), rename, delete confirm, empty/error,
+   all bar modes and clock formats, and the tooltip is deferred by the user and does not block further
+   development.
 4. The deferred items D1–D10 are each either done, or recorded as a user-approved won't-fix.
 5. After merge: `make install` from the main checkout, then the user restarts the shell (ask first).
+
+## Follow-up status — 2026-09-25
+
+- **D1–D9 complete** in `feat/world-clock-redesign`; D4, D6, and D7 have regressions; D9 now exercises minute ticks through the running loop.
+- **D10 is resolved** by making the setting label honest; no bar rendering behavior changed.
+- Live screenshot and state coverage is deferred by the user as a non-blocking follow-up. This checkout has no repo-local `.beads` tracker, so the follow-up remains documented here until a tracker is available.
+- The clean default screenshot showed the empty search field collapsing to its intrinsic one-space width, which left the add button at the left. The field now gets the remaining panel width; an automated geometry assertion and interactive state screenshots are deferred.
+- The World Clock binary was rebuilt from this worktree and its plugin process restarted by the host. The existing symlink already points to this worktree. A clean default-panel screenshot was captured; remaining live states are deferred.
+- Before the final polish, `GOWORK=off GOMAXPROCS=4 go test -count=1 -race -p 2 ./plugins/world-clock/ ./cmd/sysc-plugin-world-clock/` passed. The suite was not rerun after the final polish; `git diff --check` passes.

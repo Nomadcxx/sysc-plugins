@@ -1,3 +1,8 @@
 # fixture subset
 L America/New_York US/Eastern
 L Asia/Kolkata Asia/Calcutta
+L Asia/Kolkata Asia/Bombay
+L America/Panama EST
+L Europe/Brussels CET
+L Etc/GMT GMT
+L Europe/Kyiv Europe/Kiev

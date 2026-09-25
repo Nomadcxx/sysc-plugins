@@ -14,6 +14,11 @@ const (
 )
 
 const (
+	searchGap      = 8
+	searchAddWidth = 40
+)
+
+const (
 	zoneDragType = "world-clock-zone"
 	listHeight   = 248
 	clockWidth   = 96
@@ -39,7 +44,9 @@ type PanelState struct {
 	Renaming      string
 	RenameDraft   string
 	RenameReseed  uint64
-	Error         string
+	Errors        []string
+	NoMatches     string
+	HideNoMatches bool
 	Notice        string
 }
 
@@ -53,14 +60,16 @@ func Panel(s PanelState) *v1.Node {
 		{Kind: v1.KindText, Text: "World Clock", Size: "title", Bold: true},
 		searchRow(s),
 	}
-	if s.Error != "" {
-		children = append(children, &v1.Node{Kind: v1.KindText, Text: s.Error, Tone: v1.ToneError})
+	for _, err := range s.Errors {
+		if err != "" {
+			children = append(children, &v1.Node{Kind: v1.KindText, Text: err, Tone: v1.ToneError})
+		}
 	}
 	if s.Notice != "" {
 		children = append(children, &v1.Node{Kind: v1.KindText, Text: s.Notice, Tone: v1.ToneSubtle})
 	}
 	if s.Query != "" {
-		children = append(children, suggestionList(s.Suggestions))
+		children = append(children, suggestionList(s.Suggestions, s.NoMatches, s.HideNoMatches))
 	} else {
 		children = append(children, zoneList(s))
 	}
@@ -68,18 +77,22 @@ func Panel(s PanelState) *v1.Node {
 }
 
 func searchRow(s PanelState) *v1.Node {
-	return &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+	return &v1.Node{Kind: v1.KindRow, Gap: searchGap, Children: []*v1.Node{
 		{Kind: v1.KindTextInput, ID: "search", Text: s.Query, Name: "Search time zones", Role: "textbox",
-			Placeholder: "Search a city or country", Height: 40, SubmitOnEnter: true, Reseed: s.QueryReseed, Events: editing},
+			Placeholder: "Search a city or country", Width: PanelWidth - searchGap - searchAddWidth,
+			Height: 40, SubmitOnEnter: true, Reseed: s.QueryReseed, Events: editing},
 		{Kind: v1.KindButton, ID: "add", Icon: "add", Name: "Add the top match", Role: "button", Fill: "accent",
-			Width: 40, Height: 40, Disabled: strings.TrimSpace(s.Query) == "", Events: activate},
+			Width: searchAddWidth, Height: 40, Disabled: strings.TrimSpace(s.Query) == "", Events: activate},
 	}}
 }
 
-func suggestionList(suggestions []Suggestion) *v1.Node {
+func suggestionList(suggestions []Suggestion, noMatches string, hideNoMatches bool) *v1.Node {
 	rows := make([]*v1.Node, 0, len(suggestions)+1)
-	if len(suggestions) == 0 {
-		rows = append(rows, &v1.Node{Kind: v1.KindText, Text: "No matching zone", Tone: v1.ToneSubtle})
+	if len(suggestions) == 0 && !hideNoMatches {
+		if noMatches == "" {
+			noMatches = "No matching zone"
+		}
+		rows = append(rows, &v1.Node{Kind: v1.KindText, Text: noMatches, Tone: v1.ToneSubtle})
 	}
 	for _, m := range suggestions {
 		rows = append(rows, &v1.Node{Kind: v1.KindButton, ID: "pick:" + m.ID, Text: m.Title, Name: "Add " + m.Title,
