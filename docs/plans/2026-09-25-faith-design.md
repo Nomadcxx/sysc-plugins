@@ -97,15 +97,12 @@ Attached, 440×460 in the manifest. From the top:
 
 1. Header row: reference (title, accent) and translation abbreviation (caption, subtle, pinned
    end).
-2. Verse text, wrapped.
-3. Control row: previous verse, next verse, new verse, open chapter in browser (`xdg-open`; the
-   plan picks a reader URL that serves the chosen translation).
-4. Separator, then "Commentary" with the commentary entry (wrapped, at most 40 lines), or a
-   subtle "No commentary on this verse" line.
-5. Separator, then "See also" with up to five cross-reference buttons and the OpenBible.info
-   credit.
-
-Rows 2 to 5 sit in one `list` so the panel scrolls as a whole.
+2. Control row: previous verse, next verse, new verse, and "Read chapter" in the browser
+   (`xdg-open` to biblehub.com). It stays above the scrolling list so the controls never scroll
+   away.
+3. A `list` holding the verse text (wrapped); then a separator and "Commentary" with the entry
+   (wrapped, at most 40 lines) or a one-line status; then a separator and "See also" with up to
+   five cross-reference buttons and the OpenBible.info credit.
 
 The previous and next buttons are disabled at Genesis 1:1 and Revelation 22:21. Every layout is
 checked by `plugin/lint` at 440×460.

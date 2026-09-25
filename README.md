@@ -109,3 +109,26 @@ noctalia ai-usagebar plugin. Its codex session-file collector reads session
 logs only — never authentication files, never the network — and pasted API
 keys live in the host's own settings store and are sent only to their
 provider's API.
+
+Faith is a new plugin whose behavior follows MezoAhmedII's Quran Widget
+(noctalia community plugins, MIT); no code is shared. Its bundled data is
+listed with commits and checksums in `plugins/faith/data/SOURCES.md`:
+
+- The Berean Standard Bible (public domain since 2023) and the World English
+  Bible (public domain), from the USFM in
+  [HelloAOLab/bible-api](https://github.com/HelloAOLab/bible-api).
+- The King James Version (1769), from
+  [scrollmapper/bible_databases](https://github.com/scrollmapper/bible_databases).
+  It is public domain except in the United Kingdom, where Crown letters patent
+  apply.
+- Cross-references from [OpenBible.info](https://www.openbible.info/labs/cross-references/),
+  CC BY, by way of the same scrollmapper mirror. The five highest-voted
+  references per verse are kept.
+- Prayers from the 1928 and 1979 Books of Common Prayer (US editions, public
+  domain), the 1891 Baltimore Catechism, Thomas Ken (1674), C. F. Alexander's
+  1889 translation of St. Patrick's Breastplate, and traditional public-domain
+  English wordings; Scripture prayers read the user's chosen translation.
+
+Adam Clarke's commentary (public domain) is not bundled. When the panel is
+open, it is fetched from the [Free Use Bible API](https://bible.helloao.org),
+the only network request the plugin makes. Nothing about the user is sent.
