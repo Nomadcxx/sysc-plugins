@@ -21,19 +21,39 @@ type harness struct {
 	lines   chan []byte
 	done    chan error
 	stopped bool
+	now     time.Time
 }
 
 func start(t *testing.T, stored *v1.StateGetResult) *harness {
 	t.Helper()
+	result := v1.StateGetResult{Found: false}
+	if stored != nil {
+		result = *stored
+	}
+	raw, _ := json.Marshal(result)
+	return startWith(t, nil, func(call v1.HostCall) v1.HostReply {
+		return v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: raw}
+	})
+}
+
+// startWith runs the plugin with env adjusted by tweak and answers its first
+// state.get with getReply.
+func startWith(t *testing.T, tweak func(*environment), getReply func(v1.HostCall) v1.HostReply) *harness {
+	t.Helper()
 	input, host := io.Pipe()
 	plugin, output := io.Pipe()
 	h := &harness{t: t, host: host, lines: make(chan []byte, 64), done: make(chan error, 1)}
-	now := time.Date(2026, 9, 15, 12, 0, 30, 0, time.UTC)
+	h.now = time.Date(2026, 9, 15, 12, 0, 30, 0, time.UTC)
+	env := environment{
+		now: func() time.Time { return h.now }, local: time.UTC,
+		index:       worldclock.NewIndex(strings.NewReader(zoneTab), strings.NewReader(isoTab), nil),
+		callTimeout: 2 * time.Second,
+	}
+	if tweak != nil {
+		tweak(&env)
+	}
 	go func() {
-		err := runPlugin(input, output, environment{
-			now: func() time.Time { return now }, local: time.UTC,
-			index: worldclock.NewIndex(strings.NewReader(zoneTab), strings.NewReader(isoTab), nil),
-		})
+		err := runPlugin(input, output, env)
 		_ = output.Close() // ends the line reader so a test can drain everything
 		h.done <- err
 	}()
@@ -49,13 +69,7 @@ func start(t *testing.T, stored *v1.StateGetResult) *harness {
 	if got := h.next(); messageType(got) != "plugin.hello" {
 		t.Fatalf("first message = %s", got)
 	}
-	call := h.nextCall(v1.CallStateGet)
-	result := v1.StateGetResult{Found: false}
-	if stored != nil {
-		result = *stored
-	}
-	raw, _ := json.Marshal(result)
-	h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: raw})
+	h.send(getReply(h.nextCall(v1.CallStateGet)))
 	t.Cleanup(h.stop)
 	return h
 }
@@ -258,11 +272,83 @@ func TestSettingsApplyIgnoresBadValues(t *testing.T) {
 	}
 }
 
-func TestNextMinute(t *testing.T) {
-	if got := nextMinute(time.Date(2026, 1, 1, 10, 0, 45, 0, time.UTC)); got != 15*time.Second {
-		t.Fatalf("next minute = %v", got)
+func TestTickFollowsTheWallClockMinute(t *testing.T) {
+	now := time.Date(2026, 1, 1, 10, 0, 45, 0, time.UTC)
+	s := &session{env: environment{now: func() time.Time { return now }, local: time.UTC}, store: worldclock.NewStore(), views: map[string]view{}}
+	if !s.maybeTick() {
+		t.Fatal("first check must tick")
 	}
-	if got := nextMinute(time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)); got != time.Minute {
-		t.Fatalf("on the boundary = %v", got)
+	if s.maybeTick() {
+		t.Fatal("ticked twice in one minute")
+	}
+	// A suspend stops monotonic timers; the wall clock jumps ahead.
+	now = now.Add(47 * time.Minute)
+	if !s.maybeTick() {
+		t.Fatal("did not tick after the wall clock moved on")
+	}
+}
+
+func failGet(call v1.HostCall) v1.HostReply {
+	return v1.HostReply{Type: "host.reply", ID: call.ID, OK: false, Error: "busy"}
+}
+
+func TestFailedLoadRetriesBeforeSaving(t *testing.T) {
+	h := startWith(t, nil, failGet)
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "bar:Asia/Tokyo", Event: v1.EventActivate})
+	get := h.nextCall(v1.CallStateGet)
+	raw, _ := json.Marshal(v1.StateGetResult{Found: true, Value: json.RawMessage(`["Asia/Tokyo","Europe/Oslo"]`)})
+	h.send(v1.HostReply{Type: "host.reply", ID: get.ID, OK: true, Result: raw})
+	set := h.nextCall(v1.CallStateSet)
+	var params v1.StateSetParams
+	_ = json.Unmarshal(set.Params, &params)
+	if strings.Contains(string(params.Value), "UTC") || !strings.Contains(string(params.Value), "Europe/Oslo") {
+		t.Fatalf("saved defaults over the stored list: %s", params.Value)
+	}
+	h.send(v1.HostReply{Type: "host.reply", ID: set.ID, OK: true})
+}
+
+func TestUnloadedListIsNeverSaved(t *testing.T) {
+	h := startWith(t, nil, failGet)
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "bar:UTC", Event: v1.EventActivate})
+	h.send(failGet(h.nextCall(v1.CallStateGet)))
+	h.snapshotWhere(func(n *v1.Node) bool { return contains(n, "Couldn't load zones") })
+	h.stopped = true
+	h.send(v1.HostShutdown{Type: "host.shutdown"})
+	for line := range h.lines {
+		var call v1.HostCall
+		if messageType(line) == v1.TypeHostCall && json.Unmarshal(line, &call) == nil && call.Call == v1.CallStateSet {
+			t.Fatal("saved a list that was never loaded")
+		}
+	}
+	<-h.done
+}
+
+func TestUnansweredSaveTimesOut(t *testing.T) {
+	h := startWith(t, func(e *environment) { e.callTimeout = 100 * time.Millisecond }, func(call v1.HostCall) v1.HostReply {
+		return v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: json.RawMessage(`{"found":false}`)}
+	})
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "bar:UTC", Event: v1.EventActivate})
+	h.nextCall(v1.CallStateSet) // never answered
+	h.snapshotWhere(func(n *v1.Node) bool { return contains(n, "Couldn't save zones") })
+}
+
+func TestStaleSearchChangeAfterAddIsIgnored(t *testing.T) {
+	h := start(t, nil)
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "search", Event: v1.EventChange, Text: "syd"})
+	s := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "pick:Australia/Sydney") != nil })
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: s.Revision, Node: "pick:Australia/Sydney", Event: v1.EventActivate})
+	set := h.nextCall(v1.CallStateSet)
+	h.send(v1.HostReply{Type: "host.reply", ID: set.ID, OK: true})
+	h.snapshotWhere(func(n *v1.Node) bool { return find(n, "drag:Australia/Sydney") != nil })
+	// Typed before the cleared input reached the host: generated against the
+	// pre-reseed revision.
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: s.Revision, Node: "search", Event: v1.EventChange, Text: "sydx"})
+	after := h.snapshotWhere(func(*v1.Node) bool { return true })
+	if find(after.Root, "search").Text != "" || find(after.Root, "drag:Australia/Sydney") == nil {
+		t.Fatal("a stale keystroke revived the cleared query")
 	}
 }

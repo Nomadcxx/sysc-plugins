@@ -18,8 +18,13 @@ import (
 
 const maxSuggestions = 5
 
+// wallCheck is how often the loop compares the wall-clock minute with the
+// last one drawn. A timer armed for the next minute would run on the monotonic
+// clock, which stops during suspend and leaves a stale time after resume.
+const wallCheck = 5 * time.Second
+
 func main() {
-	env := environment{now: time.Now, local: time.Local, index: worldclock.OpenSystemIndex("/usr/share/zoneinfo")}
+	env := environment{now: time.Now, local: time.Local, index: worldclock.OpenSystemIndex("/usr/share/zoneinfo"), callTimeout: 5 * time.Second}
 	if err := runPlugin(os.Stdin, os.Stdout, env); err != nil {
 		os.Exit(1)
 	}
@@ -29,6 +34,9 @@ type environment struct {
 	now   func() time.Time
 	local *time.Location
 	index *worldclock.Index
+	// callTimeout bounds every host call. Calls run on the loop, and a reply
+	// queued behind a burst of input would otherwise never be read.
+	callTimeout time.Duration
 }
 
 type settings struct {
@@ -58,11 +66,6 @@ func (s *settings) apply(values map[string]any) {
 	}
 }
 
-// nextMinute is the wait until the next wall-clock minute boundary.
-func nextMinute(now time.Time) time.Duration {
-	return now.Truncate(time.Minute).Add(time.Minute).Sub(now)
-}
-
 type view struct {
 	kind v1.ViewKind
 	rev  uint64
@@ -81,6 +84,15 @@ type session struct {
 	addErr      string
 	saveErr     string
 	cycle       int
+	// loaded is false until state.get has answered. Saving before then would
+	// replace the user's stored list with the defaults.
+	loaded     bool
+	lastMinute time.Time
+	// searchFloor is, per panel view, the first revision carrying the current
+	// search reseed. A search event from an older revision was typed into a
+	// buffer the reseed has since cleared.
+	searchFloor map[string]uint64
+	floorGen    map[string]uint64
 }
 
 func runPlugin(in io.Reader, out io.Writer, env environment) error {
@@ -88,7 +100,8 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.world-clock", Name: "World Clock", Version: "2.0.0"})); err != nil {
 		return err
 	}
-	s := &session{env: env, client: c, store: worldclock.NewStore(), settings: defaultSettings(), views: map[string]view{}}
+	s := &session{env: env, client: c, store: worldclock.NewStore(), settings: defaultSettings(), views: map[string]view{},
+		searchFloor: map[string]uint64{}, floorGen: map[string]uint64{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	incoming := make(chan v1.Message, 8)
@@ -103,8 +116,9 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 		}
 	}()
 	s.restore(ctx)
+	s.lastMinute = env.now().Truncate(time.Minute)
 
-	minute := time.NewTimer(nextMinute(env.now()))
+	minute := time.NewTicker(wallCheck)
 	defer minute.Stop()
 	var cycle *time.Ticker
 	var cycleC <-chan time.Time
@@ -129,8 +143,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 		case <-ctx.Done():
 			return nil
 		case <-minute.C:
-			s.tick()
-			minute.Reset(nextMinute(env.now()))
+			s.maybeTick()
 		case <-cycleC:
 			s.cycle++
 			s.patchBars()
@@ -162,11 +175,21 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	}
 }
 
+func (s *session) call(ctx context.Context, kind v1.CallKind, params any) (v1.HostReply, error) {
+	if s.env.callTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.env.callTimeout)
+		defer cancel()
+	}
+	return s.client.Call(ctx, kind, params)
+}
+
 func (s *session) restore(ctx context.Context) {
-	reply, err := s.client.Call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "zones"})
+	reply, err := s.call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "zones"})
 	if err != nil || !reply.OK {
 		return
 	}
+	s.loaded = true
 	var result v1.StateGetResult
 	if json.Unmarshal(reply.Result, &result) != nil || !result.Found {
 		return
@@ -178,11 +201,23 @@ func (s *session) restore(ctx context.Context) {
 	}
 }
 
+// ensureLoaded retries a failed startup read before a change is applied, so
+// the change lands on the user's list rather than on the defaults.
+func (s *session) ensureLoaded(ctx context.Context) {
+	if !s.loaded {
+		s.restore(ctx)
+	}
+}
+
 func (s *session) save(ctx context.Context) {
+	if !s.loaded {
+		s.saveErr = "Couldn't load zones"
+		return
+	}
 	raw, err := worldclock.Encode(s.store.Zones())
 	if err == nil {
 		var reply v1.HostReply
-		reply, err = s.client.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "zones", Value: raw})
+		reply, err = s.call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "zones", Value: raw})
 		if err == nil && !reply.OK {
 			err = errors.New(reply.Error)
 		}
@@ -250,6 +285,9 @@ func (s *session) snapshot(id string) {
 	v := s.views[id]
 	v.rev++
 	s.views[id] = v
+	if v.kind == v1.ViewPanel && s.floorGen[id] != s.queryReseed {
+		s.searchFloor[id], s.floorGen[id] = v.rev, s.queryReseed
+	}
 	_ = s.client.Snapshot(id, v.rev, s.tree(v.kind, s.readings()))
 }
 
@@ -270,6 +308,18 @@ func (s *session) patch(id string, repl []v1.Replacement) {
 	}
 	v.rev++
 	s.views[id] = v
+}
+
+// maybeTick draws the minute update when the wall-clock minute has changed
+// since the last one drawn.
+func (s *session) maybeTick() bool {
+	minute := s.env.now().Truncate(time.Minute)
+	if minute.Equal(s.lastMinute) {
+		return false
+	}
+	s.lastMinute = minute
+	s.tick()
+	return true
 }
 
 // tick is the minute update: keyed patches where the tree shape is stable,
@@ -302,8 +352,11 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	id := node[strings.Index(node, ":")+1:]
 	switch {
 	case node == "open":
-		_, _ = s.client.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
+		_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
 	case node == "search":
+		if m.Revision < s.searchFloor[m.ViewID] {
+			return
+		}
 		s.query, s.addErr = m.Text, ""
 		if m.Event == v1.EventSubmit {
 			s.addTop(ctx)
@@ -313,10 +366,12 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	case strings.HasPrefix(node, "pick:"):
 		s.addPick(ctx, id)
 	case strings.HasPrefix(node, "drop:") && m.Event == v1.EventDrop:
+		s.ensureLoaded(ctx)
 		if at, err := strconv.Atoi(id); err == nil && s.store.Reorder(m.Text, at) {
 			s.save(ctx)
 		}
 	case strings.HasPrefix(node, "bar:"):
+		s.ensureLoaded(ctx)
 		if s.store.ToggleBar(id) {
 			s.cycle = 0
 			s.save(ctx)
@@ -337,6 +392,7 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	case strings.HasPrefix(node, "del:"):
 		s.store.ProposeDelete(id)
 	case node == "del-ok":
+		s.ensureLoaded(ctx)
 		if s.store.ConfirmDelete() {
 			s.save(ctx)
 		}
@@ -367,6 +423,7 @@ func (s *session) addPick(ctx context.Context, id string) {
 }
 
 func (s *session) add(ctx context.Context, m worldclock.Match) {
+	s.ensureLoaded(ctx)
 	label := ""
 	if m.Alias {
 		label = m.City
@@ -384,6 +441,7 @@ func (s *session) add(ctx context.Context, m worldclock.Match) {
 }
 
 func (s *session) commitRename(ctx context.Context) {
+	s.ensureLoaded(ctx)
 	if id := s.store.Renaming(); id != "" && s.store.Rename(id, s.renameDraft) {
 		s.save(ctx)
 	}
