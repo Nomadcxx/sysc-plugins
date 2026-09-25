@@ -38,6 +38,7 @@ After `make install`, enable plugins from sysc-shell's Plugins manager panel
 | Phone Connect | `org.sysc.kdeconnect` | 0.1.0 skeleton | port of DMS DankKDEConnect |
 | AI Usage | `org.sysc.aiusage` | 0.1.0 | new; patterns ported from noctalia ai-usagebar + DMS usage widgets |
 | Faith | `org.sysc.faith` | 0.1.0 | new; behavior from the noctalia quranwidget community plugin |
+| Cat | `org.sysc.cat` | 1.0.0 | port of noctalia cat + DMS Cat Widget, widened |
 
 "First sweep" means working but early: these plugins were generated before
 much of the shell's plugin infrastructure existed, and their views are
@@ -102,6 +103,14 @@ runtime compatibility with Noctalia; only behavior is ported. Plugins marked
 Avenge Media for DankMaterialShell's DankKDEConnect plugin
 (dms-plugin-registry #386), under the MIT license; runtime compatibility
 with DMS is not claimed or preserved.
+
+Cat ports the behaviour of noctalia's `cat` community plugin (DotNetRob) and
+the DMS Cat Widget (xi-ve/cat-dms, dms-plugin-registry #562): a bar cat
+whose pace follows CPU load. Neither reference's artwork is used. The cat is
+forty original poses in sysc-shell's own icon font -- walking, galloping,
+sitting, grooming, scratching, stretching and sleeping -- and the shell
+animates them on its own frame clock (protocol minor 8 sprite cycles), so the
+plugin sends a message per act, never per pose. It reads `/proc/stat` only.
 
 AI Usage is a new plugin built from the patterns in its prior-art research
 (docs/plans/2026-09-19-aiusage-research.md), including the owner's own

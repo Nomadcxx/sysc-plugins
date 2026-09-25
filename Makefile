@@ -10,6 +10,7 @@ PLUGINS := \
 	sysc-plugin-aiusage:aiusage \
 	sysc-plugin-kdeconnect:kdeconnect \
 	sysc-plugin-faith:faith
+	sysc-plugin-cat:cat
 
 USER_PLUGIN_ROOT := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/sysc-shell/plugins
 
