@@ -19,8 +19,9 @@ const ProcStat = "/proc/stat"
 // open, no allocation, no child process. Only the first line is read; the
 // per-core lines after it are never copied out of the kernel.
 type Sampler struct {
-	f   io.ReaderAt
-	buf [256]byte
+	f    io.ReaderAt
+	path string
+	buf  [256]byte
 
 	prevTotal, prevIdle uint64
 	primed              bool
@@ -33,7 +34,7 @@ func OpenSampler(path string) (*Sampler, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Sampler{f: f}
+	s := &Sampler{f: f, path: path}
 	if _, _, err := s.Sample(); err != nil {
 		f.Close()
 		return nil, err
@@ -59,7 +60,7 @@ func (s *Sampler) Sample() (load float64, ok bool, err error) {
 	}
 	total, idle, err := parseCPULine(s.buf[:n])
 	if err != nil {
-		return 0, false, err
+		return 0, false, fmt.Errorf("cat: %s: %w", s.path, err)
 	}
 	prevTotal, prevIdle, primed := s.prevTotal, s.prevIdle, s.primed
 	s.prevTotal, s.prevIdle, s.primed = total, idle, true
@@ -81,7 +82,7 @@ func (s *Sampler) Sample() (load float64, ok bool, err error) {
 // counted inside user and nice, so it is not added again.
 func parseCPULine(b []byte) (total, idle uint64, err error) {
 	if !bytes.HasPrefix(b, []byte("cpu ")) {
-		return 0, 0, fmt.Errorf("cat: %s does not start with the aggregate cpu line", ProcStat)
+		return 0, 0, errors.New("no aggregate cpu line first")
 	}
 	b = b[len("cpu "):]
 	if i := bytes.IndexByte(b, '\n'); i >= 0 {
@@ -103,7 +104,7 @@ func parseCPULine(b []byte) (total, idle uint64, err error) {
 			digits++
 		}
 		if digits == 0 {
-			return 0, 0, fmt.Errorf("cat: malformed cpu field %d", field)
+			return 0, 0, fmt.Errorf("malformed cpu field %d", field)
 		}
 		total += v
 		if field == 3 || field == 4 {
@@ -114,7 +115,7 @@ func parseCPULine(b []byte) (total, idle uint64, err error) {
 	// Kernels since 2.6.11 report at least eight fields; fewer than the
 	// four that include idle is not a line this sampler can measure.
 	if field < 4 {
-		return 0, 0, fmt.Errorf("cat: cpu line has %d fields", field)
+		return 0, 0, fmt.Errorf("cpu line has %d fields", field)
 	}
 	return total, idle, nil
 }

@@ -238,3 +238,20 @@ func TestThresholdsNormalize(t *testing.T) {
 		t.Fatalf("normalized = %+v", got)
 	}
 }
+
+// Every idle line the settings allow must have a load below which a moving
+// cat settles; a fixed three-point band left lines of 1 to 3 with none.
+func TestEveryIdleLineCanSettle(t *testing.T) {
+	t.Parallel()
+	for line := 1; line <= 50; line++ {
+		c := newCat(line, time.Hour)
+		c.Observe(float64(line)/100, t0)
+		if c.Act().idle() {
+			t.Fatalf("line %d: the cat did not get up at the line", line)
+		}
+		c.Observe(0, t0.Add(2*time.Second))
+		if !c.Act().idle() {
+			t.Fatalf("line %d: at 0%% load the cat kept %v", line, c.Act())
+		}
+	}
+}

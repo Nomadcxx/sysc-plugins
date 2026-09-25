@@ -81,7 +81,7 @@ const (
 	walkFrom = 0.32
 )
 
-// hysteresis is how many points below the sleep line the load has to fall
+// hysteresis is how many points below the idle line the load has to fall
 // before an active cat settles down again.
 const hysteresis = 3
 
@@ -175,11 +175,15 @@ func (c *Cat) Percent() int { return int(math.Round(c.load * 100)) }
 // Act is what the cat is doing now.
 func (c *Cat) Act() Act { return c.act }
 
+// pct is the load in percent with float noise rounded away, so a reading of
+// exactly the line counts as reaching it: 0.29*100 is 28.999999999999996.
+func (c *Cat) pct() float64 { return math.Round(c.load*1e6) / 1e4 }
+
 // speed is where the load sits between the sleep line and top speed, zero
 // through one.
 func (c *Cat) speed() float64 {
 	lo, hi := float64(c.bands.SleepBelow), float64(c.bands.TopAt)
-	return min(max((c.load*100-lo)/(hi-lo), 0), 1)
+	return min(max((c.pct()-lo)/(hi-lo), 0), 1)
 }
 
 // geometric interpolates from slow to fast so each step of load changes the
@@ -210,7 +214,7 @@ func (c *Cat) Observe(load float64, now time.Time) {
 	}
 	c.load = min(max(load, 0), 1)
 	c.known = true
-	pct := c.load * 100
+	pct := c.pct()
 	line := float64(c.bands.SleepBelow)
 	busy := c.bands.SleepBelow == 0 || pct >= line
 	if c.act.idle() && !busy {
@@ -219,7 +223,7 @@ func (c *Cat) Observe(load float64, now time.Time) {
 		}
 		return // still idle: the schedule runs from Tick
 	}
-	if !c.act.idle() && c.bands.SleepBelow > 0 && pct < line-hysteresis {
+	if !c.act.idle() && c.bands.SleepBelow > 0 && pct < c.settleAt() {
 		c.settle(now)
 		return
 	}
@@ -243,6 +247,15 @@ func (c *Cat) Observe(load float64, now time.Time) {
 		c.target = cycle
 		c.easeAt = now
 	}
+}
+
+// settleAt is the load below which a moving cat settles: hysteresis points
+// under the idle line, or half the line when the line is too low to take the
+// full band. A fixed band alone left lines of 1 to 3 with nowhere to settle,
+// since load never goes below zero.
+func (c *Cat) settleAt() float64 {
+	line := float64(c.bands.SleepBelow)
+	return line - min(hysteresis, line/2)
 }
 
 // move puts the cat into a gait at its target pace. A new gait is a new
@@ -325,7 +338,7 @@ func (c *Cat) Tick(now time.Time) bool {
 }
 
 func (c *Cat) busy() bool {
-	return c.known && (c.bands.SleepBelow == 0 || c.load*100 >= float64(c.bands.SleepBelow))
+	return c.known && (c.bands.SleepBelow == 0 || c.pct() >= float64(c.bands.SleepBelow))
 }
 
 // pickIdle chooses what a sitting cat does next: mostly it keeps sitting.

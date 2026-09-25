@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -92,5 +93,17 @@ func TestSamplerReadsTheLiveKernelFileWithoutAllocating(t *testing.T) {
 	allocs := testing.AllocsPerRun(20, func() { _, _, _ = s.Sample() })
 	if allocs != 0 {
 		t.Fatalf("a live sample allocates %.0f times", allocs)
+	}
+}
+
+func TestSamplerErrorsNameTheFileRead(t *testing.T) {
+	t.Parallel()
+	path := t.TempDir() + "/stat"
+	if err := os.WriteFile(path, []byte("intr 1 2 3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := OpenSampler(path)
+	if err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("err = %v, want it to name %s", err, path)
 	}
 }
