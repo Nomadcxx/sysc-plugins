@@ -245,3 +245,16 @@ func (s *Store) Renaming() string {
 	defer s.mu.Unlock()
 	return s.renaming
 }
+
+// Readings formats every zone at now. A zone that stopped resolving (tzdata
+// changed underneath) is skipped rather than shown as an error.
+func (s *Store) Readings(now time.Time, local *time.Location, hour24 bool) []Reading {
+	zones := s.Zones()
+	out := make([]Reading, 0, len(zones))
+	for _, z := range zones {
+		if r, err := Read(z, now, local, hour24); err == nil {
+			out = append(out, r)
+		}
+	}
+	return out
+}

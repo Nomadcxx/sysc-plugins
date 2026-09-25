@@ -25,15 +25,6 @@ func New() *Clock {
 	return &Clock{zones: zones, hour24: true}
 }
 
-// ShortLabel renders a zone's last path segment with underscores as spaces:
-// "America/New_York" becomes "New York".
-func ShortLabel(zone string) string {
-	if i := strings.LastIndex(zone, "/"); i >= 0 && i+1 < len(zone) {
-		zone = zone[i+1:]
-	}
-	return strings.ReplaceAll(zone, "_", " ")
-}
-
 func (c *Clock) Zones() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -173,49 +164,15 @@ func (c *Clock) Reorder(from, insertBefore int) error {
 	return nil
 }
 
-type Reading struct {
-	Zone   string
-	Label  string
-	Clock  string
-	Offset string
-}
-
 func (c *Clock) Readings(now time.Time) []Reading {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]Reading, 0, len(c.zones))
-	for _, z := range c.zones {
-		loc, err := time.LoadLocation(z)
-		if err != nil {
-			continue
+	zones, hour24 := append([]string(nil), c.zones...), c.hour24
+	c.mu.Unlock()
+	out := make([]Reading, 0, len(zones))
+	for _, z := range zones {
+		if r, err := Read(Zone{ID: z, OnBar: true}, now, time.UTC, hour24); err == nil {
+			out = append(out, r)
 		}
-		out = append(out, Reading{Zone: z, Label: ShortLabel(z), Clock: formatClock(now.In(loc), c.hour24), Offset: formatOffset(now.In(loc))})
 	}
 	return out
-}
-
-func formatClock(t time.Time, hour24 bool) string {
-	if hour24 {
-		return t.Format("15:04")
-	}
-	return t.Format("3:04 PM")
-}
-
-func formatOffset(t time.Time) string {
-	_, off := t.Zone()
-	h := off / 3600
-	m := (off % 3600) / 60
-	if m < 0 {
-		m = -m
-	}
-	if h >= 0 {
-		if m == 0 {
-			return fmt.Sprintf("UTC+%d", h)
-		}
-		return fmt.Sprintf("UTC+%d:%02d", h, m)
-	}
-	if m == 0 {
-		return fmt.Sprintf("UTC%d", h)
-	}
-	return fmt.Sprintf("UTC%d:%02d", h, m)
 }
