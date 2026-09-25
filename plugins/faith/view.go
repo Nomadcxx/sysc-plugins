@@ -83,7 +83,7 @@ func TooltipTree(ref Ref, verse string) *v1.Node {
 	for _, l := range lines {
 		children = append(children, &v1.Node{Kind: v1.KindText, Text: l})
 	}
-	children = append(children, &v1.Node{Kind: v1.KindText, Text: "Middle-click to read", Tone: v1.ToneSubtle, Size: "caption"})
+	children = append(children, &v1.Node{Kind: v1.KindText, Text: "Right-click to read", Tone: v1.ToneSubtle, Size: "caption"})
 	return &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: children}
 }
 

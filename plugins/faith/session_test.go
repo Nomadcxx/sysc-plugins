@@ -43,15 +43,16 @@ func TestCrossClicks(t *testing.T) {
 	if n := effectsOf[NotifyEffect](s.Input(click(NodeCross, v1.EventActivate, ""), t0)); len(n) != 1 || n[0].Params.Summary == "" {
 		t.Fatalf("left click (activate) gave %v", n)
 	}
-	if n := effectsOf[NotifyEffect](s.Input(click(NodeCross, v1.EventPointer, v1.ButtonSecondary), t0)); len(n) != 1 {
-		t.Fatalf("right click gave %v", n)
-	}
 	if e := s.Input(click(NodeCross, v1.EventPointer, v1.ButtonPrimary), t0); len(e) != 0 {
 		t.Fatalf("the primary press gave %v; a left click would pray twice", e)
 	}
-	p := effectsOf[OpenPanelEffect](s.Input(click(NodeCross, v1.EventPointer, v1.ButtonMiddle), t0))
-	if len(p) != 1 || p[0].Output != "DP-1" || p[0].Instance != "bar-1" {
-		t.Fatalf("middle click gave %v", p)
+	e := s.Input(click(NodeCross, v1.EventPointer, v1.ButtonSecondary), t0)
+	p := effectsOf[OpenPanelEffect](e)
+	if len(p) != 1 || p[0].Output != "DP-1" || p[0].Instance != "bar-1" || len(effectsOf[NotifyEffect](e)) != 0 {
+		t.Fatalf("right click gave %v", e)
+	}
+	if e := s.Input(click(NodeCross, v1.EventPointer, v1.ButtonMiddle), t0); len(e) != 0 {
+		t.Fatalf("middle click gave %v", e)
 	}
 }
 

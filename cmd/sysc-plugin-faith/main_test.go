@@ -196,7 +196,7 @@ func TestClicksOnTheCross(t *testing.T) {
 		t.Fatalf("prayer = %+v", first)
 	}
 
-	h.input("bar-1", "cross", v1.EventPointer, v1.ButtonSecondary)
+	h.input("bar-1", "cross", v1.EventActivate, "")
 	h.waitFor("a second prayer", func() bool { return len(h.notify) == 2 })
 	h.mu.Lock()
 	second := h.notify[1]
@@ -205,11 +205,15 @@ func TestClicksOnTheCross(t *testing.T) {
 		t.Fatalf("the same prayer twice in a row: %s", first.Summary)
 	}
 
-	h.input("bar-1", "cross", v1.EventPointer, v1.ButtonMiddle)
+	h.input("bar-1", "cross", v1.EventPointer, v1.ButtonSecondary)
 	h.waitFor("panel.open", func() bool { return len(h.panels) == 1 })
 	h.mu.Lock()
 	p := h.panels[0]
+	prayers := len(h.notify)
 	h.mu.Unlock()
+	if prayers != 2 {
+		t.Fatalf("a right click also sent a prayer (%d prayers)", prayers)
+	}
 	if p.Entry != "panel" || p.Output != "DP-1" || p.Instance != "bar-1" {
 		t.Fatalf("panel.open = %+v", p)
 	}

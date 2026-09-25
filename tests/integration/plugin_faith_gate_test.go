@@ -19,7 +19,7 @@ import (
 
 // TestPluginFaithGate builds the Faith binary and drives it as the host
 // would: the bar, the tooltip, and the panel, a prayer from the cross, a
-// middle click, verse navigation, and a cross-reference jump. Every snapshot
+// right click, verse navigation, and a cross-reference jump. Every snapshot
 // is laid out with the host's own rules at the slot it was opened with, and
 // the commentary host is down, so the offline path is the one exercised.
 func TestPluginFaithGate(t *testing.T) {
@@ -124,13 +124,13 @@ func TestPluginFaithGate(t *testing.T) {
 	h.open("tip-1", v1.ViewTooltip, "bar", lint.TooltipWidth, lint.TooltipHeight)
 	h.open("panel-1", v1.ViewPanel, "panel", m.Panels[0].Width, m.Panels[0].Height)
 	h.wait("the three views", func() bool {
-		return findID(h.roots["bar-1"], "cross") != nil && strings.Contains(treeText(h.roots["tip-1"]), "Middle-click") &&
+		return findID(h.roots["bar-1"], "cross") != nil && strings.Contains(treeText(h.roots["tip-1"]), "Right-click") &&
 			strings.Contains(treeText(h.roots["panel-1"]), "Commentary unavailable offline.")
 	})
 
 	h.click("bar-1", "cross", v1.EventActivate, "")
 	h.wait("a prayer", func() bool { return h.count(v1.CallNotify) == 1 })
-	h.click("bar-1", "cross", v1.EventPointer, v1.ButtonMiddle)
+	h.click("bar-1", "cross", v1.EventPointer, v1.ButtonSecondary)
 	h.wait("panel.open", func() bool { return h.count(v1.CallPanelOpen) == 1 })
 
 	before := faithRef(h.root("panel-1"))

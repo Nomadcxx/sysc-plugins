@@ -19,7 +19,7 @@ file and its register row (AGENTS.md handover rule).
 | 7 | Faith: commentary client | `10dde77` | httptest coverage for decoding, 404, the size cap, cancellation, and the cache bound. |
 | 8 | Faith: prayer corpus and shuffle bag | `e2b3357` | 33 prayers. The bag deals each prayer once per round, never back to back. |
 | 9 | Faith: wrapping and views | `e1f427d` | `TestViewsFitTheirHostSlots` runs `plugin/lint` at bar, tooltip, and 440×460 for every commentary state. |
-| 10 | Faith: session and settings | `5781f6a` | A left click prays once (the primary press is ignored), the panel refresh pauses, and daily mode turns at midnight. |
+| 10 | Faith: session and settings | `5781f6a`, then the click swap | A left click prays once (the primary press is ignored), a right click opens the panel, the refresh pauses under an open panel, and daily mode turns at midnight. |
 | 11 | Faith: protocol loop | `ade6fc7` | The in-process fake-host tests pass five times under `-race`. |
 | 12 | Faith: integration gate | `46d3c72` | `TestPluginFaithGate` passes three times under `-race`. |
 | 13 | Faith: attribution | this commit | README attribution; `make validate` and `make catalog-validate` pass. |
@@ -31,8 +31,7 @@ file and its register row (AGENTS.md handover rule).
    it. An older shell refuses the bar: an unknown icon fails conversion.
 2. **Live Niri check (plan Task 13 step 3).** This has not been run. Check that:
    - the cross renders at bar size;
-   - a left click gives one prayer, and a right click gives one;
-   - a middle click opens the panel;
+   - a left click gives one prayer, and a right click opens the panel;
    - commentary loads online and says it is unavailable offline;
    - "Read chapter" opens the right biblehub.com page in BSB, WEB, and KJV (the URL template
      is unverified because the build sandbox could not reach biblehub.com);

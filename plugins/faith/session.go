@@ -161,8 +161,6 @@ func (s *Session) Input(ev *v1.InputEvent, now time.Time) []Effect {
 		case ev.Event == v1.EventActivate:
 			return s.pray()
 		case ev.Event == v1.EventPointer && ev.Button == v1.ButtonSecondary:
-			return s.pray()
-		case ev.Event == v1.EventPointer && ev.Button == v1.ButtonMiddle:
 			return []Effect{OpenPanelEffect{Output: ev.Output, Instance: ev.ViewID}}
 		}
 		// A primary press arrives as a pointer event before the release's

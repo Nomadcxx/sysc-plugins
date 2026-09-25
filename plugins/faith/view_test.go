@@ -62,7 +62,7 @@ func TestTooltipShowsTwoLinesAndTheHint(t *testing.T) {
 	ref := mustRef(t, "JHN 3:16")
 	verse, _ := b.Text(ref)
 	got := texts(TooltipTree(ref, verse))
-	if len(got) != 4 || got[0] != "John 3:16" || !strings.HasSuffix(got[2], "…") || got[3] != "Middle-click to read" {
+	if len(got) != 4 || got[0] != "John 3:16" || !strings.HasSuffix(got[2], "…") || got[3] != "Right-click to read" {
 		t.Fatalf("tooltip = %q", got)
 	}
 	for _, l := range got[1:3] {

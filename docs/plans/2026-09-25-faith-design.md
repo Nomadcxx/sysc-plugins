@@ -14,12 +14,12 @@ The plugin is named Faith: `org.sysc.faith`, directory `plugins/faith`, executab
 
 ## Decisions
 
-1. **Both primary and secondary click give a prayer.** The cross's bar button declares
-   `activate` and `pointer`; `activate` and a `secondary` pointer event each send one prayer
-   through `notify`. The host also sends a `primary` pointer event on press before the
-   release's `activate`; the plugin ignores it, so one left click is one prayer. A `middle`
-   pointer event opens the verse panel. The tooltip names the
-   current verse and says that middle click opens it.
+1. **Left click prays; right click reads.** The cross's bar button declares `activate` and
+   `pointer`. `activate` (a left click) sends one prayer through `notify`, and a `secondary`
+   pointer event (a right click) opens the verse panel. The host also sends a `primary` pointer
+   event on press before the release's `activate`; the plugin ignores it, so one left click is
+   one prayer. Middle click does nothing. The tooltip says that right click opens the panel.
+   (Revised 2026-09-25 from "both clicks pray, middle click reads".)
 2. **Prayers are bundled, not fetched.** No free prayer API exists. The plugin ships a fixed
    corpus as Go data, each entry carrying its title, text, tradition, and source.
 3. **Public-domain prayers only.** Sources are Scripture (from a public-domain translation), the
@@ -83,7 +83,7 @@ the row two children with the icon first.
 ### Tooltip
 
 A column: the reference (accent, bold), the first two wrapped lines of the verse, and a subtle
-caption "Middle-click to read".
+caption "Right-click to read".
 
 ### Prayer notification
 
