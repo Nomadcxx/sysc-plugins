@@ -1,4 +1,4 @@
-# Lamp design
+# Faith design
 
 Date: 2026-09-25 · Baseline: `main` at `8fd1a24`, shell `main` at `f77226a` · Prior art: Noctalia
 community `quranwidget` 1.0.1 (MezoAhmedII, MIT).
@@ -9,14 +9,16 @@ A Christian devotional plugin for sysc-shell. A cross on the bar gives the user 
 clicked. An attached panel shows a Scripture verse with commentary and cross-references. Every
 text the plugin shows is Christian: Scripture, historic prayers, and Christian commentary.
 
-"Your word is a lamp to my feet and a light to my path." — Psalm 119:105. `Lamp` is the working
-name (`org.sysc.lamp`, `plugins/lamp`); a rename before the first tag touches only identifiers.
+The plugin is named Faith: `org.sysc.faith`, directory `plugins/faith`, executable
+`sysc-plugin-faith`. The implementation plan is `2026-09-25-faith.md`.
 
 ## Decisions
 
 1. **Both primary and secondary click give a prayer.** The cross's bar button declares
    `activate` and `pointer`; `activate` and a `secondary` pointer event each send one prayer
-   through `notify`. A `middle` pointer event opens the verse panel. The tooltip names the
+   through `notify`. The host also sends a `primary` pointer event on press before the
+   release's `activate`; the plugin ignores it, so one left click is one prayer. A `middle`
+   pointer event opens the verse panel. The tooltip names the
    current verse and says that middle click opens it.
 2. **Prayers are bundled, not fetched.** No free prayer API exists. The plugin ships a fixed
    corpus as Go data, each entry carrying its title, text, tradition, and source.
@@ -46,13 +48,17 @@ name (`org.sysc.lamp`, `plugins/lamp`); a rename before the first tag touches on
    permits redistribution. The implementation plan fixes the exact API IDs against
    `available_translations.json` before any code names them.
 10. **Commentary replaces tafsir.** The panel's commentary section shows the verse's entry from
-    an API commentary (`adam-clarke` by default, `tyndale` selectable), fetched on demand.
+    an API commentary (`adam-clarke` by default, `tyndale` selectable), fetched on demand. An
+    entry can run to thousands of words, so the panel shows at most 40 wrapped lines and says
+    when it has shortened one.
 11. **Cross-references are new.** The reference has no equivalent. Up to five references from the
-    `open-cross-ref` dataset appear as buttons; activating one navigates the panel to it.
+    `open-cross-ref` dataset appear as buttons, highest score first; activating one navigates the
+    panel to it. The dataset is CC BY 4.0, so the section carries a subtle "OpenBible.info"
+    credit and the README credits it too.
 12. **The plugin wraps text itself.** The protocol has no text wrapping and the host measures
     text at eight pixels per byte. Verse, prayer excerpt, and commentary are broken into lines at
-    `floor(content width / 8)` bytes on word boundaries, one text node per line, inside a scroll
-    where the text can exceed the panel.
+    `floor(content width / 8)` bytes on word boundaries, one text node per line. The panel body
+    is a `list`, the protocol's only scrolling container.
 13. **A new `cross` glyph in the shell's icon font.** The shell's catalogue has no cross. A Latin
     cross SVG (`internal/render/icons/svg/cross.svg`) is appended to `GLYPHS` in
     `internal/render/icons/build.py` at the next private-use codepoint, and `sysc-icons.ttf` is
@@ -68,7 +74,7 @@ name (`org.sysc.lamp`, `plugins/lamp`); a rename before the first tag touches on
 
 ### Bar
 
-A single-child row: the `cross` icon button, named "Lamp: click for a prayer". An optional
+A single-child row: the `cross` icon button, named "Faith: click for a prayer". An optional
 `show_reference` setting (default off) appends the current verse reference as subtle text, making
 the row two children with the icon first.
 
@@ -89,12 +95,15 @@ Attached, 440×460 in the manifest. From the top:
 
 1. Header row: reference (title, accent) and translation abbreviation (caption, subtle, pinned
    end).
-2. Verse text, wrapped, in a scroll.
+2. Verse text, wrapped.
 3. Control row: previous verse, next verse, new verse, open chapter in browser (`xdg-open`; the
    plan picks a reader URL that serves the chosen translation).
-4. Separator, then "Commentary" with the commentary entry (wrapped, scrolled), or a subtle
-   "No commentary on this verse" line.
-5. Separator, then "See also" with up to five cross-reference buttons.
+4. Separator, then "Commentary" with the commentary entry (wrapped, at most 40 lines), or a
+   subtle "No commentary on this verse" line.
+5. Separator, then "See also" with up to five cross-reference buttons and the OpenBible.info
+   credit.
+
+Rows 2 to 5 sit in one `list` so the panel scrolls as a whole.
 
 The previous and next buttons are disabled at Genesis 1:1 and Revelation 22:21. Every layout is
 checked by `plugin/lint` at 440×460.
