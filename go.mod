@@ -3,7 +3,7 @@ module github.com/Nomadcxx/sysc-plugins
 go 1.26.4
 
 require (
-	github.com/Nomadcxx/sysc-shell v0.0.0-20260925134947-2e97841b050e
+	github.com/Nomadcxx/sysc-shell v0.0.0-20260925145805-5ed5603cbed9
 	github.com/godbus/dbus/v5 v5.2.2
 	golang.org/x/image v0.45.0
 )
