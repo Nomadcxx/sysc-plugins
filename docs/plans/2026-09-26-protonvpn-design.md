@@ -15,10 +15,13 @@ A ProtonVPN plugin for sysc-shell that matches or exceeds three references:
   vocabulary, server-load colour thresholds, maintenance dimming, free-tier
   sorting.
 
-Backend is the official `protonvpn` CLI (the command surface Noctalia targets:
-`connect/disconnect/status/info/config/signin/signout`). All CLI interaction
-is isolated in one file so an adapter for a future CLI revision touches
-parsers only.
+Backend is the official `protonvpn` CLI (`connect`, `disconnect`, `status`,
+`info`, `config list`, `config set`, `signin`, `signout`). Noctalia runs the
+same binary but parses output the official CLI does not print (country/city/IP
+lines in `status`, `key: value` lines in `config list`), so its parsers are
+not a contract to copy: the formats below are taken from the CLI's own source
+(`ProtonVPN/proton-vpn-cli`, `stable`). All CLI interaction is isolated in one
+file so an adapter for a future CLI revision touches parsers only.
 
 ## Prior-art audit
 
@@ -26,6 +29,11 @@ Taken from Noctalia: the 3-tab panel (connections / protection / account),
 kill switch, NetShield 3-way, port forwarding with NAT-PMP renewal, split
 tunneling via `~/.config/Proton/VPN/settings.json`, the `.desktop` app scanner,
 country aggregation from `serverlist.json`, bar right-click quick connect.
+
+Noctalia's CLI parsers are not copied: they expect `status` fields (`Country`,
+`City`, `IP`, `Kill Switch`) and `config list` `key: value` lines that the
+official CLI does not emit. The command names and the settings.json
+split-tunnel shape are copied; the parsing is written against the real output.
 
 Taken from DMS: quick-connect modes as a setting, protocol awareness, the
 speed container, paid-server awareness.
@@ -52,8 +60,8 @@ In: bar + tooltip; 460×580 attached panel with 3 tabs; connection card with
 live rx/tx; quick connect (fastest / random / P2P / Tor); search + country
 list with expandable per-server rows; kill switch; NetShield; port forwarding
 with NAT-PMP; split tunneling with app picker; account (sign-in via terminal
-handoff, sign-out, plan, CLI info); host settings; connect/disconnect
-notifications.
+handoff, sign-out, account name, protocol, interface); host settings;
+connect/disconnect notifications.
 
 Out: pinned servers, custom DNS, early access, WireGuard config import,
 in-panel 2FA (terminal handoff instead), an "Upgrade" upsell, protocol
@@ -67,7 +75,7 @@ One plugin process, which is also the service.
 | File | Owns |
 |---|---|
 | `plugins/protonvpn/manifest.json` | Schema 1, id `org.sysc.protonvpn`, version 1.0.0, protocol minor 8, capabilities `panels, settings, state, notifications`, `requires.commands: ["protonvpn"]`, panel 460×580 attached, `include_settings` false. |
-| `plugins/protonvpn/cli.go` | The only file that spawns the CLI: connect (no arg / `--random` / `--p2p` / `--tor` / `--country CC` / server name), disconnect, `status`, `info`, `config list`, `config set …`, `signin`, `signout`. Key:value parsers, 15s connect timeout, stderr capture. |
+| `plugins/protonvpn/cli.go` | The only file that spawns the CLI: connect (no arg / `--random` / `--p2p` / `--tor` / `--country CC` / server name), disconnect, `status`, `info`, `config list`, `config set …`, `signin`, `signout`. Parsers for the CLI's real formats (status lines, the `Account:` line, the `config list` table), 15s connect timeout, stderr capture, IP from connect stdout. |
 | `plugins/protonvpn/state.go` | The state machine (disconnected → connecting → connected → disconnecting, error capture with 20s transition deadline), poll scheduling, traffic sampling from `/sys/class/net/proton0/statistics/`, nmcli link watch, NAT-PMP renewal cadence. |
 | `plugins/protonvpn/servers.go` | `~/.cache/Proton/VPN/serverlist.json` parser (~18k LogicalServers), country aggregation (count, average load, feature bitmask SECURE_CORE=1 TOR=2 P2P=4 STREAMING=8, maintenance), per-country server lists, free-tier sort, built-in fallback country list. |
 | `plugins/protonvpn/apps.go` | `.desktop` scan across XDG data dirs for split-tunnel candidates: Exec reduction, PATH resolution, exclusion of flatpak/snap runners, shells, dispatchers, setuid binaries. |
@@ -135,25 +143,45 @@ recorded here before country-row work starts.
 
 ## CLI integration
 
-Commands (protonvpn-cli-ng surface, as Noctalia targets): `protonvpn connect`
-(no arg = fastest; `--random`, `--p2p`, `--tor`, `--country CC`, or a server
+Commands (the official `protonvpn` CLI, verified against
+`ProtonVPN/proton-vpn-cli` `stable`): `protonvpn connect` (no arg = fastest;
+`--random`, `--p2p`, `--tor`, `--country CC|name`, `--city`, or a server
 name), `disconnect`, `status`, `info`, `config list`,
 `config set kill-switch standard|off`,
 `config set netshield off|malware-only|malware-ads-trackers`,
 `config set port-forwarding on|off`, `signin <user>`, `signout`.
 
-Parsing contract: `Key: value` lines; fields status, server, country, city,
-ip, protocol, kill switch, netshield, port forwarding, plan, CLI version,
-tunnel interface. Parsers are table-driven against fixtures captured from a
-real installed CLI in the first implementation step; the fixtures, not
-assumptions, define the format.
+Parsing contract, from the CLI's real output:
 
+- `status` (connected): `Status: Connected`, `Server: {name} in {location}`,
+  `Load: {N}%`, `Protocol: {protocol}`. Disconnected: `Status: Disconnected`
+  alone. Location is `City, Country`, `Country`, or `City, via EntryCountry`
+  (Secure Core). There is no IP line; the country code is parsed from the
+  server-name prefix (`US-NY#1` → `US`).
+- `info`: `Account: '{name}'` only — no plan, no CLI version, no interface.
+- `config list`: a tabulate table (`Setting` / `Value` columns, two-space
+  separation) with rows `kill-switch`, `netshield`, `port-forwarding`,
+  `custom-dns`, `vpn-accelerator`, `moderate-nat`, `ipv6`,
+  `anonymous-crash-reports`; free-tier rows read `Upgrade to enable` and map
+  to `off`.
+- `connect` stdout: `Connected to {name} in {location}.` then `Your new IP
+  address is {ip}.` — the only place the IP appears, so it is captured on
+  connect and cleared on disconnect.
+
+Parsers are table-driven against fixtures in the CLI's real formats; a live
+CLI capture replaces them when one is installed. Unparseable output is an
+error, never a zero value.
+
+- Kill switch cannot be changed while connected (the CLI refuses); the toggle
+  is disabled while connected.
 - Port forwarding toggle is a CLI command; the forwarded port number is not —
   it comes from our NAT-PMP client only.
-- Split tunneling is not a CLI command: write
-  `~/.config/Proton/VPN/settings.json` `features.split_tunneling.{enabled,apps}`.
-  Mutually exclusive with kill switch; enabling shows the GTK app's
-  "Remember to restart affected apps" notification.
+- Split tunneling is not a CLI feature yet (the CLI README says so): writing
+  `~/.config/Proton/VPN/settings.json`
+  `features.split_tunneling.{enabled,apps}` matches Noctalia and the GTK app
+  and is forward-compatible, but the CLI does not apply it today. Mutually
+  exclusive with kill switch; enabling shows the GTK app's "Remember to
+  restart affected apps" notification.
 - Sign-in needs a TTY (password + 2FA): spawn the user's terminal via
   `xdg-terminal-exec`, falling back to `x-terminal-emulator` then a short
   common list, running `protonvpn signin <user>`; the panel shows a hint line
@@ -165,9 +193,10 @@ assumptions, define the format.
 Aggregation per country: server count, average load, feature bits, maintenance
 (a country is under maintenance when all its servers are down; `Status==1` is
 only trusted when at least one server anywhere is up). Server rows carry name,
-city, load, features, score. Free accounts (plan from `protonvpn info`) sort
-free locations first. Missing or stale file → a built-in 12-country fallback
-list with a subtle "Server list unavailable" notice.
+city, load, features, score. The CLI does not expose the plan, so free
+locations (tier 0) sort first unconditionally — safe for free accounts, and
+paid users can still pick any country. Missing or stale file → a built-in
+12-country fallback list with a subtle "Server list unavailable" notice.
 
 ## Panel (460 × 580, attached)
 
@@ -182,8 +211,10 @@ Root column, padding 12, gap 8. Budget: 24 padding + 96 connection card + 8 +
    (error fill) → `Connect`. Disabled while disconnecting.
 2. Server name (bold) + country-code badge; city, country subtle. When
    disconnected: "Fastest country" over "Auto-selected on connect".
-3. IP · protocol (subtle) and, when `traffic_monitoring` and connected, the
-   keyed rx/tx line (`download`/`upload` icons, tabular text, session totals).
+3. IP · protocol (subtle; IP only when known — it comes from the connect
+   output, so a plugin started while already connected shows protocol alone)
+   and, when `traffic_monitoring` and connected, the keyed rx/tx line
+   (`download`/`upload` icons, tabular text, session totals).
 
 Error detail (first stderr line, error tone, key `err`) renders under the
 card when present and clears on the next state change.
@@ -196,8 +227,9 @@ fill accent, inactive soft.
 tagged with the feature); search row (text input, placeholder "Search country
 or server", `Reseed`, change + submit, plus a disabled-until-non-empty clear
 button); scrolling `list` (~316 tall). Country row: code badge capsule (or
-flag per spike), name (bold), `N servers · L%` subtle with a 48px load
-progress coloured by the GTK thresholds, chevron expand, `Connect` button
+flag per spike), name (bold), `N servers · L%` subtle (`1 server` singular)
+with a 48px load progress coloured by the GTK thresholds, chevron expand,
+`Connect` button
 PinEnd. Rows are rows, never buttons-with-children. Expand inserts server
 rows inline (name, city, load, feature tags `lan` P2P / `visibility_off` Tor /
 `security` Secure Core / `play_arrow` streaming, Connect). Connected country
@@ -216,11 +248,12 @@ kill switch is on), excluded-app rows (name, path subtle, delete), and an
 add-app input with up to 5 suggestion chips from the `.desktop` scan — the
 world-clock suggestion pattern.
 
-**Account tab** (list, 404): signed-in card (`person` icon, username bold,
-plan subtle) or the sign-in row (username input + Sign in button + terminal
-handoff hint); sign-out and refresh buttons; info rows (CLI version,
-protocol, tunnel interface); an Options section rendering the current
-settings values as read-only rows with a pointer to the shell settings pane.
+**Account tab** (list, 404): signed-in card (`person` icon, username bold) or
+the sign-in row (username input + Sign in button + terminal handoff hint);
+sign-out and refresh buttons; info rows (account name from `info`, protocol
+from `status`, tunnel interface from the link watch); an Options section
+rendering the current settings values as read-only rows with a pointer to the
+shell settings pane.
 
 ## Bar and tooltip
 
@@ -234,15 +267,15 @@ Bar 240×32, root row, one button (whole control opens the panel):
   setting) when disconnected, disconnects when connected, does nothing while
   transitioning.
 
-Tooltip (280×200, root column): status word, server, city/country, IP, rx/tx
-rates, protocol. Disconnected: "Unprotected" and "Right-click to quick
-connect".
+Tooltip (280×200, root column): status word, server, location, IP (when
+known), rx/tx rates, protocol. Disconnected: "Unprotected" and "Right-click
+to quick connect".
 
 ## Polling
 
 - Status poll every `refresh_seconds` when stable; every 1s while connecting
   or disconnecting; a transition older than 20s becomes `Connection error`.
-- nmcli link watch every 2s while connected (`nmcli -t -f NAME,DEVICE,STATE
+- nmcli link watch every 2s while connected (`nmcli -t -f NAME,TYPE,DEVICE,STATE
   connection show --active`, ProtonVPN name / proton0 / wireguard match): a
   vanished tunnel triggers an immediate status refresh. nmcli is optional —
   without it the status poll alone drives the bar.
@@ -259,6 +292,8 @@ connect".
 | CLI missing at runtime | Bar renders disabled; panel banner "protonvpn CLI not found". |
 | Connect timeout (20s) | `Connection error` + stderr detail line. |
 | Auth/session errors | stderr mapped to "Authentication denied" / "Session limit reached" style detail. |
+| Kill switch changed while connected | Toggle disabled while connected (the CLI refuses the change). |
+| Free-tier connect target | CLI stderr ("not available on the free plan") shown as the error detail. |
 | serverlist.json missing | Built-in 12-country fallback + subtle notice. |
 | settings.json write fails | Error line in the Protection tab; toggle reverts. |
 | NAT-PMP failure | Port row shows `—`; retried next cycle. |

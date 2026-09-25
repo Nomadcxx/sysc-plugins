@@ -20,12 +20,13 @@
 - No new Go module dependencies.
 - Commit messages carry no AI attribution (a repo hook rejects it).
 - Copy is verbatim from the spec: status words `Unprotected`, `Connecting…`, `Protected`, `Disconnecting…`, `Connection error`; placeholder `Search country or server`; `Active port: {N}`; `{name} is under maintenance`; `Fastest country`; `Auto-selected on connect`; `protonvpn CLI not found`; `Server list unavailable`; `Remember to restart affected apps`.
-- CLI parsers are governed by fixtures in `plugins/protonvpn/testdata/`, captured from a real CLI where possible (Task 5 step 1); never from assumption alone.
+- CLI parsers are governed by fixtures in `plugins/protonvpn/testdata/`, written to the official CLI's real output formats (verified from `ProtonVPN/proton-vpn-cli` `stable`; the CLI is not installed here). Task 5 step 1 re-captures from a live CLI when one is present.
+- The Makefile `PLUGINS` list gains `sysc-plugin-protonvpn:protonvpn` (Task 4) or `make build`/`make install` never build the plugin.
 - Test command throughout (from `~/sysc-plugins`): `go test ./plugins/protonvpn/ ./cmd/sysc-plugin-protonvpn/`.
 
 ## Review Focus
 
-1. **CLI output drift** between protonvpn-cli versions: parsers must fail loud (error, not zero-value) on unparseable status output, and the panel must show the raw first stderr line on command failure. Test in Task 5 (`TestParseStatusGarbageIsAnError`).
+1. **CLI output drift** between protonvpn CLI versions: parsers must fail loud (error, not zero-value) on unparseable status output, and the panel must show the raw first stderr line on command failure. Test in Task 5 (`TestParseStatusGarbageIsAnError`).
 2. **Long names** (a 30-char server name, a country with a long name) in country/server rows and the bar: lint must pass, text clips, buttons never refuse the row. Test in Task 10 (`TestConnectionsLintLongNames`).
 3. **Transition deadline**: a connect that never completes becomes `Connection error` after 20s, using an injectable clock. Test in Task 6 (`TestConnectDeadline`).
 4. **Malformed `settings.json`**: split-tunnel writes must preserve unknown keys and never clobber the file on a read failure. Test in Task 11 (`TestSplitTunnelPreservesUnknownKeys`).
@@ -43,6 +44,7 @@
 | `~/sysc-shell/internal/render/materialfont.go` | modify | accept the 14 names |
 | `~/sysc-shell/internal/render/materialfont_test.go` | modify | inventory list |
 | `go.mod`, `go.sum` | modify | shell pin bump; repairs go.sum |
+| `Makefile` | modify | add `sysc-plugin-protonvpn:protonvpn` to `PLUGINS` |
 | `plugins/protonvpn/manifest.json` | create | schema, capabilities, settings |
 | `plugins/protonvpn/cli.go` (+`_test`) | create | CLI spawn + parsers |
 | `plugins/protonvpn/state.go` (+`_test`) | create | phase machine, traffic sampler |
@@ -76,7 +78,7 @@ This task is the commission from the brainstorm, made executable. `public` and `
 
 - [ ] **Step 1: Write the failing test**
 
-In `materialfont_test.go`, append to `materialInventory` after the `"public": …, "edit": …` entries (keep alphabetical position loose; the list is a set):
+In `materialfont_test.go`, append to `materialInventory` after the `"public", "edit",` entries (the list is a `[]string`; keep alphabetical position loose, it is a set):
 
 ```go
 	"shield", "verified_user", "vpn_key", "vpn_key_off", "bolt", "dns",
@@ -142,7 +144,7 @@ Expected: PASS (the inventory test asserts both map and font coverage; a name in
 
 - [ ] **Step 6: Update SOURCE.md and commit**
 
-Record the new inventory count, byte size, and SHA-256 in `SOURCE.md`.
+Record the new inventory count (86 → 100 names), byte size, and SHA-256 in `SOURCE.md`.
 
 ```bash
 cd ~/sysc-shell && git add internal/render/icons/material/build.py \
@@ -161,23 +163,32 @@ git commit -m "feat(icons): add VPN glyph set for the protonvpn plugin"
 
 **Context:** HEAD's go.sum has zero sysc-shell lines (dropped in `228113c`) and the pin (20260925112547) predates the shell commit that added `public`/`edit`, so world-clock tests fail at HEAD. This task fixes both and equips the new glyphs.
 
-- [ ] **Step 1: Pin and tidy**
+- [ ] **Step 1: Push the shell commit**
+
+`go get` resolves through the module proxy/remote and `go.mod` has no `replace` directive, so the Task 1 commit must be on the remote:
+
+```bash
+git -C ~/sysc-shell push
+```
+
+- [ ] **Step 2: Pin and tidy**
 
 ```bash
 cd ~/sysc-plugins
-SHELL_COMMIT=$(git -C ~/sysc-shell rev-parse HEAD)
-go get github.com/Nomadcxx/sysc-shell@v0.0.0-$(git -C ~/sysc-shell log -1 --format=%cd --date=format:'%Y%m%d%H%M%S')
+go get github.com/Nomadcxx/sysc-shell@$(git -C ~/sysc-shell rev-parse HEAD)
 go mod tidy
 ```
 
-- [ ] **Step 2: Verify the whole repo is green**
+`go get` resolves the commit hash to the full `v0.0.0-YYYYMMDDHHMMSS-<12hex>` pseudo-version; a bare timestamp is not a valid version.
+
+- [ ] **Step 3: Verify the whole repo is green**
 
 ```bash
 cd ~/sysc-plugins && go build ./... && go test ./... && make validate
 ```
 Expected: world-clock tests PASS (they need `public`/`edit`); all other packages PASS; manifest validation PASSes.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 cd ~/sysc-plugins && git add go.mod go.sum
@@ -207,34 +218,32 @@ Expected: at least one CBDT font (Noto Color Emoji). If none: install `noto-colo
 package render
 
 import (
-	"image"
 	"testing"
 )
 
 func TestSpikeRegionalIndicatorFlagPaints(t *testing.T) {
-	r := NewTextRenderer() // match the constructor used by render tests
-	img := image.NewRGBA(image.Rect(0, 0, 64, 32))
-	n := r.Paint(img, "\U0001F1FA\U0001F1F8", TextSpec{Size: 16}) // US flag
-	if n == 0 {
-		t.Fatal("flag painted nothing")
+	fonts, err := NewSystemFontMap("", DefaultFontCacheDir())
+	if err != nil {
+		t.Skipf("no system font map: %v", err)
 	}
-	// Non-transparent pixels prove a colour blit, not two notdef boxes.
-	found := false
-	for x := 0; x < 64 && !found; x++ {
-		for y := 0; y < 32; y++ {
-			if img.At(x, y).(color.RGBA).A > 0 {
-				found = true
-				break
-			}
-		}
+	tr := NewTextRendererWithFontMap(fonts)
+	mask, err := tr.Raster("\U0001F1FA\U0001F1F8", TextSpec{Size: 16, Weight: 400}, false) // US flag
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !found {
-		t.Fatal("flag produced no pixels")
+	if mask.Alpha == nil {
+		t.Fatal("flag produced no mask")
 	}
+	// Mask.Color is the colour layer: non-nil proves the CBDT bitmap blit
+	// path ran, not an outline notdef box.
+	if mask.Color == nil {
+		t.Fatal("no colour layer: the flag did not blit as a bitmap emoji")
+	}
+	t.Logf("flag painted %dx%d with a colour layer", mask.Alpha.Bounds().Dx(), mask.Alpha.Bounds().Dy())
 }
 ```
 
-Match the exact renderer constructor, `TextSpec` fields, and paint entry point to the neighbouring render tests (`fontmap_test.go`, `text_test.go`) — the assertion that matters is "more than zero painted pixels for the two-rune flag".
+The renderer is the runtime path (`NewSystemFontMap` + `NewTextRendererWithFontMap`), not the Latin test face; `Raster` returns `Mask{Alpha, Color}` and `Mask.Color != nil` is the assertion that matters — it is set only when a bitmap (CBDT) glyph was blitted.
 
 - [ ] **Step 3: Run the spike**
 
@@ -259,6 +268,7 @@ git commit -m "docs(protonvpn): record flag emoji spike outcome"
 **Files:**
 - Create: `plugins/protonvpn/manifest.json`
 - Create: `cmd/sysc-plugin-protonvpn/main.go`
+- Modify: `Makefile` (add the plugin to `PLUGINS`)
 - Modify: `README.md` (plugin table row), `docs/plans/README.md` (plan row)
 
 **Interfaces:**
@@ -275,7 +285,7 @@ git commit -m "docs(protonvpn): record flag emoji spike outcome"
   "name": "ProtonVPN",
   "version": "1.0.0",
   "protocol": { "major": 1, "minor": 8 },
-  "exec": "sysc-plugin-protonvpn",
+  "exec": "bin/sysc-plugin-protonvpn",
   "capabilities": ["panels", "settings", "state", "notifications"],
   "requires": { "commands": ["protonvpn"] },
   "services": [ { "id": "service" } ],
@@ -290,22 +300,41 @@ git commit -m "docs(protonvpn): record flag emoji spike outcome"
     }
   ],
   "settings": [
-    { "key": "refresh_seconds", "type": "int", "default": 5, "min": 2, "max": 60 },
-    { "key": "traffic_monitoring", "type": "bool", "default": true },
-    { "key": "notify_on_connect", "type": "bool", "default": true },
-    { "key": "bar_mode", "type": "select", "default": "code",
-      "options": ["icon", "code", "status"] },
-    { "key": "quick_connect", "type": "select", "default": "fastest",
-      "options": ["fastest", "random", "p2p", "tor"] }
+    { "key": "refresh_seconds", "type": "int", "label": "Status refresh (seconds)", "default": 5, "min": 2, "max": 60 },
+    { "key": "traffic_monitoring", "type": "bool", "label": "Show live traffic", "default": true },
+    { "key": "notify_on_connect", "type": "bool", "label": "Notify on connect", "default": true },
+    { "key": "bar_mode", "type": "select", "label": "Bar shows", "default": "code",
+      "options": [
+        {"value": "icon", "label": "Icon only"},
+        {"value": "code", "label": "Country code"},
+        {"value": "status", "label": "Status word"}
+      ] },
+    { "key": "quick_connect", "type": "select", "label": "Right-click connects to", "default": "fastest",
+      "options": [
+        {"value": "fastest", "label": "Fastest server"},
+        {"value": "random", "label": "Random server"},
+        {"value": "p2p", "label": "P2P server"},
+        {"value": "tor", "label": "Tor server"}
+      ] }
   ]
 }
 ```
 
-Match field spellings to `plugins/world-clock/manifest.json` and `plugins/github-notifications/manifest.json` (the `exec` key, settings option shape, and requires shape follow those files exactly); `make validate` is the arbiter.
+Match field spellings to `plugins/world-clock/manifest.json` and `plugins/github-notifications/manifest.json`: `exec` is `bin/<binary>` (the host's `resolveExec` requires a regular executable inside the plugin dir), every setting carries a `label`, and select `options` are `{"value","label"}` objects. The host's `internal/plugin/manifest.go` is the arbiter — `make validate` is laxer and does not check labels or option shapes.
 
-- [ ] **Step 2: Write the skeleton loop**
+- [ ] **Step 2: Register the plugin in the Makefile**
 
-`cmd/sysc-plugin-protonvpn/main.go` — copy the structure of `cmd/sysc-plugin-world-clock/main.go`: `environment` struct (now func, callTimeout), `settings` struct with `apply(map[string]any)` (missing/mistyped keeps current, ints clamped to 2–60), `session` struct (env, client, store, settings, `views map[string]view{kind,rev}`, snapshot/patch/snapshotAll helpers, `call(ctx, kind, params)` with timeout), `runPlugin` doing `v1.NewClient` → `c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.protonvpn", Name: "ProtonVPN", Version: "1.0.0"}))` → `c.Recv()` goroutine → select loop over ctx.Done / incoming (HostShutdown returns, ViewOpen stores + snapshots, ViewClose deletes, ViewResync re-snapshots, InputEvent dispatches to a stub `handle`, SettingsChanged applies + re-snapshots). Views render placeholder trees for now:
+`Makefile`, append to `PLUGINS`:
+
+```make
+sysc-plugin-protonvpn:protonvpn
+```
+
+`make build` writes `plugins/protonvpn/bin/sysc-plugin-protonvpn`, which is what the manifest's `exec` names.
+
+- [ ] **Step 3: Write the skeleton loop**
+
+`cmd/sysc-plugin-protonvpn/main.go` — copy the structure of `cmd/sysc-plugin-world-clock/main.go`: `environment` struct (now func, callTimeout), `settings` struct with `apply(map[string]any)` (missing/mistyped keeps current, ints clamped to 2–60), `session` struct (env, client, store, settings, `views map[string]view{kind,rev}`, snapshot/patch/snapshotAll helpers, `call(ctx, kind, params)` with timeout), `runPlugin` doing `v1.NewClient(os.Stdin, os.Stdout)` → `c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.protonvpn", Name: "ProtonVPN", Version: "1.0.0"}))` (import `github.com/Nomadcxx/sysc-plugins/internal/identity`) → `c.Recv()` goroutine → select loop over ctx.Done / incoming (HostShutdown returns, ViewOpen stores + snapshots, ViewClose deletes, ViewResync re-snapshots, InputEvent dispatches to a stub `handle`, SettingsChanged applies + re-snapshots). Views render placeholder trees for now:
 
 ```go
 func barTree(s *session) *v1.Node {
@@ -327,17 +356,17 @@ func tooltipTree(s *session) *v1.Node {
 }
 ```
 
-- [ ] **Step 3: Validate and build**
+- [ ] **Step 4: Validate and build**
 
 ```bash
 cd ~/sysc-plugins && make validate && go build ./... && go vet ./plugins/protonvpn/ ./cmd/sysc-plugin-protonvpn/
 ```
 Expected: all PASS.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-cd ~/sysc-plugins && git add plugins/protonvpn cmd/sysc-plugin-protonvpn README.md docs/plans/README.md
+cd ~/sysc-plugins && git add plugins/protonvpn cmd/sysc-plugin-protonvpn Makefile README.md docs/plans/README.md
 git commit -m "feat(protonvpn): manifest and plugin skeleton"
 ```
 
@@ -363,18 +392,15 @@ const (
 
 type Status struct {
 	Phase    Phase
-	Server   string
-	Country  string
-	City     string
-	IP       string
-	Protocol string
+	Server   string // "US-NY#1"
+	Location string // "New York, United States" (or "Country", or "City, via EntryCountry")
+	Country  string // ISO code parsed from the server-name prefix
+	Load     int    // percent
+	Protocol string // "wireguard"
 }
 
 type Info struct {
-	Username string
-	Plan     string
-	Version  string
-	Interface string
+	Username string // from `Account: '{name}'`
 }
 
 type Config struct {
@@ -393,12 +419,13 @@ func (c *CLI) Run(ctx context.Context, args ...string) (stdout, stderr string, e
 func (c *CLI) Status(ctx context.Context) (Status, error)
 func (c *CLI) Info(ctx context.Context) (Info, error)
 func (c *CLI) Config(ctx context.Context) (Config, error)
-func (c *CLI) Connect(ctx context.Context, target string) (string, error) // target "" = fastest; returns stderr for error detail
-func (c *CLI) Disconnect(ctx context.Context) (string, error)
+func (c *CLI) Connect(ctx context.Context, target string) (stdout, stderr string, err error) // target "" = fastest
+func (c *CLI) Disconnect(ctx context.Context) (stdout, stderr string, err error)
 func ParseStatus(stdout string) (Status, error)
 func ParseInfo(stdout string) (Info, error)
 func ParseConfig(stdout string) (Config, error)
-func ErrorDetail(stderr string) string // first non-empty line, trimmed
+func ParseConnectIP(stdout string) string // "Your new IP address is X." → X; "" when absent
+func ErrorDetail(stderr string) string    // first non-empty line, trimmed
 ```
 
 - [ ] **Step 1: Capture real CLI output if available**
@@ -406,42 +433,53 @@ func ErrorDetail(stderr string) string // first non-empty line, trimmed
 ```bash
 command -v protonvpn && { protonvpn status; protonvpn info; protonvpn config list; } | tee /tmp/proton-capture.txt
 ```
-If the CLI is installed, paste the real output into the fixtures (Step 2) instead of the shapes below, and note the CLI version in the fixture header comment. If not installed, use the fixture shapes as-is and flag the fixture files with a leading comment `# captured-from: noctalia service.luau parsing; verify against a live CLI`.
+If the CLI is installed, paste the real output into the fixtures (Step 2) instead of the shapes below, and note the CLI version in the fixture header comment. If not installed, use the fixture shapes as-is — they are the official CLI's real formats (verified from `ProtonVPN/proton-vpn-cli` `stable`), not Noctalia's assumptions.
 
 - [ ] **Step 2: Write fixtures**
 
 `testdata/status-connected.txt`:
 
 ```
-Status:       Connected
-Server:       US-NY#1
-Country:      United States
-City:         New York
-IP:           198.51.100.7
-Protocol:     WireGuard
+Status: Connected
+Server: US-NY#1 in New York, United States
+Load: 30%
+Protocol: wireguard
 ```
 
 `testdata/status-disconnected.txt`:
 
 ```
-Status:       Disconnected
+Status: Disconnected
 ```
 
 `testdata/info.txt`:
 
 ```
-User:         jane@example.com
-Plan:         Proton VPN Plus
-CLI Version:  3.13.0
-Interface:    proton0
+Account: 'jane@example.com'
 ```
 
-`testdata/config-list.txt`:
+`testdata/config-list.txt` (the CLI's tabulate table; two-space column separation):
 
 ```
-Kill Switch:  standard
-Netshield:    malware-only
-Port Forwarding: on
+Current configuration
+
+Setting                   Value
+------------------------  ----------------------
+netshield                 malware-only
+kill-switch               standard
+port-forwarding           on
+custom-dns                off
+vpn-accelerator           off
+moderate-nat              off
+ipv6                      off
+anonymous-crash-reports   off
+```
+
+`testdata/connect-success.txt`:
+
+```
+Connected to US-NY#1 in New York, United States.
+Your new IP address is 198.51.100.7.
 ```
 
 `testdata/connect-error.txt` (used as a stderr fixture):
@@ -459,8 +497,8 @@ func TestParseStatus(t *testing.T) {
 	connected, _ := os.ReadFile("testdata/status-connected.txt")
 	s, err := ParseStatus(string(connected))
 	if err != nil { t.Fatal(err) }
-	if s.Phase != PhaseConnected || s.Server != "US-NY#1" || s.Country != "United States" ||
-		s.City != "New York" || s.IP != "198.51.100.7" || s.Protocol != "WireGuard" {
+	if s.Phase != PhaseConnected || s.Server != "US-NY#1" || s.Location != "New York, United States" ||
+		s.Country != "US" || s.Load != 30 || s.Protocol != "wireguard" {
 		t.Fatalf("got %+v", s)
 	}
 	disc, _ := os.ReadFile("testdata/status-disconnected.txt")
@@ -474,7 +512,23 @@ func TestParseStatusGarbageIsAnError(t *testing.T) {
 	}
 }
 
-func TestParseInfoAndConfig(t *testing.T) { /* same shape: read fixtures, assert fields */ }
+func TestParseInfoAndConfig(t *testing.T) {
+	info, _ := os.ReadFile("testdata/info.txt")
+	i, err := ParseInfo(string(info))
+	if err != nil || i.Username != "jane@example.com" { t.Fatalf("info %+v err %v", i, err) }
+	cfg, _ := os.ReadFile("testdata/config-list.txt")
+	c, err := ParseConfig(string(cfg))
+	if err != nil { t.Fatal(err) }
+	if c.KillSwitch != "standard" || c.NetShield != "malware-only" || !c.PortForwarding {
+		t.Fatalf("config %+v", c)
+	}
+}
+
+func TestParseConnectIP(t *testing.T) {
+	out, _ := os.ReadFile("testdata/connect-success.txt")
+	if got := ParseConnectIP(string(out)); got != "198.51.100.7" { t.Fatalf("got %q", got) }
+	if got := ParseConnectIP("no ip here"); got != "" { t.Fatalf("got %q", got) }
+}
 
 func TestErrorDetail(t *testing.T) {
 	b, _ := os.ReadFile("testdata/connect-error.txt")
@@ -485,7 +539,7 @@ func TestErrorDetail(t *testing.T) {
 }
 ```
 
-Parser rules: split lines, split on the first `:`, trim spaces, match keys case-insensitively (`Status`, `Server`, `Country`, `City`, `IP`, `Protocol`; `User`, `Plan`, `CLI Version`, `Interface`; `Kill Switch`, `Netshield`, `Port Forwarding`). `Status` maps `Connected`/`Connecting`/`Disconnected`/`Disconnecting` to phases (case-insensitive); any other value or a missing `Status` key is an error. `Port Forwarding` maps `on`/`off` case-insensitively.
+Parser rules: `status` splits lines on the first `:` and matches keys case-insensitively (`Status`, `Server`, `Load`, `Protocol`). `Status` maps `Connected`/`Connecting`/`Disconnected`/`Disconnecting` to phases (case-insensitive); any other value or a missing `Status` key is an error. `Server` splits on ` in ` into name and location; the country code is the server name's leading `CC` before `-` or `#`. `Load` strips the trailing `%`. `info` matches `Account:` and strips the surrounding single quotes. `config list` skips the header and dash lines and splits each row on the first run of two or more spaces; `kill-switch`/`netshield`/`port-forwarding` are read, `Upgrade to enable` maps to `off`, and a missing row is an error. `ParseConnectIP` matches `Your new IP address is {ip}.`
 
 - [ ] **Step 4: Run tests to verify they fail**
 
@@ -494,7 +548,7 @@ Expected: FAIL (functions undefined).
 
 - [ ] **Step 5: Implement `cli.go`**
 
-Parsers as above. `Run` uses `exec.CommandContext` with a per-command timeout (`c.Timeout`, default 10s; `Connect` uses 15s), captures `CombinedOutput`-style separate stdout/stderr buffers, and returns both with the error. `Connect(ctx, target)` builds args: `connect` plus `--random`/`--p2p`/`--tor` for those targets, `--country CC` for 2-letter codes, else the raw server name; empty target = bare `connect`. `Status` runs `status`, `Info` runs `info`, `Config` runs `config list`.
+Parsers as above. `Run` uses `exec.CommandContext` with a per-command timeout (`c.Timeout`, default 10s; `Connect` uses 15s), captures separate stdout/stderr buffers, and returns both with the error. `Connect(ctx, target)` builds args: `connect` plus `--random`/`--p2p`/`--tor` for those targets, `--country CC` for 2-letter codes, else the raw server name; empty target = bare `connect`. `Status` runs `status`, `Info` runs `info`, `Config` runs `config list`. The CLI refuses `config set kill-switch` while connected, so the loop disables that toggle while connected rather than surfacing the refusal.
 
 - [ ] **Step 6: Run tests to verify they pass**
 
@@ -524,6 +578,8 @@ type Snapshot struct {
 	Status  Status
 	Info    Info
 	Config  Config
+	IP      string // from connect stdout; cleared on disconnect
+	Interface string // tunnel device from the link watch; "" when down
 	RxRate, TxRate float64 // bytes/s
 	RxTotal, TxTotal float64
 	Port    int    // NAT-PMP forwarded port; 0 = none
@@ -538,6 +594,8 @@ func (m *Machine) Snapshot() Snapshot
 func (m *Machine) SetStatus(s Status)      // from the status poll; applies the 20s deadline
 func (m *Machine) SetInfo(i Info)
 func (m *Machine) SetConfig(c Config)
+func (m *Machine) SetIP(ip string)         // connect stdout; cleared by StartDisconnect
+func (m *Machine) SetInterface(name string) // link watch; "" when the tunnel is down
 func (m *Machine) SetPort(p int)
 func (m *Machine) StartConnect()           // PhaseConnecting, clears Err, stamps the deadline
 func (m *Machine) StartDisconnect()        // PhaseDisconnecting, stamps the deadline
@@ -661,7 +719,13 @@ func FallbackCountries() []Country // the built-in 12, all Load 0, Maintenance f
 
 - [ ] **Step 1: Write the fixture**
 
-`testdata/serverlist.json` — mirror the real file's shape (`LogicalServers` array; fields `Name`, `City`, `ExitCountry`, `Load`, `Tier`, `Features`, `Status`, `Score`). Verify the field names against noctalia's `servers.py` (which parses the same file) and adjust the struct tags to match. Include: one US server (P2P, load 30, up), one US server (load 95, up), one NL server (Tor+P2P, down), one SE server (Secure Core, up, tier 2), one free-tier server (tier 0).
+`testdata/serverlist.json` — mirror the real file's shape (`LogicalServers` array; fields `Name`, `City`, `ExitCountry`, `Load`, `Tier`, `Features`, `Status`, `Score`). Verify the field names against noctalia's `servers.py` (which parses the same file) and adjust the struct tags to match. Five servers, three countries:
+
+- `US-NY#1`, New York, US, load 30, tier 2, P2P, up
+- `US-CA#1`, Los Angeles, US, load 95, tier 2, no features, up
+- `NL#1`, Amsterdam, NL, load 40, tier 0 (free), no features, down
+- `NL#2`, Rotterdam, NL, load 50, tier 2, Tor+P2P, down
+- `SE-STO#1`, Stockholm, SE, load 20, tier 2, Secure Core, up
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -676,8 +740,8 @@ func TestAggregate(t *testing.T) {
 	servers, _ := LoadServers("testdata/serverlist.json")
 	countries := Aggregate(servers, map[string]string{"US": "United States", "NL": "Netherlands", "SE": "Sweden"}, false)
 	if len(countries) != 3 { t.Fatalf("got %d", len(countries)) }
-	us := countries[0]
-	if us.Code != "US" || len(us.Servers) != 2 || us.Maintenance { t.Fatalf("US: %+v", us) }
+	us := findCountry(t, countries, "US")
+	if len(us.Servers) != 2 || us.Maintenance { t.Fatalf("US: %+v", us) }
 	if us.Load != 63 { t.Fatalf("US load %d", us.Load) } // round((30+95)/2)
 	nl := findCountry(t, countries, "NL")
 	if !nl.Maintenance { t.Fatal("NL all down → maintenance") }
@@ -687,6 +751,7 @@ func TestAggregate(t *testing.T) {
 func TestAggregateFreeTierSortsFreeFirst(t *testing.T) {
 	servers, _ := LoadServers("testdata/serverlist.json")
 	countries := Aggregate(servers, nil, true)
+	if countries[0].Code != "NL" { t.Fatalf("free country first, got %s", countries[0].Code) }
 	if countries[0].Servers[0].Tier != 0 { t.Fatal("free locations first") }
 }
 
@@ -699,7 +764,7 @@ func TestFallbackCountries(t *testing.T) {
 
 - [ ] **Step 3: Run to verify they fail, then implement**
 
-`LoadServers` decodes the JSON array (tolerate both a bare array and an object wrapping it). `Aggregate` groups by exit country, computes the mean load of up servers (0 when all down → `Maintenance`), unions features, sorts by name; `freeTier` sorts countries whose best server is tier 0 first. `FallbackCountries` embeds the same 12 codes noctalia ships (US, GB, DE, FR, NL, CA, JP, AU, IT, ES, SE, CH).
+`LoadServers` decodes the JSON array (tolerate both a bare array and an object wrapping it). `Aggregate` groups by exit country, computes the mean load of up servers (0 when all down → `Maintenance`), unions features, and sorts countries by name with servers by tier then load. With `freeTier`, countries whose best server is tier 0 sort first (then by name). `FallbackCountries` embeds a built-in 12-country list (US, GB, DE, FR, NL, CA, JP, AU, IT, ES, SE, CH).
 
 - [ ] **Step 4: Run to verify they pass, then commit**
 
@@ -775,7 +840,7 @@ func TestBarLintEveryState(t *testing.T) {
 }
 
 func TestTooltipLint(t *testing.T) {
-	root := Tooltip(BarState{Snap: Snapshot{Phase: PhaseConnected, Status: Status{Server: "US-NY#1", Country: "United States", City: "New York", IP: "198.51.100.7", Protocol: "WireGuard"}, RxRate: 1024, TxRate: 512}})
+	root := Tooltip(BarState{Snap: Snapshot{Phase: PhaseConnected, IP: "198.51.100.7", Status: Status{Server: "US-NY#1", Location: "New York, United States", Country: "US", Protocol: "wireguard"}, RxRate: 1024, TxRate: 512}})
 	if findings := lint.Tree(root, "tooltip", 280, 200); len(findings) > 0 { t.Fatalf("%v", findings) }
 }
 ```
@@ -784,7 +849,7 @@ func TestTooltipLint(t *testing.T) {
 
 - [ ] **Step 2: Run to verify they fail, then implement**
 
-`Bar` returns a row containing one button: ID `bar`, Name `ProtonVPN`, Role `button`, Events `activate` + `pointer` (right click handled by the loop via `Button`), children = icon + optional text per mode. Status words: `Unprotected` / `Connecting…` / `Protected` / `Disconnecting…` / `Connection error`. `Tooltip` renders: status word (bold), `server`, `city, country`, `IP`, `↓ rx · ↑ tx` as `download`/`upload` icons with tabular text, `protocol`; disconnected shows `Unprotected` + `Right-click to quick connect`.
+`Bar` returns a row containing one button: ID `bar`, Name `ProtonVPN`, Role `button`, Events `activate` + `pointer` (right click handled by the loop via `Button`), children = icon + optional text per mode. Status words: `Unprotected` / `Connecting…` / `Protected` / `Disconnecting…` / `Connection error`. `Tooltip` renders: status word (bold), `server`, `location`, `IP` (when known), `↓ rx · ↑ tx` as `download`/`upload` icons with tabular text, `protocol`; disconnected shows `Unprotected` + `Right-click to quick connect`.
 
 - [ ] **Step 3: Run to verify they pass, then commit**
 
@@ -818,13 +883,13 @@ func Panel(s PanelState) *v1.Node // root column, 460×580 budget
 
 ```go
 func TestPanelSkeleton(t *testing.T) {
-	s := PanelState{Snap: Snapshot{Phase: PhaseConnected, Status: Status{Server: "US-NY#1", Country: "United States", City: "New York", IP: "198.51.100.7", Protocol: "WireGuard"}}, Tab: "connections", HasCLI: true, Traffic: true}
+	s := PanelState{Snap: Snapshot{Phase: PhaseConnected, IP: "198.51.100.7", Status: Status{Server: "US-NY#1", Location: "New York, United States", Country: "US", Protocol: "wireguard"}}, Tab: "connections", HasCLI: true, Traffic: true}
 	root := Panel(s)
-	// Connection card: status word, server, city/country, IP·protocol, action button.
+	// Connection card: status word, server, location, IP·protocol, action button.
 	assertTextContains(t, root, "Protected")
 	assertTextContains(t, root, "US-NY#1")
 	assertTextContains(t, root, "New York, United States")
-	assertTextContains(t, root, "198.51.100.7 · WireGuard")
+	assertTextContains(t, root, "198.51.100.7 · wireguard")
 	if btn := findNode(t, root, "action"); btn.Text != "Disconnect" { t.Fatalf("action %q", btn.Text) }
 }
 
@@ -870,7 +935,7 @@ func TestPanelTabNav(t *testing.T) {
 func TestPanelLintEveryState(t *testing.T) {
 	for _, tab := range []string{"connections", "protection", "account"} {
 		for _, phase := range []Phase{PhaseDisconnected, PhaseConnecting, PhaseConnected, PhaseDisconnecting, PhaseError} {
-			root := Panel(PanelState{Snap: Snapshot{Phase: phase, Status: Status{Server: "US-NY#1", Country: "United States", City: "New York", IP: "198.51.100.7", Protocol: "WireGuard"}, RxRate: 1024, TxRate: 512, Port: 51820}, Tab: tab, HasCLI: true, Traffic: true})
+			root := Panel(PanelState{Snap: Snapshot{Phase: phase, IP: "198.51.100.7", Status: Status{Server: "US-NY#1", Location: "New York, United States", Country: "US", Protocol: "wireguard"}, RxRate: 1024, TxRate: 512, Port: 51820}, Tab: tab, HasCLI: true, Traffic: true})
 			if findings := lint.Tree(root, "panel", 460, 580); len(findings) > 0 {
 				t.Fatalf("tab %s phase %v: %v", tab, phase, findings)
 			}
@@ -885,7 +950,7 @@ Root column, Padding 12, Gap 8. Children:
 
 1. Optional banner (when `!HasCLI`): error-tone text `protonvpn CLI not found`.
 2. Connection card: row, Fill `card`, Radius 10, Padding 8, Height 96, Gap 8 —
-   - leading column (clips): row 1 = status icon (`vpn_key_off` subtle / `bolt` accent / `shield` accent / `gpp_bad` error) + status word (bold); row 2 = server name (bold) + country-code badge (chip capsule) — disconnected shows `Fastest country` over `Auto-selected on connect`; row 3 = `IP · protocol` (subtle) or, when connected and `Traffic`, the keyed rx/tx line (key `traffic`: `download` icon + tabular rate + `upload` icon + tabular rate).
+   - leading column (clips): row 1 = status icon (`vpn_key_off` subtle / `bolt` accent / `shield` accent / `gpp_bad` error) + status word (bold); row 2 = server name (bold) + country-code badge (chip capsule) — disconnected shows `Fastest country` over `Auto-selected on connect`; row 3 = `IP · protocol` (subtle; protocol alone when IP is unknown) or, when connected and `Traffic`, the keyed rx/tx line (key `traffic`: `download` icon + tabular rate + `upload` icon + tabular rate).
    - PinEnd action button: ID `action`, 92×40, text per the morph table, Fill accent (`Connect`) / soft (`Cancel`) / error (`Disconnect`), Disabled while disconnecting.
 3. Error detail (when `Snap.Err != ""`): error-tone text, key `err`.
 4. Tab nav row: three buttons `tab:connections` / `tab:protection` / `tab:account`, equal share, Height 36, active Fill `accent`, inactive `soft`.
@@ -941,7 +1006,7 @@ func TestConnectionsCountryRows(t *testing.T) {
 	}
 	root := ConnectionsTree(ConnectionsState{Countries: countries})
 	assertTextContains(t, root, "United States")
-	assertTextContains(t, root, "1 servers · 63%")
+	assertTextContains(t, root, "1 server · 63%")
 	if findNode(t, root, "country:US") == nil { t.Fatal("missing country row") }
 	nl := findNode(t, root, "country:NL")
 	if nl.Tone != v1.ToneSubtle { t.Fatal("maintenance row dimmed") }
@@ -960,7 +1025,15 @@ func TestConnectionsExpandShowsServers(t *testing.T) {
 }
 
 func TestConnectionsLoadTone(t *testing.T) {
-	// >90 error, >75 accent, else normal — on the load progress node.
+	countries := []Country{
+		{Code: "US", Name: "United States", Load: 95, Servers: []Server{{Name: "US-NY#1", Up: true}}},
+		{Code: "DE", Name: "Germany", Load: 80, Servers: []Server{{Name: "DE-FRA#1", Up: true}}},
+		{Code: "SE", Name: "Sweden", Load: 40, Servers: []Server{{Name: "SE-STO#1", Up: true}}},
+	}
+	root := ConnectionsTree(ConnectionsState{Countries: countries})
+	if p := findNode(t, root, "load:US"); p.Tone != v1.ToneError { t.Fatalf("95%% tone %q", p.Tone) }
+	if p := findNode(t, root, "load:DE"); p.Tone != v1.ToneAccent { t.Fatalf("80%% tone %q", p.Tone) }
+	if p := findNode(t, root, "load:SE"); p.Tone != "" { t.Fatalf("40%% tone %q", p.Tone) }
 }
 
 func TestConnectionsSearchFilters(t *testing.T) {
@@ -990,7 +1063,24 @@ func TestConnectionsLintLongNames(t *testing.T) {
 }
 
 func TestConnectionsLintEveryState(t *testing.T) {
-	// disconnected/connecting/connected × empty countries, fallback notice, expanded, search.
+	countries := []Country{
+		{Code: "US", Name: "United States", Load: 63, Servers: []Server{{Name: "US-NY#1", City: "New York", Load: 30, Up: true, Features: FeatP2P}}},
+		{Code: "NL", Name: "Netherlands", Maintenance: true, Servers: []Server{{Name: "NL#1", Up: false}}},
+	}
+	for _, phase := range []Phase{PhaseDisconnected, PhaseConnecting, PhaseConnected, PhaseDisconnecting, PhaseError} {
+		for _, st := range []ConnectionsState{
+			{Countries: countries},
+			{Countries: countries, Notice: "Server list unavailable"},
+			{Countries: countries, Expanded: "US"},
+			{Countries: countries, Query: "NY#1"},
+			{Countries: nil},
+		} {
+			st.Snap = Snapshot{Phase: phase, Status: Status{Country: "US"}}
+			if findings := lint.Tree(ConnectionsTree(st), "panel", 460, 404); len(findings) > 0 {
+				t.Fatalf("phase %v: %v", phase, findings)
+			}
+		}
+	}
 }
 ```
 
@@ -998,7 +1088,7 @@ func TestConnectionsLintEveryState(t *testing.T) {
 
 Content column (inside the 404 budget): quick-connect row (four buttons `qc:fastest` / `qc:random` / `qc:p2p` / `qc:tor`, equal share, Height 36, Fill `soft`, disabled while transitioning); search row (text_input ID `search`, Width = 460−24−gap−40, Height 40, Placeholder `Search country or server`, `Reseed: QueryReseed`, Events change+submit; clear button ID `clear-search` 40×40, Disabled when query empty); notice line (subtle, when set); `KindList` Height ~316, Gap 4.
 
-Country row (ID `country:<CC>`, row, Fill `card` or `container` when connected-country, Radius 10, Padding 8): flag glyph or code-badge capsule (fixed Width 36, chip fill, bold 2-letter code); name (bold, clips); `N servers · L%` (subtle) + load `progress` (Width 48, Height 6, Value load/100, Tone by threshold) — hidden on maintenance rows; expand button `expand:<CC>` (28×28, icon `expand_more`); connect button `connect:<CC>` PinEnd (text `Connect`, 84×32, Fill accent, Disabled on maintenance).
+Country row (ID `country:<CC>`, row, Fill `card` or `container` when connected-country, Radius 10, Padding 8): flag glyph or code-badge capsule (fixed Width 36, chip fill, bold 2-letter code); name (bold, clips); `N servers · L%` (subtle; `1 server` singular) + load `progress` (ID `load:<CC>`, Width 48, Height 6, Value load/100, Tone by threshold) — hidden on maintenance rows; expand button `expand:<CC>` (28×28, icon `expand_more`); connect button `connect:<CC>` PinEnd (text `Connect`, 84×32, Fill accent, Disabled on maintenance).
 
 Expanded server rows (indented column under the country row): per server, row ID `server:<name>`: `dns` icon, name (clips), city (subtle, clips), load % (tabular), feature tags (`lan` P2P / `visibility_off` Tor / `security` Secure Core / `play_arrow` streaming, subtle), connect button `server-connect:<name>` PinEnd. Maintenance servers: subtle tone, tooltip `{name} is under maintenance`, disabled connect.
 
@@ -1025,6 +1115,7 @@ git commit -m "feat(protonvpn): connections tab"
 ```go
 type ProtectionState struct {
 	Snap       Snapshot
+	SplitTunnel bool   // settings.json features.split_tunneling.enabled
 	Apps       []string // excluded app paths
 	Candidates []App    // scan results for the picker
 	AppQuery   string
@@ -1053,8 +1144,13 @@ func TestProtectionRows(t *testing.T) {
 	if findNode(t, root, "copy-port") == nil { t.Fatal("copy button") }
 }
 
+func TestProtectionKillSwitchLockedWhileConnected(t *testing.T) {
+	root := ProtectionTree(ProtectionState{Snap: Snapshot{Phase: PhaseConnected, Config: Config{KillSwitch: "standard"}}})
+	if btn := findNode(t, root, "ks"); btn.Disabled != true { t.Fatal("kill switch locked while connected") }
+}
+
 func TestProtectionPortRowHiddenWhenDisconnected(t *testing.T) {
-	root := ProtectionTree(ProtectionState{Snap: Snapshot{Phase: Disconnected, Config: Config{PortForwarding: true}}, Port: 51820})
+	root := ProtectionTree(ProtectionState{Snap: Snapshot{Phase: PhaseDisconnected, Config: Config{PortForwarding: true}}, Port: 51820})
 	if findNode(t, root, "copy-port") != nil { t.Fatal("port row only when connected") }
 }
 
@@ -1071,13 +1167,14 @@ func TestProtectionSplitTunnelBlockedByKillSwitch(t *testing.T) {
 
 func TestProtectionAppRowsAndSuggestions(t *testing.T) {
 	root := ProtectionTree(ProtectionState{
-		Apps: []string{"/usr/bin/firefox"},
+		Apps: []string{"/usr/bin/chromium"},
 		Candidates: []App{{Value: "/usr/bin/firefox", Label: "Firefox"}, {Value: "/usr/bin/chromium", Label: "Chromium"}},
 		AppQuery: "fire",
 	})
-	assertTextContains(t, root, "Firefox")
-	if findNode(t, root, "del-app:/usr/bin/firefox") == nil { t.Fatal("delete button") }
+	assertTextContains(t, root, "Chromium")
+	if findNode(t, root, "del-app:/usr/bin/chromium") == nil { t.Fatal("delete button") }
 	if findNode(t, root, "app-suggest:/usr/bin/firefox") == nil { t.Fatal("suggestion chip") }
+	if findNode(t, root, "app-suggest:/usr/bin/chromium") != nil { t.Fatal("already-added app must not be suggested") }
 }
 
 func TestSplitTunnelPreservesUnknownKeys(t *testing.T) {
@@ -1102,7 +1199,23 @@ func TestSplitTunnelMalformedFileFailsLoud(t *testing.T) {
 }
 
 func TestProtectionLint(t *testing.T) {
-	// KS on/off × PF on/off × ST on/off × app rows, at 460×580.
+	for _, ks := range []string{"off", "standard"} {
+		for _, pf := range []bool{false, true} {
+			for _, st := range []bool{false, true} {
+				root := ProtectionTree(ProtectionState{
+					Snap:        Snapshot{Phase: PhaseConnected, Config: Config{KillSwitch: ks, NetShield: "malware-only", PortForwarding: pf}},
+					SplitTunnel: st,
+					Apps:        []string{"/usr/bin/firefox"},
+					Candidates:  []App{{Value: "/usr/bin/chromium", Label: "Chromium"}},
+					Port:        51820,
+					HasCopyTool: true,
+				})
+				if findings := lint.Tree(root, "panel", 460, 404); len(findings) > 0 {
+					t.Fatalf("ks %s pf %v st %v: %v", ks, pf, st, findings)
+				}
+			}
+		}
+	}
 }
 ```
 
@@ -1110,10 +1223,10 @@ func TestProtectionLint(t *testing.T) {
 
 A `KindList` (Height 404, Gap 4) of rows:
 
-- Kill switch: label `Kill Switch` (bold) + description `Block traffic if the tunnel drops` (subtle) + button ID `ks` PinEnd (text `On`/`Off`, Fill accent/soft).
+- Kill switch: label `Kill Switch` (bold) + description `Block traffic if the tunnel drops` (subtle) + button ID `ks` PinEnd (text `On`/`Off`, Fill accent/soft, Disabled while connected — the CLI refuses the change).
 - NetShield: label + description + segmented row of three buttons `ns:off` / `ns:malware-only` / `ns:malware-ads-trackers` labelled `Off` / `Malware` / `Malware+Ads`, active Fill accent.
 - Port forwarding: label + description + button `pf`; when on and connected and `Port > 0`: row `Active port: {N}` (tabular) + copy button `copy-port` (icon `content_copy`, only when `HasCopyTool`); when on and `Port == 0`: subtle `Negotiating port…`.
-- Split tunneling: label + description + button `st`; under KS: Disabled + error-tone `Disable kill switch to use split tunneling`; when enabled: excluded-app rows (label = app name, subtle path, delete button `del-app:<path>` icon `delete`), add row (text_input ID `app-query`, Placeholder `Add an app`, Reseed, change+submit) and up to 5 suggestion chips `app-suggest:<path>` (label + path, from `Candidates` filtered by `AppQuery`, excluding already-added); enabling fires the host `notify` call with `Split tunneling enabled. Remember to restart affected apps.` (loop-side, Task 15).
+- Split tunneling: label + description + button `st` (text `On`/`Off` from `SplitTunnel`); under KS: Disabled + error-tone `Disable kill switch to use split tunneling`; when enabled: excluded-app rows (label = app name, subtle path, delete button `del-app:<path>` icon `delete`), add row (text_input ID `app-query`, Placeholder `Add an app`, Reseed, change+submit) and up to 5 suggestion chips `app-suggest:<path>` (label + path, from `Candidates` filtered by `AppQuery`, excluding already-added); enabling fires the host `notify` call with `Split tunneling enabled. Remember to restart affected apps.` (loop-side, Task 15).
 - `Err` renders as an error-tone line at the foot.
 
 `ReadSplitTunnel`/`WriteSplitTunnel`: decode into `map[string]any` (preserve everything), mutate `features.split_tunneling.{enabled,apps}`, re-encode with two-space indent; a malformed file or missing parent objects is an error — never clobber. Default path `~/.config/Proton/VPN/settings.json` (caller supplies it; tests use temp dirs).
@@ -1151,10 +1264,13 @@ func AccountTree(s AccountState) *v1.Node
 
 ```go
 func TestAccountSignedIn(t *testing.T) {
-	root := AccountTree(AccountState{SignedIn: true, Snap: Snapshot{Info: Info{Username: "jane@example.com", Plan: "Proton VPN Plus", Version: "3.13.0", Interface: "proton0"}, Status: Status{Protocol: "WireGuard"}}})
+	root := AccountTree(AccountState{SignedIn: true, Snap: Snapshot{
+		Info:      Info{Username: "jane@example.com"},
+		Status:    Status{Protocol: "wireguard"},
+		Interface: "proton0",
+	}})
 	assertTextContains(t, root, "jane@example.com")
-	assertTextContains(t, root, "Proton VPN Plus")
-	assertTextContains(t, root, "3.13.0")
+	assertTextContains(t, root, "wireguard")
 	assertTextContains(t, root, "proton0")
 	if findNode(t, root, "signout") == nil { t.Fatal("signout") }
 	if findNode(t, root, "refresh") == nil { t.Fatal("refresh") }
@@ -1174,7 +1290,14 @@ func TestAccountOptionsSection(t *testing.T) {
 }
 
 func TestAccountLint(t *testing.T) {
-	// signed-in / signed-out / error, at 460×580.
+	for _, signedIn := range []bool{false, true} {
+		for _, phase := range []Phase{PhaseDisconnected, PhaseConnected, PhaseError} {
+			root := AccountTree(AccountState{SignedIn: signedIn, Snap: Snapshot{Phase: phase, Info: Info{Username: "jane@example.com"}, Status: Status{Protocol: "wireguard"}, Interface: "proton0"}})
+			if findings := lint.Tree(root, "panel", 460, 404); len(findings) > 0 {
+				t.Fatalf("signedIn %v phase %v: %v", signedIn, phase, findings)
+			}
+		}
+	}
 }
 ```
 
@@ -1182,9 +1305,9 @@ func TestAccountLint(t *testing.T) {
 
 A `KindList` (Height 404, Gap 4):
 
-- Signed-in card: row Fill `card` Radius 10 Padding 8 — `person` icon, username (bold), plan (subtle).
-- Buttons row: `signout` (`Sign out`, Fill soft) + `refresh` (icon `refresh`, 40×40).
-- Info rows (label subtle + value tabular PinEnd): `CLI version`, `Protocol`, `Tunnel interface`.
+- Signed-in card: row Fill `card` Radius 10 Padding 8 — `person` icon, username (bold).
+- Buttons row: `signout` (`Sign out`, Fill soft) + `refresh` (icon `restart_alt`, 40×40).
+- Info rows (label subtle + value tabular PinEnd): `Account` (from `info`), `Protocol` (from `status`), `Interface` (from the link watch; `—` when down).
 - Signed-out instead renders: hint card (`Complete sign-in in the terminal (password + 2FA)`, subtle), sign-in row (text_input ID `signin-user`, Placeholder `Username`, Reseed, change+submit; button `signin` `Sign in`, Fill accent, Disabled when draft empty), and the terminal-handoff hint line.
 - Options section: title `Options` + read-only rows for the five settings values + subtle `Change in shell settings`.
 - `Err` as an error-tone line at the foot.
@@ -1213,28 +1336,46 @@ func ScanApps(dataDirs []string, pathEnv []string) []App
 
 - [ ] **Step 1: Write fixtures and failing tests**
 
-Fixtures under `testdata/applications/`: `firefox.desktop` (`Exec=firefox %u`), `code.desktop` (`Exec=/usr/share/code/code --no-sandbox`), `flatpak-app.desktop` (`Exec=flatpak run org.example.App`), `snap-app.desktop` (`Exec=snap run example`), `terminal.desktop` (`Exec=gnome-terminal`), `setuid.desktop` pointing at a fixture binary mode 4755.
+Fixtures under `testdata/applications/`: `firefox.desktop` (`Exec=firefox %u`), `code.desktop` (`Exec=code --no-sandbox`), `flatpak-app.desktop` (`Exec=flatpak run org.example.App`), `snap-app.desktop` (`Exec=snap run example`), `setuid.desktop` (`Exec=setuid-tool`). Terminal emulators are not excluded (noctalia's `apps.py` keeps them — excluding a terminal is a legitimate choice), so there is no terminal fixture.
 
 ```go
 func TestScanApps(t *testing.T) {
-	dirs := []string{"testdata/applications"}
-	paths := []string{"/usr/bin", "/usr/local/bin"} // fixture binaries live here (created by the test)
-	apps := ScanApps(dirs, paths)
+	bin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil { t.Fatal(err) }
+	for _, name := range []string{"firefox", "code"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o755); err != nil { t.Fatal(err) }
+	}
+	// A setuid binary is a wrapper around the real app; it must be dropped.
+	setuid := filepath.Join(bin, "setuid-tool")
+	if err := os.WriteFile(setuid, []byte("#!/bin/sh\n"), 0o755); err != nil { t.Fatal(err) }
+	if err := os.Chmod(setuid, 0o4755); err != nil { t.Fatal(err) }
+
+	apps := ScanApps([]string{"testdata/applications"}, []string{bin})
 	got := map[string]string{}
 	for _, a := range apps { got[a.Label] = a.Value }
-	if got["Firefox"] != "firefox" { t.Fatalf("firefox: %v", got) }
-	if got["Code"] != "/usr/share/code/code" { t.Fatalf("code: %v", got) }
-	for _, banned := range []string{"Flatpak App", "Snap App", "Terminal"} {
+	if got["Firefox"] != filepath.Join(bin, "firefox") { t.Fatalf("firefox: %v", got) }
+	if got["Code"] != filepath.Join(bin, "code") { t.Fatalf("code: %v", got) }
+	for _, banned := range []string{"Flatpak App", "Snap App", "Setuid Tool"} {
 		if _, ok := got[banned]; ok { t.Fatalf("%s must be excluded", banned) }
 	}
 }
 
-func TestScanAppsSortedByLabel(t *testing.T) { /* assert ascending labels */ }
+func TestScanAppsSortedByLabel(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil { t.Fatal(err) }
+	for _, name := range []string{"firefox", "code"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o755); err != nil { t.Fatal(err) }
+	}
+	apps := ScanApps([]string{"testdata/applications"}, []string{bin})
+	for i := 1; i < len(apps); i++ {
+		if apps[i-1].Label > apps[i].Label { t.Fatalf("not sorted: %q before %q", apps[i-1].Label, apps[i].Label) }
+	}
+}
 ```
 
 - [ ] **Step 2: Run to verify they fail, then implement**
 
-Port of noctalia's `apps.py`: parse `Exec=` (strip field codes `%u` etc.), take the first token, resolve against `pathEnv` (absolute paths kept as-is), keep only executable regular files; exclude flatpak/snap runners, shells (`sh bash zsh fish dash ksh tcsh env gtk-launch xdg-open`), dispatchers (`hyprctl uwsm xdg-terminal-exec dbus-launch`, `omarchy-*` prefixes), setuid/setgid binaries. Sort by label. The loop calls it with `xdg.DataDirs` + `~/.local/share` and `os.Getenv("PATH")` split.
+Port of noctalia's `apps.py`: parse `Exec=` (strip field codes `%u` etc.), take the first token, resolve against `pathEnv` (absolute paths kept as-is), keep only executable regular files; skip `NoDisplay`/`Hidden` entries and non-`Application` types; strip leading `VAR=value`/`env` wrappers; exclude flatpak/snap runners, shells (`sh bash zsh fish dash ksh tcsh env gtk-launch xdg-open`), dispatchers (`hyprctl uwsm xdg-terminal-exec dbus-launch`, `omarchy-*` prefixes), setuid/setgid binaries; dedupe by resolved path keeping the shortest label; sort by label then path. The loop calls it with `xdg.DataDirs` + `~/.local/share` and `os.Getenv("PATH")` split.
 
 - [ ] **Step 3: Run to verify they pass, then commit**
 
@@ -1271,14 +1412,15 @@ func ParseMapResponse(b []byte) (port int, epoch uint32, err error)
 ```go
 func TestBuildMapRequest(t *testing.T) {
 	got := BuildMapRequest(2, 0, 0, 60) // op 2 = TCP map per RFC 6886
-	want := []byte{0, 2, 0, 0, 0, 0, 0, 0, 0, 60, 0, 0}
+	want := []byte{0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 60} // lifetime big-endian at bytes 8..11
 	if !bytes.Equal(got, want) { t.Fatalf("got %v want %v", got, want) }
 }
 
 func TestParseMapResponse(t *testing.T) {
-	resp := []byte{0, 2, 0, 0, 0, 0, 20, 60, 0, 0, 0, 100, 0, 0, 0, 1}
+	// version 0, op 2, result 0, epoch 100, internal port 5180, external port 5180, lifetime 60
+	resp := []byte{0, 2, 0, 0, 0, 0, 0, 100, 0x14, 0x3C, 0x14, 0x3C, 0, 0, 0, 60}
 	port, epoch, err := ParseMapResponse(resp)
-	if err != nil || port != 5244 || epoch != 100 { t.Fatalf("port %d epoch %d err %v", port, epoch, err) }
+	if err != nil || port != 5180 || epoch != 100 { t.Fatalf("port %d epoch %d err %v", port, epoch, err) }
 	if _, _, err := ParseMapResponse([]byte{0, 2, 0, 6}); err == nil { t.Fatal("error result code must fail") }
 }
 
@@ -1292,7 +1434,7 @@ func TestNATPMPFailureIsNonFatal(t *testing.T) {
 
 - [ ] **Step 2: Run to verify they fail, then implement**
 
-RFC 6886: 12-byte map request (version 0, op 1=UDP/2=TCP, reserved, internal port 0, requested external port 0, lifetime 60s), send to the gateway, parse the 16-byte response (version, op, result code, epoch, port, lifetime); result code ≠ 0 is an error. Retry with 250ms→2s backoff until the context ends. The loop calls it every 45s while connected with PF on and feeds `Machine.SetPort`.
+RFC 6886: 12-byte map request (version 0, op 1=UDP/2=TCP, reserved, internal port 0, requested external port 0, lifetime 60s), send to the gateway, parse the 16-byte response (version, op, result code, epoch, internal port, external port, lifetime); result code ≠ 0 is an error. Retry with 250ms→2s backoff until the context ends. The loop calls it every 45s while connected with PF on and feeds `Machine.SetPort`.
 
 - [ ] **Step 3: Run to verify they pass, then commit**
 
@@ -1315,7 +1457,7 @@ git commit -m "feat(protonvpn): NAT-PMP client"
 ```go
 type session struct {
 	// ... skeleton fields from Task 4 ...
-	machine    state.Machine   // or local equivalent
+	machine    protonvpn.Machine
 	cli        *protonvpn.CLI
 	countries  []protonvpn.Country
 	apps       []protonvpn.App
@@ -1329,7 +1471,7 @@ type session struct {
 
 - [ ] **Step 1: Write the failing loop tests**
 
-Fake-client tests in the style of `cmd/sysc-plugin-world-clock/main_test.go`:
+Pipe-harness tests in the style of `cmd/sysc-plugin-world-clock/main_test.go` (`io.Pipe` pairs, `v1.HostCall`/`v1.HostReply`, a `harness` struct):
 
 ```go
 func TestTabSwitchPersists(t *testing.T) {
@@ -1339,7 +1481,7 @@ func TestActionButtonWiresCommands(t *testing.T) {
 	// action on disconnected → Connect ran with no target; on connected → Disconnect.
 }
 func TestRightClickQuickConnect(t *testing.T) {
-	// bar pointer event Button right, disconnected, quick_connect=p2p → Connect --p2p.
+	// bar pointer event v1.ButtonSecondary, disconnected, quick_connect=p2p → Connect --p2p.
 }
 func TestSettingsChangeRearms(t *testing.T) {
 	// settings.changed refresh_seconds=2 → poll ticker re-armed; bad value keeps current.
@@ -1357,8 +1499,8 @@ func TestSplitTunnelEnableNotifies(t *testing.T) {
 Loop responsibilities (mirror the world-clock main.go structure):
 
 - **Startup**: probe `exec.LookPath("protonvpn")` → `hasCLI`; probe `wl-copy`/`xclip` → `hasCopyTool`; restore `ui` state (tab); initial `Status`/`Info`/`Config` fetch; load serverlist (`LoadServers` on `~/.cache/Proton/VPN/serverlist.json`, fallback `FallbackCountries` + notice); scan apps.
-- **Timers**: status poll every `refresh_seconds` (1s while connecting/disconnecting; `TransitionExpired` → `Fail("Timeout")`); nmcli link watch every 2s while connected (vanished tunnel → immediate status refresh); traffic sample every 1s while connected (`/sys/class/net/proton0/statistics/rx_bytes` + `tx_bytes`); NAT-PMP every 45s while connected + PF on.
-- **InputEvent dispatch** by node ID: `bar` (activate → `panel.open`; pointer Button 3 → quick connect/disconnect per phase + `quick_connect` setting), `action`, `qc:*`, `search`/`clear-search`, `expand:<CC>`, `connect:<CC>` → `Connect --country CC`, `server-connect:<name>` → `Connect <name>`, `ks`, `ns:*`, `pf`, `copy-port` (shell `wl-copy`/`xclip`, then a transient "Copied" affordance), `st`, `del-app:<path>`, `app-query`/`app-suggest:<path>`, `signin`/`signin-user`, `signout`, `refresh`, `tab:*`.
+- **Timers**: status poll every `refresh_seconds` (1s while connecting/disconnecting; `TransitionExpired` → `Fail("Timeout")`); nmcli link watch every 2s while connected (`nmcli -t -f NAME,TYPE,DEVICE,STATE connection show --active`; vanished tunnel → immediate status refresh, `SetInterface("")`); traffic sample every 1s while connected (`/sys/class/net/proton0/statistics/rx_bytes` + `tx_bytes`); NAT-PMP every 45s while connected + PF on.
+- **InputEvent dispatch** by node ID (`m.Node`): `bar` (activate → `panel.open`; pointer `v1.ButtonSecondary` → quick connect/disconnect per phase + `quick_connect` setting), `action`, `qc:*`, `search`/`clear-search`, `expand:<CC>`, `connect:<CC>` → `Connect --country CC`, `server-connect:<name>` → `Connect <name>`, `ks`, `ns:*`, `pf`, `copy-port` (shell `wl-copy`/`xclip`, then a transient "Copied" affordance), `st`, `del-app:<path>`, `app-query`/`app-suggest:<path>`, `signin`/`signin-user`, `signout`, `refresh`, `tab:*`. On a successful connect, `ParseConnectIP(stdout)` → `machine.SetIP`; on disconnect, `SetIP("")`.
 - **Sign-in handoff**: spawn `xdg-terminal-exec` → `x-terminal-emulator` → `kitty alacritty foot gnome-terminal konsole xterm`, first found, running `protonvpn signin <user>`; on spawn failure set `Err` with the manual command.
 - **Notifications**: on phase → connected (and `notify_on_connect`) notify `Connected to <server>`; → disconnected notify `Disconnected`; split-tunnel enable notify per spec.
 - **Patching**: keyed patches (`traffic`, `err`, bar) when shape is stable; snapshots on tab switch, expand, search, phase transitions, settings changes.
@@ -1406,7 +1548,7 @@ Reload the shell. With the `protonvpn` CLI installed and signed in:
 2. Panel opens at 460×580; connection card shows `Unprotected` / `Fastest country`; Connect morphs the button through `Cancel` → `Disconnect`.
 3. Connections tab: search filters, country expands to servers, load colours match thresholds, connected country is tinted.
 4. Protection tab: toggles reflect `config list`; `Active port: N` appears when PF is on and connected; copy works (or is hidden).
-5. Account tab: plan and info rows correct; sign-out/sign-in handoff opens a terminal.
+5. Account tab: account name, protocol, and interface rows correct; sign-out/sign-in handoff opens a terminal.
 6. Screenshots: panel (all tabs, connected + disconnected), bar in each mode, tooltip. Save under `docs/plans/` or the handover doc.
 7. Kill the tunnel externally (`nmcli` down) → bar returns to `Unprotected` within ~2s (link watch) or ≤ `refresh_seconds` without nmcli.
 
