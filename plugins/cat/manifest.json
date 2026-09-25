@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "id": "org.sysc.cat",
+  "name": "Cat",
+  "description": "An animated cat in the bar that walks and gallops with CPU load, and grooms, stretches and naps while the machine idles.",
+  "version": "1.0.0",
+  "protocol": {"major": 1, "minor": 8},
+  "exec": "bin/sysc-plugin-cat",
+  "capabilities": ["panels", "settings"],
+  "requires": {"commands": []},
+  "services": [{"id": "cat"}],
+  "widgets": [{"id": "bar", "settings": []}],
+  "panels": [{"id": "panel", "width": 340, "height": 440, "placement": "attached"}],
+  "settings": [
+    {"key": "size", "type": "int", "label": "Cat size (px)", "description": "The cat's square in the bar. The bar's height caps it.", "default": 28, "min": 16, "max": 32},
+    {"key": "show_percent", "type": "bool", "label": "Show CPU percentage", "description": "Show the load beside the cat.", "default": false},
+    {
+      "key": "tone",
+      "type": "select",
+      "label": "Colour",
+      "description": "The theme colour the cat paints in.",
+      "default": "accent",
+      "options": [
+        {"value": "accent", "label": "Accent"},
+        {"value": "normal", "label": "Foreground"},
+        {"value": "subtle", "label": "Muted"}
+      ]
+    },
+    {"key": "sleep_below", "type": "int", "label": "Idle below (% CPU)", "description": "Under this load the cat stops moving: it sits, grooms, scratches, stretches, and in time naps. 0 keeps it on the move.", "default": 10, "min": 0, "max": 50},
+    {"key": "nap_after", "type": "int", "label": "Nap after (s)", "description": "How long the cat idles before it falls asleep. 0 sends it straight to sleep.", "default": 60, "min": 0, "max": 600},
+    {"key": "top_speed_at", "type": "int", "label": "Top speed at (% CPU)", "description": "The load at which the cat runs flat out.", "default": 80, "min": 10, "max": 100},
+    {"key": "alert_above", "type": "int", "label": "Warn above (% CPU)", "description": "Paints the cat in the error colour at or above this load. 0 turns the warning off.", "default": 90, "min": 0, "max": 100},
+    {"key": "sample_seconds", "type": "int", "label": "Sample every (s)", "description": "How often CPU load is read from /proc/stat.", "default": 2, "min": 1, "max": 10}
+  ]
+}
