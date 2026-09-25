@@ -40,14 +40,17 @@ var (
 // paragraph breaks become single spaces.
 func ParseUSFM(r io.Reader) ([]Verse, error) {
 	var (
-		out     []Verse
-		chapter int
-		cur     *Verse
-		buf     strings.Builder
+		out      []Verse
+		chapter  int
+		cur      *Verse
+		buf      strings.Builder
+		implicit bool
+		seen     = map[[2]int]bool{}
 	)
 	flush := func() {
 		if cur != nil {
 			cur.Text = clean(buf.String())
+			seen[[2]int{cur.Chapter, cur.Verse}] = true
 			out = append(out, *cur)
 			cur = nil
 		}
@@ -78,6 +81,7 @@ func ParseUSFM(r io.Reader) ([]Verse, error) {
 				return nil, fmt.Errorf("chapter marker %q: %w", line, err)
 			}
 			chapter = n
+			implicit = true
 		case marker == "v":
 			flush()
 			rest = strings.TrimLeft(rest, " ")
@@ -90,10 +94,20 @@ func ParseUSFM(r io.Reader) ([]Verse, error) {
 			if chapter == 0 {
 				return nil, fmt.Errorf("verse %d before any chapter", n)
 			}
+			if seen[[2]int{chapter, n}] {
+				return nil, fmt.Errorf("verse %d:%d appears twice", chapter, n)
+			}
 			cur = &Verse{Chapter: chapter, Verse: n}
+			implicit = false
 			buf.WriteString(text)
 		default:
 			// A paragraph, poetry, or list marker continues the current verse.
+			// Text before a chapter's first verse marker is verse 1: the BSB
+			// source omits "\v 1" where a Psalm opens a book of the Psalter.
+			if cur == nil && chapter > 0 && implicit && strings.TrimSpace(rest) != "" {
+				cur = &Verse{Chapter: chapter, Verse: 1}
+				implicit = false
+			}
 			if cur != nil {
 				buf.WriteString(" " + rest)
 			}

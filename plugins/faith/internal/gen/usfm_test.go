@@ -95,6 +95,24 @@ func TestParseUSFMTreatsALoneClosingMarkerAsText(t *testing.T) {
 	}
 }
 
+// Psalm 1 in the BSB source has no "\v 1": the text follows the headings.
+func TestParseUSFMTreatsTextBeforeTheFirstVerseAsVerseOne(t *testing.T) {
+	src := "\\c 1\n\\ms BOOK I\n\\s1 The Two Paths\n\\b\n\\q1 Blessed is the man\n\\q2 who does not walk\n\\v 2 But his delight\n"
+	got, err := ParseUSFM(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != (Verse{1, 1, "Blessed is the man who does not walk"}) || got[1].Verse != 2 {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestParseUSFMRejectsARepeatedVerse(t *testing.T) {
+	if _, err := ParseUSFM(strings.NewReader("\\c 1\n\\v 1 a\n\\v 1 b\n")); err == nil {
+		t.Fatal("accepted verse 1:1 twice")
+	}
+}
+
 func TestParseUSFMRejectsAVerseBeforeAChapter(t *testing.T) {
 	if _, err := ParseUSFM(strings.NewReader(`\v 1 text`)); err == nil {
 		t.Fatal("accepted a verse before a chapter")
