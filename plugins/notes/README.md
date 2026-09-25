@@ -4,7 +4,7 @@ Notes keeps your notes as ordinary Markdown files. Set **Notes directory** to a 
 
 ## Library
 
-Open **Notes** from the bar to capture a thought, edit a file, or search note titles and text. Quick capture creates a dated note. **Scratchpad** opens `scratchpad.md` for text you want to keep nearby. Use the star to favorite a note in the library; favorites do not pin a desktop window.
+Open **Notes** from the bar to capture a thought, edit a file, or search note titles and text. Quick capture creates a dated note. When the shell grants clipboard access, **Paste** imports plain text into the capture field so you can review or edit it before saving. In the shell launcher, `/nt` opens Notes and `/nt <text>` saves a quick capture. **Scratchpad** opens `scratchpad.md` for text you want to keep nearby. Use the star to favorite a note in the library; favorites do not pin a desktop window.
 
 Open a note as a sticky from its library card or editor. The manager and every sticky for that file share one edit buffer.
 
