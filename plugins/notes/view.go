@@ -28,21 +28,23 @@ func TooltipTree() *v1.Node {
 	}}
 }
 
-func PanelTree(s Snapshot) *v1.Node {
+func PanelTree(s Snapshot, clipboardImport bool) *v1.Node {
 	if s.Editing {
 		return editorTree(s)
 	}
 	capture := input("capture", "capture", "Capture a thought…", s.CaptureText, 52, true)
+	captureChildren := []*v1.Node{capture}
+	if clipboardImport {
+		captureChildren = append(captureChildren, button("clipboard-import", "Paste", "Import plain text from the system clipboard", ""))
+	}
+	captureChildren = append(captureChildren, button("capture-save", "Save", "Capture note", "accent"))
 	children := []*v1.Node{
 		&v1.Node{Kind: v1.KindRow, Key: "header", Height: 42, Gap: 8, Children: []*v1.Node{
 			text("title", "Notes", "headline", false),
 			button("new", "+  New note", "Create a blank note", "accent"),
 		}},
 		text("subtitle", "Your ideas, saved as Markdown", "caption", true),
-		&v1.Node{Kind: v1.KindRow, Key: "capture-card", Fill: FillCard, Radius: 16, Padding: 12, Gap: 10, Children: []*v1.Node{
-			capture,
-			button("capture-save", "Save", "Capture note", "accent"),
-		}},
+		&v1.Node{Kind: v1.KindRow, Key: "capture-card", Fill: FillCard, Radius: 16, Padding: 12, Gap: 10, Children: captureChildren},
 		&v1.Node{Kind: v1.KindRow, Key: "scratchpad", Fill: FillSoft, Radius: 14, Padding: 10, Gap: 8, Children: []*v1.Node{
 			column("scratch-info", 40, 0, 2,
 				text("scratch-title", "Scratchpad", "label", false),
