@@ -64,7 +64,8 @@ split by responsibility and deleted:
 | `plugins/world-clock/zones.go` | The ordered zone list: `Zone{ID, Label, OnBar}`; add, rename, toggle bar, reorder, remove, pending delete; state encode/decode and migration. Mutex-guarded as today. |
 | `plugins/world-clock/search.go` | The search index and `Search(query) []Match`. |
 | `plugins/world-clock/reading.go` | Pure formatting of one zone at one instant against the local zone. |
-| `plugins/world-clock/view.go` | Bar, tooltip, and panel trees; the minute patch. |
+| `plugins/world-clock/panel.go` | Panel tree and the minute patch for panels. |
+| `plugins/world-clock/bar.go` | Bar modes, the bar button, and the tooltip tree. |
 | `cmd/sysc-plugin-world-clock/main.go` | Event loop, settings, persistence calls, tick scheduling. |
 
 No wire-protocol change. The manifest moves to protocol minor **7** (the host's
@@ -100,8 +101,12 @@ bump the sysc-plugins pin and run `go mod tidy`, which also repairs `go.sum`.
 
 Index built once at startup:
 
-- `/usr/share/zoneinfo/zone1970.tab`: each zone id, its city (last path segment,
-  underscores as spaces), and its country codes.
+- `/usr/share/zoneinfo/zone.tab`: one line per country with its zone id; the
+  city is the id's last path segment with underscores as spaces. `zone.tab`,
+  not `zone1970.tab`, because the latter folds capitals such as `Europe/Oslo`
+  into links and would make "Oslo" unsearchable.
+- `/usr/share/zoneinfo/tzdata.zi` link lines (`L target name`): names accepted
+  as exact ids, case-insensitively (e.g. `us/eastern`).
 - `/usr/share/zoneinfo/iso3166.tab`: country code → country name.
 - An embedded alias table (~40 entries) for major cities that are not zone
   names, e.g. San Francisco / Seattle → `America/Los_Angeles`, Mumbai / Delhi /
@@ -117,8 +122,9 @@ excluded, and at most 5 are returned. A `Match` carries the zone id, the
 display city (the alias when an alias matched), the country name, and the
 relative offset text.
 
-An exact IANA id not in `zone1970.tab` (e.g. `US/Eastern`) is still accepted
-through a case-insensitive `LoadLocation` fallback.
+An exact id (a `zone.tab` id or a `tzdata.zi` link name) matches
+case-insensitively and ranks first; any other string containing `/` that
+`time.LoadLocation` accepts verbatim is also accepted.
 
 If the tables are missing, the index holds only aliases and the exact-id
 fallback, and the panel shows the subtle line `Limited search: tz tables not found`.
@@ -131,8 +137,10 @@ For zone `z`, instant `now`, and `time.Local`:
 - `Offset`: `UTC+9`, `UTC-3:30`, `UTC+0` (unchanged format).
 - `Relative`: difference of the two UTC offsets at `now`: `Same time`, `+9h`,
   `−3h30` (U+2212 minus).
-- `Day`: `Tomorrow` / `Yesterday` / empty, comparing calendar dates of `now` in
-  `z` and in local.
+- `DayShift`: `+1`, `-1`, or `0`, comparing calendar dates of `now` in `z` and
+  in local. Cards and the bar render it as a compact `+1` / `−1` marker (the
+  DMS convention, which fits the card's time column); the tooltip spells it
+  `tomorrow` / `yesterday`.
 - `Daytime`: true when the zone's local hour is in [6, 18).
 
 All are computed from explicit arguments so tests pin both the zone and "local".
@@ -145,7 +153,8 @@ Top to bottom:
 2. Search row: text input (`Placeholder: "Search a city or country"`, `Reseed`
    generation, change + submit events) and an accent `add` icon button that
    adds the top match.
-3. While the query is non-empty: up to 5 suggestion chips, each a button
+3. While the query is non-empty, suggestions occupy the zone list's slot: up
+   to 5 suggestion chips, each a button
    `Tokyo · Japan · +9h`. Clicking one, or submitting (adds the top match), adds
    the zone immediately, clears the query via a new `Reseed`, and uses the alias
    as the label when an alias matched. No matches → subtle `No matching zone`.
@@ -153,10 +162,10 @@ Top to bottom:
    (`Tokyo is already in the list`, `No zone matches "xyz"`).
 4. Scrolling list. A drop zone sits in each gap (before row 0, between rows,
    after the last). Each zone card (`card` fill, radius 10):
-   - `drag_indicator` drag source;
-   - label (bold) over zone id (subtle);
-   - time (accent, bold, tabular, key `time:<id>`) over
-     `UTC+9 · +9h · Tomorrow` (subtle, key `meta:<id>`);
+   - drag source with a `≡` text grip (drag sources carry text, not icons);
+   - label (bold) over `Asia/Tokyo · UTC+9` (subtle, key `meta:<id>`);
+   - right column (key `clock:<id>`): time (accent, bold, tabular) with the
+     day marker, over the relative offset `+9h` (subtle);
    - `sunny` / `bedtime` icon (key `sky:<id>`);
    - actions: `visibility`/`visibility_off`, `edit`, `delete`.
    - Hidden-from-bar cards render label and time in subtle tone.
@@ -194,8 +203,9 @@ Tooltip: `World Clock` then one line per on-bar zone, `Tokyo 21:04 +9h`.
 ## Ticking
 
 The loop replaces the one-second ticker with a timer armed for the next minute
-boundary (re-armed after each fire) that sends the minute patch (`time:`,
-`meta:`, `sky:` keys plus the bar node). In `cycle` mode a second ticker at
+boundary (re-armed after each fire). Bars are patched at key `bar`; panels
+showing zone cards are patched at `clock:`, `meta:`, and `sky:` keys; panels
+showing suggestions and tooltips are re-snapshotted. In `cycle` mode a second ticker at
 `cycle_seconds` advances the index and re-snapshots bars only. A settings
 change re-arms both.
 
