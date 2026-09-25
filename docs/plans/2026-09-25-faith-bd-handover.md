@@ -64,6 +64,12 @@ Each failed identically at `8fd1a24`, before any Faith commit:
 
 ## Plan deviations
 
+- Review fixes (sysc-plugins#2): `Wrap` no longer spins on a word that opens with UTF-8
+  continuation bytes, the commentary cache is least-recently-used as the plan says, shutdown
+  flushes pending state, and a stored `null` is not restored. The plan's file list is corrected.
+- sysc-shell#14 merged `main`, where the GPU metric glyph had taken U+E048; the cross is now
+  U+E049.
+
 - The panel's controls sit in a fixed row above the scrolling list, not after the verse; the
   design is amended.
 - A mutex-guarded writer replaces the plan's `sender` mutex (plan section 2, item 2, amended).

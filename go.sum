@@ -8,6 +8,8 @@ github.com/Nomadcxx/sysc-shell v0.0.0-20260925124120-5260c7599c55 h1:pZ3sxQpfUp/
 github.com/Nomadcxx/sysc-shell v0.0.0-20260925124120-5260c7599c55/go.mod h1:tS+D9JFcx+Py4YtyipVJuWzq67fgKHziGUOLLTN4rcY=
 github.com/Nomadcxx/sysc-shell v0.0.0-20260925133451-f5ef69dce6a9 h1:9LPDJ09/xUal0ggPi6XLU0BfdSMgFO0abYNV5FePmuw=
 github.com/Nomadcxx/sysc-shell v0.0.0-20260925133451-f5ef69dce6a9/go.mod h1:tS+D9JFcx+Py4YtyipVJuWzq67fgKHziGUOLLTN4rcY=
+github.com/Nomadcxx/sysc-shell v0.0.0-20260925134947-2e97841b050e h1:cb61ObbGezDSyrkdsk9Q6pcTIAQ7gyVT1FPgOU/DhLk=
+github.com/Nomadcxx/sysc-shell v0.0.0-20260925134947-2e97841b050e/go.mod h1:h5AdhEupJ4geeRfR1ZWZEpCkP2cZLojEvg70QUAJoWU=
 github.com/go-text/typesetting v0.3.5-0.20260729084153-ddb7ff96ad4d h1:eBCCzHDJ79YDC3G7fnGuBbA/o+aEl0hSgRZYVbKzYsk=
 github.com/go-text/typesetting v0.3.5-0.20260729084153-ddb7ff96ad4d/go.mod h1:XZO1hD+nQVyvVa5IicQk7FsCa4PFQaJ2soWAP1f//68=
 github.com/go-text/typesetting-utils v0.0.0-20260419141703-4ffe8874dabc h1:8FGo2It5K75XkavhTiCKExUfVaVDS1feBnLCru5qeoY=
