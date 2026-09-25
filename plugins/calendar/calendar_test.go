@@ -77,34 +77,20 @@ func TestModelNavigationAndWeekStart(t *testing.T) {
 		t.Fatalf("week start = %q", got)
 	}
 	m.SetWeekStart("bogus") // ignored
-
-	_, _, header := m.View()
-	if header != "September 2026" {
-		t.Fatalf("header = %q", header)
+	if got := rangeTitle(m.Panel("a"), m.WeekStart()); got != "September 2026" {
+		t.Fatalf("initial panel header = %q", got)
 	}
-	m.PrevMonth()
-	_, _, header = m.View()
-	if header != "August 2026" {
-		t.Fatalf("prev header = %q", header)
+	m.Step("a", -1)
+	if got := rangeTitle(m.Panel("a"), m.WeekStart()); got != "August 2026" {
+		t.Fatalf("previous panel header = %q", got)
 	}
-	m.NextMonth()
-	m.NextMonth()
-	_, weeks, header := m.View()
-	if header != "October 2026" {
-		t.Fatalf("next header = %q", header)
+	m.Step("a", 2)
+	if got := rangeTitle(m.Panel("a"), m.WeekStart()); got != "October 2026" {
+		t.Fatalf("next panel header = %q", got)
 	}
-	// A navigated month never marks today.
-	for _, w := range weeks {
-		for _, c := range w {
-			if c.Today {
-				t.Fatal("navigated month marked a today cell")
-			}
-		}
-	}
-	m.Today()
-	_, _, header = m.View()
-	if header != "September 2026" {
-		t.Fatalf("today header = %q", header)
+	m.TodayFor("a")
+	if got := rangeTitle(m.Panel("a"), m.WeekStart()); got != "September 2026" {
+		t.Fatalf("today header = %q", got)
 	}
 	if got := m.Date(); got != "Tue 15 Sep 2026" {
 		t.Fatalf("date = %q", got)
@@ -123,14 +109,14 @@ func TestModelNavigationAndWeekStart(t *testing.T) {
 
 func TestTreesValidate(t *testing.T) {
 	m := New(fixedNow)
-	_, weeks, header := m.View()
-	if err := v1.Validate(BarTree("15"), v1.ViewBar); err != nil {
+	now := fixedNow()
+	if err := v1.Validate(BarTree(nil, now), v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
-	if err := v1.Validate(TooltipTree(m.Date(), header), v1.ViewTooltip); err != nil {
+	if err := v1.Validate(TooltipTree(nil, now), v1.ViewTooltip); err != nil {
 		t.Fatal(err)
 	}
-	if err := v1.Validate(PanelTree(header, m.WeekdayHeader(), weeks), v1.ViewPanel); err != nil {
+	if err := v1.Validate(PanelTree(m.Panel("test"), nil, m.WeekStart(), LoadStatus{Available: true, CalendarCount: 1}, now, nil, nil, false), v1.ViewPanel); err != nil {
 		t.Fatal(err)
 	}
 }

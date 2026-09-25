@@ -2,16 +2,19 @@
   "schema": 1,
   "id": "org.sysc.calendar",
   "name": "Calendar",
-  "description": "A calendar in the bar with today's date and a navigable month panel.",
-  "version": "0.2.0",
+  "description": "A read-only EDS calendar with event views, details, and safe actions.",
+  "version": "0.3.0",
   "protocol": {
     "major": 1,
-    "minor": 1
+    "minor": 8
   },
   "exec": "bin/sysc-plugin-calendar",
   "capabilities": [
     "panels",
-    "settings"
+    "settings",
+    "state",
+    "clipboard-write",
+    "open-url"
   ],
   "requires": {
     "commands": []
@@ -30,9 +33,17 @@
   "panels": [
     {
       "id": "panel",
-      "width": 320,
-      "height": 420,
-      "placement": "attached"
+      "width": 1040,
+      "height": 760,
+      "placement": "attached",
+      "shortcuts": [
+        { "key": "j", "node": "calendar-next-event" },
+        { "key": "k", "node": "calendar-previous-event" },
+        { "key": "t", "node": "cal-today" },
+        { "key": "home", "node": "cal-today" },
+        { "key": "c", "node": "action-copy" },
+        { "key": "r", "modifiers": ["ctrl"], "node": "cal-retry" }
+      ]
     }
   ],
   "settings": [
