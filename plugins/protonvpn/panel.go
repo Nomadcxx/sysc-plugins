@@ -147,6 +147,14 @@ func Panel(s PanelState) *v1.Node {
 			Events: []v1.EventKind{v1.EventActivate},
 		})
 	}
-	root.Children = append(root.Children, nav, connectionsStub(s.Tab))
+	root.Children = append(root.Children, nav, tabBody(s))
 	return root
+}
+
+// tabBody dispatches the active tab; protection and account are still stubs.
+func tabBody(s PanelState) *v1.Node {
+	if s.Tab == "connections" {
+		return ConnectionsTree(ConnectionsState{Snap: s.Snap, Flags: true})
+	}
+	return connectionsStub(s.Tab)
 }
