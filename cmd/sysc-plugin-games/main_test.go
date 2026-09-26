@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -58,6 +59,7 @@ type harness struct {
 	done    chan error
 	ran     chan []string
 	stopped bool
+	fetch   func(ctx context.Context, key, slug, dir string) string
 }
 
 func start(t *testing.T) *harness {
@@ -72,6 +74,12 @@ func start(t *testing.T) *harness {
 		run: func(_ context.Context, name string, args ...string) error {
 			ran <- append([]string{name}, args...)
 			return nil
+		},
+		fetchGrid: func(ctx context.Context, key, slug, dir string) string {
+			if h.fetch == nil {
+				return ""
+			}
+			return h.fetch(ctx, key, slug, dir)
 		},
 		callTimeout: 2 * time.Second,
 		dbPath:      dbPath,
@@ -357,4 +365,72 @@ func TestBarRightClickOpensSwitcher(t *testing.T) {
 
 	h.send(v1.InputEvent{Type: "input.event", ViewID: "f", Revision: snap.Revision, Node: "f:sw-open-1", Event: v1.EventActivate})
 	h.nextCall(v1.CallPanelOpen)
+}
+
+func TestCoverQueueIsAsyncAndCoalesced(t *testing.T) {
+	h := start(t)
+	dir := t.TempDir()
+	calls := make(chan string, 8)
+	release := make(chan struct{}, 2)
+	h.fetch = func(_ context.Context, _, slug, _ string) string {
+		calls <- slug
+		<-release
+		path := filepath.Join(dir, slug+".png")
+		_ = os.WriteFile(path, []byte("fake"), 0o644)
+		return path
+	}
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
+	line := h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
+	h.send(v1.SettingsChanged{Type: "settings.changed", Values: map[string]any{"steamgriddb_key": "k"}})
+	line = h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
+
+	rev := snapshotOf(line).Revision
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: rev, Node: "panel:card-2", Event: v1.EventActivate})
+	if got := <-calls; got != "beta" {
+		t.Fatalf("first cover job = %q, want beta", got) // worker now parked inside beta's fetch
+	}
+	line = h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
+	rev = snapshotOf(line).Revision
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: rev, Node: "panel:card-1", Event: v1.EventActivate})
+	line = h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
+	rev = snapshotOf(line).Revision
+	// Re-paint (favtoggle saves prefs) must NOT re-enqueue hades while it is dirty.
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: rev, Node: "panel:favtoggle-1", Event: v1.EventActivate})
+	h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
+	select {
+	case extra := <-calls:
+		t.Fatalf("coalescing failed: extra fetch for %q", extra)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Single worker: hades only starts once beta's fetch is released.
+	release <- struct{}{}
+	release <- struct{}{}
+	if got := <-calls; got != "hades" {
+		t.Fatalf("second cover job = %q, want hades", got)
+	}
+	// Both results land asynchronously; panel snapshots must pick them up.
+	deadline := time.After(5 * time.Second)
+	var seenBeta, seenHades bool
+	for !(seenBeta && seenHades) {
+		select {
+		case l := <-h.lines:
+			switch messageType(l) {
+			case v1.TypeHostCall:
+				var call v1.HostCall
+				if json.Unmarshal(l, &call) == nil {
+					h.replyTo(call.ID)
+				}
+			case v1.TypeViewSnapshot:
+				if bytes.Contains(l, []byte("beta.png")) {
+					seenBeta = true
+				}
+				if bytes.Contains(l, []byte("hades.png")) {
+					seenHades = true
+				}
+			}
+		case <-deadline:
+			t.Fatalf("covers never appeared: beta=%v hades=%v", seenBeta, seenHades)
+		}
+	}
 }

@@ -21,18 +21,23 @@ import (
 )
 
 func main() {
-	env := environment{now: time.Now, run: runCommand, callTimeout: 5 * time.Second}
+	env := environment{now: time.Now, run: runCommand, callTimeout: 5 * time.Second, fetchGrid: defaultFetchGrid}
 	if err := runPlugin(os.Stdin, os.Stdout, env); err != nil {
 		os.Exit(1)
 	}
+}
+
+func defaultFetchGrid(ctx context.Context, key, slug, dir string) string {
+	return covers.FetchGrid(ctx, nil, key, "", slug, dir)
 }
 
 type environment struct {
 	now         func() time.Time
 	run         func(ctx context.Context, name string, args ...string) error
 	callTimeout time.Duration
-	dbPath      string // "" = real Lutris pga.db (tests inject a fixture)
-	procRoot    string // "" = /proc
+	dbPath      string                                                  // "" = real Lutris pga.db (tests inject a fixture)
+	procRoot    string                                                  // "" = /proc
+	fetchGrid   func(ctx context.Context, key, slug, dir string) string // "" = default
 }
 
 type settings struct {
@@ -88,6 +93,18 @@ type session struct {
 	poll      *time.Ticker
 	pollC     <-chan time.Time
 	pollEvery time.Duration
+
+	coverDirty map[string]bool
+	coverJobs  chan coverJob
+	coverDone  chan coverDone
+}
+
+type coverJob struct {
+	gameID, slug, key, dir string
+}
+
+type coverDone struct {
+	gameID, path string
 }
 
 func runCommand(ctx context.Context, name string, args ...string) error {
@@ -107,7 +124,11 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	s := &session{
 		env: env, client: c, settings: defaultSettings(), views: map[string]view{},
 		machine: panel.NewMachine(), failed: map[string]bool{}, cacheDir: cacheDir,
-		sessions: store.Log{},
+		sessions:   store.Log{},
+		coverDirty: map[string]bool{}, coverJobs: make(chan coverJob, 16), coverDone: make(chan coverDone, 16),
+	}
+	if s.env.fetchGrid == nil {
+		s.env.fetchGrid = defaultFetchGrid
 	}
 	if s.settings.sourceLutris {
 		s.openLutris()
@@ -117,6 +138,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	s.prefs.EnsureMaps()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go s.coverWorker(ctx)
 	incoming := make(chan v1.Message, 8)
 	go func() {
 		for {
@@ -138,6 +160,9 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 			return nil
 		case <-s.pollC:
 			s.tick(ctx)
+		case res := <-s.coverDone:
+			s.applyCover(res)
+			s.snapshotAll()
 		case msg := <-incoming:
 			switch m := msg.(type) {
 			case *v1.HostShutdown:
@@ -386,7 +411,7 @@ func (s *session) barState() map[string]bar.Run {
 
 func (s *session) panelState() panel.State {
 	if s.selected != "" {
-		s.maybeFetchGrid(s.selected)
+		s.enqueueCover(s.selected)
 	}
 	return panel.State{
 		Now: s.env.now(), All: s.games, Prefs: s.prefs, Query: s.query,
@@ -396,20 +421,48 @@ func (s *session) panelState() panel.State {
 	}
 }
 
-// maybeFetchGrid fills a missing cover from SteamGridDB once per selection.
-// ponytail: blocking fetch with the call timeout bounds it; async queue when
-// the wait becomes annoying.
-func (s *session) maybeFetchGrid(id string) {
-	if s.settings.steamGridKey == "" || s.cacheDir == "" {
+// enqueueCover queues one async SteamGridDB fetch per game; the panel stays
+// responsive while covers download (ponytail: single worker + dirty-set
+// coalescing — add a pool only if downloads queue behind slow ones).
+func (s *session) enqueueCover(id string) {
+	if s.settings.steamGridKey == "" || s.cacheDir == "" || s.coverJobs == nil {
 		return
 	}
 	g := s.game(id)
-	if g == nil || g.CoverPath != "" {
+	if g == nil || g.CoverPath != "" || s.coverDirty[id] {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.env.callTimeout)
-	defer cancel()
-	if path := covers.FetchGrid(ctx, nil, s.settings.steamGridKey, "", g.Slug, s.cacheDir); path != "" {
-		g.CoverPath = path
+	s.coverDirty[id] = true
+	select {
+	case s.coverJobs <- coverJob{gameID: id, slug: g.Slug, key: s.settings.steamGridKey, dir: s.cacheDir}:
+	default: // queue full: retry on next selection
+		delete(s.coverDirty, id)
+	}
+}
+
+func (s *session) coverWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-s.coverJobs:
+			fctx, cancel := context.WithTimeout(ctx, s.env.callTimeout)
+			path := s.env.fetchGrid(fctx, job.key, job.slug, job.dir)
+			cancel()
+			select {
+			case s.coverDone <- coverDone{gameID: job.gameID, path: path}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func (s *session) applyCover(res coverDone) {
+	delete(s.coverDirty, res.gameID)
+	if res.path != "" {
+		if g := s.game(res.gameID); g != nil {
+			g.CoverPath = res.path
+		}
 	}
 }
