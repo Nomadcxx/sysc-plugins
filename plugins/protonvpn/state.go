@@ -94,6 +94,16 @@ func (m *Machine) SampleTraffic(rx, tx uint64, ifaceExists bool) {
 		return
 	}
 	now := m.now()
+	if rx < m.lastRx || tx < m.lastTx {
+		// counters reset (tunnel recreated between samples): re-baseline
+		m.snap.RxRate = 0
+		m.snap.TxRate = 0
+		m.snap.RxTotal = float64(rx)
+		m.snap.TxTotal = float64(tx)
+		m.lastRx, m.lastTx = rx, tx
+		m.lastSample = now
+		return
+	}
 	if !m.lastSample.IsZero() {
 		if elapsed := now.Sub(m.lastSample).Seconds(); elapsed > 0 {
 			m.snap.RxRate = float64(rx-m.lastRx) / elapsed

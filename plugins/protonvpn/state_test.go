@@ -72,10 +72,16 @@ func TestSetStatusConnectedClearsDeadline(t *testing.T) {
 	now := time.Unix(1000, 0)
 	m := &Machine{Now: func() time.Time { return now }}
 	m.StartConnect()
+	if m.transitionStarted.IsZero() {
+		t.Fatal("want deadline stamped")
+	}
 	now = now.Add(30 * time.Second)
 	m.SetStatus(Status{Phase: PhaseConnected})
-	if m.TransitionExpired() {
+	if !m.transitionStarted.IsZero() {
 		t.Fatal("want deadline cleared")
+	}
+	if m.TransitionExpired() {
+		t.Fatal("want expired false")
 	}
 }
 
@@ -136,5 +142,20 @@ func TestTrafficResumesBaselineAfterReappear(t *testing.T) {
 	s = m.Snapshot()
 	if s.RxRate != 100 || s.TxRate != 50 {
 		t.Fatalf("rates %v/%v", s.RxRate, s.TxRate)
+	}
+}
+
+func TestTrafficCounterResetWithoutVanish(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m := &Machine{Now: func() time.Time { return now }}
+	m.SampleTraffic(1000, 500, true)
+	now = now.Add(time.Second)
+	m.SampleTraffic(100, 50, true) // counters reset, interface never observed down
+	s := m.Snapshot()
+	if s.RxRate != 0 || s.TxRate != 0 {
+		t.Fatalf("rates %v/%v", s.RxRate, s.TxRate)
+	}
+	if s.RxTotal != 100 || s.TxTotal != 50 {
+		t.Fatalf("totals %v/%v", s.RxTotal, s.TxTotal)
 	}
 }
