@@ -85,17 +85,24 @@ func Bar(s BarState) *v1.Node {
 }
 
 // formatRate renders bytes/s for the tooltip; the traffic panel reuses it.
+// Bytes are whole; a scaled unit takes one decimal below 10, none above.
 func formatRate(bps float64) string {
+	var v float64
+	var unit string
 	switch {
 	case bps >= 1e9:
-		return fmt.Sprintf("%.1f GB/s", bps/1e9)
+		v, unit = bps/1e9, "GB/s"
 	case bps >= 1e6:
-		return fmt.Sprintf("%.1f MB/s", bps/1e6)
+		v, unit = bps/1e6, "MB/s"
 	case bps >= 1e3:
-		return fmt.Sprintf("%.1f kB/s", bps/1e3)
+		v, unit = bps/1e3, "KB/s"
 	default:
 		return fmt.Sprintf("%.0f B/s", bps)
 	}
+	if v < 10 {
+		return fmt.Sprintf("%.1f %s", v, unit)
+	}
+	return fmt.Sprintf("%.0f %s", v, unit)
 }
 
 // Tooltip is the 280×200 hover column: status word, server, location, IP,

@@ -1,6 +1,7 @@
 package protonvpn
 
 import (
+	"strings"
 	"testing"
 
 	lint "github.com/Nomadcxx/sysc-shell/plugin/lint"
@@ -47,6 +48,7 @@ func TestBarStates(t *testing.T) {
 	}{
 		{PhaseDisconnected, "vpn_key_off", v1.ToneSubtle},
 		{PhaseConnecting, "bolt", v1.ToneAccent},
+		{PhaseDisconnecting, "bolt", v1.ToneAccent},
 		{PhaseConnected, "shield", v1.ToneAccent},
 		{PhaseError, "gpp_bad", v1.ToneError},
 	}
@@ -83,13 +85,41 @@ func TestBarConnectingShowsEllipsis(t *testing.T) {
 	if text := barText(t, Bar(s)); text != "…" {
 		t.Fatalf("got %q", text)
 	}
+	s.Snap.Phase = PhaseDisconnecting
+	if text := barText(t, Bar(s)); text != "…" {
+		t.Fatalf("disconnecting: got %q", text)
+	}
+}
+
+func TestFormatRate(t *testing.T) {
+	cases := []struct {
+		bps  float64
+		want string
+	}{
+		{0, "0 B/s"},
+		{12, "12 B/s"},
+		{999, "999 B/s"},
+		{1000, "1.0 KB/s"},
+		{1234, "1.2 KB/s"},
+		{9999, "10.0 KB/s"},
+		{10000, "10 KB/s"},
+		{340000, "340 KB/s"},
+		{1e6, "1.0 MB/s"},
+		{1.2e6, "1.2 MB/s"},
+		{1e9, "1.0 GB/s"},
+	}
+	for _, tc := range cases {
+		if got := formatRate(tc.bps); got != tc.want {
+			t.Errorf("formatRate(%v) = %q, want %q", tc.bps, got, tc.want)
+		}
+	}
 }
 
 func TestBarLintEveryState(t *testing.T) {
 	for _, phase := range []Phase{PhaseDisconnected, PhaseConnecting, PhaseConnected, PhaseDisconnecting, PhaseError} {
 		for _, mode := range []string{"icon", "code", "status"} {
 			root := Bar(BarState{Snap: Snapshot{Phase: phase, Status: Status{Country: "US", Server: "US-NY#1"}}, Mode: mode})
-			if findings := lint.Tree(root, "bar", lint.BarWidth, lint.BarHeight); len(findings) > 0 {
+			if findings := lint.Tree(root, v1.ViewBar, lint.BarWidth, lint.BarHeight); len(findings) > 0 {
 				t.Fatalf("phase %v mode %s: %v", phase, mode, findings)
 			}
 		}
@@ -98,7 +128,32 @@ func TestBarLintEveryState(t *testing.T) {
 
 func TestTooltipLint(t *testing.T) {
 	root := Tooltip(BarState{Snap: Snapshot{Phase: PhaseConnected, IP: "198.51.100.7", Status: Status{Server: "US-NY#1", Location: "New York, United States", Country: "US", Protocol: "wireguard"}, RxRate: 1024, TxRate: 512}})
-	if findings := lint.Tree(root, "tooltip", 280, 200); len(findings) > 0 {
+	if findings := lint.Tree(root, v1.ViewTooltip, lint.TooltipWidth, lint.TooltipHeight); len(findings) > 0 {
 		t.Fatalf("%v", findings)
+	}
+}
+
+func TestTooltipDisconnected(t *testing.T) {
+	root := Tooltip(BarState{Snap: Snapshot{Phase: PhaseDisconnected, IP: "198.51.100.7", Status: Status{Server: "US-NY#1"}}})
+	var texts []string
+	var walk func(*v1.Node)
+	walk = func(n *v1.Node) {
+		if n == nil {
+			return
+		}
+		if n.Kind == v1.KindText {
+			texts = append(texts, n.Text)
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+	joined := strings.Join(texts, "\n")
+	if !strings.Contains(joined, "Unprotected") || !strings.Contains(joined, "Right-click to quick connect") {
+		t.Fatalf("missing hint lines: %q", joined)
+	}
+	if strings.Contains(joined, "US-NY#1") || strings.Contains(joined, "198.51.100.7") {
+		t.Fatalf("disconnected tooltip leaks server/IP: %q", joined)
 	}
 }
