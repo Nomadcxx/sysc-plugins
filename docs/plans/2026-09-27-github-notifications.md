@@ -122,11 +122,15 @@ Run: `git add plugins/github-notifications/service.go plugins/github-notificatio
 
 - Modify: `plugins/github-notifications/view.go`
 - Modify: `plugins/github-notifications/view_test.go`
+- Modify: `sysc-shell/internal/render/iconfont.go`
+- Modify: `sysc-shell/internal/render/icons/build.py`
+- Add: `sysc-shell/internal/render/icons/svg/github.svg` and its source/license note
+- Modify: `sysc-shell/internal/render/iconfont_test.go`
 - Reference: `docs/plugin-ui-rules.md`
 
 **Step 1: Add failing tree and layout tests**
 
-Assert the header, primary Inbox/Work/Activity switch, work category switch, search input, separate mark-read control, account-wide mark-all name, row type labels, lower-bound/page footer, Activity summary, 53-week heatmap, day tooltips, and all empty/loading/stale/error variants. Run `shelllint.Tree` for bar, tooltip, and representative 420×640 panels; include page-full lists at the maximum page size and check the heatmap stays below `v1.MaxNodes`.
+Assert the icon-only GitHub bar button and its primary/pointer event declarations, accessible name, header, primary Inbox/Work/Activity switch, work category switch, search input, separate mark-read control, account-wide mark-all name, row type labels, lower-bound/page footer, Activity summary, 53-week heatmap, day tooltips, and all empty/loading/stale/error variants. Verify the shell catalogue contains a non-empty GitHub mark. Run `shelllint.Tree` for bar, tooltip, and representative 420×640 panels; include page-full lists at the maximum page size and check the heatmap stays below `v1.MaxNodes`.
 
 Run: `go test -count=1 -p 1 ./plugins/github-notifications -run 'Test(Trees|Panel|ViewsFit)'`
 
@@ -134,7 +138,7 @@ Expected: FAIL because the current panel has only a notification column.
 
 **Step 2: Render from explicit view state**
 
-Use the shell's native row/column, segmented, text input, list, button, and text nodes. Render the contribution calendar as 53 week columns × 7 day cells, grouped with month labels. Map GitHub contribution levels to `surface`, `container`, `card`, `chip`, and `accent` fills; do not use GitHub's literal colors. Keep the current panel size and palette. Use supported `notifications`, `notifications-off`, and `refresh` icons; use `PR` and `Issue` text markers for work rows. Render only the selected view/category so the tree remains bounded.
+Use the shell's native row/column, segmented, text input, list, button, and text nodes. Render the contribution calendar as 53 week columns × 7 day cells, grouped with month labels. Map GitHub contribution levels to `surface`, `container`, `card`, `chip`, and `accent` fills; do not use GitHub's literal colors. Keep the current panel size and palette. Use the shell's bundled GitHub mark in the icon-only bar button; keep the inbox count in the panel. Use supported `notifications`, `notifications-off`, and `refresh` icons in the panel; use `PR` and `Issue` text markers for work rows. Render only the selected view/category so the tree remains bounded.
 
 **Step 3: Run view validation and geometry tests**
 
@@ -156,7 +160,7 @@ Run: `git add plugins/github-notifications/view.go plugins/github-notifications/
 
 **Step 1: Add failing protocol-routing tests**
 
-Drive host messages through the plugin harness. Cover Inbox/Work/Activity mode and category changes, local search, load-more, manual refresh coalescing, mark-one/mark-all routing, and independent state for two panel view IDs. Test that notification open resolves an item ID to its normalized URL; a failed/missing opener must leave the thread unread.
+Drive host messages through the plugin harness. Cover left and right clicks on the bar opening the declared panel for the triggering output and instance. Also cover Inbox/Work/Activity mode and category changes, local search, load-more, manual refresh coalescing, mark-one/mark-all routing, and independent state for two panel view IDs. Test that notification open resolves an item ID to its normalized URL; a failed/missing opener must leave the thread unread.
 
 Run: `go test -count=1 -p 1 ./cmd/sysc-plugin-github-notifications -run 'Test(Run|Routes|Open)'`
 
@@ -164,11 +168,11 @@ Expected: FAIL because the current event handler passes the notification ID to `
 
 **Step 2: Connect the session and coordinator to the host loop**
 
-Make the receive loop handle UI messages while the coordinator runs `gh`. Cache snapshots after successful feed updates and actions. Keep panel mode/search state per `ViewID`; share feed data and refresh status across views. Open only URLs returned by validated normalized records. Mark a notification read only after the opener starts successfully. Show Activity from its own snapshot and preserve its prior cache if GraphQL fails.
+Make the receive loop handle UI messages while the coordinator runs `gh`. Open the panel on primary activation and secondary pointer events from the bar button, passing through the triggering output, generation, and view instance. Keep bar clicks separate from read actions. Cache snapshots after successful feed updates and actions. Keep panel mode/search state per `ViewID`; share feed data and refresh status across views. Open only URLs returned by validated normalized records. Mark a notification read only after the opener starts successfully. Show Activity from its own snapshot and preserve its prior cache if GraphQL fails.
 
 **Step 3: Keep settings compatible and update manifest metadata**
 
-Keep existing setting keys. Set `per_page`'s default and maximum to 100, preserving any previously saved value, and relabel it “Rows per inbox page”. Keep the other defaults. Update the description and bump the manifest version to 0.3.0. Do not add settings or capabilities.
+Set `per_page`'s default and maximum to 100, preserving its saved value, and relabel it “Rows per inbox page”. Remove the obsolete bar count settings. Keep the other defaults. Update the description and bump the manifest version to 0.3.0. Do not add settings or capabilities.
 
 **Step 4: Run protocol and focused package tests**
 
@@ -202,7 +206,7 @@ Expected: valid manifest ID/version/settings and a successful command build.
 
 **Step 3: Review the final diff**
 
-Confirm that bar counts remain inbox-only; work and Activity are read-only; mark-all is visibly account-wide; old inbox cache restores; feed errors preserve cached data; the Activity heatmap uses semantic theme fills; and no auth token or unrelated files were added.
+Confirm the bar contains only the GitHub mark and both primary and secondary clicks open the panel; work and Activity are read-only; mark-all is visibly account-wide; old inbox cache restores; feed errors preserve cached data; the Activity heatmap uses semantic theme fills; and no auth token or unrelated files were added.
 
 **Step 4: Stop at the focused gates**
 

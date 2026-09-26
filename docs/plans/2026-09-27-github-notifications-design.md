@@ -14,19 +14,22 @@ The plugin keeps the GitHub notification inbox and adds a read-only work queue a
 
 | Area | Included behavior |
 |---|---|
-| Inbox | Unread threads, local search, individual read/open actions, mark all read, paging, unread bar count |
+| Bar | GitHub mark only, with no count; primary and secondary clicks open the panel |
+| Inbox | Unread threads, local search, individual read/open actions, mark all read, paging |
 | Work | Review-requested PRs, authored open PRs, assigned open issues; local search, paging, links |
 | Activity | Trailing-year contribution heatmap, total contributions and active days, per-day hover details |
 | Reliability | Stale cache, per-feed errors, request timeouts, coalesced refresh, read/refresh race protection |
 | Excluded | Following feed, repository/Actions dashboard, multi-forge support, write actions on work items, persisted triage state |
 
-The contribution calendar is useful profile context, but it is not notification urgency and will not affect the bar count or work ordering. The broader Kanban surface would add unrelated feeds and API traffic. Git Companion and DMS provide the useful work categories. The DMS source has no license metadata in the inspected snapshot, so this design uses behavior as reference and copies no source or artwork.
+The contribution calendar is useful profile context, but it is not notification urgency and will not affect inbox counts or work ordering. The bar stays a quiet GitHub mark without an unread badge. The broader Kanban surface would add unrelated feeds and API traffic. Git Companion and DMS provide the useful work categories. The DMS source has no license metadata in the inspected snapshot, so this design uses behavior as reference and copies no source or artwork.
 
 ## Visual design
 
 ### Overall shape
 
 Keep the current 420×640 panel. Use a compact, native shell panel with clear hierarchy: scrollable lists for Inbox and Work, and a compact calendar for Activity. The panel should feel like a quiet triage surface: the selected view and unread state are easy to spot, while timestamps and repository context stay secondary.
+
+The bar launcher is the GitHub Octocat mark by itself. Left and right clicks open the panel; unread counts stay inside the panel and notification toasts.
 
 ```text
 ┌ GitHub · Updated 2m ago                         ↻ ┐
@@ -44,7 +47,7 @@ Keep the current 420×640 panel. Use a compact, native shell panel with clear hi
 └──────────────────────────────────────────────────┘
 ```
 
-The example rows are illustrative. The panel uses host `KindColumn`, `KindRow`, `KindSegmented`, `KindTextInput`, `KindList`, `KindButton`, `KindText`, and `KindIcon` nodes. It inherits the shell's light or dark palette and uses its existing `card`, `soft`, `accent`, `subtle`, and `error` treatments. No custom CSS, image assets, or new icon dependency is needed.
+The example rows are illustrative. The panel uses host `KindColumn`, `KindRow`, `KindSegmented`, `KindTextInput`, `KindList`, `KindButton`, `KindText`, and `KindIcon` nodes. It inherits the shell's light or dark palette and uses its existing `card`, `soft`, `accent`, `subtle`, and `error` treatments. No custom CSS, raster assets, or new icon dependency is needed.
 
 ### Hierarchy and row shape
 
@@ -122,7 +125,7 @@ The cells use GitHub's contribution levels but the shell's theme fills. The diag
 
 ### Inbox
 
-Fetch unread notification threads from GitHub's notifications endpoint, ordered as GitHub returns them. Display title, repository, subject type, reason, and update age. The bar count is derived only from this feed. If a loaded page is full and more may exist, display a lower-bound count (`100+` at the default page size, or `N+` for a saved custom size) rather than presenting the loaded page length as an exact total.
+Fetch unread notification threads from GitHub's notifications endpoint, ordered as GitHub returns them. Display title, repository, subject type, reason, and update age. Inbox counts are derived only from this feed; the bar shows no count. If a loaded page is full and more may exist, display a lower-bound count (`100+` at the default page size, or `N+` for a saved custom size) rather than presenting the loaded page length as an exact total.
 
 Selecting a notification opens its validated canonical GitHub URL. Mark it read after `xdg-open` starts successfully. A separate “Read” action marks it read without opening. If opening fails, keep it unread and show an action error. “Mark all read” calls GitHub's account-wide endpoint; the action's name/accessible description must make that scope clear.
 
@@ -159,7 +162,7 @@ Use the authenticated `gh api graphql` command to fetch `viewer.contributionsCol
 
 ## Settings and compatibility
 
-Keep the plugin ID, panel/widget IDs, refresh interval, bar display mode, and hide-zero setting. Keep `per_page` as the inbox page-size setting, default 100, and raise its maximum from 50 to GitHub's 100-item page limit. This preserves the existing setting key for installations with a saved value. Work pages use 100 items per request. Add no new settings or dependencies. Bump the plugin minor version when implementing the work queue.
+Keep the plugin ID, panel/widget IDs, refresh interval, and `per_page` inbox page-size setting, default 100 with GitHub's 100-item page limit. Remove the bar display-mode and hide-zero settings because the bar is always icon-only. Work pages use 100 items per request. Add no new dependencies. Bump the plugin minor version when implementing the work queue.
 
 ## Verification gates
 
