@@ -40,6 +40,11 @@ type manifest struct {
 		Height          int    `json:"height"`
 		Placement       string `json:"placement"`
 		IncludeSettings bool   `json:"include_settings"`
+		Shortcuts       []struct {
+			Key       string   `json:"key"`
+			Modifiers []string `json:"modifiers"`
+			Node      string   `json:"node"`
+		} `json:"shortcuts"`
 	} `json:"panels"`
 	Settings []setting `json:"settings"`
 }
@@ -56,11 +61,18 @@ type setting struct {
 	VisibleWhen map[string]any `json:"visible_when"`
 }
 
+// allowedCapabilities mirrors the host's Capability constants
+// (sysc-shell internal/plugin/manifest.go).
 var allowedCapabilities = map[string]bool{
-	"notifications": true,
-	"panels":        true,
-	"settings":      true,
-	"state":         true,
+	"notifications":     true,
+	"panels":            true,
+	"settings":          true,
+	"state":             true,
+	"floating_surfaces": true,
+	"wallpaper":         true,
+	"clipboard-read":    true,
+	"clipboard-write":   true,
+	"open-url":          true,
 }
 
 var allowedSettingTypes = map[string]bool{
