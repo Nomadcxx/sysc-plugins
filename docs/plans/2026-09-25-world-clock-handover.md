@@ -15,31 +15,28 @@ work below is merged or moved into bd.
 
 ## Where things stand
 
-- **Branch:** `feat/world-clock-redesign`, worktree `~/sysc-plugins-world-clock`, 8 commits on
-  `main@b821701` (`98b097f..26bed9c`). **Not merged.**
-- **Shell:** sysc-shell `f77226a` (pushed) adds the `public` and `edit` glyphs. The plugin
-  repo pins it. `~/.local/bin/sysc-shell` was rebuilt from it; the previous binary is backed up in
-  the prior session's scratchpad (may be gone).
-- **Deployed:** all 10 plugin symlinks in `~/.config/sysc-shell/plugins/` point at this
-  worktree. They previously dangled into the deleted `.worktrees/feature/wallpaper-depth`.
-  **After merging, run `make install` from the main checkout** or the symlinks break again when
-  the worktree is removed.
-- **Verified live:** the bar shows `UTC 11:16` (primary mode, labelled).
-- **Not verified live:** the panel. A synthetic `ydotool` click missed on the niri multi-output
-  layout. Do not automate clicks on the user's desktop; ask the user to open the panel and
-  describe or screenshot it (see Acceptance).
-- **Tests:** `go test -count=1 -race -p 2 ./plugins/world-clock/ ./cmd/sysc-plugin-world-clock/`
-  passes (the package plus 12 loop tests).
+- **Merged:** `feat/world-clock-redesign` (redesign `98b097f..26bed9c`, follow-up `916e8a4`) is on
+  `main` as `81a5e3e`. The worktree `~/sysc-plugins-world-clock` is no longer used by anything and
+  can be removed.
+- **Shell pin:** `main` pins sysc-shell `3af8c4e` (`a1ba377`), which includes the `public`/`edit`
+  glyphs (`f77226a`) and the calendar host APIs. `go.sum` is complete; the repo builds.
+- **Deployed:** all 10 plugin symlinks in `~/.config/sysc-shell/plugins/` point at the main
+  checkout, built with `make install` on 2026-09-26. The running shell
+  (`~/.local/bin/sysc-shell`) is still the `f77226a` build (host protocol minor 7), so calendar's
+  minor-8 manifest will be refused until the shell is rebuilt from current sysc-shell `main` and
+  restarted (ask the user first).
+- **Verified live:** the bar (primary mode, labelled) and the default panel (see follow-up status).
+  The remaining panel states are deferred by the user.
+- **Tests:** both world-clock packages pass with `-race -p 2`. Repo-wide (capped),
+  `./plugins/... ./cmd/... ./internal/... ./tests/...` pass and `make validate` passes.
 
-### Pre-existing failures (not world-clock; do not "fix" silently)
+### Formerly failing checks (fixed 2026-09-26)
 
-- `tests/integration` notes gate: 2 tests fail, identically at the old shell pin.
-- `make validate`: `plugins/wallpaper-depth` uses capability `wallpaper`, which is missing from
-  the `tools/validate-manifests` allowlist.
-- Legacy `org.sysc.weather` plugin (Sep 9 binary in `~/.config/sysc-shell/plugins/`) fails with
-  `read plugin.hello: EOF` on every shell start since the 21:14 restart. Its hello works when the
-  binary is run by hand; the host's plugin code has not changed since `f16c753`. Uninvestigated.
-  Report it to the user; do not treat it as world-clock scope.
+- `tests/integration` notes gate: passes at the `3af8c4e` pin.
+- `make validate`: the validator's capability list now mirrors the host's nine capabilities and
+  accepts panel `shortcuts` (`7860e2a`); a test validates every shipped manifest.
+- Still open, not world-clock scope: the legacy `org.sysc.weather` plugin (Sep 9 binary) fails
+  with `read plugin.hello: EOF` on shell start. Report to the user.
 
 ## Machine and repo rules
 
@@ -155,7 +152,8 @@ Constraints for any visual change:
    all bar modes and clock formats, and the tooltip is deferred by the user and does not block further
    development.
 4. The deferred items D1–D10 are each either done, or recorded as a user-approved won't-fix.
-5. After merge: `make install` from the main checkout, then the user restarts the shell (ask first).
+5. Done 2026-09-26: `make install` from the main checkout. A shell restart (to pick up the rebuilt
+   plugins, and a newer shell for calendar) is for the user to schedule.
 
 ## Follow-up status — 2026-09-25
 
@@ -164,4 +162,10 @@ Constraints for any visual change:
 - Live screenshot and state coverage is deferred by the user as a non-blocking follow-up. This checkout has no repo-local `.beads` tracker, so the follow-up remains documented here until a tracker is available.
 - The clean default screenshot showed the empty search field collapsing to its intrinsic one-space width, which left the add button at the left. The field now gets the remaining panel width; an automated geometry assertion and interactive state screenshots are deferred.
 - The World Clock binary was rebuilt from this worktree and its plugin process restarted by the host. The existing symlink already points to this worktree. A clean default-panel screenshot was captured; remaining live states are deferred.
-- Before the final polish, `GOWORK=off GOMAXPROCS=4 go test -count=1 -race -p 2 ./plugins/world-clock/ ./cmd/sysc-plugin-world-clock/` passed. The suite was not rerun after the final polish; `git diff --check` passes.
+- 2026-09-26 recheck: the suite was rerun on the merged code with `-race -p 2` and passes.
+- **Still open:**
+  - Part 2 areas 1–5 and 7–9 are not started.
+  - The `hour24=false` lint covers only two states (acceptance item 2).
+  - D3 still has three soft spots with the real tables: `par` lists Paramaribo before Paris,
+    `est` lists America/Panama (labelled EST) before Tallinn, and `gmt` shows both Etc/GMT and
+    UTC.
