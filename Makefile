@@ -11,8 +11,8 @@ PLUGINS := \
 	sysc-plugin-kdeconnect:kdeconnect \
 	sysc-plugin-faith:faith \
 	sysc-plugin-cat:cat \
-	sysc-plugin-games:games
-
+	sysc-plugin-games:games \
+	sysc-plugin-protonvpn:protonvpn
 USER_PLUGIN_ROOT := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/sysc-shell/plugins
 
 .PHONY: build install test vet fmt validate catalog-validate clean

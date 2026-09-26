@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "id": "org.sysc.protonvpn",
+  "name": "ProtonVPN",
+  "version": "1.0.0",
+  "protocol": { "major": 1, "minor": 8 },
+  "exec": "bin/sysc-plugin-protonvpn",
+  "capabilities": ["panels", "settings", "state", "notifications"],
+  "requires": { "commands": ["protonvpn"] },
+  "services": [ { "id": "service" } ],
+  "widgets": [ { "id": "bar", "settings": [] } ],
+  "panels": [
+    {
+      "id": "panel",
+      "width": 460,
+      "height": 580,
+      "placement": "attached",
+      "include_settings": false
+    }
+  ],
+  "settings": [
+    { "key": "refresh_seconds", "type": "int", "label": "Status refresh (seconds)", "default": 5, "min": 2, "max": 60 },
+    { "key": "traffic_monitoring", "type": "bool", "label": "Show live traffic", "default": true },
+    { "key": "notify_on_connect", "type": "bool", "label": "Notify on connect", "default": true },
+    { "key": "bar_mode", "type": "select", "label": "Bar shows", "default": "code",
+      "options": [
+        {"value": "icon", "label": "Icon only"},
+        {"value": "code", "label": "Country code"},
+        {"value": "status", "label": "Status word"}
+      ] },
+    { "key": "quick_connect", "type": "select", "label": "Right-click connects to", "default": "fastest",
+      "options": [
+        {"value": "fastest", "label": "Fastest server"},
+        {"value": "random", "label": "Random server"},
+        {"value": "p2p", "label": "P2P server"},
+        {"value": "tor", "label": "Tor server"}
+      ] }
+  ]
+}
