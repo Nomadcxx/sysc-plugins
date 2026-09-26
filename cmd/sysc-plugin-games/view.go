@@ -106,8 +106,20 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 		if g := s.game(strings.TrimPrefix(node, "folder-")); g != nil && g.Directory != "" {
 			_ = s.env.run(ctx, "xdg-open", g.Directory)
 		}
-	case strings.HasPrefix(node, "config-"), strings.HasPrefix(node, "remove-"):
-		_, _ = s.call(ctx, v1.CallNotify, v1.NotifyParams{Summary: "Open Lutris", Body: "Configure and uninstall live in the Lutris GUI"})
+	case strings.HasPrefix(node, "config-"):
+		if g := s.game(strings.TrimPrefix(node, "config-")); g != nil && g.ConfigPath != "" {
+			_ = s.env.run(ctx, "xdg-open", g.ConfigPath)
+		} else {
+			_, _ = s.call(ctx, v1.CallNotify, v1.NotifyParams{Summary: "Open Lutris", Body: "No game config file found"})
+		}
+	case strings.HasPrefix(node, "remove-"):
+		// ponytail: Lutris exposes no uninstall URI or CLI flag (verified in
+		// lutris gui/application.py — only rungameid/rungame/install), so
+		// removal stays GUI-side rather than hacking pga.db rows.
+		_, _ = s.call(ctx, v1.CallNotify, v1.NotifyParams{
+			Summary: "Uninstall in Lutris",
+			Body:    "Lutris has no uninstall API — right-click the game there",
+		})
 	case strings.HasPrefix(node, "more-"):
 		s.actions = true
 	case node == "detail-back":

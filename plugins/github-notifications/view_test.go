@@ -2,6 +2,7 @@ package githubnotifications
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,30 @@ func TestTreesValidate(t *testing.T) {
 	}
 	if err := v1.Validate(PanelTree("No unread notifications", "gh exploded", nil), v1.ViewPanel); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBarTreeIsIconOnlyAndOpensOnBothMouseButtons(t *testing.T) {
+	bar := BarTree("50", true)
+	if err := v1.Validate(bar, v1.ViewBar); err != nil {
+		t.Fatal(err)
+	}
+	button := findNode(bar, "open")
+	if button == nil {
+		t.Fatal("bar has no addressed open button")
+	}
+	if button.Kind != v1.KindButton || button.Icon != "github" || button.Text != "" || len(button.Children) != 0 {
+		t.Fatalf("bar button = %+v, want only the GitHub mark", button)
+	}
+	if button.Name == "" || button.Role != "button" {
+		t.Fatalf("bar button is not accessible: %+v", button)
+	}
+	want := []v1.EventKind{v1.EventActivate, v1.EventPointer}
+	if !reflect.DeepEqual(button.Events, want) {
+		t.Fatalf("bar events = %v, want %v", button.Events, want)
+	}
+	if containsText(bar, "50") {
+		t.Fatal("bar displays an unread count")
 	}
 }
 

@@ -101,9 +101,23 @@ func (s *Source) List(ctx context.Context) ([]source.Game, error) {
 		g.Installed = installed != 0
 		g.Source = "lutris"
 		g.CoverPath = s.cover(g.Slug)
+		g.ConfigPath = s.gameConfig(g.ConfigPath)
 		out = append(out, g)
 	}
 	return out, rows.Err()
+}
+
+// gameConfig maps the pga.db configpath stem to its games/<stem>.yml file,
+// which is the real per-game config Lutris edits. "" when the file is gone.
+func (s *Source) gameConfig(stem string) string {
+	if stem == "" {
+		return ""
+	}
+	p := filepath.Join(s.lutrisRoot, "games", stem+".yml")
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	return ""
 }
 
 // Lutris stores lastplayed as epoch seconds; older installers wrote datetime

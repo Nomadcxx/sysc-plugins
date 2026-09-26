@@ -223,3 +223,34 @@ func mustList(t *testing.T, src *Source) []source.Game {
 	}
 	return games
 }
+
+func TestConfigPathResolution(t *testing.T) {
+	root := t.TempDir()
+	dbPath := makePGA(t, func(db *sql.DB) {
+		if _, err := db.Exec(`UPDATE games SET configpath='hades-2020' WHERE name='Hades'`); err != nil {
+			t.Fatal(err)
+		}
+	})
+	lutrisRoot := filepath.Join(root, "lutris")
+	if err := os.MkdirAll(filepath.Join(lutrisRoot, "games"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yml := filepath.Join(lutrisRoot, "games", "hades-2020.yml")
+	if err := os.WriteFile(yml, []byte("game:\n  slug: hades\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, err := New(Options{DBPath: dbPath, LutrisRoot: lutrisRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	games, _ := src.List(context.Background())
+	for _, g := range games {
+		want := ""
+		if g.Name == "Hades" {
+			want = yml
+		}
+		if g.ConfigPath != want {
+			t.Fatalf("%s: ConfigPath = %q, want %q", g.Name, g.ConfigPath, want)
+		}
+	}
+}
