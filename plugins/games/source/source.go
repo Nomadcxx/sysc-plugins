@@ -34,5 +34,4 @@ type Source interface {
 	Launch(ctx context.Context, g Game) error
 	Stop(ctx context.Context, g Game) error
 	Running(ctx context.Context) (map[string]time.Time, error) // keyed by Game.ID
-	Sections(ctx context.Context) ([]string, error)
 }

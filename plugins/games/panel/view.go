@@ -213,7 +213,7 @@ func detail(s State, games []source.Game) *v1.Node {
 		subtle(strings.Join(badges(g), " · ")),
 		subtle(fmt.Sprintf("%s · %s", fmtPlaytime(g.PlaytimeSec), fmtLastPlayed(g.LastPlayed, s.Now))),
 	)
-	if vals := normalized(store.DailyMinutes(s.Sessions, 14, s.Now)); len(vals) > 0 {
+	if vals := normalized(store.DailyMinutes(store.Log{g.ID: s.Sessions[g.ID]}, 14, s.Now)); len(vals) > 0 {
 		d.Children = append(d.Children, &v1.Node{Kind: v1.KindGraph, ID: "session-graph", Values: vals, Height: 48, Tooltip: "minutes played, last 14 days"})
 	} else {
 		d.Children = append(d.Children, &v1.Node{Kind: v1.KindGraph, ID: "session-graph", Absent: true, Height: 48})

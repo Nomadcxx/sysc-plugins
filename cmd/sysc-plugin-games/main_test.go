@@ -279,3 +279,26 @@ func TestSearchAndLaunch(t *testing.T) {
 		t.Fatal("no launch exec")
 	}
 }
+
+func TestReclickSelectedCardLaunches(t *testing.T) {
+	h := start(t)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
+	line := h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "card-2") != nil
+	})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:card-2", Event: v1.EventActivate})
+	line = h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "launch-2") != nil
+	})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:card-2", Event: v1.EventActivate})
+	select {
+	case got := <-h.ran:
+		if len(got) < 2 || got[1] != "lutris:rungameid/2" {
+			t.Fatalf("launch exec = %v", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("second click on selected card must launch")
+	}
+}

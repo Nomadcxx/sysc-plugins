@@ -38,6 +38,7 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 			s.prefs.View = "playing"
 			s.save(ctx, "prefs", s.prefs)
 		}
+		s.focusRunning()
 		_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
 	case node == "search" && (m.Event == v1.EventChange || m.Event == v1.EventSubmit):
 		s.query = m.Text
@@ -48,8 +49,15 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 			s.save(ctx, "prefs", s.prefs)
 		}
 	case strings.HasPrefix(node, "card-"):
-		s.selected = strings.TrimPrefix(node, "card-")
-		s.actions = m.Event == v1.EventPointer && m.Button == v1.ButtonSecondary
+		id := strings.TrimPrefix(node, "card-")
+		switch {
+		case m.Event == v1.EventPointer && m.Button == v1.ButtonSecondary:
+			s.selected, s.actions = id, true
+		case s.selected == id && !s.actions:
+			s.doLaunch(ctx, id) // Enter/re-click on the selected card launches
+		default:
+			s.selected = id
+		}
 	case strings.HasPrefix(node, "launch-"):
 		s.doLaunch(ctx, strings.TrimPrefix(node, "launch-"))
 	case strings.HasPrefix(node, "stop-"):
@@ -75,6 +83,22 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	case node == "detail-back":
 		s.actions = false
 	}
+}
+
+// focusRunning preselects the newest running game so opening the panel from
+// the pill lands on something actionable (design: "focused on running game").
+func (s *session) focusRunning() {
+	if s.selected != "" || len(s.running) == 0 {
+		return
+	}
+	var best string
+	var bestT time.Time
+	for id, t := range s.running {
+		if t.After(bestT) {
+			best, bestT = id, t
+		}
+	}
+	s.selected = best
 }
 
 func (s *session) setSection(name string) bool {

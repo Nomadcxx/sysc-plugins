@@ -197,21 +197,3 @@ func (s *Source) Running(ctx context.Context) (map[string]time.Time, error) {
 	}
 	return out, nil
 }
-
-func (s *Source) Sections(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `select distinct platform from games
-		where platform is not null and platform != '' order by platform`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}

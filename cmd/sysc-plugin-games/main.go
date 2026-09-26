@@ -109,11 +109,10 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 		machine: panel.NewMachine(), failed: map[string]bool{}, cacheDir: cacheDir,
 		sessions: store.Log{},
 	}
-	src, err := lutris.New(lutris.Options{DBPath: env.dbPath, ProcRoot: env.procRoot, Run: env.run})
-	if err != nil {
-		s.missing = true
+	if s.settings.sourceLutris {
+		s.openLutris()
 	} else {
-		s.src = src
+		s.missing = true
 	}
 	s.prefs.EnsureMaps()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -161,6 +160,12 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 				s.snapshotAll()
 			case *v1.SettingsChanged:
 				s.settings.apply(m.Values)
+				if !s.settings.sourceLutris {
+					s.src, s.running = nil, nil
+				} else if s.src == nil {
+					s.openLutris()
+				}
+				s.refresh(ctx)
 				if s.settings.pollRunning == "off" {
 					s.running = nil
 				} else {
@@ -197,6 +202,15 @@ func (s *session) hasBar() bool {
 		}
 	}
 	return false
+}
+
+func (s *session) openLutris() {
+	src, err := lutris.New(lutris.Options{DBPath: s.env.dbPath, ProcRoot: s.env.procRoot, Run: s.env.run})
+	if err != nil {
+		s.missing = true
+		return
+	}
+	s.src, s.missing = src, false
 }
 
 func (s *session) refresh(ctx context.Context) {

@@ -15,7 +15,6 @@ func (f *fakeSource) Stop(context.Context, Game) error     { return nil }
 func (f *fakeSource) Running(context.Context) (map[string]time.Time, error) {
 	return nil, nil
 }
-func (f *fakeSource) Sections(context.Context) ([]string, error) { return []string{"Action"}, nil }
 
 func TestFakeSatisfiesInterface(t *testing.T) {
 	var s Source = &fakeSource{games: []Game{{ID: "7", Name: "Hades", Runner: "wine"}}}

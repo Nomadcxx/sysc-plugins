@@ -179,17 +179,33 @@ func TestRunningAndStop(t *testing.T) {
 	}
 }
 
-func TestSections(t *testing.T) {
-	src, err := New(Options{DBPath: makePGA(t, nil)})
+func TestRealLibrarySmoke(t *testing.T) {
+	db := os.Getenv("SYC_GAMES_TEST_PGA")
+	if db == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("no home")
+		}
+		db = filepath.Join(home, ".local/share/lutris/pga.db")
+	}
+	if _, err := os.Stat(db); err != nil {
+		t.Skip("no real pga.db")
+	}
+	src, err := New(Options{DBPath: db})
+	if err != nil {
+		t.Fatalf("open real pga.db: %v", err)
+	}
+	games, err := src.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	sections, err := src.Sections(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	if len(games) == 0 {
+		t.Fatal("real library lists zero games")
 	}
-	if len(sections) != 1 || sections[0] != "Windows" {
-		t.Fatalf("sections: %v", sections)
+	for _, g := range games {
+		if g.PlaytimeSec < 0 {
+			t.Fatalf("%s: negative playtime %v", g.Name, g.PlaytimeSec)
+		}
 	}
 }
 
