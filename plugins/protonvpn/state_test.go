@@ -67,3 +67,74 @@ func TestErrorClearsOnNextTransition(t *testing.T) {
 		t.Fatal("want detail cleared")
 	}
 }
+
+func TestSetStatusConnectedClearsDeadline(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m := &Machine{Now: func() time.Time { return now }}
+	m.StartConnect()
+	now = now.Add(30 * time.Second)
+	m.SetStatus(Status{Phase: PhaseConnected})
+	if m.TransitionExpired() {
+		t.Fatal("want deadline cleared")
+	}
+}
+
+func TestSetStatusConnectingDoesNotExtendDeadline(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m := &Machine{Now: func() time.Time { return now }}
+	m.StartConnect()
+	now = now.Add(21 * time.Second)
+	m.SetStatus(Status{Phase: PhaseConnecting})
+	if !m.TransitionExpired() {
+		t.Fatal("want deadline unchanged")
+	}
+}
+
+func TestStartDisconnectClearsIPAndErr(t *testing.T) {
+	m := &Machine{Now: func() time.Time { return time.Unix(1000, 0) }}
+	m.SetIP("1.2.3.4")
+	m.Fail("boom")
+	m.StartDisconnect()
+	s := m.Snapshot()
+	if s.IP != "" || s.Err != "" {
+		t.Fatal("want IP and Err cleared")
+	}
+}
+
+func TestSetStatusDisconnectedClearsIP(t *testing.T) {
+	m := &Machine{Now: func() time.Time { return time.Unix(1000, 0) }}
+	m.SetIP("1.2.3.4")
+	m.SetStatus(Status{Phase: PhaseDisconnected})
+	if m.Snapshot().IP != "" {
+		t.Fatal("want IP cleared")
+	}
+}
+
+func TestSetStatusClearsErrOnPhaseChange(t *testing.T) {
+	m := &Machine{Now: func() time.Time { return time.Unix(1000, 0) }}
+	m.Fail("boom")
+	m.SetStatus(Status{Phase: PhaseConnected})
+	if m.Snapshot().Err != "" {
+		t.Fatal("want Err cleared")
+	}
+}
+
+func TestTrafficResumesBaselineAfterReappear(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m := &Machine{Now: func() time.Time { return now }}
+	m.SampleTraffic(1000, 500, true)
+	now = now.Add(time.Second)
+	m.SampleTraffic(0, 0, false)
+	now = now.Add(time.Second)
+	m.SampleTraffic(100, 50, true) // counters reset while the tunnel was down
+	s := m.Snapshot()
+	if s.RxRate != 0 || s.TxRate != 0 {
+		t.Fatal("want baseline rates")
+	}
+	now = now.Add(time.Second)
+	m.SampleTraffic(200, 100, true)
+	s = m.Snapshot()
+	if s.RxRate != 100 || s.TxRate != 50 {
+		t.Fatalf("rates %v/%v", s.RxRate, s.TxRate)
+	}
+}

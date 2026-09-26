@@ -41,7 +41,13 @@ func (m *Machine) now() time.Time {
 func (m *Machine) Snapshot() Snapshot { return m.snap }
 
 func (m *Machine) SetStatus(s Status) {
-	changed := m.snap.Status.Phase != s.Phase
+	changed := m.snap.Phase != s.Phase
+	if changed {
+		m.snap.Err = ""
+	}
+	if s.Phase == PhaseDisconnected {
+		m.snap.IP = ""
+	}
 	m.snap.Status = s
 	m.snap.Phase = s.Phase
 	switch s.Phase {
@@ -82,7 +88,9 @@ func (m *Machine) SampleTraffic(rx, tx uint64, ifaceExists bool) {
 	if !ifaceExists {
 		m.snap.RxRate = 0
 		m.snap.TxRate = 0
-		m.lastSample = time.Time{} // restart the rate baseline when the tunnel reappears
+		// restart the rate baseline so reappearance with reset counters doesn't underflow
+		m.lastRx, m.lastTx = 0, 0
+		m.lastSample = time.Time{}
 		return
 	}
 	now := m.now()
