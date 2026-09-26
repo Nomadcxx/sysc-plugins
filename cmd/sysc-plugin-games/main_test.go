@@ -41,6 +41,15 @@ func makeFixture(t *testing.T) (dbPath, procRoot string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`UPDATE games SET configpath='hades' WHERE name='Hades'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(filepath.Dir(dbPath), "games"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(dbPath), "games", "hades.yml"), []byte("game: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	procRoot = t.TempDir()
 	pid := filepath.Join(procRoot, "4242")
 	if err := os.MkdirAll(pid, 0o755); err != nil {
@@ -308,6 +317,29 @@ func TestReclickSelectedCardLaunches(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("second click on selected card must launch")
+	}
+}
+
+func TestConfigOpensGameYml(t *testing.T) {
+	h := start(t)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
+	line := h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "card-1") != nil
+	})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:card-1", Event: v1.EventPointer, Button: v1.ButtonSecondary})
+	line = h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "config-1") != nil
+	})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:config-1", Event: v1.EventActivate})
+	select {
+	case got := <-h.ran:
+		if len(got) < 2 || got[0] != "xdg-open" || filepath.Base(got[1]) != "hades.yml" {
+			t.Fatalf("configure exec = %v", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no configure exec")
 	}
 }
 

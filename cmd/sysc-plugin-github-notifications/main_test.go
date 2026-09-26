@@ -23,10 +23,10 @@ func TestBarClicksOpenGitHubPanel(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pluginIn, hostOut := io.Pipe()
-			pluginOut, hostIn := io.Pipe()
-			hostEncoder := v1.NewEncoder(pluginInWriter(hostOut))
-			hostDecoder := v1.NewDecoder(hostIn, v1.ToHost)
+			pluginIn, hostWriter := io.Pipe()
+			hostReader, pluginOut := io.Pipe()
+			hostEncoder := v1.NewEncoder(hostWriter)
+			hostDecoder := v1.NewDecoder(hostReader, v1.ToHost)
 			var writeMu sync.Mutex
 			send := func(msg v1.Message) error {
 				writeMu.Lock()
@@ -35,7 +35,7 @@ func TestBarClicksOpenGitHubPanel(t *testing.T) {
 			}
 
 			done := make(chan error, 1)
-			go func() { done <- runPlugin(hostOut, pluginOut, barTestGH{}, nil) }()
+			go func() { done <- runPlugin(pluginIn, pluginOut, barTestGH{}, nil) }()
 
 			pluginHello := make(chan *v1.PluginHello, 1)
 			panelCalls := make(chan *v1.HostCall, 2)
@@ -76,10 +76,10 @@ func TestBarClicksOpenGitHubPanel(t *testing.T) {
 
 			cleanup := func() {
 				_ = send(&v1.HostShutdown{})
+				_ = hostWriter.Close()
 				_ = pluginIn.Close()
-				_ = hostOut.Close()
+				_ = hostReader.Close()
 				_ = pluginOut.Close()
-				_ = hostIn.Close()
 				select {
 				case <-done:
 				case <-time.After(2 * time.Second):
@@ -135,8 +135,6 @@ func TestBarClicksOpenGitHubPanel(t *testing.T) {
 		})
 	}
 }
-
-func pluginInWriter(writer io.Writer) io.Writer { return writer }
 
 type barTestGH struct{}
 
