@@ -141,3 +141,19 @@ func TestPanelWidthFollowsTheMockup(t *testing.T) {
 		}
 	}
 }
+
+func TestComposerFocusTargetsTheFirstField(t *testing.T) {
+	t.Parallel()
+	if node, ok := composerFocus(kdeconnect.ComposerNone, kdeconnect.ComposerShare); !ok || node != "share-text" {
+		t.Fatalf("share focus = %q, %v, want share-text, true", node, ok)
+	}
+	if node, ok := composerFocus(kdeconnect.ComposerNone, kdeconnect.ComposerSMS); !ok || node != "sms-number" {
+		t.Fatalf("sms focus = %q, %v, want sms-number, true", node, ok)
+	}
+	if _, ok := composerFocus(kdeconnect.ComposerShare, kdeconnect.ComposerNone); ok {
+		t.Fatal("closing the composer issued a focus")
+	}
+	if _, ok := composerFocus(kdeconnect.ComposerShare, kdeconnect.ComposerShare); ok {
+		t.Fatal("an unchanged composer issued a focus")
+	}
+}

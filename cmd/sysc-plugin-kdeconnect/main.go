@@ -155,8 +155,14 @@ func run(in *os.File, out *os.File) error {
 			case *v1.ViewResync:
 				publish(nil)
 			case *v1.InputEvent:
+				prev := ui.composer
 				if handleInput(ctx, c, svc, m, &ui, snap, &busy) {
 					publish(nil)
+				}
+				if node, ok := composerFocus(prev, ui.composer); ok {
+					// Best-effort: the composer can close before the host
+					// answers, and a gone node refuses the focus.
+					_, _ = c.Call(ctx, v1.CallViewFocus, v1.ViewFocusParams{View: m.ViewID, Node: node})
 				}
 			case *v1.SettingsChanged:
 				settings = settingsFrom(m.Values)
@@ -167,6 +173,22 @@ func run(in *os.File, out *os.File) error {
 			notify(ctx, c, e)
 		}
 	}
+}
+
+// composerFocus reports the view.focus call a composer transition needs:
+// the first field's node id, and whether the composer just opened. Closing
+// and no-op transitions focus nothing.
+func composerFocus(prev, now kdeconnect.Composer) (string, bool) {
+	if now == prev || now == kdeconnect.ComposerNone {
+		return "", false
+	}
+	switch now {
+	case kdeconnect.ComposerShare:
+		return "share-text", true
+	case kdeconnect.ComposerSMS:
+		return "sms-number", true
+	}
+	return "", false
 }
 
 // panelHeight is the popout height the manifest declares and every resize
