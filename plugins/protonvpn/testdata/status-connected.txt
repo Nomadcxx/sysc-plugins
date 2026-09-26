@@ -1,0 +1,4 @@
+Status: Connected
+Server: US-NY#1 in New York, United States
+Load: 30%
+Protocol: wireguard

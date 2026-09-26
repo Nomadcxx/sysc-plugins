@@ -1,0 +1,12 @@
+Current configuration
+
+Setting                   Value
+------------------------  ----------------------
+netshield                 malware-only
+kill-switch               standard
+port-forwarding           on
+custom-dns                off
+vpn-accelerator           off
+moderate-nat              off
+ipv6                      off
+anonymous-crash-reports   off
