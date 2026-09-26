@@ -14,12 +14,13 @@ import (
 )
 
 type manifest struct {
-	Schema   int    `json:"schema"`
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Version  string `json:"version"`
-	Exec     string `json:"exec"`
-	Protocol struct {
+	Schema      int    `json:"schema"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Version     string `json:"version"`
+	Exec        string `json:"exec"`
+	Protocol    struct {
 		Major int `json:"major"`
 		Minor int `json:"minor"`
 	} `json:"protocol"`
@@ -42,18 +43,21 @@ type manifest struct {
 		IncludeSettings bool   `json:"include_settings"`
 		Shortcuts       []struct {
 			Key       string   `json:"key"`
-			Modifiers []string `json:"modifiers"`
+			Modifiers []string `json:"modifiers,omitempty"`
 			Node      string   `json:"node"`
-		} `json:"shortcuts"`
+		} `json:"shortcuts,omitempty"`
 	} `json:"panels"`
 	Settings []setting `json:"settings"`
 }
 
 // setting is one manifest settings row, at plugin scope or inside a widget.
+// It mirrors the host's wireSetting field for field: the decode is strict, so
+// a field the host accepts and this omits fails a manifest the shell loads.
 type setting struct {
 	Key         string         `json:"key"`
 	Type        string         `json:"type"`
 	Label       string         `json:"label"`
+	Description string         `json:"description"`
 	Default     any            `json:"default"`
 	Min         any            `json:"min"`
 	Max         any            `json:"max"`
@@ -61,15 +65,13 @@ type setting struct {
 	VisibleWhen map[string]any `json:"visible_when"`
 }
 
-// allowedCapabilities mirrors the host's Capability constants
-// (sysc-shell internal/plugin/manifest.go).
 var allowedCapabilities = map[string]bool{
 	"notifications":     true,
 	"panels":            true,
 	"settings":          true,
 	"state":             true,
-	"floating_surfaces": true,
 	"wallpaper":         true,
+	"floating_surfaces": true,
 	"clipboard-read":    true,
 	"clipboard-write":   true,
 	"open-url":          true,

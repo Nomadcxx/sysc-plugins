@@ -2,6 +2,7 @@
   "schema": 1,
   "id": "org.sysc.github-notifications",
   "name": "GitHub Notifications",
+  "description": "Shows unread GitHub notifications in the bar with a panel to review and mark them read.",
   "version": "0.2.0",
   "protocol": {
     "major": 1,

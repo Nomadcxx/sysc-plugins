@@ -37,6 +37,8 @@ After `make install`, enable plugins from sysc-shell's Plugins manager panel
 | Wallpaper Depth | `org.sysc.wallpaper-depth` | 1.0.0 | port of noctalia official plugin |
 | Phone Connect | `org.sysc.kdeconnect` | 0.1.0 skeleton | port of DMS DankKDEConnect |
 | AI Usage | `org.sysc.aiusage` | 0.1.0 | new; patterns ported from noctalia ai-usagebar + DMS usage widgets |
+| Faith | `org.sysc.faith` | 0.1.0 | new; behavior from the noctalia quranwidget community plugin |
+| Cat | `org.sysc.cat` | 1.0.0 | port of noctalia cat + DMS Cat Widget, widened |
 
 "First sweep" means working but early: these plugins were generated before
 much of the shell's plugin infrastructure existed, and their views are
@@ -79,6 +81,18 @@ Notes the hard way taught us:
 - The wire vocabulary has no grid or desktop-widget view kind; compose grids
   from rows/columns, and note that noctalia desktop widgets are not portable.
 
+## Releasing and third-party catalogs
+
+Tagging `<dir>-v<version>` (for example `timer-v1.4.0`) builds both arches,
+publishes a GitHub release, and opens a pull request against `main` with the
+regenerated `catalog.json` — the file sysc-shell's built-in `sysc` plugin
+source reads. `go run ./tools/catalog` (`package`, `update`, `validate`) is
+the tooling behind that workflow, and `make catalog-validate` runs the same
+check CI does. Any git repository can be its own plugin source by copying
+this tooling and keeping a `catalog.json` at its default branch's root. See
+[docs/publishing.md](docs/publishing.md) for the full guide, including
+`catalog-meta.json` fields and screenshot requirements.
+
 ## Attribution
 
 Plugins marked "port of noctalia ..." are Go rewrites of behavior originally
@@ -90,9 +104,40 @@ Avenge Media for DankMaterialShell's DankKDEConnect plugin
 (dms-plugin-registry #386), under the MIT license; runtime compatibility
 with DMS is not claimed or preserved.
 
+Cat ports the behaviour of noctalia's `cat` community plugin (DotNetRob) and
+the DMS Cat Widget (xi-ve/cat-dms, dms-plugin-registry #562): a bar cat
+whose pace follows CPU load. Neither reference's artwork is used. The cat is
+forty original poses in sysc-shell's own icon font -- walking, galloping,
+sitting, grooming, scratching, stretching and sleeping -- and the shell
+animates them on its own frame clock (protocol minor 8 sprite cycles), so the
+plugin sends a message per act, never per pose. It reads `/proc/stat` only.
+
 AI Usage is a new plugin built from the patterns in its prior-art research
 (docs/plans/2026-09-19-aiusage-research.md), including the owner's own
 noctalia ai-usagebar plugin. Its codex session-file collector reads session
 logs only — never authentication files, never the network — and pasted API
 keys live in the host's own settings store and are sent only to their
 provider's API.
+
+Faith is a new plugin whose behavior follows MezoAhmedII's Quran Widget
+(noctalia community plugins, MIT); no code is shared. Its bundled data is
+listed with commits and checksums in `plugins/faith/data/SOURCES.md`:
+
+- The Berean Standard Bible (public domain since 2023) and the World English
+  Bible (public domain), from the USFM in
+  [HelloAOLab/bible-api](https://github.com/HelloAOLab/bible-api).
+- The King James Version (1769), from
+  [scrollmapper/bible_databases](https://github.com/scrollmapper/bible_databases).
+  It is public domain except in the United Kingdom, where Crown letters patent
+  apply.
+- Cross-references from [OpenBible.info](https://www.openbible.info/labs/cross-references/),
+  CC BY, by way of the same scrollmapper mirror. The five highest-voted
+  references per verse are kept.
+- Prayers from the 1928 and 1979 Books of Common Prayer (US editions, public
+  domain), the 1891 Baltimore Catechism, Thomas Ken (1674), C. F. Alexander's
+  1889 translation of St. Patrick's Breastplate, and traditional public-domain
+  English wordings; Scripture prayers read the user's chosen translation.
+
+Adam Clarke's commentary (public domain) is not bundled. When the panel is
+open, it is fetched from the [Free Use Bible API](https://bible.helloao.org),
+the only network request the plugin makes. Nothing about the user is sent.

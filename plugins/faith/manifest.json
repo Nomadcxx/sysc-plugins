@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "id": "org.sysc.faith",
+  "name": "Faith",
+  "description": "A cross on the bar that offers a prayer when clicked, and a Scripture panel with cross-references and commentary.",
+  "version": "0.1.0",
+  "protocol": {
+    "major": 1,
+    "minor": 4
+  },
+  "exec": "bin/sysc-plugin-faith",
+  "capabilities": [
+    "notifications",
+    "panels",
+    "settings",
+    "state"
+  ],
+  "requires": {
+    "commands": []
+  },
+  "services": [
+    {
+      "id": "faith"
+    }
+  ],
+  "widgets": [
+    {
+      "id": "bar",
+      "settings": []
+    }
+  ],
+  "panels": [
+    {
+      "id": "panel",
+      "width": 440,
+      "height": 460,
+      "placement": "attached"
+    }
+  ],
+  "settings": [
+    {
+      "key": "tradition",
+      "type": "select",
+      "label": "Prayer tradition",
+      "default": "ecumenical",
+      "options": [
+        {"value": "ecumenical", "label": "Ecumenical"},
+        {"value": "catholic", "label": "Ecumenical and Catholic"},
+        {"value": "orthodox", "label": "Ecumenical and Orthodox"}
+      ]
+    },
+    {
+      "key": "verse_mode",
+      "type": "select",
+      "label": "Verse",
+      "default": "pool",
+      "options": [
+        {"value": "pool", "label": "Random devotional verse"},
+        {"value": "daily", "label": "Verse of the day"},
+        {"value": "bible", "label": "Random verse from the whole Bible"}
+      ]
+    },
+    {"key": "refresh_minutes", "type": "int", "label": "New verse every (minutes, 0 = never)", "default": 30, "min": 0, "max": 1440},
+    {
+      "key": "translation",
+      "type": "select",
+      "label": "Translation",
+      "default": "BSB",
+      "options": [
+        {"value": "BSB", "label": "Berean Standard Bible"},
+        {"value": "WEB", "label": "World English Bible"},
+        {"value": "KJV", "label": "King James Version"}
+      ]
+    },
+    {"key": "show_commentary", "type": "bool", "label": "Show Adam Clarke's commentary (online)", "default": true},
+    {"key": "show_reference", "type": "bool", "label": "Show the verse reference on the bar", "default": false},
+    {"key": "prayer_seconds", "type": "int", "label": "Prayer notification seconds (0 = default)", "default": 30, "min": 0, "max": 300}
+  ]
+}

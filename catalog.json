@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "plugins": [
+    {
+      "id": "org.sysc.timer",
+      "name": "Pomodoro Timer",
+      "author": "Nomadcxx",
+      "description": "A Pomodoro timer in the bar with work and break sessions.",
+      "category": "productivity",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-24T23:19:00.769137222Z",
+      "updated_at": "2026-09-24T23:19:00.769137222Z",
+      "version": "1.4.0",
+      "protocol": {
+        "major": 1,
+        "minor": 3
+      },
+      "capabilities": [
+        "notifications",
+        "panels",
+        "settings",
+        "state"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/timer-v1.4.0/org.sysc.timer-1.4.0-linux-amd64.tar.gz",
+          "sha256": "ec3d3bf795c8c8499cacf80608b2dad5daa703a8dd12c0f656df390565f706af",
+          "size": 2256517
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/timer-v1.4.0/org.sysc.timer-1.4.0-linux-arm64.tar.gz",
+          "sha256": "7ff314d2e81e435e4c289db35cfca489f47ef16680eea745f2cf8415ee13d54c",
+          "size": 2084914
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/timer-v1.4.0"
+    }
+  ]
+}

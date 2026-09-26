@@ -1,6 +1,6 @@
 # Design and Plan Register
 
-Last updated: 2026-09-24.
+Last updated: 2026-09-26.
 
 Every design, plan, and handover this project has produced, with where it lives and what it is for.
 Add a row here in the same commit that adds a document. A document that is not in this register is
@@ -60,12 +60,15 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-23-wallpaper-depth-design.md` | design | The approved Wallpaper Depth design: a fixed shell-owned clock on the Bottom layer, per-output Depth Anything masks, destination-out composition, and two narrow wallpaper host calls. |
 | `2026-09-23-wallpaper-depth.md` | plan | The TDD implementation sequence for wire minor 7, wallpaper snapshot and mask calls, the Bottom-layer depth clock, serialized per-output inference, process gate, and bare-metal calibration. |
 | `2026-09-24-wallpaper-depth-gap-closure.md` | plan | Reuse the host settings renderer, add queued bulk mask generation and setup/result detail, then polish the Wallpaper Depth panel. |
-| `2026-09-24-notes-design.md` | design | Approved Notes manager plus shell-owned floating sticky surfaces for a configured Obsidian vault folder, including the bounded plugin surface contract, pin layers, and save-failure safety. |
 | `2026-09-24-notes.md` | plan | Implementation sequence for the floating-surface plugin protocol, shell-owned layer-surface host, safe note colors, concurrent Markdown editing, redesigned manager, and compositor gate. |
 | `2026-09-24-calendar-design.md` | design | Approved EDS-backed, read-only calendar direction: next-event bar pill, five views, safe event actions, and the host UI/input APIs required to render them at parity. |
 | `2026-09-24-calendar.md` | plan | Test-first cross-repository implementation sequence for protocol minor 8, shell schedule-grid rendering and actions, EDS event queries, all five plugin views, and screenshot-based acceptance. |
+| `2026-09-24-notes-design.md` | design | Approved Notes manager plus shell-owned floating sticky surfaces for a configured Obsidian vault folder, including the bounded plugin surface contract, pin layers, and save-failure safety. |
 | `2026-09-25-world-clock-design.md` | design | Approved World Clock redesign: audit of v1.2.0, city search, relative-to-local readings, labelled zones with bar visibility, four bar modes, minute-aligned ticking, and the two shell glyphs it needs. |
 | `2026-09-25-world-clock.md` | plan | Test-first sequence for the World Clock redesign: shell glyphs and pin repair, zone model and migration, search index, relative readings, panel, bar modes, event loop, and live acceptance. |
 | `2026-09-25-world-clock-handover.md` | handover | Open: the World Clock review's deferred minor findings (D1–D10) plus a user-approved polish and visual round, with deploy state, constraints, and acceptance. |
+| `2026-09-25-faith-design.md` | design | Faith, a Christian devotional plugin: a cross bar glyph that gives a bundled public-domain prayer on click, and a verse panel over the Free Use Bible API with commentary and cross-references. |
+| `2026-09-25-faith.md` | plan | The offline-first Faith TDD sequence: the shell glyphs (landed), a generator that bundles BSB, WEB, KJV and OpenBible cross-references, the store and pool, the commentary client, prayers, views, the process wiring, the gate, and a closing bd handover. |
+| `2026-09-25-faith-bd-handover.md` | handover | Faith work to record in bd: completed tasks with commits and suggested close reasons, the shell-release gate, the live check, and sandbox-only failures that predate the work. |
 | `2026-09-26-protonvpn-design.md` | design | Approved ProtonVPN design: prior-art audit of Noctalia, DMS, and the GTK app; the official-CLI parsing contract; 460×580 three-tab panel; NAT-PMP; split tunneling; and the flag-emoji gate. |
 | `2026-09-26-protonvpn.md` | plan | TDD implementation sequence for the ProtonVPN plugin: shell glyphs and pin repair, CLI parsers, phase machine, serverlist, views, NAT-PMP, event loop, and live acceptance. |

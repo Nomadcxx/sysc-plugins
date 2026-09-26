@@ -2,6 +2,7 @@
   "schema": 1,
   "id": "org.sysc.world-clock",
   "name": "World Clock",
+  "description": "Search and manage labelled world clocks in the bar and panel.",
   "version": "2.0.0",
   "protocol": {
     "major": 1,
