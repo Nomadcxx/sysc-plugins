@@ -83,37 +83,46 @@ func (c *CLI) Run(ctx context.Context, args ...string) (string, string, error) {
 	return c.run(ctx, c.timeout(), args...)
 }
 
+// wrapErr attaches the first stderr line to err, matching the repo pattern
+// in plugins/github-notifications/gh.go.
+func wrapErr(err error, stderr string) error {
+	if d := ErrorDetail(stderr); d != "" {
+		return fmt.Errorf("%w: %s", err, d)
+	}
+	return err
+}
+
 // Status runs `protonvpn status` and parses the output.
 func (c *CLI) Status(ctx context.Context) (Status, error) {
-	out, _, err := c.Run(ctx, "status")
+	out, stderr, err := c.Run(ctx, "status")
 	if err != nil {
-		return Status{}, err
+		return Status{}, wrapErr(err, stderr)
 	}
 	return ParseStatus(out)
 }
 
 // Info runs `protonvpn info` and parses the output.
 func (c *CLI) Info(ctx context.Context) (Info, error) {
-	out, _, err := c.Run(ctx, "info")
+	out, stderr, err := c.Run(ctx, "info")
 	if err != nil {
-		return Info{}, err
+		return Info{}, wrapErr(err, stderr)
 	}
 	return ParseInfo(out)
 }
 
 // Config runs `protonvpn config list` and parses the output.
 func (c *CLI) Config(ctx context.Context) (Config, error) {
-	out, _, err := c.Run(ctx, "config", "list")
+	out, stderr, err := c.Run(ctx, "config", "list")
 	if err != nil {
-		return Config{}, err
+		return Config{}, wrapErr(err, stderr)
 	}
 	return ParseConfig(out)
 }
 
-// Connect runs `protonvpn connect` with the given target: "" for the fastest
+// connectArgs builds the argv for `protonvpn connect`: "" for the fastest
 // server, "random"/"p2p"/"tor" for the matching flag, a 2-letter country code
-// via --country, or a raw server name. Uses a 15s timeout.
-func (c *CLI) Connect(ctx context.Context, target string) (string, string, error) {
+// via --country, or a raw server name.
+func connectArgs(target string) []string {
 	args := []string{"connect"}
 	switch target {
 	case "":
@@ -130,7 +139,13 @@ func (c *CLI) Connect(ctx context.Context, target string) (string, string, error
 			args = append(args, target)
 		}
 	}
-	return c.run(ctx, 15*time.Second, args...)
+	return args
+}
+
+// Connect runs `protonvpn connect` with the given target (see connectArgs).
+// Uses a 15s timeout.
+func (c *CLI) Connect(ctx context.Context, target string) (string, string, error) {
+	return c.run(ctx, 15*time.Second, connectArgs(target)...)
 }
 
 // Disconnect runs `protonvpn disconnect`.
