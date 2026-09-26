@@ -1,0 +1,54 @@
+{
+  "LogicalServers": [
+    {
+      "Name": "US-NY#1",
+      "City": "New York",
+      "ExitCountry": "US",
+      "Load": 30,
+      "Tier": 2,
+      "Features": 4,
+      "Status": 1,
+      "Score": 1.5
+    },
+    {
+      "Name": "US-CA#1",
+      "City": "Los Angeles",
+      "ExitCountry": "US",
+      "Load": 95,
+      "Tier": 2,
+      "Features": 0,
+      "Status": 1,
+      "Score": 2.1
+    },
+    {
+      "Name": "NL#1",
+      "City": "Amsterdam",
+      "ExitCountry": "NL",
+      "Load": 40,
+      "Tier": 0,
+      "Features": 0,
+      "Status": 0,
+      "Score": 3.0
+    },
+    {
+      "Name": "NL#2",
+      "City": "Rotterdam",
+      "ExitCountry": "NL",
+      "Load": 50,
+      "Tier": 2,
+      "Features": 6,
+      "Status": 0,
+      "Score": 2.8
+    },
+    {
+      "Name": "SE-STO#1",
+      "City": "Stockholm",
+      "ExitCountry": "SE",
+      "Load": 20,
+      "Tier": 2,
+      "Features": 1,
+      "Status": 1,
+      "Score": 1.2
+    }
+  ]
+}
