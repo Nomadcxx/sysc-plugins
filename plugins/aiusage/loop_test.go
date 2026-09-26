@@ -313,6 +313,32 @@ func TestWarmStartFlagsStaleByAge(t *testing.T) {
 	}
 }
 
+func TestWarmStartUsesSnapshotWindowForCodexCache(t *testing.T) {
+	t.Parallel()
+
+	env, _ := loopEnv()
+	cfg := testConfig()
+	cfg.Track = map[string]bool{"codex": true, "claude": true}
+	cache, history := loopPaths(t)
+	l := NewLoop(Registry{}, cfg, env, cache, history)
+	l.writeCache(Report{CapturedAt: base.Add(-3 * time.Hour), Providers: []ProviderReport{
+		{ID: "codex", State: StateFresh, Snapshot: true, UpdatedAt: base.Add(-3 * time.Hour),
+			Windows: []Window{{Key: "primary", Label: "Session", HasPercent: true, UsedPercent: 40,
+				WindowMinutes: 300, ResetsAt: base.Add(time.Hour)}}},
+		{ID: "claude", State: StateFresh, UpdatedAt: base.Add(-3 * time.Hour),
+			Windows: []Window{{Key: "primary", Label: "Session", HasPercent: true, UsedPercent: 40,
+				WindowMinutes: 300, ResetsAt: base.Add(time.Hour)}}},
+	}})
+
+	warm := l.WarmStart()
+	if len(warm.Providers) != 2 {
+		t.Fatalf("warm providers = %+v", warm.Providers)
+	}
+	if warm.Providers[0].Stale || !warm.Providers[1].Stale {
+		t.Fatalf("codex/live stale flags = %t/%t, want false/true", warm.Providers[0].Stale, warm.Providers[1].Stale)
+	}
+}
+
 func TestHistoryRecordsAndTrims(t *testing.T) {
 	t.Parallel()
 

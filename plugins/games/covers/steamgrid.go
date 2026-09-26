@@ -25,6 +25,16 @@ type Doer interface {
 }
 
 // FetchGrid downloads a 600x900 SteamGridDB image for the slug into destDir
+// CachedGrid returns a previously downloaded SteamGridDB image, or "".
+func CachedGrid(slug, destDir string) string {
+	cached := filepath.Join(destDir, slugFile(slug)+"-grid.jpg")
+	if _, err := os.Stat(cached); err == nil {
+		return cached
+	}
+	return ""
+}
+
+// FetchGrid downloads a 600x900 SteamGridDB image for the slug into destDir
 // and returns the local path, or "" on no key / no result / any error.
 // Never retries, never logs: a missing cover is not an incident.
 // ponytail: slug-as-search-term matching; IGDB-grade matching if wrong-game
@@ -36,10 +46,10 @@ func FetchGrid(ctx context.Context, do Doer, apiKey, baseURL, slug, destDir stri
 	if baseURL == "" {
 		baseURL = "https://www.steamgriddb.com/api/v2"
 	}
-	cached := filepath.Join(destDir, slugFile(slug)+"-grid.jpg")
-	if _, err := os.Stat(cached); err == nil {
-		return cached
+	if c := CachedGrid(slug, destDir); c != "" {
+		return c
 	}
+	dest := filepath.Join(destDir, slugFile(slug)+"-grid.jpg")
 	data, ok := sgdbGet(ctx, do, apiKey, baseURL+"/search/autocomplete/"+slug+"?languages=en")
 	if !ok {
 		return ""
@@ -64,8 +74,8 @@ func FetchGrid(ctx context.Context, do Doer, apiKey, baseURL, slug, destDir stri
 		if url == "" {
 			continue
 		}
-		if err := download(ctx, do, url, cached); err == nil {
-			return cached
+		if err := download(ctx, do, url, dest); err == nil {
+			return dest
 		}
 	}
 	return ""

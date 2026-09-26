@@ -17,6 +17,16 @@ type Prefs struct {
 	Hidden    map[string]bool `json:"hidden"`
 }
 
+// EnsureMaps makes a zero-value Prefs safe to write into.
+func (p *Prefs) EnsureMaps() {
+	if p.Favorites == nil {
+		p.Favorites = map[string]bool{}
+	}
+	if p.Hidden == nil {
+		p.Hidden = map[string]bool{}
+	}
+}
+
 func (p *Prefs) UnmarshalJSON(data []byte) error {
 	type alias Prefs
 	a := alias{Favorites: map[string]bool{}, Hidden: map[string]bool{}}

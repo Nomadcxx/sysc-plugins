@@ -311,12 +311,13 @@ func fleetRollup(r Report, cfg Config, now time.Time) *v1.Node {
 	if timed == 0 {
 		return nil
 	}
-	// Height includes padding: 42 is 26 of content plus the 2×8 the card
-	// insets, so the rollup stands as tall as a provider row.
-	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Padding: 8, Height: 42, Key: "fleet-rollup"}
+	// Height includes padding: 60 leaves 44px for the average and risk count
+	// stacked in the left column, plus the row's 2×8 inset.
+	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Padding: 8, Height: 60, Key: "fleet-rollup"}
 	row.Children = append(row.Children,
-		&v1.Node{Kind: v1.KindColumn, Width: 82, Padding: 5, Children: []*v1.Node{
+		&v1.Node{Kind: v1.KindColumn, Width: 82, Padding: 5, Gap: 2, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: fmt.Sprintf("Avg %v%%", math.Round(total/float64(timed))), Bold: true},
+			{Kind: v1.KindText, Text: fmt.Sprintf("%d at risk", atRisk), Tone: v1.ToneSubtle, Size: "caption"},
 		}})
 	if peak != nil {
 		row.Children = append(row.Children, &v1.Node{
@@ -326,8 +327,6 @@ func fleetRollup(r Report, cfg Config, now time.Time) *v1.Node {
 			Width:  136,
 			Events: []v1.EventKind{v1.EventActivate}})
 	}
-	row.Children = append(row.Children,
-		&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d at risk", atRisk), Tone: v1.ToneSubtle, Size: "caption", Width: 52})
 	return row
 }
 
@@ -707,12 +706,9 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 			if !w.HasPercent || w.UsedPercent < 100 {
 				continue
 			}
+			// The window card below already shows the reset countdown. Keep
+			// this warning to the state and label so it fits the pane.
 			line := fmt.Sprintf("%s · Quota exhausted", w.Label)
-			if cd := FormatCountdown(w.ResetsAt, now); cd != "" {
-				line += " · renews in " + cd
-			} else if !w.ResetsAt.IsZero() {
-				line += " · renews " + w.ResetsAt.Format("Mon 15:04")
-			}
 			pane.Children = append(pane.Children, &v1.Node{
 				Kind: v1.KindColumn, Fill: "error-container", Padding: 10,
 				Children: []*v1.Node{
@@ -759,7 +755,7 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 	// than pushing the button past the pane's edge.
 	footer := &v1.Node{Kind: v1.KindRow, Gap: 8, Height: 28, PinEnd: true, Children: []*v1.Node{
 		{Kind: v1.KindText, Tone: v1.ToneSubtle, Size: "caption",
-			Text: "Quota windows · last local snapshot per provider · not billing figures"},
+			Text: "Local quota snapshots · not billing figures"},
 		{Kind: v1.KindButton, ID: "export", Text: "Export CSV", Width: 88,
 			Name: "Export usage history as CSV", Role: "button",
 			Tooltip: "Write the recorded percents to a CSV file in your downloads folder",
@@ -777,7 +773,7 @@ func windowCard(w Window, cfg Config, hostMinor int, now time.Time) *v1.Node {
 		pct = fmt.Sprintf("%.0f%%", w.UsedPercent)
 	}
 	card.Children = append(card.Children, &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-		{Kind: v1.KindColumn, Width: 64, Children: []*v1.Node{
+		{Kind: v1.KindColumn, Width: max(64, len(w.Label)*8), Children: []*v1.Node{
 			{Kind: v1.KindText, Text: w.Label, Bold: true},
 		}},
 		{Kind: v1.KindColumn, PinEnd: true, Children: []*v1.Node{
