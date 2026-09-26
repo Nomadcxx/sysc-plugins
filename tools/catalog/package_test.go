@@ -70,6 +70,8 @@ func TestPackagePluginTimer(t *testing.T) {
 		t.Fatalf("readManifest: %v", err)
 	}
 
+	binDir := filepath.Join(repoRoot, "plugins", "timer", "bin")
+	binBefore := dirState(t, binDir)
 	outDir := t.TempDir()
 	res, err := packagePlugin(repoRoot, "timer", "amd64", outDir)
 	if err != nil {
@@ -83,8 +85,10 @@ func TestPackagePluginTimer(t *testing.T) {
 	if filepath.Dir(res.Path) != outDir {
 		t.Fatalf("archive written to %q, want under %q", res.Path, outDir)
 	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "plugins", "timer", "bin")); err == nil {
-		t.Fatal("packaging must never write into plugins/timer/bin")
+	// make install builds into plugins/timer/bin, so the directory may exist;
+	// packaging must leave it exactly as it found it.
+	if after := dirState(t, binDir); after != binBefore {
+		t.Fatalf("packaging wrote into plugins/timer/bin: before %q, after %q", binBefore, after)
 	}
 
 	info, err := os.Stat(res.Path)
@@ -321,4 +325,26 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// dirState summarises a directory's entries, sizes, and modification times,
+// or reports that it does not exist.
+func dirState(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return "absent"
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&b, "%s:%d:%d;", e.Name(), info.Size(), info.ModTime().UnixNano())
+	}
+	return b.String()
 }
