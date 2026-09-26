@@ -7,11 +7,12 @@ import (
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-// barContent walks the tree and returns the first icon name and the first
-// text it finds, each independently.
-func barContent(t *testing.T, n *v1.Node) (string, string) {
+// barContent walks the tree and returns the first icon's name and tone plus
+// the first text it finds, each independently.
+func barContent(t *testing.T, n *v1.Node) (string, v1.Tone, string) {
 	t.Helper()
 	var icon, text string
+	var tone v1.Tone
 	var walk func(*v1.Node)
 	walk = func(n *v1.Node) {
 		if n == nil {
@@ -19,6 +20,7 @@ func barContent(t *testing.T, n *v1.Node) (string, string) {
 		}
 		if n.Kind == v1.KindIcon && icon == "" {
 			icon = n.Icon
+			tone = n.Tone
 		}
 		if n.Kind == v1.KindText && text == "" {
 			text = n.Text
@@ -28,12 +30,12 @@ func barContent(t *testing.T, n *v1.Node) (string, string) {
 		}
 	}
 	walk(n)
-	return icon, text
+	return icon, tone, text
 }
 
 func barText(t *testing.T, n *v1.Node) string {
 	t.Helper()
-	_, text := barContent(t, n)
+	_, _, text := barContent(t, n)
 	return text
 }
 
@@ -50,9 +52,12 @@ func TestBarStates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		n := Bar(BarState{Snap: Snapshot{Phase: tc.phase, Status: Status{Country: "US"}}, Mode: "code"})
-		icon, text := barContent(t, n)
+		icon, tone, text := barContent(t, n)
 		if icon != tc.wantIcon {
 			t.Errorf("phase %v icon %q", tc.phase, icon)
+		}
+		if tone != tc.wantTone {
+			t.Errorf("phase %v tone %q", tc.phase, tone)
 		}
 		_ = text
 	}
