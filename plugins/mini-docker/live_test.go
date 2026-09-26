@@ -48,7 +48,7 @@ func TestLiveListsAndTrees(t *testing.T) {
 		}
 	}
 	running := s.RunningCount()
-	bar := BarTree(BarLabel("always", running, true), false)
+	bar := BarTree(false)
 	if err := v1.Validate(bar, v1.ViewBar); err != nil {
 		t.Fatalf("live bar tree rejected: %v", err)
 	}

@@ -206,11 +206,11 @@ func startMiniDockerGate(t *testing.T, logPath, rmEntered, rmRelease string) *mi
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		_ = h.stop()
+		_ = h.stdin.Close()
 		if t.Failed() {
 			t.Logf("mini-docker stderr:\n%s", h.stderr.String())
 		}
-		_ = h.stop()
-		_ = h.stdin.Close()
 	})
 	return h
 }
@@ -263,17 +263,53 @@ func (h *miniDockerGateHost) click(viewID, node string) {
 	}
 }
 
-func (h *miniDockerGateHost) inputText(viewID, node, text string) {
+// clickUntil retries a click until the panel tree matches. The plugin drops
+// events carrying a superseded revision, so a click racing a refresh tick must
+// be re-sent with the revision the host currently sees.
+func (h *miniDockerGateHost) clickUntil(viewID, node string, matches func(*v1.Node) bool) *v1.Node {
 	h.t.Helper()
-	h.mu.Lock()
-	revision, output, generation := h.revs[viewID], h.outputs[viewID], h.generation[viewID]
-	h.mu.Unlock()
-	if err := h.send(&v1.InputEvent{
-		Type: v1.TypeInputEvent, ViewID: viewID, Revision: revision,
-		Node: node, Event: v1.EventChange, Text: text, Output: output, Generation: generation,
-	}); err != nil {
-		h.t.Fatal(err)
+	return h.inputUntil(viewID, node, v1.EventActivate, "", matches)
+}
+
+func (h *miniDockerGateHost) typeUntil(viewID, node, text string, matches func(*v1.Node) bool) *v1.Node {
+	h.t.Helper()
+	return h.inputUntil(viewID, node, v1.EventChange, text, matches)
+}
+
+func (h *miniDockerGateHost) inputUntil(viewID, node string, event v1.EventKind, text string, matches func(*v1.Node) bool) *v1.Node {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		root, rev, output, generation := h.roots[viewID], h.revs[viewID], h.outputs[viewID], h.generation[viewID]
+		h.mu.Unlock()
+		if root != nil && matches(root) {
+			return root
+		}
+		if err := h.send(&v1.InputEvent{
+			Type: v1.TypeInputEvent, ViewID: viewID, Revision: rev,
+			Node: node, Event: event, Text: text, Output: output, Generation: generation,
+		}); err != nil {
+			h.t.Fatal(err)
+		}
+		for time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			h.mu.Lock()
+			root, current := h.roots[viewID], h.revs[viewID]
+			h.mu.Unlock()
+			if root != nil && matches(root) {
+				return root
+			}
+			if current > rev {
+				break
+			}
+		}
 	}
+	h.mu.Lock()
+	root := h.roots[viewID]
+	h.mu.Unlock()
+	h.t.Fatalf("input %q never produced the expected panel tree\n%s", node, dumpTree(root))
+	return nil
 }
 
 func (h *miniDockerGateHost) setting(values map[string]any) {
@@ -363,8 +399,10 @@ func TestPluginMiniDockerGate(t *testing.T) {
 	t.Cleanup(func() { _ = os.WriteFile(rmRelease, []byte("release"), 0o600) })
 
 	h.open("bar-1", v1.ViewBar, "bar", viewSlot{v1.ViewBar, lint.BarWidth, lint.BarHeight}, "placement-1", "DP-1", 7)
-	h.waitView("bar-1", func(root *v1.Node) bool { return findID(root, "open") != nil })
-	h.waitView("bar-1", func(root *v1.Node) bool { return nodeText(root, "open") == "docker 1" })
+	h.waitView("bar-1", func(root *v1.Node) bool {
+		node := findID(root, "open")
+		return node != nil && node.Icon == "docker" && node.Text == ""
+	})
 	h.open("tip-1", v1.ViewTooltip, "bar", viewSlot{v1.ViewTooltip, lint.TooltipWidth, lint.TooltipHeight}, "placement-1", "DP-1", 7)
 	h.waitView("tip-1", func(root *v1.Node) bool { return strings.Contains(treeText(root), "1 container running") })
 	h.click("bar-1", "open")
@@ -376,54 +414,37 @@ func TestPluginMiniDockerGate(t *testing.T) {
 	panelW, panelH := miniDockerPanelSize(t)
 	h.open("panel-1", v1.ViewPanel, "panel", viewSlot{v1.ViewPanel, panelW, panelH}, "placement-1", "DP-1", 7)
 	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "select:container-stopped") != nil })
-	h.setting(map[string]any{"default_network": "custom", "status_mode": "hidden"})
-	h.waitView("bar-1", func(root *v1.Node) bool { return nodeText(root, "open") == "docker" })
+	h.setting(map[string]any{"default_network": "custom"})
 
-	h.click("panel-1", "tab:images")
-	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "select:alpine:3") != nil })
-	h.click("panel-1", "select:alpine:3")
-	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "run:alpine:3") != nil })
-	h.click("panel-1", "run:alpine:3")
-	form := h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "run-form") != nil })
+	h.clickUntil("panel-1", "tab:images", func(root *v1.Node) bool { return findID(root, "select:alpine:3") != nil })
+	h.clickUntil("panel-1", "select:alpine:3", func(root *v1.Node) bool { return findID(root, "run:alpine:3") != nil })
+	form := h.clickUntil("panel-1", "run:alpine:3", func(root *v1.Node) bool { return findID(root, "run-form") != nil })
 	if nodeText(form, "form:network") != "Network: custom" || nodeText(form, "port") != "8080" {
 		t.Fatalf("run form defaults: network=%q port=%q", nodeText(form, "form:network"), nodeText(form, "port"))
 	}
-	h.inputText("panel-1", "name", "gate-web")
-	h.waitView("panel-1", func(root *v1.Node) bool { return nodeText(root, "name") == "gate-web" })
+	h.typeUntil("panel-1", "name", "gate-web", func(root *v1.Node) bool { return nodeText(root, "name") == "gate-web" })
 	port := availableHostPort(t)
-	h.inputText("panel-1", "port", port)
-	h.waitView("panel-1", func(root *v1.Node) bool { return nodeText(root, "port") == port })
-	h.inputText("panel-1", "env", "A=one\nB=two=three")
-	h.waitView("panel-1", func(root *v1.Node) bool { return nodeText(root, "env") == "A=one\nB=two=three" })
-	h.click("panel-1", "form:publish")
-	h.waitView("panel-1", func(root *v1.Node) bool { return nodeText(root, "form:publish") == "Publish port: on" })
-	h.click("panel-1", "form:network")
-	h.waitView("panel-1", func(root *v1.Node) bool { return nodeText(root, "form:network") == "Network: bridge" })
-	h.click("panel-1", "form:network")
-	h.waitView("panel-1", func(root *v1.Node) bool { return nodeText(root, "form:network") == "Network: custom" })
-	h.click("panel-1", "run-submit")
-	h.waitView("panel-1", func(root *v1.Node) bool {
+	h.typeUntil("panel-1", "port", port, func(root *v1.Node) bool { return nodeText(root, "port") == port })
+	h.typeUntil("panel-1", "env", "A=one\nB=two=three", func(root *v1.Node) bool { return nodeText(root, "env") == "A=one\nB=two=three" })
+	h.clickUntil("panel-1", "form:publish", func(root *v1.Node) bool { return nodeText(root, "form:publish") == "Publish port: on" })
+	h.clickUntil("panel-1", "form:network", func(root *v1.Node) bool { return nodeText(root, "form:network") == "Network: bridge" })
+	h.clickUntil("panel-1", "form:network", func(root *v1.Node) bool { return nodeText(root, "form:network") == "Network: custom" })
+	h.clickUntil("panel-1", "run-submit", func(root *v1.Node) bool {
 		return findID(root, "run-form") == nil && strings.Contains(treeText(root), "Docker images")
 	})
 	wantRun := []string{"run", "-d", "--name", "gate-web", "-e", "A=one", "-e", "B=two=three", "-p", port + ":" + port, "--network", "custom", "alpine:3"}
 	waitDockerCall(t, logPath, wantRun)
 
-	h.click("panel-1", "tab:volumes")
-	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "select:db-data") != nil })
-	h.click("panel-1", "tab:networks")
-	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "select:network-custom") != nil })
-	h.click("panel-1", "tab:containers")
-	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "select:container-stopped") != nil })
-	h.click("panel-1", "select:container-stopped")
-	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "remove:container-stopped") != nil })
-	h.click("panel-1", "remove:container-stopped")
-	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "confirm") != nil })
-	h.click("panel-1", "confirm")
-	waitFile(t, rmEntered, "entered")
-	busy := h.waitView("panel-1", func(root *v1.Node) bool {
+	h.clickUntil("panel-1", "tab:volumes", func(root *v1.Node) bool { return findID(root, "select:db-data") != nil })
+	h.clickUntil("panel-1", "tab:networks", func(root *v1.Node) bool { return findID(root, "select:network-custom") != nil })
+	h.clickUntil("panel-1", "tab:containers", func(root *v1.Node) bool { return findID(root, "select:container-stopped") != nil })
+	h.clickUntil("panel-1", "select:container-stopped", func(root *v1.Node) bool { return findID(root, "remove:container-stopped") != nil })
+	h.clickUntil("panel-1", "remove:container-stopped", func(root *v1.Node) bool { return findID(root, "confirm") != nil })
+	busy := h.clickUntil("panel-1", "confirm", func(root *v1.Node) bool {
 		remove := findID(root, "remove:container-stopped")
 		return remove != nil && remove.Disabled
 	})
+	waitFile(t, rmEntered, "entered")
 	if tab := findID(busy, "tab:images"); tab == nil || tab.Disabled {
 		t.Fatalf("unrelated tab disabled during remove: %+v", tab)
 	}

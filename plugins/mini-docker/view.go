@@ -9,38 +9,23 @@ import (
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-// BarTree renders the docker pill. One activatable button carrying the
-// label — the click opens the panel (host only opens panels on the
-// plugin's own CallPanelOpen), mirroring the world-clock bar shape. An
-// unavailable docker tones the pill error: hidden must not read as
+// BarTree renders the docker pill. One activatable button carrying only
+// the whale glyph — the click opens the panel (host only opens panels on
+// the plugin's own CallPanelOpen). No fill or shape: the bar's own glyph
+// items (clipboard, wifi, sound) are bare, and the pill must match them.
+// An unavailable docker tones the glyph error: hidden must not read as
 // zero-running.
-func BarTree(label string, unavailable bool) *v1.Node {
+func BarTree(unavailable bool) *v1.Node {
 	var tone v1.Tone
 	if unavailable {
 		tone = v1.ToneError
 	}
 	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{
-		Kind: v1.KindButton, ID: "open", Text: label, Tone: tone,
-		Name: "Open mini docker", Role: "button", Tabular: true,
+		Kind: v1.KindButton, ID: "open", Tone: tone,
+		Name: "Open mini docker", Role: "button",
+		Icon:   "docker",
 		Events: []v1.EventKind{v1.EventActivate},
 	}}}
-}
-
-// BarLabel computes the bar text for the current settings and snapshot.
-// show_count was folded into status_mode: one setting, honest labels.
-func BarLabel(statusMode string, running int, available bool) string {
-	if !available {
-		return "docker"
-	}
-	switch statusMode {
-	case "hidden":
-		return "docker"
-	case "running_only":
-		if running == 0 {
-			return "docker"
-		}
-	}
-	return "docker " + strconv.Itoa(running)
 }
 
 // TooltipText computes the bar tooltip.
@@ -92,10 +77,11 @@ func PanelTreeForSession(state SessionSnapshot) *v1.Node {
 		state.Scope = ScopeContainers
 	}
 	col := &v1.Node{Kind: v1.KindColumn, Gap: 8, Padding: 16, Children: []*v1.Node{
-		{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
+		{Kind: v1.KindRow, Gap: 8, Height: 36, PinEnd: true, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: "Docker " + string(state.Scope), Size: "title", Bold: true},
 			{Kind: v1.KindButton, ID: "refresh", Text: "Refresh", Name: "Refresh " + string(state.Scope), Role: "button",
-				Icon: "refresh", Events: []v1.EventKind{v1.EventActivate}},
+				Icon: "refresh", Fill: "soft", Shape: "stadium", Padding: 10, Height: 32,
+				Events: []v1.EventKind{v1.EventActivate}},
 		}},
 	}}
 
@@ -209,20 +195,17 @@ func networkLabel(network string) string {
 }
 
 func scopeButtons(selected Scope) *v1.Node {
-	buttons := &v1.Node{Kind: v1.KindRow, Gap: 4}
+	buttons := &v1.Node{Kind: v1.KindSegmented, Gap: 2, Height: 40}
 	icons := map[Scope]string{
 		ScopeContainers: "widgets", ScopeImages: "wallpaper",
 		ScopeVolumes: "folder_open", ScopeNetworks: "lan",
 	}
 	for _, scope := range []Scope{ScopeContainers, ScopeImages, ScopeVolumes, ScopeNetworks} {
 		label := strings.ToUpper(string(scope[:1])) + string(scope[1:])
-		fill := "outline"
-		if scope == selected {
-			fill = "accent"
-		}
 		buttons.Children = append(buttons.Children, &v1.Node{Kind: v1.KindButton,
 			ID: "tab:" + string(scope), Text: label, Name: label + " tab", Role: "button",
-			Icon: icons[scope], Fill: fill, Height: 28, Events: []v1.EventKind{v1.EventActivate}})
+			Icon: icons[scope], Selected: scope == selected, Padding: 3, Gap: 4,
+			Events: []v1.EventKind{v1.EventActivate}})
 	}
 	return buttons
 }
@@ -256,7 +239,11 @@ func panelStatus(state SessionSnapshot) []*v1.Node {
 		case active.Loading && active.Available:
 			appendLine("Refreshing…", v1.ToneSubtle)
 		case active.SkippedLines > 0:
-			appendLine(fmt.Sprintf("%d malformed lines skipped", active.SkippedLines), v1.ToneSubtle)
+			lines := "lines"
+			if active.SkippedLines == 1 {
+				lines = "line"
+			}
+			appendLine(fmt.Sprintf("%d malformed %s skipped", active.SkippedLines, lines), v1.ToneSubtle)
 		}
 	}
 	return status
@@ -384,7 +371,7 @@ func entityRow(entity panelEntity, selectedID string) *v1.Node {
 		fill = "card"
 	}
 	return &v1.Node{Kind: v1.KindButton, ID: "select:" + entityNodeKey(entity.Scope, entity.ID),
-		Name: boundedAccessibleName("Select " + entity.Name + "; " + entity.Summary), Role: "button", Fill: fill, Radius: 10, Padding: 8, Height: 54,
+		Name: boundedAccessibleName("Select " + entity.Name + "; " + entity.Summary), Role: "button", Fill: fill, Radius: 10, Padding: 8, Height: 56,
 		Events: []v1.EventKind{v1.EventActivate}, Children: []*v1.Node{{
 			Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
 				{Kind: v1.KindText, Text: compactEntityName(entity), Bold: true},
@@ -497,7 +484,7 @@ func containerRow(c Container, selectedID string) *v1.Node {
 	}
 	return &v1.Node{Kind: v1.KindButton, ID: "select:" + c.ID,
 		Name: boundedAccessibleName("Select " + c.Names + "; image " + c.Image + "; status " + c.Status),
-		Role: "button", Fill: fill, Radius: 10, Padding: 8, Height: 54,
+		Role: "button", Fill: fill, Radius: 10, Padding: 8, Height: 56,
 		Events: []v1.EventKind{v1.EventActivate}, Children: []*v1.Node{{
 			Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
 				{Kind: v1.KindText, Text: compactDisplayText(c.Names, maxPanelTextBytes), Tone: tone, Bold: true},

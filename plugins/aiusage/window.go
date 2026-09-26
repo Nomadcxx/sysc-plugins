@@ -57,8 +57,12 @@ type ProviderReport struct {
 	Credits       *float64
 	State         State
 	Stale         bool
-	UpdatedAt     time.Time
-	Err           string // human-readable, secret-scrubbed
+	// Snapshot marks a reading that only moves when the tool itself runs
+	// (a local session file), not one the loop refreshes on its cadence.
+	// Staleness for these is judged against the window they describe.
+	Snapshot  bool
+	UpdatedAt time.Time
+	Err       string // human-readable, secret-scrubbed
 }
 
 // Report is the immutable snapshot views render.

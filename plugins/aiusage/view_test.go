@@ -631,3 +631,32 @@ func TestWindowCardWaitingForFreshData(t *testing.T) {
 		t.Fatalf("card = %+v", card)
 	}
 }
+
+// TestSnapshotStalenessFollowsTheWindowNotTheCadence pins the codex fix: a
+// local snapshot only moves when the tool runs, so the refresh cadence must
+// not mark it stale while the window it describes is still open.
+func TestSnapshotStalenessFollowsTheWindowNotTheCadence(t *testing.T) {
+	cfg := viewConfig() // Refresh: time.Minute
+	now := viewNow
+	window := Window{Key: "primary", Label: "Session", HasPercent: true,
+		UsedPercent: 9, WindowMinutes: 300, ResetsAt: now.Add(45 * time.Minute)}
+
+	snap := ProviderReport{ID: "codex", Name: "Codex", State: StateFresh, Snapshot: true,
+		UpdatedAt: now.Add(-3 * time.Hour), Windows: []Window{window}}
+	if snap.staleFor(cfg, now) {
+		t.Fatal("a snapshot inside its window is not stale")
+	}
+
+	rolled := snap
+	rolled.Windows = []Window{window}
+	rolled.Windows[0].ResetsAt = now.Add(-time.Minute)
+	if !rolled.staleFor(cfg, now) {
+		t.Fatal("a snapshot past its window reset is stale")
+	}
+
+	live := ProviderReport{ID: "claude", Name: "Claude", State: StateFresh,
+		UpdatedAt: now.Add(-3 * time.Hour), Windows: []Window{window}}
+	if !live.staleFor(cfg, now) {
+		t.Fatal("a live reading older than the cadence is stale")
+	}
+}

@@ -2,7 +2,7 @@
   "schema": 1,
   "id": "org.sysc.mini-docker",
   "name": "Mini Docker",
-  "description": "Shows the running Docker container count in the bar with a panel to manage them.",
+  "description": "Shows the Docker whale in the bar with a panel to manage containers.",
   "version": "0.4.0",
   "protocol": {
     "major": 1,
@@ -45,26 +45,6 @@
       "default": 5,
       "min": 1,
       "max": 30
-    },
-    {
-      "key": "status_mode",
-      "type": "select",
-      "label": "Bar count mode",
-      "default": "always",
-      "options": [
-        {
-          "value": "always",
-          "label": "Always"
-        },
-        {
-          "value": "running_only",
-          "label": "When running"
-        },
-        {
-          "value": "hidden",
-          "label": "Never"
-        }
-      ]
     },
     {
       "key": "default_network",

@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "id": "org.sysc.games",
+  "name": "Games",
+  "description": "Lutris game deck: launch, running truth, session history, cover art.",
+  "version": "0.1.0",
+  "protocol": {
+    "major": 1,
+    "minor": 7
+  },
+  "exec": "bin/sysc-plugin-games",
+  "capabilities": [
+    "panels",
+    "settings",
+    "state"
+  ],
+  "requires": {
+    "commands": []
+  },
+  "services": [
+    {
+      "id": "games"
+    }
+  ],
+  "widgets": [
+    {
+      "id": "bar",
+      "settings": []
+    }
+  ],
+  "panels": [
+    {
+      "id": "panel",
+      "width": 720,
+      "height": 560,
+      "placement": "attached",
+      "shortcuts": [
+        {
+          "key": "f",
+          "node": "focus-search"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {"key": "source_lutris", "type": "bool", "label": "Lutris library", "default": true},
+    {"key": "steamgriddb_key", "type": "string", "label": "SteamGridDB API key", "default": ""},
+    {
+      "key": "poll_running", "type": "select", "label": "Detect running games", "default": "auto",
+      "options": [
+        {"value": "auto", "label": "Automatic"},
+        {"value": "off", "label": "Never"}
+      ]
+    },
+    {"key": "hide_unavailable", "type": "bool", "label": "Hide uninstalled games", "default": false}
+  ]
+}

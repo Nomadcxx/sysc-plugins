@@ -22,13 +22,16 @@ type LoadStatus struct {
 	Truncated     bool
 }
 
+// BarTree is the calendar's bar item. Fill "card" resolves to the shell's
+// capsule colour, so the button merges into the bar capsule like the
+// built-in glyph items instead of painting a lighter inner pill.
 func BarTree(events []Event, now time.Time) *v1.Node {
 	event, active, ok := NextTimedEvent(events, now)
 	if !ok {
 		label := now.Format("Mon 2 Jan")
 		return &v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{{
 			Kind: v1.KindButton, ID: "calendar-open", Icon: "calendar_month", Text: label, Name: "Open calendar, " + now.Format("Monday, 2 January 2006"), Role: "button",
-			Fill: "soft", Shape: "stadium", Padding: 5, Events: []v1.EventKind{v1.EventActivate},
+			Fill: "card", Events: []v1.EventKind{v1.EventActivate},
 		}}}
 	}
 	status := countdown(event.Start.Sub(now))
@@ -38,7 +41,7 @@ func BarTree(events []Event, now time.Time) *v1.Node {
 	label := truncateText(event.Summary, 24) + "  " + status
 	return &v1.Node{Kind: v1.KindRow, Gap: 6, Tooltip: eventTooltip(event, now, active), Children: []*v1.Node{{
 		Kind: v1.KindButton, ID: "calendar-open", Icon: "calendar_month", Text: label, Name: "Open calendar. " + eventAccessibleName(event, now.Location()), Role: "button",
-		Fill: "soft", Shape: "stadium", Padding: 5, Tabular: true, Events: []v1.EventKind{v1.EventActivate},
+		Fill: "card", Tabular: true, Events: []v1.EventKind{v1.EventActivate},
 	}}}
 }
 

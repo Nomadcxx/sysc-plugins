@@ -3,8 +3,11 @@ package aiusage
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -239,6 +242,44 @@ func monogram(id string) *v1.Node {
 	}
 }
 
+// providerLogos maps a provider id to its shipped mark. The binary lives in
+// <plugin>/bin/, so the marks sit one level up in assets/logos; the directory
+// is read once and a missing one simply leaves the monogram in place.
+var providerLogos = sync.OnceValue(scanProviderLogos)
+
+func scanProviderLogos() map[string]string {
+	out := map[string]string{}
+	exe, err := os.Executable()
+	if err != nil {
+		return out
+	}
+	dir := filepath.Join(filepath.Dir(exe), "..", "assets", "logos")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".png" {
+			continue
+		}
+		out[strings.TrimSuffix(e.Name(), ".png")] = filepath.Join(dir, e.Name())
+	}
+	return out
+}
+
+// providerIcon is the provider's mark: its shipped logo when one exists,
+// otherwise the letter disc. The host decodes the file asynchronously and
+// reserves the box either way, so the row never reflows on decode.
+func providerIcon(id string) *v1.Node {
+	if path := providerLogos()[id]; path != "" {
+		return &v1.Node{
+			Kind: v1.KindImage, Path: path, ImageSize: 26,
+			Name: "provider " + id, Role: "img",
+		}
+	}
+	return monogram(id)
+}
+
 // fleetRollup summarizes the tracked fleet the way AIOC's header does:
 // average load across timed quota windows (balance and informational
 // placeholders are excluded so they cannot dilute the average), the peak
@@ -274,13 +315,15 @@ func fleetRollup(r Report, cfg Config, now time.Time) *v1.Node {
 	// insets, so the rollup stands as tall as a provider row.
 	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Padding: 8, Height: 42, Key: "fleet-rollup"}
 	row.Children = append(row.Children,
-		&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Avg %v%%", math.Round(total/float64(timed))), Bold: true, Width: 56})
+		&v1.Node{Kind: v1.KindColumn, Width: 82, Padding: 5, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: fmt.Sprintf("Avg %v%%", math.Round(total/float64(timed))), Bold: true},
+		}})
 	if peak != nil {
 		row.Children = append(row.Children, &v1.Node{
 			Kind: v1.KindButton, ID: "peak:" + peak.ID,
 			Text: fmt.Sprintf("Peak %s %v%%", peak.Name, peakPct),
 			Name: "Jump to " + peak.Name + ", the most loaded provider", Role: "button",
-			Width:  132,
+			Width:  136,
 			Events: []v1.EventKind{v1.EventActivate}})
 	}
 	row.Children = append(row.Children,
@@ -305,7 +348,9 @@ func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor 
 	list.Children = append(list.Children,
 		&v1.Node{Kind: v1.KindRow, Gap: 6, Height: 28, Children: []*v1.Node{
 			{Kind: v1.KindIcon, Icon: "ai-usage"},
-			{Kind: v1.KindText, Text: "AI Usage", Bold: true, Size: "title"},
+			{Kind: v1.KindColumn, Width: 96, Padding: 6, Children: []*v1.Node{
+				{Kind: v1.KindText, Text: "AI Usage", Bold: true, Size: "title"},
+			}},
 			&v1.Node{Kind: v1.KindButton, ID: "refresh", Text: refreshLabel,
 				Name: "Refresh all providers", Role: "button",
 				Disabled: r.Loading, Tooltip: "Refresh tracked providers now; providers inside a safe refresh window are deferred.",
@@ -400,12 +445,13 @@ func providerRow(p ProviderReport, selected bool, cfg Config, hostMinor int, now
 		row.StrokeFill = "accent"
 	}
 	// Every child carries a fixed width: the pane has 274px of content and
-	// these controls use 270px. The 112px name control fits "Command Code";
-	// compact statuses stay in 64px while the tooltip carries full detail.
-	row.Children = append(row.Children, monogram(p.ID))
+	// these controls use 270px. The 120px name control fits "Command Code"
+	// at the real face; compact statuses stay in 56px while the tooltip
+	// carries full detail.
+	row.Children = append(row.Children, providerIcon(p.ID))
 	row.Children = append(row.Children, &v1.Node{
 		Kind: v1.KindButton, ID: "sel:" + p.ID, Text: p.Name,
-		Name: "Show " + p.Name, Role: "button", Width: 112,
+		Name: "Show " + p.Name, Role: "button", Width: 120,
 		Tooltip: rowTooltip(p, cfg, now),
 		Events:  []v1.EventKind{v1.EventActivate},
 	})
@@ -413,7 +459,7 @@ func providerRow(p ProviderReport, selected bool, cfg Config, hostMinor int, now
 	// current text metric; complete state and error text stays in the tooltip
 	// and detail pane. Wider master-list space can remove this ceiling later.
 	row.Children = append(row.Children, &v1.Node{
-		Kind: v1.KindColumn, Gap: 2, Width: 64, Children: []*v1.Node{
+		Kind: v1.KindColumn, Gap: 2, Width: 56, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: secondLine, Tone: tone, Size: "caption"},
 		},
 	})
@@ -437,6 +483,15 @@ func (p ProviderReport) staleFor(cfg Config, now time.Time) bool {
 	}
 	if p.UpdatedAt.IsZero() {
 		return false
+	}
+	if p.Snapshot {
+		// A local snapshot only moves when the tool runs, so the refresh
+		// cadence says nothing about it. It is stale once the window it
+		// describes has reset; without a reset time, a day is the ceiling.
+		if h := Headline(p.Windows); h != nil && !h.ResetsAt.IsZero() {
+			return now.After(h.ResetsAt)
+		}
+		return now.Sub(p.UpdatedAt) > 24*time.Hour
 	}
 	return now.Sub(p.UpdatedAt) > 2*cfg.Refresh
 }
@@ -553,7 +608,7 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 	identity.Children = append(identity.Children,
 		&v1.Node{Kind: v1.KindText, Text: freshness, Tone: tone, Size: "caption", MaxWidth: 258})
 	header := &v1.Node{Kind: v1.KindRow, Key: "provider-summary", Gap: 8, Children: []*v1.Node{
-		monogram(p.ID), identity,
+		providerIcon(p.ID), identity,
 	}}
 	h := Headline(p.Windows)
 	if p.State == StateFresh {
@@ -606,9 +661,11 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 		})
 		return pane
 	case StateFault:
-		row := &v1.Node{Kind: v1.KindRow, Gap: 8, Height: 28, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: p.Err, Tone: v1.ToneError, Size: "caption", MaxWidth: 320},
-		}}
+		// The error gets its own full-width line: the real face runs wider
+		// than the host's crude metric, and a diagnostic clipped mid-word is
+		// the one thing this branch exists to show.
+		pane.Children = append(pane.Children, &v1.Node{
+			Kind: v1.KindText, Text: p.Err, Tone: v1.ToneError, Size: "caption", MaxWidth: 412})
 		if p.Stale && len(p.Windows) > 0 {
 			// A record card shows the last numbers as dated text: a bar
 			// reads as a live reading, and nothing is reading. The numbers
@@ -630,11 +687,10 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 			}
 			pane.Children = append(pane.Children, card)
 		}
-		row.Children = append(row.Children, &v1.Node{
+		pane.Children = append(pane.Children, &v1.Node{
 			Kind: v1.KindButton, ID: "retry:" + p.ID, Text: "Retry",
 			Name: "Retry " + p.Name, Role: "button",
 			Events: []v1.EventKind{v1.EventActivate}})
-		pane.Children = append(pane.Children, row)
 	case StateNoData:
 		msg := p.Err
 		if msg == "" {
@@ -704,7 +760,7 @@ func detailPane(r Report, providers []ProviderReport, selected string, hist []fl
 	footer := &v1.Node{Kind: v1.KindRow, Gap: 8, Height: 28, PinEnd: true, Children: []*v1.Node{
 		{Kind: v1.KindText, Tone: v1.ToneSubtle, Size: "caption",
 			Text: "Quota windows · last local snapshot per provider · not billing figures"},
-		{Kind: v1.KindButton, ID: "export", Text: "Export CSV",
+		{Kind: v1.KindButton, ID: "export", Text: "Export CSV", Width: 88,
 			Name: "Export usage history as CSV", Role: "button",
 			Tooltip: "Write the recorded percents to a CSV file in your downloads folder",
 			Events:  []v1.EventKind{v1.EventActivate}},
@@ -721,7 +777,9 @@ func windowCard(w Window, cfg Config, hostMinor int, now time.Time) *v1.Node {
 		pct = fmt.Sprintf("%.0f%%", w.UsedPercent)
 	}
 	card.Children = append(card.Children, &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-		{Kind: v1.KindText, Text: w.Label, Bold: true},
+		{Kind: v1.KindColumn, Width: 64, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: w.Label, Bold: true},
+		}},
 		{Kind: v1.KindColumn, PinEnd: true, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: pct, Tabular: true, Tone: tone, Bold: true, Width: 48},
 		}},

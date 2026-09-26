@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -52,6 +53,20 @@ func (fakeCLI) Rmi(context.Context, string) error                        { retur
 func (fakeCLI) VolRm(context.Context, string) error                      { return nil }
 func (fakeCLI) NetRm(context.Context, string) error                      { return nil }
 func (fakeCLI) Run(context.Context, minidocker.RunOpts) error            { return nil }
+
+// flakyCLI fails List once armed, so the bar's availability tone flips and
+// the next publish carries a new digest.
+type flakyCLI struct {
+	fakeCLI
+	fail atomic.Bool
+}
+
+func (c *flakyCLI) List(context.Context) ([]minidocker.Container, int, error) {
+	if c.fail.Load() {
+		return nil, 0, errors.New("Docker daemon not running")
+	}
+	return c.fakeCLI.List(context.Background())
+}
 
 // slowCLI makes List take delay, emulating a hung docker daemon.
 type slowCLI struct{ delay time.Duration }
@@ -172,7 +187,6 @@ func TestRunConcurrentTraffic(t *testing.T) {
 		h.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
 			Values: map[string]any{
 				"refresh_interval_seconds": 1.0,
-				"status_mode":              []string{"always", "running_only", "hidden"}[i%3],
 			}})
 		h.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "v1",
 			Revision: latestRevision.Load(), Node: "start:a1", Event: v1.EventActivate})
@@ -200,8 +214,8 @@ func TestRunConcurrentTraffic(t *testing.T) {
 }
 
 // TestRefreshClickDoesNotBlockMainLoop clicks refresh against a hung docker
-// and then commits a settings change; the settings publish (the canary: the
-// bar label drops the count) must land while the refresh is still in flight.
+// and then opens a second view; the second view's snapshot (the canary) must
+// land while the refresh is still in flight.
 func TestRefreshClickDoesNotBlockMainLoop(t *testing.T) {
 	const delay = 1500 * time.Millisecond
 	inR, inW, err := os.Pipe()
@@ -226,35 +240,31 @@ func TestRefreshClickDoesNotBlockMainLoop(t *testing.T) {
 	newSession = func() *minidocker.Session { return minidocker.NewSession(slowCLI{delay: delay}) }
 	defer func() { newSession = func() *minidocker.Session { return minidocker.NewSession(minidocker.CLI{}) } }()
 
-	// The canary is a snapshot whose bar button text has lost the count —
-	// only the committed "hidden" settings produce that. It is armed only
-	// after the unambiguous "docker 1" (available + counted) snapshot, since
-	// the pre-refresh unavailable bar also reads "docker".
+	// The canary is the snapshot for a second view: opening a view forces a
+	// publish, so it can only land once the main loop is free. It is armed
+	// only after the first view's snapshot, since the pre-refresh bar also
+	// publishes.
 	var armed, canary atomic.Bool
 	var latestRevision atomic.Uint64
 	go func() {
 		dec := json.NewDecoder(outR)
 		var m struct {
 			Type     string `json:"type"`
+			ViewID   string `json:"view_id"`
 			Revision uint64 `json:"revision"`
-			Root     *struct {
-				Children []struct {
-					Text string `json:"text"`
-				} `json:"children"`
-			} `json:"root"`
 		}
 		for {
 			if err := dec.Decode(&m); err != nil {
 				return
 			}
-			if m.Type != v1.TypeViewSnapshot || m.Root == nil || len(m.Root.Children) == 0 {
+			if m.Type != v1.TypeViewSnapshot {
 				continue
 			}
 			latestRevision.Store(m.Revision)
-			switch text := m.Root.Children[0].Text; {
-			case text == "docker 1":
+			switch m.ViewID {
+			case "v1":
 				armed.Store(true)
-			case armed.Load() && text == "docker":
+			case "v2":
 				canary.Store(true)
 			}
 		}
@@ -265,20 +275,19 @@ func TestRefreshClickDoesNotBlockMainLoop(t *testing.T) {
 
 	h.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "v1", View: v1.ViewBar, Entry: "bar"})
 	// The startup poll runs in the poller goroutine and takes the full delay;
-	// wait for its "docker 1" snapshot before clicking anything.
+	// wait for its first snapshot before clicking anything.
 	if !waitFor(armed.Load, delay+2*time.Second) {
 		t.Fatal("no available snapshot; harness did not reach the armed state")
 	}
 
-	// Refresh against the hung daemon, then the settings commit. With the
-	// refresh inline on the main loop the commit waits out the full delay.
+	// Refresh against the hung daemon, then open a second view. With the
+	// refresh inline on the main loop the open waits out the full delay.
 	h.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "v1", Revision: latestRevision.Load(),
 		Node: "refresh", Event: v1.EventActivate})
-	h.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
-		Values: map[string]any{"status_mode": "hidden"}})
+	h.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "v2", View: v1.ViewBar, Entry: "bar"})
 
 	if !waitFor(canary.Load, delay-300*time.Millisecond) {
-		t.Fatal("settings commit was blocked behind the in-flight refresh")
+		t.Fatal("view open was blocked behind the in-flight refresh")
 	}
 
 	h.send(&v1.HostShutdown{Type: v1.TypeHostShutdown})
@@ -336,13 +345,15 @@ func TestViewResyncResetsRevisionAndRepublishes(t *testing.T) {
 		Limits:    v1.DefaultLimits,
 	})
 
-	newSession = func() *minidocker.Session { return minidocker.NewSession(fakeCLI{}) }
+	cli := &flakyCLI{}
+	newSession = func() *minidocker.Session { return minidocker.NewSession(cli) }
 	defer func() { newSession = func() *minidocker.Session { return minidocker.NewSession(minidocker.CLI{}) } }()
 
 	// Snapshots arrive on one pipe for the whole run; counting the revision
 	// values is enough to prove the reset, and atomics keep the drain
 	// goroutine out of the test's way.
 	var firstRevision, secondRevision atomic.Int64
+	var latest atomic.Uint64
 	go func() {
 		dec := json.NewDecoder(outR)
 		var m struct {
@@ -357,6 +368,7 @@ func TestViewResyncResetsRevisionAndRepublishes(t *testing.T) {
 			if m.Type != v1.TypeViewSnapshot || m.ViewID != "v1" {
 				continue
 			}
+			latest.Store(m.Revision)
 			switch m.Revision {
 			case 1:
 				firstRevision.Add(1)
@@ -373,11 +385,13 @@ func TestViewResyncResetsRevisionAndRepublishes(t *testing.T) {
 	if !waitFor(func() bool { return firstRevision.Load() >= 1 }, 5*time.Second) {
 		t.Fatal("no first snapshot within 5s")
 	}
-	// A settings commit forces a second publish; the bar revision climbs.
-	h.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
-		Values: map[string]any{"status_mode": "hidden"}})
+	// The daemon goes down: the bar tone flips, so the refresh publishes a
+	// new digest and the revision climbs.
+	cli.fail.Store(true)
+	h.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "v1", Revision: latest.Load(),
+		Node: "refresh", Event: v1.EventActivate})
 	if !waitFor(func() bool { return secondRevision.Load() >= 1 }, 5*time.Second) {
-		t.Fatal("settings commit produced no second snapshot")
+		t.Fatal("refresh produced no second snapshot")
 	}
 
 	// The host rejected or dropped the view and asks for a fresh base.
@@ -721,10 +735,10 @@ func TestRunPublishesChangedTreesPerViewAndForcesOpenAndResync(t *testing.T) {
 	h.host.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "first", View: v1.ViewBar, Entry: "bar"})
 	first := h.nextSnapshot(t, "first", func(s wireSnapshot) bool {
 		node := nodeByID(s.Root, "open")
-		return node != nil && node.Text == "docker 1"
+		return node != nil && node.Icon == "docker"
 	})
-	h.host.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
-		Values: map[string]any{"status_mode": "always"}})
+	h.host.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "first", Revision: first.Revision,
+		Node: "refresh", Event: v1.EventActivate})
 	select {
 	case snapshot := <-h.snapshots:
 		t.Fatalf("unchanged view was republished: %+v", snapshot)
@@ -840,7 +854,7 @@ func TestTooltipIncludesDockerFailureDiagnosis(t *testing.T) {
 	state := minidocker.SessionSnapshot{
 		ContainerTab: minidocker.TabStatus{ListError: "Docker daemon not running"},
 	}
-	root := viewTree(v1.ViewTooltip, state, "always", 0)
+	root := viewTree(v1.ViewTooltip, state, 0)
 	if !treeHasText(root, "Docker daemon not running") {
 		t.Fatalf("tooltip omitted the Docker diagnosis: %+v", root)
 	}

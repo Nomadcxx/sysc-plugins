@@ -178,7 +178,7 @@ func (c *snapshotCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 	if err := ctx.Err(); err != nil {
 		return ProviderReport{}, err
 	}
-	rep := ProviderReport{ID: "codex", Name: "Codex", UpdatedAt: c.env.now(), State: StateNoData}
+	rep := ProviderReport{ID: "codex", Name: "Codex", UpdatedAt: c.env.now(), State: StateNoData, Snapshot: true}
 	files, err := sessionFiles(c.sessionRoot())
 	if err != nil || len(files) == 0 {
 		return rep, nil

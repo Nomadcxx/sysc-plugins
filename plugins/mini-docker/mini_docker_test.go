@@ -1790,33 +1790,13 @@ func TestSessionActRunsActionAndRefreshes(t *testing.T) {
 func TestBarTreeUnavailableTone(t *testing.T) {
 	// The unavailable pill must carry ToneError: hidden == zero-running ==
 	// unavailable is how the bar lies today.
-	tree := BarTree("docker", true)
+	tree := BarTree(true)
 	if tree.Children[0].Tone != v1.ToneError {
 		t.Fatalf("tone = %v, want error", tree.Children[0].Tone)
 	}
-	tree = BarTree("docker 2", false)
+	tree = BarTree(false)
 	if tree.Children[0].Tone != "" {
 		t.Fatalf("tone = %v, want default when available", tree.Children[0].Tone)
-	}
-}
-
-// show_count is gone (D1): it duplicated status_mode. The mode labels are
-// honest now - "Never" really means no count, not a hidden pill.
-func TestBarLabelModes(t *testing.T) {
-	if got := BarLabel("always", 3, true); got != "docker 3" {
-		t.Fatalf("always = %q", got)
-	}
-	if got := BarLabel("running_only", 0, true); got != "docker" {
-		t.Fatalf("running_only zero = %q", got)
-	}
-	if got := BarLabel("running_only", 2, true); got != "docker 2" {
-		t.Fatalf("running_only = %q", got)
-	}
-	if got := BarLabel("hidden", 5, true); got != "docker" {
-		t.Fatalf("hidden = %q", got)
-	}
-	if got := BarLabel("always", 0, false); got != "docker" {
-		t.Fatalf("unavailable = %q", got)
 	}
 }
 
@@ -1853,7 +1833,7 @@ func TestParseAction(t *testing.T) {
 }
 
 func TestBarTreeValidate(t *testing.T) {
-	bar := BarTree("docker 2", false)
+	bar := BarTree(false)
 	if err := v1.Validate(bar, v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
@@ -1981,6 +1961,9 @@ func TestPanelScopeButtons(t *testing.T) {
 		t.Fatalf("panel children = %d, want header and scope row", len(panel.Children))
 	}
 	scopeRow := panel.Children[1]
+	if scopeRow.Kind != v1.KindSegmented {
+		t.Fatalf("scope row kind = %v, want segmented", scopeRow.Kind)
+	}
 	want := []string{"tab:containers", "tab:images", "tab:volumes", "tab:networks"}
 	if len(scopeRow.Children) != len(want) {
 		t.Fatalf("scope buttons = %d, want %d", len(scopeRow.Children), len(want))
@@ -1989,12 +1972,8 @@ func TestPanelScopeButtons(t *testing.T) {
 		if button.ID != want[i] || button.Kind != v1.KindButton || len(button.Events) == 0 {
 			t.Fatalf("scope button %d = %+v", i, button)
 		}
-		fill := "outline"
-		if button.ID == "tab:images" {
-			fill = "accent"
-		}
-		if button.Fill != fill {
-			t.Fatalf("%s fill = %q, want %q", button.ID, button.Fill, fill)
+		if button.Selected != (button.ID == "tab:images") {
+			t.Fatalf("%s selected = %v, want %v", button.ID, button.Selected, button.ID == "tab:images")
 		}
 	}
 }
@@ -2459,9 +2438,9 @@ func TestPanelCraftPass(t *testing.T) {
 	}
 }
 
-func TestBarTreeCountIsTabular(t *testing.T) {
+func TestBarTreeIsIconOnly(t *testing.T) {
 	var buttons []*v1.Node
-	walkNodes(BarTree("docker 12", false), func(n *v1.Node) {
+	walkNodes(BarTree(false), func(n *v1.Node) {
 		if n.Kind == v1.KindButton {
 			buttons = append(buttons, n)
 		}
@@ -2469,10 +2448,9 @@ func TestBarTreeCountIsTabular(t *testing.T) {
 	if len(buttons) != 1 {
 		t.Fatalf("bar buttons = %d, want 1", len(buttons))
 	}
-	// The running count changes every refresh; tabular figures keep the
-	// pill from wobbling in width.
-	if !buttons[0].Tabular {
-		t.Fatal("bar count must be Tabular")
+	// The pill is the whale alone: no label, no count.
+	if buttons[0].Icon != "docker" || buttons[0].Text != "" {
+		t.Fatalf("bar pill icon=%q text=%q, want the docker glyph alone", buttons[0].Icon, buttons[0].Text)
 	}
 }
 
@@ -2490,7 +2468,7 @@ func TestPanelTreeValidate(t *testing.T) {
 	if err := v1.Validate(PanelTree(true, true, "", "", "", nil), v1.ViewPanel); err != nil {
 		t.Fatal(err)
 	}
-	if err := v1.Validate(BarTree("docker 2", false), v1.ViewBar); err != nil {
+	if err := v1.Validate(BarTree(false), v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -2547,7 +2525,7 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 		"unavailable": {listErr: "Docker daemon not running"},
 	}
 	for name, s := range states {
-		bar := BarTree(BarLabel("always", 1, s.available), !s.available)
+		bar := BarTree(!s.available)
 		for _, f := range shelllint.Tree(bar, v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight) {
 			t.Errorf("%s bar: %s", name, f)
 		}

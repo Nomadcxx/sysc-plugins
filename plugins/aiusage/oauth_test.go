@@ -85,6 +85,71 @@ func TestOAuthLimitsShapePreferred(t *testing.T) {
 	}
 }
 
+// TestOAuthPercentLimitsShape covers the live body measured 2026-09-27: the
+// limits array carries percent, not utilization, and the flat pair rides
+// beside it. Reading only utilization rejected the whole body.
+func TestOAuthPercentLimitsShape(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"five_hour":{"utilization":100.0,"resets_at":"2026-09-26T17:30:00.241683+00:00"},"seven_day":{"utilization":78.0,"resets_at":"2026-09-30T21:00:00.241708+00:00"},"limits":[{"kind":"session","percent":100,"resets_at":"2026-09-26T17:30:00.241683+00:00","is_active":true},{"kind":"weekly_all","percent":78,"resets_at":"2026-09-30T21:00:00.241708+00:00","is_active":false}]}`))
+	}))
+	defer srv.Close()
+
+	home := t.TempDir()
+	writeCredentials(t, home, "tok-a", base.Add(time.Hour).UnixMilli())
+	c := &oauthUsageCollector{
+		env:     Env{Client: srv.Client(), Home: home, Now: func() time.Time { return base }},
+		base:    srv.URL,
+		version: "2.1.0",
+	}
+
+	rep, err := c.Fetch(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.State != StateFresh {
+		t.Fatalf("state = %v, err = %q", rep.State, rep.Err)
+	}
+	if len(rep.Windows) != 2 {
+		t.Fatalf("windows = %d, want 2", len(rep.Windows))
+	}
+	if rep.Windows[0].Key != "primary" || rep.Windows[0].UsedPercent != 100 {
+		t.Fatalf("primary = %+v", rep.Windows[0])
+	}
+	if rep.Windows[1].Key != "secondary" || rep.Windows[1].UsedPercent != 78 {
+		t.Fatalf("secondary = %+v", rep.Windows[1])
+	}
+}
+
+// TestOAuthLimitsWithoutReadingsFallsBackToFlatPair covers a limits array
+// whose entries carry neither spelling: the flat pair beside it is still a
+// valid quota body and must not be discarded with the array.
+func TestOAuthLimitsWithoutReadingsFallsBackToFlatPair(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"limits":[{"kind":"session","resets_at":"2026-09-26T17:30:00Z"}],"five_hour":{"utilization":40.0,"resets_at":"2026-09-19T15:30:00Z"},"seven_day":{"utilization":9.0,"resets_at":"2026-09-22T02:00:00Z"}}`))
+	}))
+	defer srv.Close()
+
+	home := t.TempDir()
+	writeCredentials(t, home, "tok-a", base.Add(time.Hour).UnixMilli())
+	c := &oauthUsageCollector{
+		env:     Env{Client: srv.Client(), Home: home, Now: func() time.Time { return base }},
+		base:    srv.URL,
+		version: "2.1.0",
+	}
+
+	rep, err := c.Fetch(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Windows) != 2 || rep.Windows[0].UsedPercent != 40 || rep.Windows[1].UsedPercent != 9 {
+		t.Fatalf("windows = %+v", rep.Windows)
+	}
+}
+
 func TestOAuthFlatFallback(t *testing.T) {
 	t.Parallel()
 

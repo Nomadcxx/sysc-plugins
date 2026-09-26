@@ -135,9 +135,14 @@ func (l *Loop) loadCache() Report {
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return Report{} // a torn cache degrades to a cold start
 	}
-	if r.CapturedAt.Add(2 * l.cfg.Refresh).Before(l.env.now()) {
-		for i := range r.Providers {
-			r.Providers[i].Stale = true
+	// A cache older than the cadence is stale for a live source, but a
+	// snapshot source is judged against the window it describes, so the
+	// decision is per provider rather than one blanket age.
+	now := l.env.now()
+	for i := range r.Providers {
+		p := &r.Providers[i]
+		if p.State == StateFresh && p.staleFor(l.cfg, now) {
+			p.Stale = true
 		}
 	}
 	for i := range r.Providers {

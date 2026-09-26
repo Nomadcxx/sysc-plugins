@@ -225,8 +225,12 @@ func credits(body []byte) *float64 {
 // array or the older flat pair.
 type oauthWire struct {
 	Limits []struct {
-		Kind        string   `json:"kind"`
+		Kind string `json:"kind"`
+		// The endpoint has shipped both spellings: the older limits array
+		// carried utilization, the current one carries percent. Either is a
+		// valid reading; a body with neither is not.
 		Utilization *float64 `json:"utilization"`
+		Percent     *float64 `json:"percent"`
 		ResetsAt    string   `json:"resets_at"`
 		IsActive    *bool    `json:"is_active"`
 	} `json:"limits"`
@@ -270,15 +274,20 @@ func parseOAuthWindows(body []byte) ([]Window, bool) {
 			default:
 				continue
 			}
-			if l.Utilization == nil {
+			utilization := l.Utilization
+			if utilization == nil {
+				utilization = l.Percent
+			}
+			if utilization == nil {
 				continue
 			}
-			out = append(out, windowFromUtilization(key, minutes, *l.Utilization, l.ResetsAt))
+			out = append(out, windowFromUtilization(key, minutes, *utilization, l.ResetsAt))
 		}
 		if len(out) > 0 {
 			return out, true
 		}
-		return nil, false
+		// A limits array whose entries carry no reading is not a quota body
+		// by itself; the flat pair beside it may still be one.
 	}
 	if wire.FiveHour == nil {
 		return nil, false // an error body has no five_hour block

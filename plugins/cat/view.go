@@ -86,8 +86,10 @@ func BarTree(f Frame, s Settings, height int) *v1.Node {
 	// vertical inset, so the padding only opens the sides: the gallop is as
 	// wide as its square, and without it nose and tail touch the pill's rim.
 	cat := BarCat(f, s, height)
+	// Fill "card" resolves to the capsule colour the shell already paints,
+	// so the button does not add a lighter inner pill over it.
 	open := &v1.Node{Kind: v1.KindButton, ID: "open", Name: "Open the cat", Role: "button",
-		Height: cat.IconSize, Padding: barInset, Gap: 4, Events: []v1.EventKind{v1.EventActivate},
+		Fill: "card", Height: cat.IconSize, Padding: barInset, Gap: 4, Events: []v1.EventKind{v1.EventActivate},
 		Children: []*v1.Node{cat}}
 	if s.ShowPercent {
 		tone := v1.ToneNormal

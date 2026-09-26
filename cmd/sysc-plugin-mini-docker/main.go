@@ -55,9 +55,8 @@ func run(in *os.File, out *os.File) error {
 	views := map[string]view{}
 	lastTree := map[string][sha256.Size]byte{}
 	settings := struct {
-		interval   time.Duration
-		statusMode string
-	}{interval: 5 * time.Second, statusMode: "always"}
+		interval time.Duration
+	}{interval: 5 * time.Second}
 
 	// mu guards views, rendered-tree digests, and settings. sendMu serializes
 	// every encoder write, including host.call, across the main loop and poller.
@@ -90,7 +89,6 @@ func run(in *os.File, out *os.File) error {
 		mu.Lock()
 		defer mu.Unlock()
 		state := session.State()
-		mode := settings.statusMode
 		running := 0
 		for _, container := range state.Containers {
 			if container.Running() {
@@ -98,7 +96,7 @@ func run(in *os.File, out *os.File) error {
 			}
 		}
 		for id, current := range views {
-			root := viewTree(current.kind, state, mode, running)
+			root := viewTree(current.kind, state, running)
 			encoded, err := json.Marshal(root)
 			if err != nil {
 				continue
@@ -313,7 +311,6 @@ func run(in *os.File, out *os.File) error {
 					}
 				}
 			case *v1.SettingsChanged:
-				changed := false
 				intervalWasChanged := false
 				defaultNetwork := ""
 				defaultNetworkChanged := false
@@ -323,12 +320,6 @@ func run(in *os.File, out *os.File) error {
 						next := time.Duration(value) * time.Second
 						intervalWasChanged = next != settings.interval
 						settings.interval = next
-					}
-				}
-				if raw, ok := msg.Values["status_mode"]; ok {
-					if mode, ok := raw.(string); ok && (mode == "always" || mode == "running_only" || mode == "hidden") && mode != settings.statusMode {
-						settings.statusMode = mode
-						changed = true
 					}
 				}
 				if raw, ok := msg.Values["default_network"]; ok {
@@ -347,18 +338,15 @@ func run(in *os.File, out *os.File) error {
 					default:
 					}
 				}
-				if changed {
-					publish("")
-				}
 			}
 		}
 	}
 }
 
-func viewTree(kind v1.ViewKind, state minidocker.SessionSnapshot, statusMode string, running int) *v1.Node {
+func viewTree(kind v1.ViewKind, state minidocker.SessionSnapshot, running int) *v1.Node {
 	switch kind {
 	case v1.ViewBar:
-		return minidocker.BarTree(minidocker.BarLabel(statusMode, running, state.ContainerTab.Available), !state.ContainerTab.Available)
+		return minidocker.BarTree(!state.ContainerTab.Available)
 	case v1.ViewTooltip:
 		return minidocker.TooltipTreeForSession(state, running)
 	default:
