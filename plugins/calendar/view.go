@@ -129,7 +129,7 @@ func panelHeader(state PanelState, weekStart string) *v1.Node {
 	return &v1.Node{Kind: v1.KindRow, Height: headerHeight, PinEnd: true, Children: []*v1.Node{
 		{Kind: v1.KindRow, Gap: headerGap, Children: []*v1.Node{
 			prev,
-			{Kind: v1.KindText, Text: title, Size: "title", Bold: true, MaxWidth: titleMaxWidth},
+			{Kind: v1.KindText, ID: "cal-title", Text: title, Size: "title", Bold: true, MaxWidth: titleMaxWidth},
 			next,
 			{Kind: v1.KindButton, ID: "cal-today", Text: "Today", Name: "Go to today", Role: "button", Fill: "soft", Width: todayButton, Height: iconButton, Events: []v1.EventKind{v1.EventActivate}},
 		}},

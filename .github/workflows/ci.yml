@@ -12,6 +12,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # The calendar plugin reads Evolution Data Server through cgo, so vet,
+      # test and build all need libecal's headers and pkg-config file.
+      - name: install libecal
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libecal2.0-dev
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - name: vet

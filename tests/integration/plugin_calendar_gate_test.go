@@ -103,9 +103,10 @@ func TestPluginCalendarGateAllViews(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.mu.Lock()
-	h.slots = recordSlot(h.slots, "panel-1", viewSlot{v1.ViewPanel, 1040, 760})
+	// The manifest's panel box (plugins/calendar/manifest.json).
+	h.slots = recordSlot(h.slots, "panel-1", viewSlot{v1.ViewPanel, 800, 720})
 	h.mu.Unlock()
-	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Output: "DP-1", Width: 1040, Height: 760}); err != nil {
+	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Output: "DP-1", Width: 800, Height: 720}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -164,10 +165,10 @@ func TestPluginCalendarGateAllViews(t *testing.T) {
 }
 
 func panelTitle(root *v1.Node) string {
-	if root == nil || len(root.Children) == 0 || len(root.Children[0].Children) < 2 {
-		return ""
+	if title := findID(root, "cal-title"); title != nil {
+		return title.Text
 	}
-	return root.Children[0].Children[1].Text
+	return ""
 }
 
 func findKindInTree(root *v1.Node, kind v1.NodeKind) *v1.Node {
