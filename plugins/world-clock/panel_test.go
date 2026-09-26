@@ -85,7 +85,7 @@ func TestPanelZoneCard(t *testing.T) {
 			t.Fatalf("missing %s", id)
 		}
 	}
-	if !hasText(root, "Asia/Tokyo · UTC+9", v1.ToneSubtle) || !hasText(root, "+9h", v1.ToneSubtle) || !hasText(root, "+1", v1.ToneAccent) {
+	if !hasText(root, "Asia · UTC+9", v1.ToneSubtle) || !hasText(root, "+9h", v1.ToneSubtle) || !hasText(root, "+1", v1.ToneAccent) {
 		t.Fatal("card lines missing")
 	}
 	if !hasText(root, "Tokyo", v1.ToneNormal) || !hasText(root, "UTC", v1.ToneSubtle) {
@@ -273,5 +273,29 @@ func TestMetaLineOmitsRedundantZoneForUTC(t *testing.T) {
 	}
 	if got := metaText(Reading{Zone: "Asia/Tokyo", Offset: "UTC+9"}).Text; got != "Asia/Tokyo · UTC+9" {
 		t.Fatalf("tokyo meta = %q", got)
+	}
+}
+
+func TestMetaLineDropsTheCityTheLabelRepeats(t *testing.T) {
+	t.Parallel()
+	cases := map[Reading]string{
+		{Zone: "America/New_York", Label: "New York", Offset: "UTC-4"}:                   "America · UTC-4",
+		{Zone: "America/Argentina/Buenos_Aires", Label: "Buenos Aires", Offset: "UTC-3"}: "America/Argentina · UTC-3",
+		{Zone: "America/New_York", Label: "HQ", Offset: "UTC-4"}:                         "America/New_York · UTC-4",
+		{Zone: "UTC", Label: "UTC", Offset: "UTC+0"}:                                     "UTC+0",
+	}
+	for r, want := range cases {
+		if got := metaText(r).Text; got != want {
+			t.Errorf("%s/%s meta = %q, want %q", r.Zone, r.Label, got, want)
+		}
+	}
+}
+
+func TestHeaderToListSpacingIsOneInset(t *testing.T) {
+	t.Parallel()
+	root := Panel(PanelState{Readings: sampleReadings()})
+	header, list := root.Children[0], root.Children[1]
+	if got := header.Padding + root.Gap + list.Padding; got > 2*contentInset {
+		t.Fatalf("search box to first card is %d px; hardware showed 30 px reads as a hole", got)
 	}
 }

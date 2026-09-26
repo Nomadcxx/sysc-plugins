@@ -18,7 +18,7 @@ const (
 // and the list's inset is also the gutter its 4 px scrollbar is drawn in.
 const (
 	panelPad     = 12
-	panelGap     = 10
+	panelGap     = 0 // the header's and list's insets already separate them
 	contentInset = 10
 	headerGap    = 8
 	titleLine    = 24 // the title token renders taller than body text
@@ -182,12 +182,17 @@ func zoneCard(r Reading, s PanelState) *v1.Node {
 	}}
 }
 
-// metaText is the card's second line. A zone with no region ("UTC") would
-// only repeat its label, so it shows the offset alone.
+// metaText is the card's second line. It never repeats what the label says:
+// a zone with no region ("UTC") shows its offset alone, and a card still
+// showing the default city name drops that city from the zone id. A custom
+// label keeps the full id, the only place the actual zone is named.
 func metaText(r Reading) *v1.Node {
 	text := r.Zone + " · " + r.Offset
-	if !strings.Contains(r.Zone, "/") {
+	switch i := strings.LastIndex(r.Zone, "/"); {
+	case i < 0:
 		text = r.Offset
+	case r.Label == ShortLabel(r.Zone):
+		text = r.Zone[:i] + " · " + r.Offset
 	}
 	return &v1.Node{Kind: v1.KindText, Key: "meta:" + r.Zone, Text: text, Tone: v1.ToneSubtle}
 }
