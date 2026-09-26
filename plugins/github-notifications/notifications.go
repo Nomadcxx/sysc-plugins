@@ -5,6 +5,7 @@ package githubnotifications
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -172,6 +173,13 @@ func ValidThreadID(id string) bool {
 	}
 	n, err := strconv.ParseUint(id, 10, 64)
 	return err == nil && n > 0
+}
+
+// CanonicalGitHubURL accepts only credential-free https://github.com targets.
+func CanonicalGitHubURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host == "github.com" && u.User == nil &&
+		u.RawQuery == "" && u.Fragment == "" && strings.HasPrefix(u.Path, "/") && u.RawPath == ""
 }
 
 // FormatRelative renders an RFC3339 timestamp as a coarse relative age.

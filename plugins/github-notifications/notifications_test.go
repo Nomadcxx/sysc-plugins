@@ -127,6 +127,29 @@ func TestValidThreadID(t *testing.T) {
 	}
 }
 
+func TestCanonicalGitHubURLRejectsExternalAndCredentialTargets(t *testing.T) {
+	for _, raw := range []string{
+		"https://github.com/acme/api/issues/1",
+		"https://github.com/notifications",
+	} {
+		if !CanonicalGitHubURL(raw) {
+			t.Errorf("CanonicalGitHubURL(%q) = false", raw)
+		}
+	}
+	for _, raw := range []string{
+		"http://github.com/acme/api",
+		"https://evil.example/acme/api",
+		"https://user@github.com/acme/api",
+		"https://github.com/acme/api?redirect=evil",
+		"https://github.com/acme/api#fragment",
+		"https://github.com/%2Facme/api",
+	} {
+		if CanonicalGitHubURL(raw) {
+			t.Errorf("CanonicalGitHubURL(%q) = true", raw)
+		}
+	}
+}
+
 func TestCacheRoundTrip(t *testing.T) {
 	raw, _ := json.Marshal([]Item{mustItem(t, rawItem("5", "hello", "Issue", "assign"))})
 	var items []Item

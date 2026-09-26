@@ -2,11 +2,11 @@
   "schema": 1,
   "id": "org.sysc.github-notifications",
   "name": "GitHub Notifications",
-  "description": "Shows unread GitHub notifications in the bar with a panel to review and mark them read.",
-  "version": "0.2.0",
+  "description": "Triage unread GitHub notifications, open work, and contribution activity from the panel.",
+  "version": "0.3.0",
   "protocol": {
     "major": 1,
-    "minor": 1
+    "minor": 4
   },
   "exec": "bin/sysc-plugin-github-notifications",
   "capabilities": [
@@ -51,10 +51,10 @@
     {
       "key": "per_page",
       "type": "int",
-      "label": "Max notifications",
-      "default": 50,
+      "label": "Rows per inbox page",
+      "default": 100,
       "min": 1,
-      "max": 50
+      "max": 100
     },
     {
       "key": "display_mode",

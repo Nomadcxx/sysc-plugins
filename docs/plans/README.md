@@ -1,6 +1,6 @@
 # Design and Plan Register
 
-Last updated: 2026-09-26.
+Last updated: 2026-09-27.
 
 Every design, plan, and handover this project has produced, with where it lives and what it is for.
 Add a row here in the same commit that adds a document. A document that is not in this register is
@@ -72,3 +72,6 @@ Naming is `YYYY-MM-DD-<topic>[-<kind>].md`. A topic with no kind suffix is the i
 | `2026-09-25-faith-bd-handover.md` | handover | Faith work to record in bd: completed tasks with commits and suggested close reasons, the shell-release gate, the live check, and sandbox-only failures that predate the work. |
 | `2026-09-26-protonvpn-design.md` | design | Approved ProtonVPN design: prior-art audit of Noctalia, DMS, and the GTK app; the official-CLI parsing contract; 460×580 three-tab panel; NAT-PMP; split tunneling; and the flag-emoji gate. |
 | `2026-09-26-protonvpn.md` | plan | TDD implementation sequence for the ProtonVPN plugin: shell glyphs and pin repair, CLI parsers, phase machine, serverlist, views, NAT-PMP, event loop, and live acceptance. |
+| `2026-09-27-github-notifications-research.md` | research | Pinned prior-art comparison of the Noctalia inbox, contribution calendar, work queue and dashboard, DMS notifier, and current sysc-plugins port. |
+| `2026-09-27-github-notifications-design.md` | design | Approved three-view design for the inbox, work queue, and contribution Activity calendar, including native UI shape, states, cache behavior, and concurrency invariants. |
+| `2026-09-27-github-notifications.md` | plan | TDD implementation sequence for safe GitHub queries, independent feeds, contribution heatmap rendering, refresh/read race protection, panel geometry, and host event routing. |
