@@ -86,7 +86,7 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 	}
 	result, _ := json.Marshal(v1.StateGetResult{Found: false})
 	sendHostJSON(t, host, v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: result})
-	sendHostJSON(t, host, v1.ViewOpen{Type: "view.open", ViewID: "calendar-panel", View: v1.ViewPanel, Entry: "panel", Width: 1040, Height: 760})
+	sendHostJSON(t, host, v1.ViewOpen{Type: "view.open", ViewID: "calendar-panel", View: v1.ViewPanel, Entry: "panel", Width: calendar.PanelWidth, Height: calendar.PanelHeight})
 
 	var populated v1.ViewSnapshot
 	for {

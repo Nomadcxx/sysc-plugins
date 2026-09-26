@@ -76,48 +76,40 @@ func PanelTree(state PanelState, events []Event, weekStart string, status LoadSt
 	if state.Date.IsZero() {
 		state.Date = localDay(now)
 	}
-	root := &v1.Node{Kind: v1.KindColumn, Gap: 12, Padding: 14}
+	root := &v1.Node{Kind: v1.KindColumn, Gap: panelGap, Padding: panelPadding}
 	root.Children = append(root.Children, panelHeader(state, weekStart), viewSwitcher(state.View))
-	filters := calendarFilterBar(sources, hidden, calendarsExpanded)
+	// body is what the chrome above leaves of the panel box; every view sizes
+	// its scrolling content from it rather than from a fixed guess.
+	body := PanelHeight - 2*panelPadding - headerHeight - panelGap - switcherHeight - panelGap
+	filters, overflow := calendarFilterBar(sources, hidden, calendarsExpanded)
 	if filters != nil {
 		root.Children = append(root.Children, filters)
+		body -= filterHeight + panelGap
+		if calendarsExpanded && overflow {
+			body -= expandedList + 6
+		}
 	}
-	root.Children = append(root.Children, keyboardHint())
 	banner := statusBanner(status, len(events))
 	if banner != nil {
 		root.Children = append(root.Children, banner)
+		body -= bannerHeight + panelGap
 	}
-	contentHeight := func(base int) int {
-		if filters != nil {
-			base -= 38
-		}
-		if calendarsExpanded && len(sources) > 8 {
-			base -= 100
-		}
-		if banner != nil {
-			base -= 64
-		}
-		return max(base-30, 280)
-	}
+	body = max(body, 200)
 	if state.Details {
 		if event, ok := eventByID(events, state.SelectedEventID); ok {
-			root.Children = append(root.Children, eventDetails(event, now.Location(), contentHeight(570)))
+			root.Children = append(root.Children, eventDetails(event, now.Location(), body))
 			return root
 		}
 	}
 	switch state.View {
 	case ViewWeek, ViewFourDays, ViewDay:
-		root.Children = append(root.Children, scheduleView(state, events, weekStart, now, contentHeight(560)))
+		root.Children = append(root.Children, scheduleView(state, events, weekStart, now, body))
 	case ViewAgenda:
-		root.Children = append(root.Children, agendaView(state, events, weekStart, now, contentHeight(550)))
+		root.Children = append(root.Children, agendaView(state, events, weekStart, now, body))
 	default:
-		root.Children = append(root.Children, monthView(state, events, weekStart, now, contentHeight(530)))
+		root.Children = append(root.Children, monthView(state, events, weekStart, now, body-dayTitleHeight))
 	}
 	return root
-}
-
-func keyboardHint() *v1.Node {
-	return &v1.Node{Kind: v1.KindText, Text: "J / K  Previous or next event     T  Today     C  Copy details     Ctrl + R  Refresh", Tone: v1.ToneSubtle, Size: "label"}
 }
 
 func panelHeader(state PanelState, weekStart string) *v1.Node {
@@ -130,11 +122,19 @@ func panelHeader(state PanelState, weekStart string) *v1.Node {
 	} else if state.View == ViewDay {
 		step = "day"
 	}
-	return &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-		button("cal-prev", "‹", "Previous "+step, "button", v1.EventActivate),
-		{Kind: v1.KindText, Text: title, Size: "title", Bold: true, MaxWidth: 680},
-		button("cal-next", "›", "Next "+step, "button", v1.EventActivate),
-		{Kind: v1.KindButton, ID: "cal-today", Text: "Today", Name: "Go to today", Role: "button", Fill: "soft", Events: []v1.EventKind{v1.EventActivate}},
+	prev := button("cal-prev", "‹", "Previous "+step, "button", v1.EventActivate)
+	next := button("cal-next", "›", "Next "+step, "button", v1.EventActivate)
+	prev.Width, prev.Height, next.Width, next.Height = stepButton, iconButton, stepButton, iconButton
+	// Two children so PinEnd keeps the shortcut button at the right edge.
+	return &v1.Node{Kind: v1.KindRow, Height: headerHeight, PinEnd: true, Children: []*v1.Node{
+		{Kind: v1.KindRow, Gap: headerGap, Children: []*v1.Node{
+			prev,
+			{Kind: v1.KindText, Text: title, Size: "title", Bold: true, MaxWidth: titleMaxWidth},
+			next,
+			{Kind: v1.KindButton, ID: "cal-today", Text: "Today", Name: "Go to today", Role: "button", Fill: "soft", Width: todayButton, Height: iconButton, Events: []v1.EventKind{v1.EventActivate}},
+		}},
+		{Kind: v1.KindButton, ID: "cal-shortcuts", Icon: "keyboard", Name: "Keyboard shortcuts", Role: "button", Tooltip: shortcutHint,
+			Width: iconButton, Height: iconButton, Events: []v1.EventKind{v1.EventActivate}},
 	}}
 }
 
@@ -145,7 +145,7 @@ func viewSwitcher(selected ViewMode) *v1.Node {
 	}{
 		{ViewMonth, "Month"}, {ViewWeek, "Week"}, {ViewFourDays, "4 days"}, {ViewDay, "Day"}, {ViewAgenda, "Agenda"},
 	}
-	root := &v1.Node{Kind: v1.KindSegmented, Gap: 2, Height: 38}
+	root := &v1.Node{Kind: v1.KindSegmented, Gap: 2, Height: switcherHeight}
 	for _, item := range segments {
 		root.Children = append(root.Children, &v1.Node{
 			Kind: v1.KindButton, ID: "cal-view-" + string(item.mode), Text: item.label,
@@ -193,22 +193,30 @@ func statusBanner(status LoadStatus, eventCount int) *v1.Node {
 	if title == "" {
 		return nil
 	}
-	children := []*v1.Node{{Kind: v1.KindText, Text: boundedText(title, 512), Tone: tone, Bold: true}}
+	text := &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{{Kind: v1.KindText, Text: boundedText(title, 512), Tone: tone, Bold: true}}}
 	if detail != "" {
-		children = append(children, &v1.Node{Kind: v1.KindText, Text: boundedText(detail, 1024), Tone: tone})
+		text.Children = append(text.Children, &v1.Node{Kind: v1.KindText, Text: boundedText(detail, 1024), Tone: tone})
 	}
+	banner := &v1.Node{Kind: v1.KindRow, Gap: 8, Fill: "soft", Shape: "medium", Padding: 10, Height: bannerHeight, Children: []*v1.Node{text}}
 	if status.Error != "" || !status.Available || status.CalendarCount == 0 {
-		children = append(children, button("cal-retry", "Refresh", "Retry calendar refresh", "button", v1.EventActivate))
+		// The text column clips; PinEnd reserves the button so a long error
+		// can never push it out of the row.
+		retry := button("cal-retry", "Refresh", "Retry calendar refresh", "button", v1.EventActivate)
+		retry.Height = iconButton
+		banner.PinEnd = true
+		banner.Children = append(banner.Children, retry)
 	}
-	return &v1.Node{Kind: v1.KindRow, Gap: 8, Fill: "soft", Shape: "medium", Padding: 10, Children: children}
+	return banner
 }
 
-func calendarFilterBar(sources []CalendarSource, hidden map[string]bool, expanded bool) *v1.Node {
+// calendarFilterBar shows as many calendar chips as fit on one row and folds
+// the rest behind "+N". It reports whether any were folded.
+func calendarFilterBar(sources []CalendarSource, hidden map[string]bool, expanded bool) (*v1.Node, bool) {
 	if len(sources) == 0 {
-		return nil
+		return nil, false
 	}
-	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{{Kind: v1.KindText, Text: "Calendars", Tone: v1.ToneSubtle, Size: "label"}}}
-	limit := min(len(sources), 8)
+	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Height: filterHeight, Children: []*v1.Node{{Kind: v1.KindText, Text: "Calendars", Tone: v1.ToneSubtle, Size: "label"}}}
+	limit := chipsThatFit(sources)
 	for _, source := range sources[:limit] {
 		row.Children = append(row.Children, calendarToggleButton(source, hidden))
 	}
@@ -227,12 +235,32 @@ func calendarFilterBar(sources []CalendarSource, hidden map[string]bool, expande
 		}
 		column.Children = append(column.Children, list)
 	}
-	return column
+	return column, len(sources) > limit
+}
+
+// chipsThatFit counts the leading chips that fit beside the label, keeping
+// room for the "+N" button whenever some do not. Widths use the host's text
+// metric (8 px per byte) plus the chip's padding and stroke.
+func chipsThatFit(sources []CalendarSource) int {
+	const label, more, gap = len("Calendars") * 8, 48, 6
+	width := func(s CalendarSource) int { return len(truncateText(s.Name, chipTextLimit))*8 + 2*5 + 2 + 12 }
+	used := label
+	for i, s := range sources {
+		used += gap + width(s)
+		reserve := 0
+		if i < len(sources)-1 {
+			reserve = gap + more
+		}
+		if used+reserve > contentWidth {
+			return i
+		}
+	}
+	return len(sources)
 }
 
 func calendarToggleButton(source CalendarSource, hidden map[string]bool) *v1.Node {
 	visible := !hidden[source.ID]
-	label, action := truncateText(source.Name, 16), "Hide"
+	label, action := truncateText(source.Name, chipTextLimit), "Hide"
 	fill := "accent"
 	if !visible {
 		action, fill = "Show", "outline"
@@ -251,14 +279,17 @@ func CalendarToggleNodeID(sourceID string) string {
 }
 
 func monthView(state PanelState, events []Event, weekStart string, now time.Time, listHeight int) *v1.Node {
-	left := &v1.Node{Kind: v1.KindColumn, Width: 342, Gap: 8, Children: []*v1.Node{}}
-	weekdays := &v1.Node{Kind: v1.KindRow, Gap: 3}
-	for _, day := range weekdayLabels(weekStart) {
-		weekdays.Children = append(weekdays.Children, &v1.Node{Kind: v1.KindText, Text: day, Width: 42, Tone: v1.ToneSubtle, Size: "label"})
+	left := &v1.Node{Kind: v1.KindColumn, Width: monthGridWidth, Gap: monthCellGap, Children: []*v1.Node{}}
+	// Each weekday label is a column cell as wide as a date button: text
+	// measures its own width, so bare labels cannot line up with the grid.
+	weekdays := &v1.Node{Kind: v1.KindRow, Gap: monthCellGap}
+	for i, day := range weekdayLabels(weekStart) {
+		weekdays.Children = append(weekdays.Children, &v1.Node{Kind: v1.KindColumn, Key: fmt.Sprintf("weekday-%d", i), Width: monthCell,
+			Children: []*v1.Node{{Kind: v1.KindText, Text: day, Tone: v1.ToneSubtle, Size: "label", CenterX: true}}})
 	}
 	left.Children = append(left.Children, weekdays)
 	for _, week := range monthGrid(state.Date, weekStart, now, state.Date) {
-		row := &v1.Node{Kind: v1.KindRow, Gap: 3}
+		row := &v1.Node{Kind: v1.KindRow, Gap: monthCellGap}
 		for _, cell := range week {
 			row.Children = append(row.Children, dateButton(cell, events))
 		}
@@ -277,7 +308,7 @@ func monthView(state PanelState, events []Event, weekStart string, now time.Time
 	} else {
 		right.Children = append(right.Children, eventList(dayEvents, state.Date.Location(), listHeight))
 	}
-	return &v1.Node{Kind: v1.KindRow, Gap: 22, Children: []*v1.Node{left, right}}
+	return &v1.Node{Kind: v1.KindRow, Gap: monthSplitGap, Children: []*v1.Node{left, right}}
 }
 
 func dateButton(cell Cell, events []Event) *v1.Node {
@@ -294,7 +325,7 @@ func dateButton(cell Cell, events []Event) *v1.Node {
 	if count > 0 {
 		text += " ·"
 	}
-	node := &v1.Node{Kind: v1.KindButton, ID: "cal-date-" + date, Text: text, Name: label, Role: "button", Width: 42, Height: 42, Tabular: true,
+	node := &v1.Node{Kind: v1.KindButton, ID: "cal-date-" + date, Text: text, Name: label, Role: "button", Width: monthCell, Height: monthCell, Tabular: true,
 		Events: []v1.EventKind{v1.EventActivate}}
 	if cell.Selected {
 		node.Fill = "accent"
@@ -582,3 +613,38 @@ func truncateText(value string, limit int) string {
 	}
 	return value + "…"
 }
+
+// PanelWidth and PanelHeight are the manifest's panel box. The shell sends the
+// declared size in view.open rather than the size it grants, and a 1536x864
+// laptop grants about 810 wide (sysc-578), so the panel is designed for a box
+// every screen honours instead of for the largest one.
+const (
+	PanelWidth  = 800
+	PanelHeight = 720
+
+	panelPadding = 14
+	panelGap     = 12
+	contentWidth = PanelWidth - 2*panelPadding
+
+	headerHeight   = 36
+	switcherHeight = 38
+	filterHeight   = 32
+	expandedList   = 88
+	bannerHeight   = 64
+
+	stepButton    = 36
+	todayButton   = 72
+	iconButton    = 32
+	headerGap     = 8
+	titleMaxWidth = contentWidth - 2*stepButton - todayButton - iconButton - 4*headerGap
+
+	monthCell      = 56
+	monthCellGap   = 6
+	monthGridWidth = 7*monthCell + 6*monthCellGap
+	monthSplitGap  = 22
+	dayTitleHeight = 32
+
+	chipTextLimit = 28
+)
+
+const shortcutHint = "J / K  Previous or next event · T  Today · C  Copy details · Ctrl + R  Refresh"

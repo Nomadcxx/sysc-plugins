@@ -42,7 +42,7 @@ func TestCalendarPanelBuildsAllFiveViewsAndSelectedDayAgenda(t *testing.T) {
 				t.Fatal("month grid omitted the selected date")
 			}
 		}
-		if findings := lint.Tree(root, v1.ViewPanel, 1040, 760); len(findings) != 0 {
+		if findings := lint.Tree(root, v1.ViewPanel, PanelWidth, PanelHeight); len(findings) != 0 {
 			t.Errorf("%s panel does not fit: %+v", mode, findings)
 		}
 	}
@@ -91,7 +91,7 @@ func TestExpandedCalendarFilterFitsEveryPanelView(t *testing.T) {
 		if findNode(root, CalendarToggleNodeID(sources[len(sources)-1].ID)) == nil {
 			t.Errorf("%s expanded calendar list omitted its final source", mode)
 		}
-		if findings := lint.Tree(root, v1.ViewPanel, 1040, 760); len(findings) != 0 {
+		if findings := lint.Tree(root, v1.ViewPanel, PanelWidth, PanelHeight); len(findings) != 0 {
 			t.Errorf("%s expanded panel does not fit: %+v", mode, findings)
 		}
 	}
