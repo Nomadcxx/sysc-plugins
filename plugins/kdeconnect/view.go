@@ -243,12 +243,13 @@ func PanelTreeForState(snap Snapshot, settings Settings, composer Composer, draf
 		if len(snap.Devices) > 1 {
 			col.Children = append(col.Children, deviceChooserTree(snap, selected, switcherOpen))
 		}
+		col.Children = append(col.Children, actionRowTree(selected, settings))
 		if settings.ShowDeviceCard {
+			// The mockup card sits below the actions so the tall phone
+			// artwork never crowds the controls above it.
 			col.Children = append(col.Children, deviceCardTree(selected))
 		}
-		col.Children = append(col.Children,
-			actionRowTree(selected, settings),
-			infoRowsTree(selected))
+		col.Children = append(col.Children, infoRowsTree(selected))
 		if grid := recentImagesTree(snap); grid != nil {
 			col.Children = append(col.Children, grid)
 		}
