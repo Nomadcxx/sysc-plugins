@@ -32,11 +32,7 @@ func Resolve(g source.Game, cacheDir string) string {
 			return g.CoverPath
 		}
 	}
-	safe := strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(g.Slug)
-	if safe == "" {
-		safe = "game"
-	}
-	tile := filepath.Join(cacheDir, safe+".png")
+	tile := filepath.Join(cacheDir, slugFile(g.Slug)+".png")
 	if _, err := os.Stat(tile); err == nil {
 		return tile
 	}

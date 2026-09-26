@@ -632,6 +632,34 @@ func TestWindowCardWaitingForFreshData(t *testing.T) {
 	}
 }
 
+func TestWindowCardReservesWidthForLongProviderLabels(t *testing.T) {
+	label := "Premium requests"
+	card := windowCard(Window{Key: "primary", Label: label, HasPercent: true}, viewConfig(), 7, viewNow)
+	labelColumn := card.Children[0].Children[0]
+	want := len(label) * 8 // the plugin host's text measure for row children
+	if labelColumn.Width < want {
+		t.Fatalf("label column width = %d, want at least %d for %q", labelColumn.Width, want, label)
+	}
+}
+
+func TestFleetRollupKeepsTheRiskCountVisible(t *testing.T) {
+	report := Report{Providers: []ProviderReport{
+		{ID: "alpha", Name: "Alpha", State: StateFresh, Windows: []Window{{Key: "primary", HasPercent: true, UsedPercent: 90, WindowMinutes: 300}}},
+		{ID: "beta", Name: "Beta", State: StateFresh, Windows: []Window{{Key: "primary", HasPercent: true, UsedPercent: 95, WindowMinutes: 300}}},
+		{ID: "gamma", Name: "Gamma", State: StateFresh, Windows: []Window{{Key: "primary", HasPercent: true, UsedPercent: 20, WindowMinutes: 300}}},
+	}}
+	row := fleetRollup(report, viewConfig(), viewNow)
+	if row == nil || row.Height < 50 {
+		t.Fatalf("fleet rollup height = %v, want enough space for two stacked metrics", row)
+	}
+	if len(row.Children) != 2 || row.Children[0].Kind != v1.KindColumn || len(row.Children[0].Children) != 2 {
+		t.Fatalf("fleet rollup children = %+v, want average and risk count stacked beside peak action", row.Children)
+	}
+	if row.Children[0].Children[1].Text != "2 at risk" {
+		t.Fatalf("risk count = %q, want the full count", row.Children[0].Children[1].Text)
+	}
+}
+
 // TestSnapshotStalenessFollowsTheWindowNotTheCadence pins the codex fix: a
 // local snapshot only moves when the tool runs, so the refresh cadence must
 // not mark it stale while the window it describes is still open.
