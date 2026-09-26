@@ -1,6 +1,7 @@
 package panel
 
 import (
+	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
 	"testing"
 	"time"
 
@@ -224,8 +225,20 @@ func TestFavoriteStarOnCard(t *testing.T) {
 	s.Prefs.Favorites = map[string]bool{"1": true}
 	root := BuildTree(s)
 	var stars []*v1.Node
-	collect(t, root, func(n *v1.Node) bool { return n.Kind == v1.KindIcon && n.Icon == "star" }, &stars)
+	collect(t, root, func(n *v1.Node) bool { return n.Kind == v1.KindText && n.Text == "\u2605" }, &stars)
 	if len(stars) != 1 {
 		t.Fatalf("one star expected, got %d", len(stars))
+	}
+}
+
+func TestPanelFits(t *testing.T) {
+	s := baseState()
+	if f := shelllint.Tree(BuildTree(s), v1.ViewPanel, 720, 560); len(f) != 0 {
+		t.Fatalf("library view does not fit 720x560: %v", f)
+	}
+	s.Selected = baseState().All[0].ID
+	s.Actions = true
+	if f := shelllint.Tree(BuildTree(s), v1.ViewPanel, 720, 560); len(f) != 0 {
+		t.Fatalf("action view does not fit 720x560: %v", f)
 	}
 }

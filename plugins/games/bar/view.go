@@ -27,7 +27,7 @@ func Elapsed(start, now time.Time) string {
 func Pill(running map[string]Run, libraryMissing bool, now time.Time) *v1.Node {
 	n := &v1.Node{
 		Kind: v1.KindButton, ID: "bar", Key: "bar",
-		Icon: "sports_esports", Name: "games", Role: "button",
+		Text: "\U0001F3AE", Name: "games", Role: "button",
 		Events: []v1.EventKind{v1.EventActivate, v1.EventPointer},
 	}
 	switch len(running) {

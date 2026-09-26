@@ -146,13 +146,13 @@ func card(s State, g source.Game) *v1.Node {
 	}
 	c := &v1.Node{
 		Kind: v1.KindButton, ID: "card-" + g.ID, Key: "card-" + g.ID,
-		Fill: fill, Shape: "card", Width: 226,
+		Fill: fill, Shape: "card", Width: 188,
 		Events: []v1.EventKind{v1.EventActivate, v1.EventPointer},
 		Name:   "select " + g.Name, Role: "option", Tooltip: g.Name,
 	}
 	col := &v1.Node{Kind: v1.KindColumn, Gap: 4, Padding: 6}
 	col.Children = append(col.Children,
-		&v1.Node{Kind: v1.KindImage, Path: covers.Resolve(g, s.CacheDir), ImageW: 210, ImageH: 120, Radius: 6, Background: true},
+		&v1.Node{Kind: v1.KindImage, Path: covers.Resolve(g, s.CacheDir), ImageW: 174, ImageH: 100, Radius: 6, Background: true},
 		cardTitle(s, g),
 	)
 	c.Children = append(c.Children, col)
@@ -162,7 +162,7 @@ func card(s State, g source.Game) *v1.Node {
 func cardTitle(s State, g source.Game) *v1.Node {
 	r := &v1.Node{Kind: v1.KindRow, Gap: 4}
 	if s.Prefs.Favorites[g.ID] {
-		r.Children = append(r.Children, &v1.Node{Kind: v1.KindIcon, Icon: "star", IconSize: 14})
+		r.Children = append(r.Children, &v1.Node{Kind: v1.KindText, Text: "\u2605", Tone: v1.ToneAccent})
 	}
 	if _, running := s.Running[g.ID]; running {
 		r.Children = append(r.Children, &v1.Node{Kind: v1.KindIcon, Icon: "play_arrow", IconSize: 14})
@@ -228,7 +228,7 @@ func detail(s State, games []source.Game) *v1.Node {
 			launch.Disabled = true
 		}
 		d.Children = append(d.Children, launch, &v1.Node{
-			Kind: v1.KindButton, ID: "more-" + g.ID, Text: "More", Icon: "more_horiz",
+			Kind: v1.KindButton, ID: "more-" + g.ID, Text: "More", Icon: "expand_more",
 			Events: []v1.EventKind{v1.EventActivate, v1.EventPointer},
 			Name:   "more actions for " + g.Name, Role: "button",
 		})
@@ -249,12 +249,12 @@ func actionButtons(s State, g source.Game) []*v1.Node {
 	}
 	out = append(out,
 		btn("Configure", "tune", "config-"+g.ID),
-		btn("Open folder", "folder", "folder-"+g.ID),
-		btn(favLabel(s, g), "star", "favtoggle-"+g.ID),
+		btn("Open folder", "folder_open", "folder-"+g.ID),
+		btn(favLabel(s, g), "", "favtoggle-"+g.ID),
 		btn(hideLabel(s, g), "visibility", "hidetoggle-"+g.ID),
 		btn("Uninstall", "delete", "remove-"+g.ID),
 	)
-	back := btn("Back", "arrow_back", "detail-back")
+	back := btn("Back", "chevron_left", "detail-back")
 	back.Name = "back to game view"
 	out = append(out, back)
 	return out
