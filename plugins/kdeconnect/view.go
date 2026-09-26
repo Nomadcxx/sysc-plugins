@@ -341,15 +341,15 @@ func shareComposerTree(drafts Drafts) *v1.Node {
 			{Kind: v1.KindTextInput, ID: "share-text", Name: "URL or text to share", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-				gatedButton("share-url-send", "link", "Send URL", "Share the URL with the device",
+				gatedButton("share-url-send", "send", "Send URL", "Share the URL with the device",
 					isURILike(drafts.ShareText)),
-				gatedButton("share-text-send", "link", "Send text", "Share the text with the device",
+				gatedButton("share-text-send", "send", "Send text", "Share the text with the device",
 					strings.TrimSpace(drafts.ShareText) != ""),
 			}},
 			{Kind: v1.KindTextInput, ID: "share-file", Name: "File path to send", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-				gatedButton("share-file-send", "link", "Send file", "Send the file to the device",
+				gatedButton("share-file-send", "send", "Send file", "Send the file to the device",
 					drafts.ShareFile != ""),
 			}},
 		}}
@@ -366,7 +366,7 @@ func smsComposerTree(drafts Drafts) *v1.Node {
 			{Kind: v1.KindTextInput, ID: "sms-body", Name: "Message", Role: "textbox",
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-				gatedButton("sms-send", "link", "Send", "Send the message",
+				gatedButton("sms-send", "send", "Send", "Send the message",
 					drafts.SmsNumber != "" && drafts.SmsBody != ""),
 				{Kind: v1.KindButton, ID: "sms-app", Text: "Open app",
 					Name: "Open the SMS app on the device", Role: "button",
@@ -708,10 +708,10 @@ func recentImagesTree(snap Snapshot) *v1.Node {
 				Children: []*v1.Node{
 					{Kind: v1.KindImage, ID: "recent-" + img.ID, Path: img.Thumb, ImageSize: 96},
 					{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
-						{Kind: v1.KindButton, ID: "recent-open-" + img.ID, Icon: "folder_open",
+						{Kind: v1.KindButton, ID: "recent-open-" + img.ID, Icon: "folder-open",
 							Name: "Open " + path.Base(img.Source), Role: "button",
 							Events: []v1.EventKind{v1.EventActivate}},
-						{Kind: v1.KindButton, ID: "recent-share-" + img.ID, Icon: "link",
+						{Kind: v1.KindButton, ID: "recent-share-" + img.ID, Icon: "share",
 							Name: "Share " + path.Base(img.Source), Role: "button",
 							Events: []v1.EventKind{v1.EventActivate}},
 					}},

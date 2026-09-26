@@ -96,11 +96,11 @@ func TestRecentImagesTreeGrid(t *testing.T) {
 			t.Fatalf("image %d = %+v, want Path %q at size 96", i, image, img.Thumb)
 		}
 		open := findButton(cell, "recent-open-"+img.ID)
-		if open == nil || open.Icon != "folder_open" || open.Role != "button" {
+		if open == nil || open.Icon != "folder-open" || open.Role != "button" {
 			t.Fatalf("open button %d = %+v", i, open)
 		}
 		share := findButton(cell, "recent-share-"+img.ID)
-		if share == nil || share.Icon != "link" || share.Role != "button" {
+		if share == nil || share.Icon != "share" || share.Role != "button" {
 			t.Fatalf("share button %d = %+v", i, share)
 		}
 	}
@@ -656,13 +656,13 @@ func TestPairingComposerSendIcons(t *testing.T) {
 	t.Parallel()
 	share := PanelTree(pairedSnap(), testSettings(), ComposerShare, Drafts{ShareText: "https://example.com", ShareFile: "/tmp/x"})
 	for _, id := range []string{"share-url-send", "share-text-send", "share-file-send"} {
-		if b := findButton(share, id); b == nil || b.Icon != "link" {
-			t.Fatalf("%s icon = %q, want link", id, iconOf(b))
+		if b := findButton(share, id); b == nil || b.Icon != "send" {
+			t.Fatalf("%s icon = %q, want send", id, iconOf(b))
 		}
 	}
 	sms := PanelTree(pairedSnap(), testSettings(), ComposerSMS, Drafts{SmsNumber: "+1", SmsBody: "hi"})
-	if b := findButton(sms, "sms-send"); b == nil || b.Icon != "link" {
-		t.Fatalf("sms-send icon = %q, want link", iconOf(b))
+	if b := findButton(sms, "sms-send"); b == nil || b.Icon != "send" {
+		t.Fatalf("sms-send icon = %q, want send", iconOf(b))
 	}
 }
 
