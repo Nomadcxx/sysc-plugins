@@ -302,3 +302,59 @@ func TestReclickSelectedCardLaunches(t *testing.T) {
 		t.Fatal("second click on selected card must launch")
 	}
 }
+
+// nextCall drains messages (auto-replying host.calls) until a host.call of
+// the wanted kind, returning its params.
+func (h *harness) nextCall(kind v1.CallKind) json.RawMessage {
+	h.t.Helper()
+	for {
+		line := h.next()
+		if messageType(line) != v1.TypeHostCall {
+			continue
+		}
+		var call v1.HostCall
+		if json.Unmarshal(line, &call) != nil {
+			continue
+		}
+		if call.Call != kind {
+			h.replyTo(call.ID)
+			continue
+		}
+		raw, _ := json.Marshal(v1.SurfaceResult{ViewID: "f"})
+		h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: raw})
+		return call.Params
+	}
+}
+
+func TestBarRightClickOpensSwitcher(t *testing.T) {
+	h := start(t)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "b", View: v1.ViewBar, Entry: "bar", Output: "DP-1"})
+	h.pump(func(l []byte) bool { return find(snapshotOf(l).Root, "bar") != nil })
+
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "b", Node: "bar", Event: v1.EventPointer, Button: v1.ButtonSecondary})
+	params := h.nextCall(v1.CallSurfaceOpen)
+	var p struct {
+		Key    string `json:"key"`
+		Width  int    `json:"width"`
+		Height int    `json:"height"`
+	}
+	if json.Unmarshal(params, &p) != nil || p.Key != "switcher" || p.Width != 320 || p.Height != 400 {
+		t.Fatalf("surface.open params = %s", params)
+	}
+
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "f", View: v1.ViewFloating, Entry: "switcher"})
+	line := h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "f" && find(s.Root, "sw-stop-1") != nil
+	})
+	snap := snapshotOf(line)
+	if find(snap.Root, "sw-open-1") == nil {
+		t.Fatal("missing sw-open row")
+	}
+	if find(snap.Root, "switcher-list") == nil {
+		t.Fatal("floating view must render the switcher list")
+	}
+
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "f", Revision: snap.Revision, Node: "f:sw-open-1", Event: v1.EventActivate})
+	h.nextCall(v1.CallPanelOpen)
+}

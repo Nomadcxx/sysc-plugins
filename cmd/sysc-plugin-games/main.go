@@ -262,6 +262,7 @@ func (s *session) scan(ctx context.Context) {
 			})
 		}
 	}
+	s.closeSwitcherIfIdle(ctx)
 	s.setPoll(s.desiredPoll())
 }
 

@@ -6,15 +6,33 @@ import (
 	"time"
 
 	"github.com/Nomadcxx/sysc-plugins/plugins/games/bar"
+	"github.com/Nomadcxx/sysc-plugins/plugins/games/covers"
 	"github.com/Nomadcxx/sysc-plugins/plugins/games/panel"
+	"github.com/Nomadcxx/sysc-plugins/plugins/games/switcher"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 func (s *session) tree(kind v1.ViewKind) *v1.Node {
-	if kind == v1.ViewBar {
+	switch kind {
+	case v1.ViewBar:
 		return bar.Pill(s.barState(), s.missing, s.env.now())
+	case v1.ViewFloating:
+		return switcher.Build(s.switcherState(), s.env.now())
 	}
 	return panel.BuildTree(s.panelState())
+}
+
+// switcherState lists running games newest-first with resolved cover paths.
+func (s *session) switcherState() []switcher.Run {
+	var out []switcher.Run
+	for id, start := range s.running {
+		g := s.game(id)
+		if g == nil {
+			continue
+		}
+		out = append(out, switcher.Run{ID: id, Name: g.Name, Start: start, CoverPath: covers.Resolve(*g, s.cacheDir)})
+	}
+	return out
 }
 
 func (s *session) snapshot(id string) {
@@ -31,12 +49,16 @@ func (s *session) snapshotAll() {
 }
 
 func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
-	node := m.Node[strings.Index(m.Node, ":")+1:] // host prefixes "<viewkind>:"
+	node := m.Node[strings.Index(m.Node, ":")+1:] // host prefixes "<viewID>:"
 	switch {
 	case node == "bar":
 		if m.Event == v1.EventPointer && m.Button == v1.ButtonSecondary && len(s.running) > 0 {
-			s.prefs.View = "playing"
-			s.save(ctx, "prefs", s.prefs)
+			_, _ = s.call(ctx, v1.CallSurfaceOpen, v1.SurfaceOpenParams{
+				Key: "switcher", Title: "Now playing",
+				Output: m.Output, Generation: m.Generation,
+				X: 60, Y: 60, Width: 320, Height: 400,
+			})
+			return
 		}
 		s.focusRunning()
 		_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
@@ -64,6 +86,14 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 		if g := s.game(strings.TrimPrefix(node, "stop-")); g != nil && s.src != nil {
 			_ = s.src.Stop(ctx, *g)
 		}
+	case strings.HasPrefix(node, "sw-stop-"):
+		if g := s.game(strings.TrimPrefix(node, "sw-stop-")); g != nil && s.src != nil {
+			_ = s.src.Stop(ctx, *g)
+		}
+		s.closeSwitcherIfIdle(ctx)
+	case strings.HasPrefix(node, "sw-open-"):
+		s.selected, s.actions = strings.TrimPrefix(node, "sw-open-"), false
+		_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation})
 	case strings.HasPrefix(node, "favtoggle-"):
 		id := strings.TrimPrefix(node, "favtoggle-")
 		s.prefs.Favorites[id] = !s.prefs.Favorites[id]
@@ -82,6 +112,19 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 		s.actions = true
 	case node == "detail-back":
 		s.actions = false
+	}
+}
+
+// closeSwitcherIfIdle hides the floating switcher once nothing is running,
+// so a stopped game doesn't leave an empty list hovering on screen.
+func (s *session) closeSwitcherIfIdle(ctx context.Context) {
+	if len(s.running) > 0 {
+		return
+	}
+	for id, v := range s.views {
+		if v.kind == v1.ViewFloating {
+			_, _ = s.call(ctx, v1.CallSurfaceClose, v1.SurfaceCloseParams{View: id})
+		}
 	}
 }
 
