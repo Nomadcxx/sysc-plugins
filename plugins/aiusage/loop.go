@@ -141,6 +141,11 @@ func (l *Loop) loadCache() Report {
 	now := l.env.now()
 	for i := range r.Providers {
 		p := &r.Providers[i]
+		if p.UpdatedAt.IsZero() {
+			// Older or partial cache entries may only carry the report capture
+			// time; use it as their conservative per-provider age.
+			p.UpdatedAt = r.CapturedAt
+		}
 		if p.State == StateFresh && p.staleFor(l.cfg, now) {
 			p.Stale = true
 		}

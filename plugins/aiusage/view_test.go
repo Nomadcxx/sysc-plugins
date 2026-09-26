@@ -639,7 +639,7 @@ func TestWindowCardReservesWidthForLongProviderLabels(t *testing.T) {
 	label := "Premium requests"
 	card := windowCard(Window{Key: "primary", Label: label, HasPercent: true}, viewConfig(), 7, viewNow)
 	labelColumn := card.Children[0].Children[0]
-	want := len(label) * 8 // the plugin host's text measure for row children
+	want := len(label) * 10 // leaves room for the rendered face, not just the host metric
 	if labelColumn.Width < want {
 		t.Fatalf("label column width = %d, want at least %d for %q", labelColumn.Width, want, label)
 	}

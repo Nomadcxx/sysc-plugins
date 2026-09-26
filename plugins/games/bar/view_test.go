@@ -23,8 +23,8 @@ func TestPillIdle(t *testing.T) {
 	if n.Kind != v1.KindButton || n.Key != "bar" {
 		t.Fatalf("kind/key: %s/%s", n.Kind, n.Key)
 	}
-	if n.Text != "🎮" {
-		t.Fatalf("idle pill text=%q", n.Text)
+	if n.Icon != "sports_esports" {
+		t.Fatalf("idle pill icon=%q", n.Icon)
 	}
 }
 

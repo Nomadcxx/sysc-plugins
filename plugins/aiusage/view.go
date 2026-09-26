@@ -773,7 +773,10 @@ func windowCard(w Window, cfg Config, hostMinor int, now time.Time) *v1.Node {
 		pct = fmt.Sprintf("%.0f%%", w.UsedPercent)
 	}
 	card.Children = append(card.Children, &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-		{Kind: v1.KindColumn, Width: max(64, len(w.Label)*8), Children: []*v1.Node{
+		// ponytail: quota labels are plugin-owned ASCII strings; 10px/byte
+		// covers the shipped face. If labels become arbitrary API text, use
+		// renderer-measured widths capped to the remaining pane width.
+		{Kind: v1.KindColumn, Width: max(64, len(w.Label)*10), Children: []*v1.Node{
 			{Kind: v1.KindText, Text: w.Label, Bold: true},
 		}},
 		{Kind: v1.KindColumn, PinEnd: true, Children: []*v1.Node{
