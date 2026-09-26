@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -86,6 +88,59 @@ func TestUpdateCreatesFirstRow(t *testing.T) {
 	}
 	if _, ok := e.Assets["linux-amd64"]; !ok {
 		t.Fatalf("expected a linux-amd64 asset, got %v", e.Assets)
+	}
+}
+
+func TestUpdatePinsReadmeWhenPresent(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		readme   bool
+		wantRead bool
+	}{
+		{name: "without README"},
+		{name: "with README", readme: true, wantRead: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+			const body = "# Timer\n\nA simple timer.\n"
+			if tc.readme {
+				writeFile(t, filepath.Join(root, "plugins", "timer", "README.md"), body)
+			}
+			dist := t.TempDir()
+			writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
+			if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+				t.Fatalf("updateCatalog: %v", err)
+			}
+
+			data, err := os.ReadFile(filepath.Join(root, "catalog.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc struct {
+				Plugins []struct {
+					Readme *struct {
+						URL    string `json:"url"`
+						SHA256 string `json:"sha256"`
+					} `json:"readme"`
+				} `json:"plugins"`
+			}
+			if err := json.Unmarshal(data, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if len(doc.Plugins) != 1 || (doc.Plugins[0].Readme != nil) != tc.wantRead {
+				t.Fatalf("readme = %+v, want present %t", doc.Plugins, tc.wantRead)
+			}
+			if !tc.wantRead {
+				return
+			}
+			sum := sha256.Sum256([]byte(body))
+			if doc.Plugins[0].Readme.URL != "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/timer-v1.0.0/plugins/timer/README.md" {
+				t.Errorf("readme URL = %q", doc.Plugins[0].Readme.URL)
+			}
+			if doc.Plugins[0].Readme.SHA256 != hex.EncodeToString(sum[:]) {
+				t.Errorf("readme sha256 = %q, want %x", doc.Plugins[0].Readme.SHA256, sum)
+			}
+		})
 	}
 }
 

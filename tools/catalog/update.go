@@ -79,6 +79,10 @@ func updateCatalog(repoRoot, tag, dist string, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
 	}
+	readme, err := readPluginReadme(repoRoot, pluginDir, tag)
+	if err != nil {
+		return fmt.Errorf("update: %w", err)
+	}
 
 	metaPath := filepath.Join(repoRoot, catalogMetaFile)
 	metaAll, err := readCatalogMeta(metaPath)
@@ -115,7 +119,7 @@ func updateCatalog(repoRoot, tag, dist string, now time.Time) error {
 		}
 		entries = append(entries, e)
 	}
-	entries = append(entries, mergeRelease(existing, newRelease, now, meta, manifest))
+	entries = append(entries, mergeRelease(existing, newRelease, now, meta, manifest, readme))
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 	return writeCatalog(catalogPath, entries)
@@ -126,7 +130,7 @@ func updateCatalog(repoRoot, tag, dist string, now time.Time) error {
 // release moves to the front of Releases (capped at releasesCap), unless the
 // new release is the same version being re-published, in which case it
 // replaces the old top-level release rather than duplicating it there.
-func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.Time, meta catalogMeta, manifest pluginManifest) catalog.Entry {
+func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.Time, meta catalogMeta, manifest pluginManifest, readme *catalog.Screenshot) catalog.Entry {
 	if existing == nil {
 		return catalog.Entry{
 			ID:              manifest.ID,
@@ -138,6 +142,7 @@ func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.
 			License:         meta.License,
 			Homepage:        meta.Homepage,
 			Screenshot:      meta.Screenshot.toCatalog(),
+			Readme:          readme,
 			AddedAt:         now,
 			UpdatedAt:       now,
 			Release:         newRelease,
@@ -171,10 +176,32 @@ func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.
 	e.License = meta.License
 	e.Homepage = meta.Homepage
 	e.LongDescription = meta.LongDescription
+	e.Readme = readme
 	if meta.Screenshot != nil {
 		e.Screenshot = meta.Screenshot.toCatalog()
 	}
 	return e
+}
+
+// readPluginReadme returns a tag-pinned URL and hash for the plugin README,
+// when the tagged tree includes one.
+func readPluginReadme(repoRoot, pluginDir, tag string) (*catalog.Screenshot, error) {
+	path := filepath.Join(repoRoot, "plugins", pluginDir, "README.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if int64(len(data)) > catalog.MaxReadmeBytes {
+		return nil, fmt.Errorf("plugins/%s/README.md is larger than %d bytes", pluginDir, catalog.MaxReadmeBytes)
+	}
+	sum := sha256.Sum256(data)
+	return &catalog.Screenshot{
+		URL:    fmt.Sprintf("https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/%s/plugins/%s/README.md", tag, pluginDir),
+		SHA256: hex.EncodeToString(sum[:]),
+	}, nil
 }
 
 // scanAssets finds <id>-<version>-linux-<arch>.tar.gz files in dist and

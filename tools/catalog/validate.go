@@ -17,7 +17,7 @@ import (
 func runValidate(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	community := fs.Bool("community", false, "require every row to carry a screenshot, as the community catalog does")
-	fetch := fs.Bool("fetch", false, "download every asset and screenshot and check size and sha256")
+	fetch := fs.Bool("fetch", false, "download every asset, screenshot, and README and check size and sha256")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -34,8 +34,8 @@ func runValidate(args []string) error {
 // catalog-meta.json entry, and agree with its plugins/<dir>/manifest.json on
 // name, description, protocol, capabilities and requires for the top-level
 // release. -community additionally requires a screenshot. -fetch downloads
-// every asset and screenshot named by the catalog and checks size and
-// sha256, the release workflow's job before it opens the catalog PR.
+// every asset, screenshot, and README named by the catalog and checks size
+// and sha256, the release workflow's job before it opens the catalog PR.
 func validateCatalog(repoRoot string, community, fetch bool, w io.Writer) error {
 	catalogPath := filepath.Join(repoRoot, "catalog.json")
 	data, err := os.ReadFile(catalogPath)
@@ -133,19 +133,22 @@ func validateEntry(repoRoot string, e catalog.Entry, metaAll map[string]catalogM
 // mismatch against what the catalog declares.
 func fetchEntry(e catalog.Entry) []error {
 	var errs []error
-	check := func(label, url, wantSHA string, wantSize int64) {
-		if err := checkFetchable(url, wantSHA, wantSize); err != nil {
+	check := func(label, url, wantSHA string, wantSize, maxBytes int64) {
+		if err := checkFetchable(url, wantSHA, wantSize, maxBytes); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", label, err))
 		}
 	}
 	releases := append([]catalog.Release{e.Release}, e.Releases...)
 	for _, r := range releases {
 		for key, a := range r.Assets {
-			check(fmt.Sprintf("%s assets[%s]", r.Version, key), a.URL, a.SHA256, a.Size)
+			check(fmt.Sprintf("%s assets[%s]", r.Version, key), a.URL, a.SHA256, a.Size, catalog.MaxAssetBytes)
 		}
 	}
 	if e.Screenshot != nil {
-		check("screenshot", e.Screenshot.URL, e.Screenshot.SHA256, 0)
+		check("screenshot", e.Screenshot.URL, e.Screenshot.SHA256, 0, catalog.MaxAssetBytes)
+	}
+	if e.Readme != nil {
+		check("readme", e.Readme.URL, e.Readme.SHA256, 0, catalog.MaxReadmeBytes)
 	}
 	return errs
 }
@@ -153,7 +156,7 @@ func fetchEntry(e catalog.Entry) []error {
 // checkFetchable downloads url, capped at the catalog's own asset ceiling,
 // and compares its size (when wantSize is positive) and sha256 against what
 // the catalog declares.
-func checkFetchable(url, wantSHA string, wantSize int64) error {
+func checkFetchable(url, wantSHA string, wantSize, maxBytes int64) error {
 	resp, err := http.Get(url)
 	if err != nil {
 		return fmt.Errorf("fetch: %w", err)
@@ -163,12 +166,12 @@ func checkFetchable(url, wantSHA string, wantSize int64) error {
 		return fmt.Errorf("fetch: status %s", resp.Status)
 	}
 	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(resp.Body, catalog.MaxAssetBytes+1))
+	n, err := io.Copy(h, io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
-	if n > catalog.MaxAssetBytes {
-		return fmt.Errorf("larger than %d bytes", catalog.MaxAssetBytes)
+	if n > maxBytes {
+		return fmt.Errorf("larger than %d bytes", maxBytes)
 	}
 	if wantSize > 0 && n != wantSize {
 		return fmt.Errorf("size %d, catalog says %d", n, wantSize)
