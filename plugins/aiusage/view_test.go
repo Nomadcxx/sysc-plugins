@@ -450,7 +450,7 @@ func TestPanelTreeStructure(t *testing.T) {
 	if findText(tree, "Session 90%") == nil {
 		t.Fatal("record card missing the last numbers")
 	}
-	if findText(tree, "Quota windows · last local snapshot per provider · not billing figures") == nil {
+	if findText(tree, "Local quota snapshots · not billing figures") == nil {
 		t.Fatal("honesty footer missing")
 	}
 }
@@ -605,8 +605,11 @@ func TestDetailExhaustedNoticeAndTooltip(t *testing.T) {
 	rep.Providers[0].Windows[0].UsedPercent = 100
 	rep.Providers[0].Windows[0].ResetsAt = viewNow.Add(30 * time.Hour)
 	tree := PanelTree(rep, "alpha", nil, cfg, 4, viewNow)
-	if findText(tree, "Session · Quota exhausted · renews in 1d 6h") == nil {
+	if findText(tree, "Session · Quota exhausted") == nil {
 		t.Fatal("exhausted notice missing")
+	}
+	if findText(tree, "resets in 1d 6h") == nil {
+		t.Fatal("the window card should carry the renewal time")
 	}
 
 	// The tooltip view is text-only and names provider, window, and reset.
