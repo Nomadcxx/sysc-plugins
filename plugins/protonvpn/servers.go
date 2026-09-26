@@ -74,6 +74,16 @@ func LoadServers(path string) ([]Server, error) {
 		return nil, fmt.Errorf("serverlist: %w", err)
 	}
 	servers := make([]Server, 0, len(list))
+	// Status is filled in by a separate loads refresh; until that succeeds
+	// every server reads Status 0, meaning "unknown", not "down" (same rule
+	// as noctalia's status_known()). Trust Status only when someone is up.
+	anyUp := false
+	for _, r := range list {
+		if r.Status == 1 {
+			anyUp = true
+			break
+		}
+	}
 	for _, r := range list {
 		servers = append(servers, Server{
 			Name:     r.Name,
@@ -82,7 +92,7 @@ func LoadServers(path string) ([]Server, error) {
 			Load:     r.Load,
 			Tier:     r.Tier,
 			Features: r.Features,
-			Up:       r.Status == 1,
+			Up:       !anyUp || r.Status == 1,
 			Score:    r.Score,
 		})
 	}
@@ -128,7 +138,7 @@ func Aggregate(servers []Server, countryNames map[string]string, freeTier bool) 
 			c.Maintenance = true
 		}
 		free[code] = minTier == 0
-		sort.Slice(c.Servers, func(i, j int) bool {
+		sort.SliceStable(c.Servers, func(i, j int) bool {
 			if c.Servers[i].Tier != c.Servers[j].Tier {
 				return c.Servers[i].Tier < c.Servers[j].Tier
 			}
@@ -140,7 +150,7 @@ func Aggregate(servers []Server, countryNames map[string]string, freeTier bool) 
 	for _, code := range order {
 		countries = append(countries, *byCode[code])
 	}
-	sort.Slice(countries, func(i, j int) bool {
+	sort.SliceStable(countries, func(i, j int) bool {
 		a, b := countries[i], countries[j]
 		if freeTier && free[a.Code] != free[b.Code] {
 			return free[a.Code]
