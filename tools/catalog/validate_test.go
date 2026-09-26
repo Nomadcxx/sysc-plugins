@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -153,6 +155,69 @@ func TestValidateFetchPassesOnMatch(t *testing.T) {
 	var out bytes.Buffer
 	if err := validateCatalog(root, false, true, &out); err != nil {
 		t.Fatalf("validateCatalog -fetch: %v (output: %s)", err, out.String())
+	}
+}
+
+func TestValidateFetchChecksReadmeSHAAndSize(t *testing.T) {
+	readme := []byte("# Plugin README\n")
+	sum := sha256.Sum256(readme)
+	assetBody := []byte("release-bytes")
+	assetSum := sha256.Sum256(assetBody)
+	currentReadme := readme
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/asset.tar.gz" {
+			_, _ = w.Write(assetBody)
+			return
+		}
+		_, _ = w.Write(currentReadme)
+	}))
+	defer srv.Close()
+
+	root := buildValidatingRepo(t)
+	rewriteCatalogAssetURL(t, root, srv.URL+"/asset.tar.gz", hex.EncodeToString(assetSum[:]))
+	writeCatalogReadme(t, root, srv.URL+"/README.md", hex.EncodeToString(sum[:]))
+
+	var out bytes.Buffer
+	if err := validateCatalog(root, false, true, &out); err != nil {
+		t.Fatalf("validateCatalog -fetch: %v (output: %s)", err, out.String())
+	}
+
+	writeCatalogReadme(t, root, srv.URL+"/README.md", strings.Repeat("0", 64))
+	out.Reset()
+	if err := validateCatalog(root, false, true, &out); err == nil || !strings.Contains(out.String(), "readme") || !strings.Contains(out.String(), "sha256") {
+		t.Fatalf("expected README sha256 failure, err=%v output=%s", err, out.String())
+	}
+
+	const maxReadmeBytes = 256 << 10
+	currentReadme = bytes.Repeat([]byte("x"), maxReadmeBytes+1)
+	largeSum := sha256.Sum256(currentReadme)
+	writeCatalogReadme(t, root, srv.URL+"/README.md", hex.EncodeToString(largeSum[:]))
+	out.Reset()
+	if err := validateCatalog(root, false, true, &out); err == nil || !strings.Contains(out.String(), "readme") || !strings.Contains(out.String(), "larger than") {
+		t.Fatalf("expected README size failure, err=%v output=%s", err, out.String())
+	}
+}
+
+func writeCatalogReadme(t *testing.T, root, url, sum string) {
+	t.Helper()
+	path := filepath.Join(root, "catalog.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	plugins := doc["plugins"].([]any)
+	plugins[0].(map[string]any)["readme"] = map[string]string{"url": url, "sha256": sum}
+	data, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -1,5 +1,5 @@
-github.com/Nomadcxx/sysc-shell v0.0.0-20260927162619-c4eaac21be31 h1:IjgiBbgWEOBQ3ybcnYY3xAWc7lGOGslCio+vuwVasMc=
-github.com/Nomadcxx/sysc-shell v0.0.0-20260927162619-c4eaac21be31/go.mod h1:1SEJ0oRP1MK5QgqSQJXJgtBMF6CxhuX4xdtpuc7kjqw=
+github.com/Nomadcxx/sysc-shell v0.0.0-20260929042114-44f14a32b2e9 h1:bF9sgJtNEh+Mh2GuNblWZMaFmmj2ikxk7e1K3OtPO7s=
+github.com/Nomadcxx/sysc-shell v0.0.0-20260929042114-44f14a32b2e9/go.mod h1:M1myQ61M1sGLlp7K8yBEeKGUX4jm1psqHUSdwPOKytg=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/go-text/typesetting v0.3.5-0.20260729084153-ddb7ff96ad4d h1:eBCCzHDJ79YDC3G7fnGuBbA/o+aEl0hSgRZYVbKzYsk=
@@ -20,6 +20,8 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
+github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
+github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
 golang.org/x/image v0.46.0 h1:b1+oYj0Jbp6K5MDT4i4/eZpYlk3V8SJhhDKh6LBHAyQ=
 golang.org/x/image v0.46.0/go.mod h1:3B3W05VGVQyuXucLINLjXKrqISASfi4Xj+iCVkLMwew=
 golang.org/x/mod v0.38.0 h1:MECBjubtXD7yj4HrhIUcywNaGeNVUdfVnxmPajOk4yk=
