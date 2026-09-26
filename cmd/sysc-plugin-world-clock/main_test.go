@@ -323,7 +323,9 @@ func TestSaveAndAddErrorsBothRenderInOrderAndFit(t *testing.T) {
 	panel := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "search") != nil && find(n, "search").Text == "tokyo" })
 
 	saveIndex, addIndex := -1, -1
-	for i, child := range panel.Root.Children {
+	// Message lines live in the header column, above the list.
+	header := panel.Root.Children[0]
+	for i, child := range header.Children {
 		if child.Kind != v1.KindText {
 			continue
 		}
@@ -335,7 +337,7 @@ func TestSaveAndAddErrorsBothRenderInOrderAndFit(t *testing.T) {
 		}
 	}
 	if saveIndex < 0 || addIndex < 0 || saveIndex >= addIndex {
-		t.Fatalf("save and add errors missing or out of order: %+v", panel.Root.Children)
+		t.Fatalf("save and add errors missing or out of order: %+v", header.Children)
 	}
 	if findings := shelllint.Tree(panel.Root, v1.ViewPanel, worldclock.PanelWidth, worldclock.PanelHeight); len(findings) != 0 {
 		t.Fatalf("two-error panel does not fit: %v", findings)

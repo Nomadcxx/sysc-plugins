@@ -1,6 +1,8 @@
 package worldclock
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -186,5 +188,90 @@ func TestSuggestionTitle(t *testing.T) {
 	}
 	if got := SuggestionTitle(Match{City: "UTC"}, "Same time"); got != "UTC · Same time" {
 		t.Fatalf("title = %q", got)
+	}
+}
+
+func TestManifestPanelMatchesPanelBox(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Panels []struct{ Width, Height int } `json:"panels"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil || len(m.Panels) != 1 {
+		t.Fatalf("manifest panels: %v %+v", err, m)
+	}
+	if m.Panels[0].Width != PanelWidth || m.Panels[0].Height != PanelHeight {
+		t.Fatalf("manifest %dx%d, code %dx%d", m.Panels[0].Width, m.Panels[0].Height, PanelWidth, PanelHeight)
+	}
+	if PanelWidth < 480 || PanelHeight < 440 {
+		t.Fatalf("panel %dx%d is the size that clipped zone lines on hardware", PanelWidth, PanelHeight)
+	}
+}
+
+// On hardware the title and search box sat on the panel border, the search
+// text overlapped the pill's cap, and the scrollbar covered the card actions.
+func TestPanelContentClearsEdgesAndScrollbar(t *testing.T) {
+	t.Parallel()
+	root := Panel(PanelState{Readings: sampleReadings()})
+	if root.Padding < 12 {
+		t.Fatalf("root padding %d leaves content on the panel border", root.Padding)
+	}
+	search := findID(root, "search")
+	if search.Padding < 8 || search.Height-2*search.Padding < 16 {
+		t.Fatalf("search padding %d at height %d: text must clear the cap and keep a 16px line", search.Padding, search.Height)
+	}
+	var list, header *v1.Node
+	visit(root, func(n *v1.Node) {
+		if n.Kind == v1.KindList && list == nil {
+			list = n
+		}
+	})
+	header = root.Children[0]
+	if list == nil || list.Padding < 10 {
+		t.Fatalf("list padding must hold the 4px scrollbar clear of the cards: %+v", list)
+	}
+	if header.Padding != list.Padding {
+		t.Fatalf("header inset %d and card inset %d disagree", header.Padding, list.Padding)
+	}
+	inner := PanelWidth - 2*root.Padding - 2*header.Padding
+	if got := search.Width + searchGap + searchAddWidth; got != inner {
+		t.Fatalf("search row is %d wide, header content is %d", got, inner)
+	}
+}
+
+func TestPanelListFillsHeightWithoutOverflow(t *testing.T) {
+	t.Parallel()
+	for _, errs := range [][]string{nil, {"Couldn't save zones", "Tokyo is already in the list"}} {
+		s := PanelState{Readings: sampleReadings(), Errors: errs}
+		if len(errs) > 0 {
+			s.Notice = "Limited search: tz tables not found"
+		}
+		root := Panel(s)
+		var list *v1.Node
+		visit(root, func(n *v1.Node) {
+			if n.Kind == v1.KindList && list == nil {
+				list = n
+			}
+		})
+		used := 2*root.Padding + panelHeaderHeight(s) + root.Gap + list.Height
+		if used > PanelHeight {
+			t.Fatalf("errors=%d: content needs %d px of a %d px panel", len(errs), used, PanelHeight)
+		}
+		if len(errs) == 0 && list.Height < 300 {
+			t.Fatalf("list is %d px: the taller panel should show five cards", list.Height)
+		}
+	}
+}
+
+func TestMetaLineOmitsRedundantZoneForUTC(t *testing.T) {
+	t.Parallel()
+	if got := metaText(Reading{Zone: "UTC", Offset: "UTC+0"}).Text; got != "UTC+0" {
+		t.Fatalf("utc meta = %q", got)
+	}
+	if got := metaText(Reading{Zone: "Asia/Tokyo", Offset: "UTC+9"}).Text; got != "Asia/Tokyo · UTC+9" {
+		t.Fatalf("tokyo meta = %q", got)
 	}
 }

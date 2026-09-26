@@ -9,8 +9,22 @@ import (
 
 // PanelWidth and PanelHeight are the manifest's panel box; tests lint at it.
 const (
-	PanelWidth  = 420
-	PanelHeight = 360
+	PanelWidth  = 480
+	PanelHeight = 440
+)
+
+// The panel's frame. The host adds no inner padding, so the root column
+// provides it. The header and the list share one inset so their edges align,
+// and the list's inset is also the gutter its 4 px scrollbar is drawn in.
+const (
+	panelPad     = 12
+	panelGap     = 10
+	contentInset = 10
+	headerGap    = 8
+	titleLine    = 24 // the title token renders taller than body text
+	textLine     = 18
+	searchHeight = 40
+	searchPad    = 10 // the painter insets field text by Padding; clears the pill's cap
 )
 
 const (
@@ -20,7 +34,6 @@ const (
 
 const (
 	zoneDragType = "world-clock-zone"
-	listHeight   = 248
 	clockWidth   = 96
 	skyWidth     = 24
 	cardGap      = 6
@@ -56,37 +69,55 @@ var (
 )
 
 func Panel(s PanelState) *v1.Node {
-	children := []*v1.Node{
+	header := []*v1.Node{
 		{Kind: v1.KindText, Text: "World Clock", Size: "title", Bold: true},
 		searchRow(s),
 	}
+	header = append(header, messageLines(s)...)
+	height := PanelHeight - 2*panelPad - panelHeaderHeight(s) - panelGap
+	var list *v1.Node
+	if s.Query != "" {
+		list = suggestionList(s.Suggestions, s.NoMatches, s.HideNoMatches, height)
+	} else {
+		list = zoneList(s, height)
+	}
+	return &v1.Node{Kind: v1.KindColumn, Padding: panelPad, Gap: panelGap, Children: []*v1.Node{
+		{Kind: v1.KindColumn, Padding: contentInset, Gap: headerGap, Children: header},
+		list,
+	}}
+}
+
+func messageLines(s PanelState) []*v1.Node {
+	var out []*v1.Node
 	for _, err := range s.Errors {
 		if err != "" {
-			children = append(children, &v1.Node{Kind: v1.KindText, Text: err, Tone: v1.ToneError})
+			out = append(out, &v1.Node{Kind: v1.KindText, Text: err, Tone: v1.ToneError})
 		}
 	}
 	if s.Notice != "" {
-		children = append(children, &v1.Node{Kind: v1.KindText, Text: s.Notice, Tone: v1.ToneSubtle})
+		out = append(out, &v1.Node{Kind: v1.KindText, Text: s.Notice, Tone: v1.ToneSubtle})
 	}
-	if s.Query != "" {
-		children = append(children, suggestionList(s.Suggestions, s.NoMatches, s.HideNoMatches))
-	} else {
-		children = append(children, zoneList(s))
-	}
-	return &v1.Node{Kind: v1.KindColumn, Gap: 8, Children: children}
+	return out
+}
+
+// panelHeaderHeight is the vertical budget of the header column; the list
+// takes what remains, so error lines shorten the list instead of pushing it
+// past the panel's bottom edge.
+func panelHeaderHeight(s PanelState) int {
+	return 2*contentInset + titleLine + headerGap + searchHeight + len(messageLines(s))*(headerGap+textLine)
 }
 
 func searchRow(s PanelState) *v1.Node {
 	return &v1.Node{Kind: v1.KindRow, Gap: searchGap, Children: []*v1.Node{
 		{Kind: v1.KindTextInput, ID: "search", Text: s.Query, Name: "Search time zones", Role: "textbox",
-			Placeholder: "Search a city or country", Width: PanelWidth - searchGap - searchAddWidth,
-			Height: 40, SubmitOnEnter: true, Reseed: s.QueryReseed, Events: editing},
+			Placeholder: "Search a city or country", Width: PanelWidth - 2*panelPad - 2*contentInset - searchGap - searchAddWidth,
+			Height: searchHeight, Padding: searchPad, SubmitOnEnter: true, Reseed: s.QueryReseed, Events: editing},
 		{Kind: v1.KindButton, ID: "add", Icon: "add", Name: "Add the top match", Role: "button", Fill: "accent",
-			Width: searchAddWidth, Height: 40, Disabled: strings.TrimSpace(s.Query) == "", Events: activate},
+			Width: searchAddWidth, Height: searchHeight, Disabled: strings.TrimSpace(s.Query) == "", Events: activate},
 	}}
 }
 
-func suggestionList(suggestions []Suggestion, noMatches string, hideNoMatches bool) *v1.Node {
+func suggestionList(suggestions []Suggestion, noMatches string, hideNoMatches bool, height int) *v1.Node {
 	rows := make([]*v1.Node, 0, len(suggestions)+1)
 	if len(suggestions) == 0 && !hideNoMatches {
 		if noMatches == "" {
@@ -98,10 +129,10 @@ func suggestionList(suggestions []Suggestion, noMatches string, hideNoMatches bo
 		rows = append(rows, &v1.Node{Kind: v1.KindButton, ID: "pick:" + m.ID, Text: m.Title, Name: "Add " + m.Title,
 			Role: "button", Fill: "soft", Height: 36, Events: activate})
 	}
-	return &v1.Node{Kind: v1.KindList, Height: listHeight, Gap: 4, Children: rows}
+	return &v1.Node{Kind: v1.KindList, Height: height, Padding: contentInset, Gap: 4, Children: rows}
 }
 
-func zoneList(s PanelState) *v1.Node {
+func zoneList(s PanelState, height int) *v1.Node {
 	rows := make([]*v1.Node, 0, 2*len(s.Readings)+1)
 	if len(s.Readings) == 0 {
 		rows = append(rows, &v1.Node{Kind: v1.KindText, Text: "No zones yet. Search for a city above.", Tone: v1.ToneSubtle})
@@ -112,7 +143,7 @@ func zoneList(s PanelState) *v1.Node {
 	if len(s.Readings) > 0 {
 		rows = append(rows, dropGap(len(s.Readings)))
 	}
-	return &v1.Node{Kind: v1.KindList, Height: listHeight, Children: rows}
+	return &v1.Node{Kind: v1.KindList, Height: height, Padding: contentInset, Children: rows}
 }
 
 func dropGap(i int) *v1.Node {
@@ -124,7 +155,7 @@ func zoneCard(r Reading, s PanelState) *v1.Node {
 	var name *v1.Node
 	if s.Renaming == r.Zone {
 		name = &v1.Node{Kind: v1.KindTextInput, ID: "label:" + r.Zone, Text: s.RenameDraft, Name: "Label for " + r.Zone,
-			Role: "textbox", Placeholder: ShortLabel(r.Zone), Height: 36, SubmitOnEnter: true, Reseed: s.RenameReseed, Events: editing}
+			Role: "textbox", Placeholder: ShortLabel(r.Zone), Height: 36, Padding: 8, SubmitOnEnter: true, Reseed: s.RenameReseed, Events: editing}
 	} else {
 		tone := v1.ToneNormal
 		if !r.OnBar {
@@ -151,8 +182,14 @@ func zoneCard(r Reading, s PanelState) *v1.Node {
 	}}
 }
 
+// metaText is the card's second line. A zone with no region ("UTC") would
+// only repeat its label, so it shows the offset alone.
 func metaText(r Reading) *v1.Node {
-	return &v1.Node{Kind: v1.KindText, Key: "meta:" + r.Zone, Text: r.Zone + " · " + r.Offset, Tone: v1.ToneSubtle}
+	text := r.Zone + " · " + r.Offset
+	if !strings.Contains(r.Zone, "/") {
+		text = r.Offset
+	}
+	return &v1.Node{Kind: v1.KindText, Key: "meta:" + r.Zone, Text: text, Tone: v1.ToneSubtle}
 }
 
 func clockColumn(r Reading) *v1.Node {
