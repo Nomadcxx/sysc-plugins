@@ -122,8 +122,8 @@ regional-indicator runes into one run; `blitGlyphBitmap` blits Noto Color
 Emoji PNGs untinted). Before the Connections tab is implemented, a spike
 shapes `🇺🇸` through `lint`/render with Noto Color Emoji installed. Flags paint
 → country rows lead with a flag glyph; anything degrades → the code-badge
-capsule (2-letter, chip fill) is the shipped default. The spike result is
-recorded here before country-row work starts.
+capsule (2-letter, chip fill) is the shipped default. Outcome (2026-09-26):
+flags paint with Noto Color Emoji — country rows lead with a flag glyph.
 
 ## Data model and persistence
 
