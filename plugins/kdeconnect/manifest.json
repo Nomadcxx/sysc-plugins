@@ -10,7 +10,7 @@
   "requires": {"commands": ["kdeconnect-cli"]},
   "services": [{"id": "kdeconnect"}],
   "widgets": [{"id": "bar", "settings": []}],
-  "panels": [{"id": "panel", "width": 400, "height": 520, "placement": "attached"}],
+  "panels": [{"id": "panel", "width": 400, "height": 760, "placement": "attached"}],
   "settings": [
     {"key": "refresh_seconds", "type": "float", "label": "Refresh interval (seconds)", "default": 30, "min": 0, "max": 300},
     {"key": "enable_clipboard_action", "type": "bool", "label": "Show send-clipboard action", "default": true},

@@ -116,3 +116,28 @@ func TestDeviceSwitcherActivationTogglesPanelState(t *testing.T) {
 		t.Fatal("pointer input changed the device switcher")
 	}
 }
+
+func TestPanelWidthFollowsTheMockup(t *testing.T) {
+	t.Parallel()
+	device := func(typ string) kdeconnect.Snapshot {
+		return kdeconnect.Snapshot{SelectedID: "d", Devices: []kdeconnect.Device{{ID: "d", Type: typ}}}
+	}
+	table := []struct {
+		name     string
+		snap     kdeconnect.Snapshot
+		showCard bool
+		want     int
+	}{
+		{"phone with card", device("phone"), true, 400},
+		{"tablet with card", device("tablet"), true, 525},
+		{"desktop with card", device("desktop"), true, 525},
+		{"laptop with card", device("laptop"), true, 525},
+		{"large type without card", device("tablet"), false, 400},
+		{"no selected device", kdeconnect.Snapshot{}, true, 400},
+	}
+	for _, row := range table {
+		if got := panelWidth(row.snap, row.showCard); got != row.want {
+			t.Fatalf("%s: panelWidth = %d, want %d", row.name, got, row.want)
+		}
+	}
+}

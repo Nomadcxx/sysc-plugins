@@ -47,10 +47,11 @@ var mockupSizes = map[string][2]int{
 	"laptop":  {260, 170},
 }
 
-// mockupKind mirrors deviceIcon's type normalisation onto the mockup asset
+// MockupKind mirrors deviceIcon's type normalisation onto the mockup asset
 // names for the four mockup types; an empty result means the type has no
-// mockup.
-func mockupKind(dev *Device) string {
+// mockup. Exported so the entry point can size the panel for the mockup
+// the device card will show.
+func MockupKind(dev *Device) string {
 	if dev == nil {
 		return ""
 	}
@@ -72,7 +73,7 @@ func mockupKind(dev *Device) string {
 // mockup or the asset is not installed, and the card falls back to the
 // type icon.
 func deviceMockup(dev *Device) (string, int, int, bool) {
-	kind := mockupKind(dev)
+	kind := MockupKind(dev)
 	if kind == "" {
 		return "", 0, 0, false
 	}
