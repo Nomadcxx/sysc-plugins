@@ -8,7 +8,7 @@ import (
 
 type fakeSource struct{ games []Game }
 
-func (f *fakeSource) Name() string { return "fake" }
+func (f *fakeSource) Name() string                         { return "fake" }
 func (f *fakeSource) List(context.Context) ([]Game, error) { return f.games, nil }
 func (f *fakeSource) Launch(context.Context, Game) error   { return nil }
 func (f *fakeSource) Stop(context.Context, Game) error     { return nil }

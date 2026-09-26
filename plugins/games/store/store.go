@@ -11,8 +11,8 @@ import (
 const maxSessionsPerGame = 30
 
 type Prefs struct {
-	Sort      string          `json:"sort"`      // name|playtime|recent
-	View      string          `json:"view"`      // library|favorites|playing|hidden
+	Sort      string          `json:"sort"` // name|playtime|recent
+	View      string          `json:"view"` // library|favorites|playing|hidden
 	Favorites map[string]bool `json:"favorites"`
 	Hidden    map[string]bool `json:"hidden"`
 }
