@@ -432,12 +432,12 @@ func TestDeviceMockupResolvesTypeAssets(t *testing.T) {
 		file string
 		w, h int
 	}{
-		"phone":      {"phone.png", 135, 260},
-		"smartphone": {"phone.png", 135, 260},
-		"tablet":     {"tablet.png", 180, 240},
-		"desktop":    {"desktop.png", 260, 160},
-		"computer":   {"desktop.png", 260, 160},
-		"laptop":     {"laptop.png", 260, 170},
+		"phone":      {"phone.png", 111, 225},
+		"smartphone": {"phone.png", 111, 225},
+		"tablet":     {"tablet.png", 156, 213},
+		"desktop":    {"desktop.png", 210, 136},
+		"computer":   {"desktop.png", 210, 136},
+		"laptop":     {"laptop.png", 231, 146},
 	}
 	for typ, want := range cases {
 		path, w, h, ok := deviceMockup(&Device{Type: typ})
@@ -473,7 +473,7 @@ func TestDeviceCardShowsMockupWhenAssetResolves(t *testing.T) {
 	if mock.Kind != v1.KindImage {
 		t.Fatalf("lead child = %+v, want the mockup image", mock)
 	}
-	if mock.Path != filepath.Join(dir, "phone.png") || mock.ImageW != 135 || mock.ImageH != 260 ||
+	if mock.Path != filepath.Join(dir, "phone.png") || mock.ImageW != 111 || mock.ImageH != 225 ||
 		!mock.Background || mock.Shape != "card" || !mock.CenterX {
 		t.Fatalf("mockup node = %+v", mock)
 	}

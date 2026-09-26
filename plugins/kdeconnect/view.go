@@ -38,13 +38,14 @@ func deviceIcon(dev *Device) string {
 // ../assets. Tests point it at a temp directory.
 var mockupAssetDir string
 
-// mockupSizes carries the DMS size classes: the canvas each type's mockup
-// was drawn on.
+// mockupSizes carries each type's mockup artwork size, trimmed of the
+// transparent canvas margins the source assets shipped with so the card
+// hugs the artwork.
 var mockupSizes = map[string][2]int{
-	"phone":   {135, 260},
-	"tablet":  {180, 240},
-	"desktop": {260, 160},
-	"laptop":  {260, 170},
+	"phone":   {111, 225},
+	"tablet":  {156, 213},
+	"desktop": {210, 136},
+	"laptop":  {231, 146},
 }
 
 // MockupKind mirrors deviceIcon's type normalisation onto the mockup asset
