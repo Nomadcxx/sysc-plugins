@@ -110,22 +110,48 @@ func selectedDevice(snap Snapshot) *Device {
 // BarTree is the bar pill: the offline glyph with N/A while the daemon is
 // unreachable, and — matching the reference pill — the offline glyph again
 // whenever the selected device is not reachable, with the percent only for
-// a connected, reporting device. The whole control opens the panel.
+// a connected, reporting device. The whole control opens the panel. While
+// the device charges, the pill carries its charge level as an animated,
+// tinted fill ahead of the glyph (sysc-447): error below 20, accent
+// otherwise — the wire has no warning/success fills.
 func BarTree(snap Snapshot) *v1.Node {
 	icon, label := "smartphone", "N/A"
+	var fill *v1.Node
 	if snap.Available {
 		label = ""
 		if dev := selectedDevice(snap); dev != nil {
 			if !dev.Reachable {
 				icon = "devices_other"
 			}
+			if dev.BatteryCharging && dev.BatteryKnown && dev.BatteryCharge >= 0 {
+				value := float64(dev.BatteryCharge) / 100
+				if value > 1 {
+					value = 1
+				}
+				tone := v1.ToneAccent
+				if dev.BatteryCharge < 20 {
+					tone = v1.ToneError
+				}
+				fill = &v1.Node{Kind: v1.KindProgress, Key: "kdeconnect-pill",
+					Value: value, Animate: true, Tone: tone, Width: 64}
+			}
 		}
 	}
-	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{
-		Kind: v1.KindButton, ID: "open", Icon: icon, Text: label,
+	button := &v1.Node{Kind: v1.KindButton, ID: "open",
 		Name: "Open phone connect", Role: "button",
-		Events: []v1.EventKind{v1.EventActivate},
-	}}}
+		Events: []v1.EventKind{v1.EventActivate}}
+	if fill != nil {
+		// The converter replaces a button's icon-synthesized children with
+		// explicit ones, so the charging pill carries its own glyph (and
+		// label) after the fill.
+		button.Children = []*v1.Node{fill, {Kind: v1.KindIcon, Icon: icon}}
+		if label != "" {
+			button.Children = append(button.Children, &v1.Node{Kind: v1.KindText, Text: label})
+		}
+	} else {
+		button.Icon, button.Text = icon, label
+	}
+	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{button}}
 }
 
 // TooltipTree names the backend, the selected device's state, and — when
@@ -588,7 +614,7 @@ func batteryProgressNode(dev *Device) *v1.Node {
 		value = 1
 	}
 	return &v1.Node{Key: "battery-progress", Kind: v1.KindProgress, Value: value,
-		Width: 180, CenterX: true}
+		Animate: true, Width: 180, CenterX: true}
 }
 
 // actionRowTree groups capability-gated actions into labelled, host-sized

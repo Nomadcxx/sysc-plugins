@@ -1180,3 +1180,41 @@ func TestDeviceCardUsesVerticalContent(t *testing.T) {
 		t.Fatal("device artwork and labels must stack inside the button")
 	}
 }
+
+func TestBarTreeChargingFill(t *testing.T) {
+	t.Parallel()
+	snap := pairedSnap()
+	snap.Devices[0].BatteryCharging = true
+	pill := BarTree(snap).Children[0]
+	if len(pill.Children) != 2 {
+		t.Fatalf("charging pill children = %d, want fill then icon", len(pill.Children))
+	}
+	fill := pill.Children[0]
+	if fill.Kind != v1.KindProgress || fill.Key != "kdeconnect-pill" || !fill.Animate {
+		t.Fatalf("charging fill = %+v", fill)
+	}
+	if fill.Tone != v1.ToneAccent || fill.Value != 0.98 {
+		t.Fatalf("charging fill tone/value = %q %v", fill.Tone, fill.Value)
+	}
+	if pill.Children[1].Kind != v1.KindIcon || pill.Children[1].Icon != "smartphone" {
+		t.Fatalf("charging pill icon = %+v", pill.Children[1])
+	}
+	low := pairedSnap()
+	low.Devices[0].BatteryCharging = true
+	low.Devices[0].BatteryCharge = 12
+	if fill := BarTree(low).Children[0].Children[0]; fill.Tone != v1.ToneError {
+		t.Fatalf("low charging fill tone = %q, want error", fill.Tone)
+	}
+	idle := BarTree(pairedSnap()).Children[0]
+	if len(idle.Children) != 0 || idle.Icon != "smartphone" {
+		t.Fatalf("idle pill changed: %+v", idle)
+	}
+}
+
+func TestBatteryProgressAnimates(t *testing.T) {
+	t.Parallel()
+	p := batteryProgressNode(&Device{BatteryKnown: true, BatteryCharge: 40})
+	if p == nil || !p.Animate || p.Key != "battery-progress" {
+		t.Fatalf("battery progress = %+v, want an animated keyed node", p)
+	}
+}
