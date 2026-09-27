@@ -5,6 +5,11 @@ Asking: a fresh-eyes review of branch `feat/protonvpn`
 `6c467a1..HEAD`, before merge to main. Per-session spec/QA gates were
 skipped by user instruction; this document replaces them.
 
+Branch is pushed: `git fetch origin feat/protonvpn` (PR draft link
+https://github.com/Nomadcxx/sysc-plugins/pull/new/feat/protonvpn).
+Note remote `main` is at `8765ef3`, ahead of this branch's base —
+rebase or merge-test before landing.
+
 ## What was built
 
 Plugin `org.sysc.protonvpn`: bar + tooltip + 460×580 panel (connections /
