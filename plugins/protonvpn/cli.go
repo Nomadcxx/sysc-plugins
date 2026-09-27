@@ -279,10 +279,32 @@ func ParseConnectIP(stdout string) string {
 	return ""
 }
 
-// ErrorDetail returns the first non-empty line of stderr, trimmed.
+// cliNoise marks stderr lines emitted by the CLI's wrappers, not the CLI
+// itself: the packaged binary prints a sentry/eventlet deprecation block
+// (verified live against proton-vpn-cli 1.0.3) before real output.
+var cliNoise = []string{
+	"warning", ".py", "sentry", "eventlet", "deprecated",
+	"recommend", "framework", "https://", "import ",
+}
+
+// ErrorDetail returns the first non-empty stderr line that is not wrapper
+// noise, trimmed. ponytail: blocklist of the one known noisy wrapper; swap
+// for structured stderr parsing if the CLI grows more.
 func ErrorDetail(stderr string) string {
 	for _, line := range strings.Split(stderr, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		low := strings.ToLower(line)
+		noisy := false
+		for _, n := range cliNoise {
+			if strings.Contains(low, n) {
+				noisy = true
+				break
+			}
+		}
+		if !noisy {
 			return line
 		}
 	}

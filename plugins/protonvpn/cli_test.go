@@ -171,3 +171,20 @@ func TestErrorDetail(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestErrorDetailSkipsWrapperNoise(t *testing.T) {
+	noise := "/usr/lib/python3.14/site-packages/sentry_sdk/utils.py:1392: EventletDeprecationWarning: \n" +
+		"Eventlet is deprecated. It is currently being maintained in bugfix mode, and\n" +
+		"we strongly recommend against using it for new projects.\n" +
+		"\n" +
+		"  from eventlet.patcher import is_monkey_patched  # type: ignore\n"
+	if got := ErrorDetail(noise + "Authentication denied\n"); got != "Authentication denied" {
+		t.Fatalf("got %q", got)
+	}
+	if got := ErrorDetail(noise); got != "" {
+		t.Fatalf("noise-only stderr must yield no detail, got %q", got)
+	}
+	if got := ErrorDetail("plain failure\n"); got != "plain failure" {
+		t.Fatalf("got %q", got)
+	}
+}
