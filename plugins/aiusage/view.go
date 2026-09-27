@@ -13,6 +13,17 @@ import (
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
+const (
+	panelPaneHeight       = 406
+	panelContentInset     = 22 // retain the shell panel/card inset without the settings wrapper
+	panelContentChrome    = 2 * panelContentInset
+	panelHeaderHeight     = 28
+	providerRowHeight     = 42
+	fleetRollupHeight     = 60
+	providerListGap       = 2
+	providerDividerHeight = 1
+)
+
 // View builders turn a Report snapshot into plugin/v1 view trees. They are
 // pure functions: every data-dependent value is an argument, every
 // settings-dependent value comes from Instance/Config.
@@ -311,9 +322,9 @@ func fleetRollup(r Report, cfg Config, now time.Time) *v1.Node {
 	if timed == 0 {
 		return nil
 	}
-	// Height includes padding: 60 leaves 44px for the average and risk count
+	// Height includes padding: fleetRollupHeight leaves 44px for the average and risk count
 	// stacked in the left column, plus the row's 2×8 inset.
-	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Padding: 8, Height: 60, Key: "fleet-rollup"}
+	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Padding: 8, Height: fleetRollupHeight, Key: "fleet-rollup"}
 	row.Children = append(row.Children,
 		&v1.Node{Kind: v1.KindColumn, Width: 82, Padding: 5, Gap: 2, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: fmt.Sprintf("Avg %v%%", math.Round(total/float64(timed))), Bold: true},
@@ -335,17 +346,71 @@ func fleetRollup(r Report, cfg Config, now time.Time) *v1.Node {
 // column (the host converter refuses a row root), so the side-by-side
 // master/detail row is its single child.
 func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor int, now time.Time) *v1.Node {
-	// Column root (panel rule). Both panes are fixed-height scrolls — the
-	// panel box is 750×430 and the content overflows it, so each pane gets
-	// an explicit viewport (the scroll rule: it clips only with a height).
-	const paneHeight = 406 // panel 430 − root padding 24
+	return PanelTreeAtSurfaceHeight(r, selected, hist, cfg, hostMinor, now,
+		PanelPreferredSurfaceHeight(r, cfg, hostMinor, now))
+}
+
+// SettingsPanelTree is the plugin-owned header above the shell's validated
+// settings form. The host supplies the form for this manifest entry.
+func SettingsPanelTree() *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, Gap: 6, Children: []*v1.Node{
+		{Kind: v1.KindRow, Gap: 8, Height: panelHeaderHeight, Children: []*v1.Node{
+			{Kind: v1.KindButton, ID: "back", Icon: "chevron_left",
+				Name: "Back to AI Usage", Role: "button", Tooltip: "Return to AI Usage",
+				Events: []v1.EventKind{v1.EventActivate}},
+			{Kind: v1.KindIcon, Icon: "settings"},
+			{Kind: v1.KindColumn, Width: 180, Children: []*v1.Node{
+				{Kind: v1.KindText, Text: "AI Usage Settings", Bold: true, Size: "title"},
+			}},
+		}},
+		{Kind: v1.KindText, Text: "Manage providers, credentials, refresh, and alerts.", Tone: v1.ToneSubtle, Size: "caption"},
+	}}
+}
+
+// PanelPreferredHeight is the pane viewport needed to show the header, rollup,
+// separators, and every provider row, while retaining the manifest viewport
+// as a minimum.
+func PanelPreferredHeight(r Report, cfg Config, hostMinor int, now time.Time) int {
+	height, children := panelHeaderHeight, 1
+	if fleetRollup(r, cfg, now) != nil {
+		height += fleetRollupHeight
+		children++
+	}
+	for i := range r.Providers {
+		if i > 0 && hostMinor >= 4 {
+			height += providerDividerHeight
+			children++
+		}
+		height += providerRowHeight
+		children++
+	}
+	height += max(children-1, 0) * providerListGap
+	return max(panelPaneHeight, height)
+}
+
+// PanelPreferredSurfaceHeight includes the panel inset around plugin content.
+func PanelPreferredSurfaceHeight(r Report, cfg Config, hostMinor int, now time.Time) int {
+	return PanelPreferredHeight(r, cfg, hostMinor, now) + panelContentChrome
+}
+
+// PanelTreeAtSurfaceHeight builds the panel for the surface height fitted by
+// the host. If the output allows less than the preferred height, both panes
+// keep their scroll behavior within that viewport.
+func PanelTreeAtSurfaceHeight(r Report, selected string, hist []float64, cfg Config, hostMinor int, now time.Time, surfaceHeight int) *v1.Node {
+	paneHeight := surfaceHeight - panelContentChrome
+	if paneHeight <= 0 {
+		paneHeight = 1
+	}
+	// Column root (panel rule). Its inset preserves the shell's panel/card
+	// breathing room without making the usage view part of a scroll wrapper.
+	// Both panes are fixed-height scrolls; a scroll clips only with a height.
 	refreshLabel := "Refresh"
 	if r.Loading {
 		refreshLabel = "Refreshing…"
 	}
-	list := &v1.Node{Kind: v1.KindList, Width: 290, Height: paneHeight, Gap: 2, Children: []*v1.Node{}}
+	list := &v1.Node{Kind: v1.KindList, Width: 290, Height: paneHeight, Gap: providerListGap, Children: []*v1.Node{}}
 	list.Children = append(list.Children,
-		&v1.Node{Kind: v1.KindRow, Gap: 6, Height: 28, Children: []*v1.Node{
+		&v1.Node{Kind: v1.KindRow, Gap: 6, Height: panelHeaderHeight, Children: []*v1.Node{
 			{Kind: v1.KindIcon, Icon: "ai-usage"},
 			{Kind: v1.KindColumn, Width: 96, Padding: 6, Children: []*v1.Node{
 				{Kind: v1.KindText, Text: "AI Usage", Bold: true, Size: "title"},
@@ -353,6 +418,9 @@ func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor 
 			&v1.Node{Kind: v1.KindButton, ID: "refresh", Text: refreshLabel,
 				Name: "Refresh all providers", Role: "button",
 				Disabled: r.Loading, Tooltip: "Refresh tracked providers now; providers inside a safe refresh window are deferred.",
+				Events: []v1.EventKind{v1.EventActivate}},
+			&v1.Node{Kind: v1.KindButton, ID: "settings", Icon: "settings",
+				Name: "AI Usage settings", Role: "button", Tooltip: "Provider and alert settings",
 				Events: []v1.EventKind{v1.EventActivate}},
 		}})
 	// The fleet rollup: average load across timed quota windows, the peak
@@ -367,7 +435,7 @@ func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor 
 
 	for i, p := range providers {
 		if i > 0 && hostMinor >= 4 {
-			list.Children = append(list.Children, &v1.Node{Kind: v1.KindSeparator})
+			list.Children = append(list.Children, &v1.Node{Kind: v1.KindSeparator, Height: providerDividerHeight})
 		}
 		list.Children = append(list.Children, providerRow(p, selected == p.ID, cfg, hostMinor, now))
 	}
@@ -376,7 +444,7 @@ func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor 
 
 	// Column root (panel rule) with the side-by-side master/detail row as
 	// its single child.
-	return &v1.Node{Kind: v1.KindColumn, Padding: 12, Children: []*v1.Node{
+	return &v1.Node{Kind: v1.KindColumn, Padding: panelContentInset, Children: []*v1.Node{
 		{Kind: v1.KindRow, Gap: 12, Children: []*v1.Node{list, detail}},
 	}}
 }
@@ -435,7 +503,7 @@ func providerRow(p ProviderReport, selected bool, cfg Config, hostMinor int, now
 		Fill: fill, Padding: 8, Gap: 4,
 		// Height includes padding: 42 is 26 of content — the monogram disc's
 		// square — plus the 2×8 the card insets.
-		Height: 42,
+		Height: providerRowHeight,
 	}
 	// The selection tint gets a hairline accent rim on minor-5-plus hosts —
 	// the border AIOC draws around its active provider.

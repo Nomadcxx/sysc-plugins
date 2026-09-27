@@ -57,9 +57,13 @@ func run(in, out *os.File) error {
 	}
 
 	type view struct {
-		kind     v1.ViewKind
-		rev      uint64
-		instance string
+		kind         v1.ViewKind
+		entry        string
+		rev          uint64
+		instance     string
+		width        int
+		height       int
+		resizeTarget int
 	}
 	views := map[string]view{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -82,17 +86,45 @@ func run(in, out *os.File) error {
 		}
 		rep := loop.Snapshot()
 		hist := loop.History(selected, 30)
+		now := time.Now()
 		for id, v := range views {
 			var root *v1.Node
 			switch v.kind {
 			case v1.ViewBar:
-				root = aiusage.BarTree(rep, settings.instance(v.instance), settings.config, minor, time.Now())
+				root = aiusage.BarTree(rep, settings.instance(v.instance), settings.config, minor, now)
 			case v1.ViewTooltip:
 				// The shell auto-opens this view under the bar widget; a
 				// text-only tree is what it can paint.
-				root = aiusage.TooltipTree(rep, settings.instance(v.instance), settings.config, minor, time.Now())
+				root = aiusage.TooltipTree(rep, settings.instance(v.instance), settings.config, minor, now)
 			default:
-				root = aiusage.PanelTree(rep, selected, hist, settings.config, minor, time.Now())
+				if v.entry == "settings" {
+					root = aiusage.SettingsPanelTree()
+					break
+				}
+				wantHeight := aiusage.PanelPreferredSurfaceHeight(rep, settings.config, minor, now)
+				if v.height > 0 && v.width >= 64 && wantHeight != v.resizeTarget {
+					callCtx, stop := context.WithTimeout(ctx, 2*time.Second)
+					reply, err := c.Call(callCtx, v1.CallPanelResize,
+						v1.PanelResizeParams{Width: v.width, Height: wantHeight})
+					stop()
+					if err == nil && reply.OK {
+						// ponytail: legacy hosts return null, so keep the bounded
+						// ViewOpen viewport and let the panes scroll; fitted-size
+						// replies enable growth on current hosts.
+						var size struct {
+							Width  int `json:"width"`
+							Height int `json:"height"`
+						}
+						if json.Unmarshal(reply.Result, &size) == nil && size.Height >= 64 {
+							v.height = size.Height
+						}
+						v.resizeTarget = wantHeight
+					}
+				}
+				if v.height <= 0 {
+					v.height = wantHeight
+				}
+				root = aiusage.PanelTreeAtSurfaceHeight(rep, selected, hist, settings.config, minor, now, v.height)
 			}
 			v.rev++
 			views[id] = v
@@ -174,7 +206,10 @@ func run(in, out *os.File) error {
 					// serves the cache and touches no endpoint.
 					round(false)
 				}
-				views[m.ViewID] = view{kind: m.View, instance: m.Instance}
+				views[m.ViewID] = view{
+					kind: m.View, entry: m.Entry, instance: m.Instance,
+					width: m.Width, height: m.Height, resizeTarget: m.Height,
+				}
 				publish()
 			case *v1.ViewClose:
 				closed := views[m.ViewID]
@@ -201,6 +236,12 @@ func run(in, out *os.File) error {
 				switch {
 				case m.Node == "open":
 					_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+				case m.Node == "settings" || m.Node == "back":
+					source := views[m.ViewID]
+					_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{
+						Entry: panelEntryForAction(m.Node), Output: m.Output,
+						Generation: m.Generation, Instance: source.instance,
+					})
 				case m.Node == "refresh":
 					// Manual refresh overrides cadence/backoff; the loop still
 					// defers providers inside a hard request floor.
@@ -253,6 +294,17 @@ func run(in, out *os.File) error {
 			round(false)
 			schedule.Reset(settings.config.Refresh)
 		}
+	}
+}
+
+func panelEntryForAction(action string) string {
+	switch action {
+	case "settings":
+		return "settings"
+	case "back":
+		return "panel"
+	default:
+		return ""
 	}
 }
 

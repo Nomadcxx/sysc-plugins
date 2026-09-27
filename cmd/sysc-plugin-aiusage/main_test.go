@@ -6,6 +6,17 @@ import (
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
+func TestPanelEntryForActionSwitchesBetweenUsageAndSettings(t *testing.T) {
+	for _, tc := range []struct {
+		action string
+		want   string
+	}{{"settings", "settings"}, {"back", "panel"}} {
+		if got := panelEntryForAction(tc.action); got != tc.want {
+			t.Errorf("panel entry for %q = %q, want %q", tc.action, got, tc.want)
+		}
+	}
+}
+
 func TestSettingsChangesKeepPluginAndInstanceScopesSeparate(t *testing.T) {
 	state := newSettingsState(7)
 	if !state.config.AlertsEnabled {
