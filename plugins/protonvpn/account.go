@@ -67,7 +67,7 @@ func signInCard(s AccountState) *v1.Node {
 		{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
 			{Kind: v1.KindTextInput, ID: "signin-user", Key: "signin-user", Name: "Username", Role: "textbox",
 				Text: s.UserDraft, Placeholder: "Username", Reseed: s.UserReseed,
-				Width: 336, Height: 40,
+				Width: 320, Height: 40,
 				Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
 			accountButton("signin", "Sign in", "accent", s.UserDraft == ""),
 		}},

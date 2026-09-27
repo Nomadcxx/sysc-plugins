@@ -12,6 +12,9 @@ type PanelState struct {
 	Tab     string // connections | protection | account
 	HasCLI  bool
 	Traffic bool // traffic_monitoring setting
+	Conns   ConnectionsState
+	Prot    ProtectionState
+	Acct    AccountState
 }
 
 // tabWidth is one of three equal shares of the 460 panel minus its padding
@@ -112,12 +115,23 @@ func connectionCard(s PanelState) *v1.Node {
 	}
 }
 
-// connectionsStub is the tab body placeholder; the tasks building the
-// connections, protection and account trees replace each call site.
-func connectionsStub(label string) *v1.Node {
-	return &v1.Node{Kind: v1.KindColumn, Children: []*v1.Node{
-		{Kind: v1.KindText, Text: label, Tone: v1.ToneSubtle},
-	}}
+// tabBody dispatches the active tab. The flag spike passed, so connections
+// always render emoji flags from here; standalone tests keep the knob.
+func tabBody(s PanelState) *v1.Node {
+	switch s.Tab {
+	case "protection":
+		p := s.Prot
+		p.Snap = s.Snap
+		return ProtectionTree(p)
+	case "account":
+		a := s.Acct
+		a.Snap = s.Snap
+		return AccountTree(a)
+	}
+	c := s.Conns
+	c.Snap = s.Snap
+	c.Flags = true
+	return ConnectionsTree(c)
 }
 
 // Panel is the 460×580 panel: optional CLI banner, the connection card, the
@@ -149,12 +163,4 @@ func Panel(s PanelState) *v1.Node {
 	}
 	root.Children = append(root.Children, nav, tabBody(s))
 	return root
-}
-
-// tabBody dispatches the active tab; protection and account are still stubs.
-func tabBody(s PanelState) *v1.Node {
-	if s.Tab == "connections" {
-		return ConnectionsTree(ConnectionsState{Snap: s.Snap, Flags: true})
-	}
-	return connectionsStub(s.Tab)
 }
