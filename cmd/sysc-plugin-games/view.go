@@ -18,6 +18,8 @@ func (s *session) tree(kind v1.ViewKind) *v1.Node {
 		return bar.Pill(s.barState(), s.missing, s.env.now())
 	case v1.ViewFloating:
 		return switcher.Build(s.switcherState(), s.env.now())
+	case v1.ViewTooltip:
+		return bar.TooltipTree(s.barState(), s.missing, len(s.games), s.env.now())
 	}
 	return panel.BuildTree(s.panelState())
 }

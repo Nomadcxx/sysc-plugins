@@ -1,10 +1,82 @@
 package main
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
+
+func TestPanelEntryForActionSwitchesBetweenUsageAndSettings(t *testing.T) {
+	for _, tc := range []struct {
+		action string
+		want   string
+	}{{"settings", "settings"}, {"back", "panel"}} {
+		if got := panelEntryForAction(tc.action); got != tc.want {
+			t.Errorf("panel entry for %q = %q, want %q", tc.action, got, tc.want)
+		}
+	}
+}
+
+func TestSwitchPanelOpensTargetWithoutClosingCurrentPanel(t *testing.T) {
+	type call struct {
+		kind   v1.CallKind
+		params v1.PanelParams
+	}
+	var calls []call
+	invoke := func(_ context.Context, kind v1.CallKind, params any) (v1.HostReply, error) {
+		panel, ok := params.(v1.PanelParams)
+		if !ok {
+			t.Fatalf("params = %T, want v1.PanelParams", params)
+		}
+		calls = append(calls, call{kind: kind, params: panel})
+		return v1.HostReply{OK: true}, nil
+	}
+
+	if err := switchPanel(context.Background(), invoke, "settings", v1.PanelParams{
+		Entry: "panel", Instance: "placement-1", Output: "DP-1", Generation: 7,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("host calls = %+v, want a single replacement open", calls)
+	}
+	if calls[0].kind != v1.CallPanelOpen || calls[0].params.Entry != "settings" {
+		t.Fatalf("call = %+v, want open settings entry", calls[0])
+	}
+	for _, got := range calls {
+		if got.params.Output != "DP-1" || got.params.Generation != 7 || got.params.Instance != "placement-1" {
+			t.Errorf("call params = %+v, want output/generation/instance preserved", got.params)
+		}
+	}
+}
+
+func TestSwitchPanelReportsRejectedOpen(t *testing.T) {
+	err := switchPanel(context.Background(), func(_ context.Context, _ v1.CallKind, _ any) (v1.HostReply, error) {
+		return v1.HostReply{Error: "open rejected"}, nil
+	}, "settings", v1.PanelParams{Entry: "panel"})
+	if err == nil || !strings.Contains(err.Error(), "open rejected") {
+		t.Fatalf("switch error = %v, want host open rejection", err)
+	}
+}
+
+func TestClosePanelUsesSettingsEntry(t *testing.T) {
+	var got v1.PanelParams
+	err := closePanel(context.Background(), func(_ context.Context, kind v1.CallKind, params any) (v1.HostReply, error) {
+		if kind != v1.CallPanelClose {
+			t.Fatalf("call kind = %q, want panel.close", kind)
+		}
+		got = params.(v1.PanelParams)
+		return v1.HostReply{OK: true}, nil
+	}, v1.PanelParams{Entry: "settings", Instance: "placement-1", Output: "DP-1", Generation: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Entry != "settings" || got.Instance != "placement-1" || got.Output != "DP-1" || got.Generation != 7 {
+		t.Fatalf("close params = %+v, want settings popup identity preserved", got)
+	}
+}
 
 func TestSettingsChangesKeepPluginAndInstanceScopesSeparate(t *testing.T) {
 	state := newSettingsState(7)

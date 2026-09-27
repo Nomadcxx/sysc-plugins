@@ -6,7 +6,7 @@
   "version": "0.1.0",
   "protocol": {
     "major": 1,
-    "minor": 7
+    "minor": 8
   },
   "exec": "bin/sysc-plugin-games",
   "capabilities": [
@@ -43,15 +43,39 @@
     }
   ],
   "settings": [
-    {"key": "source_lutris", "type": "bool", "label": "Lutris library", "default": true},
-    {"key": "steamgriddb_key", "type": "string", "label": "SteamGridDB API key", "default": ""},
     {
-      "key": "poll_running", "type": "select", "label": "Detect running games", "default": "auto",
+      "key": "source_lutris",
+      "type": "bool",
+      "label": "Lutris library",
+      "default": true
+    },
+    {
+      "key": "steamgriddb_key",
+      "type": "string",
+      "label": "SteamGridDB API key",
+      "default": ""
+    },
+    {
+      "key": "poll_running",
+      "type": "select",
+      "label": "Detect running games",
+      "default": "auto",
       "options": [
-        {"value": "auto", "label": "Automatic"},
-        {"value": "off", "label": "Never"}
+        {
+          "value": "auto",
+          "label": "Automatic"
+        },
+        {
+          "value": "off",
+          "label": "Never"
+        }
       ]
     },
-    {"key": "hide_unavailable", "type": "bool", "label": "Hide uninstalled games", "default": false}
+    {
+      "key": "hide_unavailable",
+      "type": "bool",
+      "label": "Hide uninstalled games",
+      "default": false
+    }
   ]
 }
