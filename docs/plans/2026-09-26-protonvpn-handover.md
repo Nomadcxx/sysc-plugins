@@ -1,7 +1,8 @@
 # ProtonVPN plugin — session handover
 
-Status: Tasks 1–11 of 16 complete. This document lets a fresh agent continue
-the implementation without re-deriving context.
+Status: **all 16 tasks shipped** (see "Acceptance record" at the bottom).
+The sections below preserve the handover context as written when Tasks 1–11
+had just landed; the "What remains" section is now historical.
 
 ## Where the work lives
 
@@ -45,7 +46,7 @@ Commit messages must carry no AI attribution (a repo hook rejects it).
 | 10. Connections tab | `c47ad89` | `connections.go`: `ConnectionsState`, `ConnectionsTree` (quick-connect row `qc:*`, search row `search`/`clear-search`, notice, country rows `country:<CC>` with flag/code badge, load progress `load:<CC>`, expand `expand:<CC>`, connect `connect:<CC>`; expanded server rows `server:<name>`/`server-connect:<name>`; maintenance dimming; search filtering + auto-expand). `panel.go` `tabBody` dispatches connections. |
 | 11. Protection tab | `4953933` | `protection.go`: `ProtectionState`, `ProtectionTree` (kill switch `ks` locked while connected, NetShield `ns:*`, port forwarding `pf` + `Active port: N` + `copy-port` + `Negotiating port…`, split tunneling `st` + `del-app:*` + `app-query` + `app-suggest:*`, foot `Err`). `splittunnel.go`: `ReadSplitTunnel`/`WriteSplitTunnel` preserving unknown keys, failing loud on malformed files. |
 
-## What remains
+## What remains (historical — shipped in Tasks 12–16, see acceptance record)
 
 ### Task 12 — Account tab (`account.go`)
 
@@ -239,7 +240,7 @@ view, width, height)`; `lint.BarWidth` 240, `lint.BarHeight` 32,
 - `protection.go` renders the split-tunnel editor even when the kill switch
   blocks it (required by the plan's test 6, which uses a zero-value Config).
 
-## How to continue
+## How to continue (superseded — see acceptance record)
 
 1. `cd /home/nomadx/sysc-plugins/.worktrees/feat/protonvpn` (branch
    `feat/protonvpn`, HEAD `4953933`).
@@ -248,3 +249,47 @@ view, width, height)`; `lint.BarWidth` 240, `lint.BarHeight` 32,
    `gofmt -l`, commit with the plan's message and no AI attribution.
 4. No spec/QA subagent reviews — verify the tests yourself.
 5. After Task 16, generate the review-request `.md` and hand the branch over.
+
+## Acceptance record (2026-09-27, Tasks 12–16)
+
+Worktree `/home/nomadx/sysc-plugins/.worktrees/feat/protonvpn`, branch
+`feat/protonvpn`, range `6c467a1..c2371f5` (22 commits).
+
+| Task | Commit | What landed |
+|---|---|---|
+| 12. Account tab | `246f709` | `account.go`: `AccountState` (+ `Settings map[string]string`, a spec gap: Options rows render real values, `—` when missing), signed-in card/buttons/info rows, signed-out hint + username field + terminal-handoff line, error foot. `signin-user` width 320 to fit the embedded 420-wide card. |
+| 13. App scanner | `a6b1be2` | `apps.go`: `ScanApps` port of Noctalia `apps.py` (Exec field codes + `VAR=`/`env` stripping, PATH resolution, NoDisplay/Hidden/non-Application skips, runner/shell/dispatcher/setuid exclusions, shortest-label dedupe, label-then-path sort). Fixtures in `testdata/applications/`. Tests run executables in an in-package temp dir because `/tmp` is mounted `nosuid`. |
+| 14. NAT-PMP | `15755d8` | `natpmp.go`: `BuildMapRequest`/`ParseMapResponse` golden-byte wire format, `RequestPort` UDP+TCP lifetime 60, per-attempt 1s read timeout, 250ms→2s retry until ctx end; refusals/socket errors fail fast (non-fatal to the plugin). Tests include a fake-gateway round trip. |
+| 15. Event loop | `dcab335` | `main.go`: startup probes (CLI/clipboard lookPath), state-restored tab, initial status/info/config polls, serverlist `LoadServers`→`Aggregate` with `FallbackCountries` + notice, app scan, 1s tick driving status poll (`refresh_seconds`, 1s while transitioning, 20s `Timeout` fail), nmcli link watch (2s), traffic sampler (1s, `/sys/class/net/proton0`), NAT-PMP renewal (45s), phase notifications, full node-ID input dispatch, terminal sign-in handoff. `panel.go` `tabBody` wired to all three trees. Pipe-harness tests (`main_test.go`, fake sh CLI — builtins only because the harness empties `PATH`): tab persistence, action→connect wiring + IP, right-click quick connect `connect --p2p`, settings re-arm (`bar_mode`), connect notification, split-tunnel enable writes settings.json + notifies. |
+| 16. Sweep + docs | `c2371f5` + this | Panel column overflow reconciled: `tabBody` caps the tab list to the panel's remaining height (lint is silent on column overflow; 404 only fit the no-banner no-error case). Lint sweep extended: panel 460×580 × 3 tabs × 5 phases × {plain, search+notice, expanded, maintenance, app-picker, error line} × hasCLI both; tooltip now every phase. |
+
+### Verified
+
+- `go test -count=1 ./plugins/protonvpn/ ./cmd/sysc-plugin-protonvpn/` — ok,
+  ok (83 tests incl. the 6 required harness tests and the full lint sweep).
+- `GOTMPDIR=... make build` — all plugins build; `make validate` — 13/13
+  manifests ok.
+- `make test` — only failures: pre-existing
+  `TestPluginCalendarGateAllViews` (reproduced at base `6c467a1`) and a
+  `TestPluginMiniDockerGate` timing flake that passes on re-run
+  (`go test -count=1 ./tests/integration/` → calendar only).
+
+### Deferred (cannot run here)
+
+The `protonvpn` CLI is not installed, so the plan's 7 live acceptance checks
+(`make install`, reload, bar states, panel tabs, protection toggles against
+the real CLI, account sign-in handoff, external tunnel kill) are **not
+verified**. Fixtures were built from the verified official-CLI output formats;
+first live contact should re-check `status`/`config list` parsing.
+
+### Deviations disclosed
+
+1. `copy-port` uses the host's native `clipboard.write` call, not
+   `wl-copy`/`xclip` shellout; the copy-tool probe remains only to gate the
+   button as the spec requires.
+2. Updates use whole-view snapshots on change instead of keyed patches
+   (stable-shape patching was not needed at this view size; keys remain on
+   `traffic`/`err` nodes).
+3. `AccountState.Settings` added (spec gap: Options section had no data).
+4. Harness seeds `settings.json` because `WriteSplitTunnel` deliberately
+   refuses to clobber missing/malformed files.
