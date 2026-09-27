@@ -31,18 +31,17 @@ func statusWord(p Phase) string {
 	}
 }
 
-// phaseIcon pairs the bar glyph with its theme tone. Disconnecting keeps the
-// bolt: the tunnel is mid-transition, like connecting.
+// phaseIcon pairs the Proton mark with its theme tone. The mark is constant;
+// the tone carries the phase, so connecting and connected share a colour and
+// the label or tooltip tells them apart.
 func phaseIcon(p Phase) (string, v1.Tone) {
 	switch p {
-	case PhaseConnecting, PhaseDisconnecting:
-		return "bolt", v1.ToneAccent
-	case PhaseConnected:
-		return "shield", v1.ToneAccent
+	case PhaseConnecting, PhaseDisconnecting, PhaseConnected:
+		return "proton", v1.ToneAccent
 	case PhaseError:
-		return "gpp_bad", v1.ToneError
+		return "proton", v1.ToneError
 	default:
-		return "vpn_key_off", v1.ToneSubtle
+		return "proton", v1.ToneSubtle
 	}
 }
 

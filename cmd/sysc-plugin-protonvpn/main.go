@@ -108,6 +108,7 @@ type session struct {
 	stApps      []string
 	tab         string
 	expanded    string
+	page        int
 	query       string
 	appQuery    string
 	userDraft   string
@@ -447,19 +448,32 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	node := m.Node
 	switch {
 	case node == "bar":
-		if m.Event == v1.EventPointer && m.Button == v1.ButtonSecondary {
+		// A primary click arrives twice: EventPointer on press, EventActivate
+		// on release. Opening on both would toggle the panel straight closed.
+		switch {
+		case m.Event == v1.EventPointer && m.Button == v1.ButtonSecondary:
 			s.quickAction(ctx)
-		} else {
-			_, _ = s.call(ctx, v1.CallPanelOpen, nil)
+		case m.Event == v1.EventActivate:
+			_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{
+				Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID,
+			})
 		}
 	case node == "action":
 		s.actionButton(ctx)
 	case strings.HasPrefix(node, "qc:"):
 		s.connect(ctx, quickTarget(strings.TrimPrefix(node, "qc:")))
 	case node == "search" && (m.Event == v1.EventChange || m.Event == v1.EventSubmit):
-		s.query = m.Text
+		s.query, s.page = m.Text, 0
 	case node == "clear-search":
-		s.query, s.queryReseed = "", s.queryReseed+1
+		s.query, s.queryReseed, s.page = "", s.queryReseed+1, 0
+	case node == "page:prev":
+		if s.page > 0 {
+			s.page--
+		}
+	case node == "page:next":
+		if s.page+1 < protonvpn.CountryPages(s.connsState()) {
+			s.page++
+		}
 	case strings.HasPrefix(node, "expand:"):
 		cc := strings.TrimPrefix(node, "expand:")
 		if s.expanded == cc {
@@ -509,7 +523,7 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 		s.notifyTransitions(ctx)
 	case strings.HasPrefix(node, "tab:"):
 		s.tab = strings.TrimPrefix(node, "tab:")
-		s.expanded, s.query, s.appQuery = "", "", ""
+		s.expanded, s.query, s.appQuery, s.page = "", "", "", 0
 		s.persistTab(ctx)
 	}
 }
@@ -715,6 +729,15 @@ func panelTree(s *session) *v1.Node {
 	return protonvpn.Panel(s.panelState())
 }
 
+// connsState is the Connections tab's render state, also used to clamp the
+// page before stepping it.
+func (s *session) connsState() protonvpn.ConnectionsState {
+	return protonvpn.ConnectionsState{
+		Query: s.query, QueryReseed: s.queryReseed,
+		Countries: s.countries, Expanded: s.expanded, Page: s.page, Notice: s.notice,
+	}
+}
+
 func (s *session) panelState() protonvpn.PanelState {
 	snap := s.machine.Snapshot()
 	return protonvpn.PanelState{
@@ -722,10 +745,7 @@ func (s *session) panelState() protonvpn.PanelState {
 		Tab:     s.tab,
 		HasCLI:  s.hasCLI,
 		Traffic: s.settings.trafficMonitoring,
-		Conns: protonvpn.ConnectionsState{
-			Query: s.query, QueryReseed: s.queryReseed,
-			Countries: s.countries, Expanded: s.expanded, Notice: s.notice,
-		},
+		Conns:   s.connsState(),
 		Prot: protonvpn.ProtectionState{
 			SplitTunnel: s.stEnabled, Apps: s.stApps,
 			Candidates: s.candidates(s.appQuery), AppQuery: s.appQuery, AppReseed: s.appReseed,
