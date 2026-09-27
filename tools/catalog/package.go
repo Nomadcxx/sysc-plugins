@@ -92,7 +92,7 @@ func packagePlugin(repoRoot, pluginDir, arch, outDir string) (packageResult, err
 	}
 	defer os.RemoveAll(buildDir)
 	binPath := filepath.Join(buildDir, cmdName)
-	if err := buildBinary(repoRoot, "./cmd/"+cmdName, arch, binPath); err != nil {
+	if err := buildBinary(repoRoot, "./cmd/"+cmdName, arch, binPath, cgoPlugins[pluginDir]); err != nil {
 		return packageResult{}, fmt.Errorf("package: %w", err)
 	}
 
@@ -108,13 +108,24 @@ func packagePlugin(repoRoot, pluginDir, arch, outDir string) (packageResult, err
 	return packageResult{Path: archivePath, Size: size, SHA256: sum}, nil
 }
 
+// cgoPlugins are the plugins whose binaries link C libraries: calendar's
+// eds.go needs libecal-2.0 through cgo, so its release build runs with
+// CGO_ENABLED=1 on a matching-arch host that installed the dev package
+// (see .github/workflows/release.yml). Add one entry per future cgo plugin.
+var cgoPlugins = map[string]bool{"calendar": true}
+
 // buildBinary runs the pinned, reproducible build the release workflow
-// relies on: no cgo, a fixed OS/arch pair, trimmed paths, and no build id (Go
-// embeds one by default, and it varies run to run unless suppressed).
-func buildBinary(repoRoot, pkg, arch, out string) error {
+// relies on: cgo only where cgoPlugins says so, a fixed OS/arch pair,
+// trimmed paths, and no build id (Go embeds one by default, and it varies
+// run to run unless suppressed).
+func buildBinary(repoRoot, pkg, arch, out string, cgo bool) error {
+	cgoEnv := "0"
+	if cgo {
+		cgoEnv = "1"
+	}
 	cmd := exec.Command("go", "build", "-trimpath", "-ldflags=-buildid=", "-o", out, pkg)
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+arch)
+	cmd.Env = append(os.Environ(), "CGO_ENABLED="+cgoEnv, "GOOS=linux", "GOARCH="+arch)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("go build %s: %w\n%s", pkg, err, output)
