@@ -33,6 +33,33 @@ func panelSize(t *testing.T) (int, int) {
 	return m.Panels[0].Width, m.Panels[0].Height
 }
 
+func TestManifestKeepsSettingsOffTheUsagePanel(t *testing.T) {
+	raw, err := os.ReadFile("manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Panels []struct {
+			ID              string `json:"id"`
+			IncludeSettings bool   `json:"include_settings"`
+		} `json:"panels"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	entries := make(map[string]bool, len(manifest.Panels))
+	for _, panel := range manifest.Panels {
+		entries[panel.ID] = panel.IncludeSettings
+	}
+	main, ok := entries["panel"]
+	if !ok || main {
+		t.Fatal("usage panel still includes the settings form")
+	}
+	if !entries["settings"] {
+		t.Fatal("dedicated settings panel is missing its settings form")
+	}
+}
+
 // TestViewsFitTheirHostSlots lays every view the plugin can build out with the
 // host's own rules, at the sizes the host uses. v1.Validate is geometry-blind
 // and the host's layout stops at the first rejection, so this matrix — state
@@ -41,6 +68,8 @@ func panelSize(t *testing.T) (int, int) {
 // Height 28 for controls that measure 16, and the panel was refused.
 func TestViewsFitTheirHostSlots(t *testing.T) {
 	panelW, panelH := panelSize(t)
+	// The usage panel now carries the same combined inset in its own root.
+	contentW, contentH := panelW, panelH
 	states := map[string]Report{
 		"fresh": viewReport(),
 		"setup": {Providers: []ProviderReport{{ID: "alpha", Name: "Alpha",
@@ -62,8 +91,13 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 				t.Errorf("%s minor %d bar: %s", name, minor, f)
 			}
 			panel := PanelTree(r, "alpha", hist, cfg, minor, viewNow)
-			for _, f := range shelllint.Tree(panel, v1.ViewPanel, panelW, panelH) {
+			for _, f := range shelllint.Tree(panel, v1.ViewPanel, contentW, contentH) {
 				t.Errorf("%s minor %d panel: %s", name, minor, f)
+			}
+			settings := SettingsPanelTree()
+			for _, f := range shelllint.Tree(settings, v1.ViewPanel,
+				contentW-2*panelContentInset, contentH-2*panelContentInset) {
+				t.Errorf("%s minor %d settings panel: %s", name, minor, f)
 			}
 		}
 	}

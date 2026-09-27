@@ -70,7 +70,8 @@
     }
   ],
   "panels": [
-    {"id": "panel", "width": 750, "height": 430, "placement": "attached", "include_settings": true}
+    {"id": "panel", "width": 758, "height": 450, "placement": "attached"},
+    {"id": "settings", "width": 758, "height": 800, "placement": "attached", "include_settings": true}
   ],
   "settings": [
     {"key": "track_claude", "type": "bool", "label": "Track Claude", "default": true},
