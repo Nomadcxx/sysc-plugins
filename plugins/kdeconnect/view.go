@@ -96,26 +96,43 @@ func MockupKind(dev *Device) string {
 // deviceMockup resolves the device type's mockup artwork: the asset path
 // and the DMS size class for the type. ok is false when the type has no
 // mockup or the asset is not installed, and the card falls back to the
-// type icon.
+// type icon. While the phone reports album art, the composite with the
+// cover in its screen stands in for the plain frame.
 func deviceMockup(dev *Device) (string, int, int, bool) {
 	kind := MockupKind(dev)
-	if kind == "" {
+	p, ok := mockupAsset(kind)
+	if !ok {
 		return "", 0, 0, false
 	}
+	if dev.MockupArt != "" {
+		if _, err := os.Stat(dev.MockupArt); err == nil {
+			p = dev.MockupArt
+		}
+	}
 	size := mockupSizes[kind]
+	return p, size[0], size[1], true
+}
+
+// mockupAsset is the installed artwork for a mockup kind: beside the
+// running executable, the installed plugin's ../assets, unless a test set
+// mockupAssetDir. ok is false for an unknown kind or a missing file.
+func mockupAsset(kind string) (string, bool) {
+	if _, known := mockupSizes[kind]; !known {
+		return "", false
+	}
 	dir := mockupAssetDir
 	if dir == "" {
 		exe, err := os.Executable()
 		if err != nil {
-			return "", 0, 0, false
+			return "", false
 		}
 		dir = filepath.Join(filepath.Dir(exe), "..", "assets")
 	}
 	p := filepath.Join(dir, kind+".png")
 	if _, err := os.Stat(p); err != nil {
-		return "", 0, 0, false
+		return "", false
 	}
-	return p, size[0], size[1], true
+	return p, true
 }
 
 // selectedDevice returns the snapshot's selected device, or nil when the
@@ -933,7 +950,7 @@ func samePanelStructure(prev, next Snapshot) bool {
 			a.VerificationKey != b.VerificationKey ||
 			a.BatteryKnown != b.BatteryKnown || a.NetworkKnown != b.NetworkKnown ||
 			a.NetworkType != b.NetworkType || a.NetworkStrength != b.NetworkStrength ||
-			a.NotificationsKnown != b.NotificationsKnown ||
+			a.NotificationsKnown != b.NotificationsKnown || a.MockupArt != b.MockupArt ||
 			!stringSlicesEqual(a.SupportedPlugins, b.SupportedPlugins) {
 			return false
 		}
