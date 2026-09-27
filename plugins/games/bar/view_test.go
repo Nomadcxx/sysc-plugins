@@ -1,6 +1,7 @@
 package bar
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,18 +11,6 @@ import (
 )
 
 var now = time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
-
-// geomFit clones the pill row with a whitelisted icon. The pinned SDK
-// 7b5d65f predates the sports_esports glyph, so lint's icon whitelist
-// rejects it; this keeps the lint focused on geometry. Drop the swap when
-// the pin catches up (ponytail).
-func geomFit(n *v1.Node) *v1.Node {
-	btn := *n.Children[0]
-	btn.Icon = "schedule"
-	root := *n
-	root.Children = []*v1.Node{&btn}
-	return &root
-}
 
 func TestPillValidatesAsBar(t *testing.T) {
 	running := map[string]Run{"7": {Name: "Hades", Start: now.Add(-5 * time.Minute)}}
@@ -40,7 +29,7 @@ func TestPillValidatesAsBar(t *testing.T) {
 		if len(n.Children[0].Text) > 24 {
 			t.Fatalf("pill text %q exceeds 24-byte bar budget", n.Children[0].Text)
 		}
-		for _, finding := range shelllint.Tree(geomFit(n), v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight) {
+		for _, finding := range shelllint.Tree(n, v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight) {
 			t.Fatalf("bar lint: %v", finding)
 		}
 	}
@@ -124,5 +113,61 @@ func TestElapsed(t *testing.T) {
 		if got := Elapsed(now.Add(-c.d), now); got != c.want {
 			t.Errorf("Elapsed(-%v)=%q want %q", c.d, got, c.want)
 		}
+	}
+}
+
+func TestTooltipValidatesAndFits(t *testing.T) {
+	running := map[string]Run{
+		"7": {Name: "Hades", Start: now.Add(-5 * time.Minute)},
+		"3": {Name: "Baldurs Gate 3 Divinity Original Sin", Start: now.Add(-125 * time.Minute)},
+	}
+	many := map[string]Run{}
+	for i := 0; i < 9; i++ {
+		many[fmt.Sprintf("%d", i)] = Run{Name: fmt.Sprintf("Game %d", i), Start: now.Add(-time.Duration(i) * time.Minute)}
+	}
+	for _, n := range []*v1.Node{
+		TooltipTree(nil, false, 53, now),
+		TooltipTree(nil, true, 0, now),
+		TooltipTree(running, false, 53, now),
+		TooltipTree(many, false, 53, now),
+	} {
+		if err := v1.Validate(n, v1.ViewTooltip); err != nil {
+			t.Fatalf("validate: %v", err)
+		}
+		if n.Kind != v1.KindColumn {
+			t.Fatalf("tooltip root must be a column, got %s", n.Kind)
+		}
+		for _, finding := range shelllint.Tree(n, v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight) {
+			t.Fatalf("tooltip lint: %v", finding)
+		}
+	}
+}
+
+func TestTooltipContent(t *testing.T) {
+	running := map[string]Run{
+		"7": {Name: "Hades", Start: now.Add(-5 * time.Minute)},
+		"3": {Name: "Doom", Start: now.Add(-30 * time.Minute)},
+	}
+	n := TooltipTree(running, false, 53, now)
+	if n.Children[0].Text != "Games" {
+		t.Fatalf("title=%q", n.Children[0].Text)
+	}
+	first := n.Children[1]
+	if first.Kind != v1.KindRow || first.Children[1].Text != "Hades" || first.Children[2].Text != "5m" {
+		t.Fatalf("first row=%+v, want Hades 5m newest-first", first)
+	}
+	if got := TooltipTree(nil, false, 53, now).Children[1].Text; got != "No games running" {
+		t.Fatalf("idle text=%q", got)
+	}
+	if got := TooltipTree(nil, true, 0, now).Children[1].Text; got != "Lutris library not found" {
+		t.Fatalf("missing text=%q", got)
+	}
+	many := map[string]Run{}
+	for i := 0; i < 9; i++ {
+		many[fmt.Sprintf("%d", i)] = Run{Name: fmt.Sprintf("Game %d", i), Start: now.Add(-time.Duration(i) * time.Minute)}
+	}
+	last := TooltipTree(many, false, 53, now).Children
+	if got := last[len(last)-1].Text; got != "+3 more" {
+		t.Fatalf("overflow line=%q, want +3 more", got)
 	}
 }

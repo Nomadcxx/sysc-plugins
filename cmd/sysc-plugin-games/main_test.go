@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 	_ "modernc.org/sqlite"
 )
@@ -221,6 +222,25 @@ func TestBarShowsRunningGame(t *testing.T) {
 	}
 	if pill.Text != "Hades · 0m" {
 		t.Fatalf("pill text = %q", pill.Text)
+	}
+}
+
+func TestTooltipViewLaysOut(t *testing.T) {
+	h := start(t)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "t", View: v1.ViewTooltip, Entry: "bar", Output: "DP-1"})
+	line := h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "t"
+	})
+	snap := snapshotOf(line)
+	if err := v1.Validate(snap.Root, v1.ViewTooltip); err != nil {
+		t.Fatalf("tooltip validate: %v", err)
+	}
+	for _, f := range shelllint.Tree(snap.Root, v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight) {
+		t.Errorf("tooltip lint: %v", f)
+	}
+	if !bytes.Contains(line, []byte("Hades")) {
+		t.Fatalf("tooltip must list the running game: %s", line)
 	}
 }
 
