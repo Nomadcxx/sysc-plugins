@@ -657,6 +657,23 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 	switch a.Kind {
 	case ActionPair, ActionAcceptPair, ActionRejectPair, ActionUnpair:
 		_ = st.reconcileNow(bus)
+	case ActionBrowse:
+		// startBrowsing answers false when the phone refuses the mount; the
+		// daemon keeps the reason, which is what the user can act on.
+		if !replyTrue(call) {
+			reason := "the device refused the mount"
+			if r := bus.object(kdeService, path).Call(sftpIface+".getMountError", 0); r.Err == nil && len(r.Body) > 0 {
+				if text, _ := r.Body[0].(string); text != "" {
+					reason = text
+				}
+			}
+			st.emit(Event{
+				Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
+				Message: actionFailureText(a.Kind, name), Detail: reason,
+				Err: errors.New("kdeconnect: sftp mount failed: " + reason),
+			})
+			return
+		}
 	}
 	st.emit(Event{
 		Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
@@ -711,6 +728,16 @@ func encodeURIComponent(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// replyTrue reports whether a call answered a single true boolean, the
+// sftp mount methods' success reply.
+func replyTrue(call *dbus.Call) bool {
+	if len(call.Body) == 0 {
+		return false
+	}
+	ok, _ := call.Body[0].(bool)
+	return ok
 }
 
 // displayName prefers the device name and falls back to its id, which is
@@ -1050,10 +1077,10 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 		return
 	}
 	obj := bus.object(kdeService, pluginPath(selected, "sftp"))
-	// The pinned SFTP interface carries startBrowsing, mountPoint, and
-	// mountAndWait — no bare mount. startBrowsing is the DMS flow: it mounts
-	// the share and the mountPoint call then reads where it landed.
-	if call := obj.Call(sftpIface+".startBrowsing", 0); call.Err != nil {
+	// mountAndWait mounts without a window; startBrowsing would also open
+	// the file manager, on every background refresh. mountPoint then reads
+	// where the share landed.
+	if call := obj.Call(sftpIface+".mountAndWait", 0); call.Err != nil || !replyTrue(call) {
 		return
 	}
 	call := obj.Call(sftpIface+".mountPoint", 0)
