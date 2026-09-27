@@ -1,6 +1,7 @@
 package aiusage
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -564,6 +565,87 @@ func TestPanelTreeBudgetsWithSixProviders(t *testing.T) {
 	}
 	if d := treeDepth(tree); d > 16 {
 		t.Fatalf("panel depth %d, past the %d budget", d, 16)
+	}
+}
+
+func TestPanelTreeHasSettingsButton(t *testing.T) {
+	tree := PanelTree(viewReport(), "alpha", nil, viewConfig(), 4, viewNow)
+	button := findNodeID(tree, "settings")
+	if button == nil || button.Kind != v1.KindButton || button.Icon != "settings" || button.Name == "" {
+		t.Fatalf("settings action = %+v, want accessible settings icon button", button)
+	}
+}
+
+func TestSettingsPanelHasBackButton(t *testing.T) {
+	tree := SettingsPanelTree()
+	button := findNodeID(tree, "back")
+	if button == nil || button.Kind != v1.KindButton || button.Icon != "chevron_left" || button.Name == "" {
+		t.Fatalf("back action = %+v, want accessible back icon button", button)
+	}
+}
+
+func TestSettingsPanelHasCloseButton(t *testing.T) {
+	button := findNodeID(SettingsPanelTree(), "close")
+	if button == nil || button.Kind != v1.KindButton || button.Name == "" || button.Role != "button" ||
+		len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
+		t.Fatalf("close action = %+v, want accessible close button", button)
+	}
+}
+
+func findNodeID(n *v1.Node, id string) *v1.Node {
+	if n == nil {
+		return nil
+	}
+	if n.ID == id {
+		return n
+	}
+	for _, child := range n.Children {
+		if found := findNodeID(child, id); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func TestPanelTreeGrowsToFitProviderRows(t *testing.T) {
+	t.Parallel()
+
+	const providers = 8
+	rep := Report{}
+	for i := 0; i < providers; i++ {
+		p := freshRep(fmt.Sprintf("provider-%02d", i))
+		p.Name = fmt.Sprintf("Provider %02d", i)
+		rep.Providers = append(rep.Providers, p)
+	}
+	tree := PanelTree(rep, "provider-00", nil, viewConfig(), 4, viewNow)
+	if len(tree.Children) != 1 || len(tree.Children[0].Children) != 2 {
+		t.Fatalf("panel tree shape changed: %+v", tree)
+	}
+	const want = 28 + 60 + providers*42 + (providers - 1) + providers*4
+	list, detail := tree.Children[0].Children[0], tree.Children[0].Children[1]
+	if list.Height != want || detail.Height != want {
+		t.Fatalf("pane heights = %d/%d, want %d to show all provider rows", list.Height, detail.Height, want)
+	}
+}
+
+func TestPanelTreeKeepsTheHostFittedViewport(t *testing.T) {
+	t.Parallel()
+
+	rep := Report{}
+	for i := 0; i < 12; i++ {
+		rep.Providers = append(rep.Providers, ProviderReport{
+			ID: fmt.Sprintf("provider-%02d", i), Name: fmt.Sprintf("Provider %02d", i), State: StateNeedsSetup,
+		})
+	}
+	const fittedHeight = 300
+	tree := PanelTreeAtSurfaceHeight(rep, "provider-00", nil, viewConfig(), 4, viewNow,
+		panelContentChrome+fittedHeight)
+	row := tree.Children[0]
+	if got := row.Children[0].Height; got != fittedHeight {
+		t.Fatalf("provider viewport = %d, want fitted height %d", got, fittedHeight)
+	}
+	if got := row.Children[1].Height; got != fittedHeight {
+		t.Fatalf("detail viewport = %d, want fitted height %d", got, fittedHeight)
 	}
 }
 
