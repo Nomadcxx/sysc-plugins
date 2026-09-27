@@ -191,12 +191,16 @@ func CountryPages(s ConnectionsState) int {
 func pagerRow(page, pages, total int) *v1.Node {
 	first := page*countriesPerPage + 1
 	last := min((page+1)*countriesPerPage, total)
+	// PinEnd reserves the tail only for a two-child row, so the count
+	// travels with the previous button and next holds the right edge.
 	return &v1.Node{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
-		{Kind: v1.KindButton, ID: "page:prev", Name: "Previous page", Role: "button",
-			Icon: "chevron_left", Fill: "soft", Width: 36, Height: 32, Disabled: page == 0,
-			Events: []v1.EventKind{v1.EventActivate}},
-		{Kind: v1.KindText, Text: fmt.Sprintf("%d–%d of %d", first, last, total),
-			Tone: v1.ToneSubtle, Tabular: true},
+		{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+			{Kind: v1.KindButton, ID: "page:prev", Name: "Previous page", Role: "button",
+				Icon: "chevron_left", Fill: "soft", Width: 36, Height: 32, Disabled: page == 0,
+				Events: []v1.EventKind{v1.EventActivate}},
+			{Kind: v1.KindText, Text: fmt.Sprintf("%d–%d of %d", first, last, total),
+				Tone: v1.ToneSubtle, Tabular: true},
+		}},
 		{Kind: v1.KindButton, ID: "page:next", Name: "Next page", Role: "button",
 			Icon: "chevron_right", Fill: "soft", Width: 36, Height: 32, Disabled: page >= pages-1,
 			Events: []v1.EventKind{v1.EventActivate}},
@@ -217,7 +221,7 @@ func countryRow(s ConnectionsState, c Country, expanded bool) *v1.Node {
 		row.Tone = v1.ToneSubtle
 		row.Tooltip = c.Name + " is under maintenance"
 	}
-	lead := &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+	name := &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
 		{Kind: v1.KindText, Text: c.Name, Bold: true, MaxWidth: nameMax},
 	}}
 	meta := &v1.Node{Kind: v1.KindRow, Gap: 4}
@@ -230,8 +234,19 @@ func countryRow(s ConnectionsState, c Country, expanded bool) *v1.Node {
 			&v1.Node{Kind: v1.KindText, Text: serverSummary(c), Tone: v1.ToneSubtle, MaxWidth: nameMax},
 			loadProgress(c))
 	}
-	lead.Children = append(lead.Children, meta)
-	row.Children = append(row.Children, flagGlyph(c, s.Flags), lead, expandButton(c, expanded), connectButton(c))
+	name.Children = append(name.Children, meta)
+	// PinEnd is a two-child contract: the engine reserves the trailing
+	// child's width only for a [leading, trailing] row, while a zero-width
+	// column inside any PinEnd row swallows the whole remainder and pushes
+	// later siblings out of the box. Group glyph plus text as the lead and
+	// the two controls as the tail, the way the shell's device rows do.
+	leading := &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+		flagGlyph(c, s.Flags), name,
+	}}
+	trailing := &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+		expandButton(c, expanded), connectButton(c),
+	}}
+	row.Children = []*v1.Node{leading, trailing}
 	return row
 }
 
@@ -359,8 +374,14 @@ func serverRow(srv Server) *v1.Node {
 		row.Tone = v1.ToneSubtle
 		connect.Tooltip = srv.Name + " is under maintenance"
 	}
-	row.Children = append(row.Children,
-		&v1.Node{Kind: v1.KindIcon, Icon: "dns", Tone: v1.ToneSubtle}, lead, connect)
+	// Two-child PinEnd, as in countryRow: the dns glyph joins the text
+	// column in the lead, the connect button is the whole tail.
+	row.Children = []*v1.Node{
+		{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+			{Kind: v1.KindIcon, Icon: "dns", Tone: v1.ToneSubtle}, lead,
+		}},
+		connect,
+	}
 	return row
 }
 

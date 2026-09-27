@@ -1,8 +1,9 @@
 # ProtonVPN plugin — panel layout handover
 
-Status: the bar click and the node-count rejection are fixed; the panel is
-still rejected by the shell's layout engine. This document hands the remaining
-work to the next session.
+Status: fixed. The bar click opens the panel, the connections tab stays inside
+the node budget, and the layout-engine rejection described below is resolved —
+the panel view now lays out cleanly at 460×580 and at the standalone tab width.
+This document keeps the analysis for the record.
 
 ## What this PR contains
 
@@ -23,7 +24,8 @@ work to the next session.
 
 Tests: `go test -count=1 ./plugins/protonvpn/ ./cmd/sysc-plugin-protonvpn/`
 passes, including `TestConnectionsStaysUnderNodeLimit` (149 countries × 40
-servers) and `TestConnectionsPagerPagesTheList`.
+servers), `TestConnectionsPagerPagesTheList`, and
+`TestPinEndRowsHonorTheTwoChildContract`.
 
 ## Shell-side dependency
 
@@ -34,10 +36,10 @@ The `proton` glyph lives on sysc-shell branch **`feat/proton-glyph`**
 `fontmap.go` face route, and `TestProtonGlyphIsTheMark`. **Not yet merged to
 sysc-shell `main`.**
 
-## The remaining failure
+## The failure that was fixed
 
-The panel view now passes validation but the shell's layout engine rejects it.
-From `journalctl --user -u sysc-shell.service`:
+The panel view passed validation but the shell's layout engine rejected it, so
+no panel opened. From `journalctl --user -u sysc-shell.service`:
 
 ```
 WARN plugin view rejected plugin=org.sysc.protonvpn view=panel revision=1
@@ -77,29 +79,42 @@ The plugin lint does not catch this: `internal/ui/check.go` mirrors Layout's
 loop but only implements the two-child `PinEnd` reservation, and its
 `KindColumn` case explicitly hands the column the row's content box.
 
-## Suggested fix
+## The fix applied
 
-Restructure `countryRow` and `serverRow` to the documented two-child `PinEnd`
-shape, the way the shell's own `bluetoothbody.go:195` does it:
+`countryRow` and `serverRow` were restructured to the documented two-child
+`PinEnd` shape, the way the shell's own `bluetoothbody.go:195` does it:
 
-- `countryRow`: `[leading, trailing]` where `leading` is a row/column holding
-  `flagGlyph` + the name/meta column, and `trailing` is a row holding
+- `countryRow`: `[leading, trailing]` where `leading` is a row holding the
+  `flagGlyph` plus the name/meta column, and `trailing` is a row holding
   `expandButton` + `connectButton`.
 - `serverRow`: `[leading, connectButton]` where `leading` holds the `dns`
-  icon + the name/meta column.
+  icon plus the name/meta column.
+- `pagerRow`: previously a three-child row whose `PinEnd` was inert; it is
+  now `[prev + count, next]` so the page stepper really right-pins.
 
-Alternatively drop `PinEnd` and give the lead column an explicit `Width`, but
-the two-child shape matches the shell contract and keeps the controls
-right-aligned.
+Node IDs are unchanged (`country:XX`, `expand:XX`, `connect:XX`,
+`server:XX`, `server-connect:XX`, `page:prev`, `page:next`), so the event
+handlers in `cmd/sysc-plugin-protonvpn/main.go` still match.
 
-## Reproduction
+`TestPinEndRowsHonorTheTwoChildContract` walks every view the plugin can
+publish (all three tabs plus bar and tooltip in every phase) and fails on any
+`PinEnd` row that is not exactly two children — the lint mirror cannot catch
+this class, so the contract is asserted plugin-side.
+
+Verified against the real engine, not just lint: a scratch test in a
+`feat/proton-glyph` worktree drives the shell's internal `ui.LayoutColumn`
+over `Panel()` at 460×580 and every tab body standalone at the 436px content
+width, with worst-case long names and full pagination. Pre-fix it reproduced
+the journal error above verbatim; post-fix all cases lay out clean.
+
+## Verifying on the laptop
 
 Laptop `192.168.0.64:7777` (user `nomadx`), shell deployed from
 `feat/proton-glyph` via `scripts/deploy --host laptop --force …`; plugin
 binary at `~/sysc-plugins-main/plugins/protonvpn/bin/`. Click the pill at
 (848, 24) with `ydotool` (`YDOTOOL_SOCKET=/tmp/.ydotool_socket`, left button
-`0x00`), then read the journal. The error popup under the bar shows the same
-message.
+`0x00`), then read the journal: the panel should open and no
+`plugin view rejected` line should appear.
 
 ## Still open from the previous handover
 
