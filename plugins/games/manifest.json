@@ -11,6 +11,7 @@
   "exec": "bin/sysc-plugin-games",
   "capabilities": [
     "floating_surfaces",
+    "notifications",
     "panels",
     "settings",
     "state"
