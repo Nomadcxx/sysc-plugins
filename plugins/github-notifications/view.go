@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -82,7 +83,7 @@ func PanelTreeForState(state PanelState) *v1.Node {
 	switch state.Mode {
 	case ModeWork:
 		children = append(children,
-			input("search", "Search work items…", state.Search, state.ViewID),
+			workSearch(state.Search, state.ViewID),
 			workCategoryRow(state.WorkKind, state.WorkFeeds),
 			feedList(workListHeight, workBody(state.Work, state.Search)),
 		)
@@ -133,7 +134,7 @@ func workCategoryRow(kind WorkKind, feeds map[WorkKind]WorkSnapshot) *v1.Node {
 		}
 		children = append(children, tab("work:"+string(category.kind), category.label+count, kind == category.kind, category.label))
 	}
-	return &v1.Node{Kind: v1.KindSegmented, Height: 36, Gap: 2, Children: children}
+	return &v1.Node{Kind: v1.KindSegmented, Height: 32, Gap: 2, Children: children}
 }
 
 func inboxBody(snapshot InboxSnapshot, query string) *v1.Node {
@@ -145,7 +146,7 @@ func inboxBody(snapshot InboxSnapshot, query string) *v1.Node {
 	case len(items) == 0 && snapshot.Status == StatusLoading:
 		children = append(children, message("inbox-empty", "Loading unread notifications…", false))
 	case len(items) == 0 && snapshot.Status != StatusError:
-		children = append(children, message("inbox-empty", "No unread notifications", false))
+		children = append(children, emptyState("inbox-empty", "You're all caught up"))
 	case len(items) > 0:
 		for _, item := range items {
 			children = append(children, notificationRow(item))
@@ -203,36 +204,91 @@ func activityBody(snapshot ActivitySnapshot) *v1.Node {
 		return &v1.Node{Kind: v1.KindColumn, ID: "activity-feed", Gap: 8, Children: children}
 	}
 	children = append(children,
-		&v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d contributions · %d active days", snapshot.TotalContributions, snapshot.ActiveDays), Size: "title"},
-		activityMonthLabels(snapshot.Weeks),
-		activityGrid(snapshot.Weeks),
-		&v1.Node{Kind: v1.KindText, Text: "Daily contribution activity · trailing year", Tone: v1.ToneSubtle, Size: "caption"},
+		&v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+			statTile(humanize(snapshot.TotalContributions), "contributions"),
+			statTile(humanize(snapshot.ActiveDays), "active days"),
+		}},
+		&v1.Node{Kind: v1.KindColumn, Fill: "outline", Radius: 10, Padding: 10, Gap: 6, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: "Trailing year", Size: "label", Bold: true},
+			activityMonthLabels(snapshot.Weeks),
+			activityGrid(snapshot.Weeks),
+			activityLegend(),
+		}},
 	)
-	return &v1.Node{Kind: v1.KindColumn, ID: "activity-feed", Gap: 8, Children: children}
+	return &v1.Node{Kind: v1.KindColumn, ID: "activity-feed", Gap: 10, Children: children}
 }
 
+// activityMonthLabels sets each month's name over the week column where it
+// starts, so the labels line up with the grid instead of packing left.
 func activityMonthLabels(weeks []ActivityWeek) *v1.Node {
-	months := make([]string, 0, 13)
+	type start struct {
+		week  int
+		label string
+	}
+	var starts []start
 	last := ""
-	for _, week := range weeks {
+	for wi, week := range weeks {
 		for _, day := range week.Days {
 			if day.Date == "" {
 				continue
 			}
-			month := day.Date[:7]
-			if month != last {
+			if month := day.Date[:7]; month != last {
 				parsed, _ := time.Parse("2006-01", month)
-				months = append(months, parsed.Format("Jan"))
+				starts = append(starts, start{wi, parsed.Format("Jan")})
 				last = month
 			}
 			break
 		}
 	}
-	children := make([]*v1.Node, len(months))
-	for i, month := range months {
-		children[i] = &v1.Node{Kind: v1.KindText, Text: month, Size: "caption", Width: 24}
+	children := make([]*v1.Node, 0, len(starts))
+	for i, st := range starts {
+		end, trailing := len(weeks), activityGap // the grid has no gap after its last week
+		if i+1 < len(starts) {
+			end, trailing = starts[i+1].week, 0
+		}
+		text := st.label
+		if end-st.week < 4 {
+			text = "" // a sliver of a month has no room for its name
+		}
+		// Text measures its own width, so a sized column holds each slot.
+		children = append(children, &v1.Node{Kind: v1.KindColumn, Width: (end-st.week)*activityPitch - trailing,
+			Children: []*v1.Node{{Kind: v1.KindText, Text: text, Size: "caption", Tone: v1.ToneSubtle}}})
 	}
-	return &v1.Node{Kind: v1.KindRow, ID: "activity-months", Gap: 2, Children: children}
+	return &v1.Node{Kind: v1.KindRow, ID: "activity-months", Children: children}
+}
+
+// One week column is a cell plus its gap; 53 of them fill the card.
+const (
+	activityCell  = 6
+	activityGap   = 1
+	activityPitch = activityCell + activityGap
+)
+
+func activityLegend() *v1.Node {
+	row := &v1.Node{Kind: v1.KindRow, Gap: 3, Children: []*v1.Node{
+		{Kind: v1.KindText, Text: "Less", Size: "caption", Tone: v1.ToneSubtle},
+	}}
+	for _, level := range []ContributionLevel{ContributionNone, ContributionFirstQuartile, ContributionSecondQuartile, ContributionThirdQuartile, ContributionFourthQuartile} {
+		row.Children = append(row.Children, &v1.Node{Kind: v1.KindColumn, Width: 8, Height: 8, Fill: contributionFill(level), Radius: 2})
+	}
+	row.Children = append(row.Children, &v1.Node{Kind: v1.KindText, Text: "More", Size: "caption", Tone: v1.ToneSubtle})
+	return row
+}
+
+func statTile(value, label string) *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, Fill: "outline", Radius: 10, Padding: 10, Gap: 2, Width: 186, Children: []*v1.Node{
+		{Kind: v1.KindText, Text: value, Size: "headline", Bold: true, Tabular: true},
+		{Kind: v1.KindText, Text: label, Size: "caption", Tone: v1.ToneSubtle},
+	}}
+}
+
+// humanize groups the thousands of a non-negative count: 1184 reads as 1,184.
+func humanize(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }
 
 func activityGrid(weeks []ActivityWeek) *v1.Node {
@@ -241,15 +297,15 @@ func activityGrid(weeks []ActivityWeek) *v1.Node {
 		days := make([]*v1.Node, 7)
 		for weekday, day := range week.Days {
 			fill := contributionFill(day.Level)
-			cell := &v1.Node{Kind: v1.KindColumn, Key: fmt.Sprintf("activity:%d:%d", wi, weekday), Width: 5, Height: 7, Fill: fill, Radius: 1}
+			cell := &v1.Node{Kind: v1.KindColumn, Key: fmt.Sprintf("activity:%d:%d", wi, weekday), Width: activityCell, Height: activityCell, Fill: fill, Radius: 1}
 			if day.Date != "" {
 				cell.Tooltip = fmt.Sprintf("%s · %s", day.Date, plural(day.Count, "contribution"))
 			}
 			days[weekday] = cell
 		}
-		columns[wi] = &v1.Node{Kind: v1.KindColumn, Width: 5, Gap: 2, Children: days}
+		columns[wi] = &v1.Node{Kind: v1.KindColumn, Width: activityCell, Gap: activityGap, Children: days}
 	}
-	return &v1.Node{Kind: v1.KindRow, ID: "activity-heatmap", Gap: 2, Children: columns}
+	return &v1.Node{Kind: v1.KindRow, ID: "activity-heatmap", Gap: activityGap, Children: columns}
 }
 
 func contributionFill(level ContributionLevel) string {
@@ -268,45 +324,60 @@ func contributionFill(level ContributionLevel) string {
 }
 
 func notificationRow(item Item) *v1.Node {
-	marker := item.Type
+	label, tone := item.Type, v1.ToneSubtle
 	switch item.Type {
 	case "PullRequest":
-		marker = "PR"
-	case "Issue":
-		marker = "Issue"
+		label = "PR"
 	case "CheckSuite":
-		marker = "CI"
+		label = "CI"
 	}
-	return &v1.Node{Kind: v1.KindColumn, Key: "notification:" + item.ID, Gap: 2, Children: []*v1.Node{
-		{Kind: v1.KindRow, Height: 36, Gap: 6, PinEnd: true, Children: []*v1.Node{
-			{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
-				{Kind: v1.KindText, Text: marker, Width: 34, Size: "caption", Tone: v1.ToneAccent},
-				{Kind: v1.KindButton, ID: "open:" + item.ID, Text: bounded(item.Title, 80), Name: bounded("Open "+item.Title+" in GitHub", v1.MaxIdentBytes), Role: "button", Events: []v1.EventKind{v1.EventActivate}, Width: 220, MaxWidth: 220},
-			}},
-			{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
-				{Kind: v1.KindText, Text: item.RelativeTime, Width: 30, Tabular: true, Tone: v1.ToneSubtle},
-				{Kind: v1.KindButton, ID: "read:" + item.ID, Text: "Read", Name: bounded("Mark "+item.Title+" as read", v1.MaxIdentBytes), Role: "button", Events: []v1.EventKind{v1.EventActivate}, Fill: "soft", Shape: "stadium", Padding: 8, Height: 28},
-			}},
-		}},
-		{Kind: v1.KindText, Text: item.Repo + " · " + item.ReasonLabel, Tone: v1.ToneSubtle, Size: "caption"},
+	if item.IsFailure {
+		tone = v1.ToneError
+	}
+	return &v1.Node{Kind: v1.KindRow, Key: "notification:" + item.ID, Gap: rowGap, PinEnd: true, Children: []*v1.Node{
+		feedCard("open:"+item.ID, "Open "+item.Title+" in GitHub", rowWidth-rowGap-readSize, item.Title, item.RelativeTime,
+			label, tone, item.Repo+" · "+item.ReasonLabel),
+		{Kind: v1.KindButton, ID: "read:" + item.ID, Icon: "check", Name: bounded("Mark "+item.Title+" as read", v1.MaxIdentBytes),
+			Tooltip: "Mark read", Role: "button", Fill: "soft", Shape: "circle", Width: readSize, Height: readSize,
+			Events: []v1.EventKind{v1.EventActivate}},
 	}}
 }
 
-func workRow(item WorkItem) *v1.Node {
-	marker := "PR"
-	if item.Kind == WorkIssues {
-		marker = "Issue"
-	}
-	return &v1.Node{Kind: v1.KindColumn, Key: "work:" + workToken(item.URL), Gap: 2, Children: []*v1.Node{
-		{Kind: v1.KindRow, Height: 36, Gap: 6, PinEnd: true, Children: []*v1.Node{
-			{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
-				{Kind: v1.KindText, Text: marker, Width: 34, Size: "caption", Tone: v1.ToneAccent},
-				{Kind: v1.KindButton, ID: WorkOpenID(item), Text: bounded(item.Title, 110), Name: bounded("Open "+item.Title+" in GitHub", 120), Role: "button", Events: []v1.EventKind{v1.EventActivate}, Width: 280, MaxWidth: 280},
-			}},
-			{Kind: v1.KindText, Text: item.RelativeTime, Width: 36, Tabular: true, Tone: v1.ToneSubtle},
+// Feed rows stop short of the list's right edge so its scrollbar never
+// paints over a row's trailing action.
+const (
+	rowWidth = 380
+	rowGap   = 8
+	readSize = 32
+)
+
+// feedCard is one outlined, activatable feed row: the title over a line
+// naming the item's type and where it came from.
+func feedCard(id, name string, width int, title, when, label string, tone v1.Tone, meta string) *v1.Node {
+	inner := width - 20
+	return &v1.Node{Kind: v1.KindButton, ID: id, Name: bounded(name, v1.MaxIdentBytes), Role: "button",
+		Fill: "outline", Radius: 10, Padding: 10, Width: width, Height: 54,
+		Events: []v1.EventKind{v1.EventActivate}, Children: []*v1.Node{{
+			Kind: v1.KindColumn, Gap: 3, Children: []*v1.Node{
+				// Title and age form a label/value pair, so the host pins the age right.
+				{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+					{Kind: v1.KindText, Text: bounded(title, 110), MaxWidth: inner - 44},
+					{Kind: v1.KindText, Text: when, Size: "caption", Tone: v1.ToneSubtle, Tabular: true},
+				}},
+				// One text node: a full page of rows must stay under v1.MaxNodes.
+				{Kind: v1.KindText, Text: bounded(label+" · "+meta, 160), Size: "caption", Tone: tone, MaxWidth: inner},
+			},
 		}},
-		{Kind: v1.KindText, Text: fmt.Sprintf("%s · #%d", item.Repo, item.Number), Tone: v1.ToneSubtle, Size: "caption"},
-	}}
+	}
+}
+
+func workRow(item WorkItem) *v1.Node {
+	label := "PR"
+	if item.Kind == WorkIssues {
+		label = "Issue"
+	}
+	return feedCard(WorkOpenID(item), "Open "+item.Title+" in GitHub", rowWidth, item.Title, item.RelativeTime,
+		label, v1.ToneSubtle, fmt.Sprintf("%s · #%d", item.Repo, item.Number))
 }
 
 func WorkOpenID(item WorkItem) string { return "work-open:" + workToken(item.URL) }
@@ -334,6 +405,12 @@ func feedMessages(status Status, err string, stale bool, updated time.Time, load
 	return children
 }
 
+func workSearch(value, viewID string) *v1.Node {
+	search := input("search", "Search work items…", value, viewID)
+	search.Width = rowWidth
+	return search
+}
+
 func input(id, placeholder, value, viewID string) *v1.Node {
 	return &v1.Node{Kind: v1.KindTextInput, ID: id, Key: "github-search:" + viewID, Text: value, Placeholder: placeholder,
 		Name: placeholder, Role: "textbox", Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}, Height: 40, Width: 248}
@@ -351,6 +428,14 @@ func button(id, label, name, fill string) *v1.Node {
 func tab(id, label string, selected bool, name string) *v1.Node {
 	return &v1.Node{Kind: v1.KindButton, ID: id, Text: label, Name: bounded(name, v1.MaxIdentBytes), Role: "tab",
 		Selected: selected, Padding: 3, Events: []v1.EventKind{v1.EventActivate}}
+}
+
+// emptyState is a quiet, centred GitHub mark over one line of text.
+func emptyState(id, text string) *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, Gap: 10, Padding: 48, Width: rowWidth, Children: []*v1.Node{
+		{Kind: v1.KindIcon, Icon: "github", IconSize: 40, Tone: v1.ToneSubtle, CenterX: true},
+		{Kind: v1.KindText, ID: id, Text: text, Tone: v1.ToneSubtle, CenterX: true},
+	}}
 }
 
 func message(id, text string, isError bool) *v1.Node {
