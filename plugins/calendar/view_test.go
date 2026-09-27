@@ -104,6 +104,15 @@ func TestBarCountdownAndTooltipHaveAccessibleEventContext(t *testing.T) {
 	if err := v1.Validate(bar, v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
+	for _, finding := range lint.Tree(bar, v1.ViewBar, lint.BarWidth, lint.BarHeight) {
+		t.Fatalf("bar lint: %v", finding)
+	}
+	// Worst-case countdown ("in 23h 59m") must still leave the label inside
+	// the 240x32 capsule.
+	later := BarTree([]Event{{ID: "x", Summary: "A very long event summary that must be truncated", Start: now.Add(23*time.Hour + 59*time.Minute), End: now.Add(24 * time.Hour)}}, now)
+	for _, finding := range lint.Tree(later, v1.ViewBar, lint.BarWidth, lint.BarHeight) {
+		t.Fatalf("long-countdown bar lint: %v", finding)
+	}
 	if !strings.Contains(barTooltip(bar), "Room 4") || !strings.Contains(barTooltip(bar), "Meeting link available") {
 		t.Fatalf("bar tooltip lacks full details: %q", barTooltip(bar))
 	}

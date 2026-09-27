@@ -38,7 +38,9 @@ func BarTree(events []Event, now time.Time) *v1.Node {
 	if active {
 		status = "Now"
 	}
-	label := truncateText(event.Summary, 24) + "  " + status
+	// Bar capsule fits 240x32 = icon + 24 bytes of label (lint.Tree proves
+	// this in view_test); reserve the separator and the widest countdown.
+	label := truncateText(event.Summary, max(22-len(status), 8)) + "  " + status
 	return &v1.Node{Kind: v1.KindRow, Gap: 6, Tooltip: eventTooltip(event, now, active), Children: []*v1.Node{{
 		Kind: v1.KindButton, ID: "calendar-open", Icon: "calendar_month", Text: label, Name: "Open calendar. " + eventAccessibleName(event, now.Location()), Role: "button",
 		Fill: "card", Tabular: true, Events: []v1.EventKind{v1.EventActivate},

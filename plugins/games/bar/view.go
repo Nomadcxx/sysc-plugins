@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"time"
+	"unicode/utf8"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -24,11 +25,16 @@ func Elapsed(start, now time.Time) string {
 	return fmt.Sprintf("%dh %02dm", m/60, m%60)
 }
 
+// Pill returns the bar view root: a row wrapping the button, because the
+// host's Convert refuses any non-row bar root (internal/plugin/view.go).
 func Pill(running map[string]Run, libraryMissing bool, now time.Time) *v1.Node {
 	n := &v1.Node{
 		Kind: v1.KindButton, ID: "bar", Key: "bar",
 		Icon: "sports_esports", Name: "games", Role: "button",
 		Events: []v1.EventKind{v1.EventActivate, v1.EventPointer},
+		// Host wraps bar roots in a capsule; card fill keeps the pill from
+		// painting a lighter inner shape (same contract as calendar/cat).
+		Fill: "card",
 	}
 	switch len(running) {
 	case 0:
@@ -37,14 +43,32 @@ func Pill(running map[string]Run, libraryMissing bool, now time.Time) *v1.Node {
 		}
 	case 1:
 		for _, r := range running {
-			n.Text = r.Name + " · " + Elapsed(r.Start, now)
+			n.Text = fitLabel(r.Name, " · "+Elapsed(r.Start, now))
 		}
 		n.Tabular = true
 	default:
 		first := newest(running)
-		n.Text = fmt.Sprintf("%s +%d", first, len(running)-1)
+		n.Text = fitLabel(first, fmt.Sprintf(" +%d", len(running)-1))
 	}
-	return n
+	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{n}}
+}
+
+// fitLabel keeps "name+suffix" within the 24-byte text budget of a bar pill
+// (240x32 capsule minus icon/padding; measured bytes x8px). Long Lutris titles
+// would otherwise overflow and the host would refuse the whole view.
+func fitLabel(name, suffix string) string {
+	const budget = 24
+	if len(name)+len(suffix) <= budget {
+		return name + suffix
+	}
+	keep := budget - 3 - len(suffix) // 3 = bytes in "…"
+	if keep < 1 {
+		keep = 1
+	}
+	for keep > 0 && !utf8.ValidString(name[:keep]) {
+		keep-- // cut on a rune boundary
+	}
+	return name[:keep] + "…" + suffix
 }
 
 func newest(running map[string]Run) string {
