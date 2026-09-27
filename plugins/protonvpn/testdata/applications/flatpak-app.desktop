@@ -1,0 +1,4 @@
+[Desktop Entry]
+Name=Flatpak App
+Exec=flatpak run org.example.App
+Type=Application

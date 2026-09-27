@@ -1,0 +1,4 @@
+[Desktop Entry]
+Name=Code
+Exec=code --no-sandbox
+Type=Application

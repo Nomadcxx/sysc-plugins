@@ -1,0 +1,4 @@
+[Desktop Entry]
+Name=Web Kiosk Launcher
+Exec=env BROWSER=firefox firefox
+Type=Application

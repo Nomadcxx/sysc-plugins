@@ -1,0 +1,4 @@
+[Desktop Entry]
+Name=Snap App
+Exec=snap run example
+Type=Application

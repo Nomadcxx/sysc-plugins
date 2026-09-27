@@ -1,0 +1,4 @@
+[Desktop Entry]
+Name=Setuid Tool
+Exec=setuid-tool
+Type=Application
