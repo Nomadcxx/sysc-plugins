@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,6 +96,9 @@ type kdeconnectHost struct {
 	revs  map[string]uint64
 	slots map[string]viewSlot
 	wake  chan struct{}
+	// panelW and panelH are the manifest's panel size, the box a host
+	// opens the panel with; the tree's fixed widths are derived from it.
+	panelW, panelH int
 }
 
 func startKDEConnect(t *testing.T) *kdeconnectHost {
@@ -111,6 +115,12 @@ func startKDEConnect(t *testing.T) *kdeconnectHost {
 	}
 	if err := os.WriteFile(filepath.Join(pluginDir, "manifest.json"), manifest, 0o644); err != nil {
 		t.Fatal(err)
+	}
+	var declared struct {
+		Panels []struct{ Width, Height int } `json:"panels"`
+	}
+	if err := json.Unmarshal(manifest, &declared); err != nil || len(declared.Panels) == 0 {
+		t.Fatalf("manifest panel size: %v %+v", err, declared)
 	}
 	if err := os.CopyFS(filepath.Join(pluginDir, "assets"), os.DirFS(filepath.Join(root, "plugins/kdeconnect/assets"))); err != nil {
 		t.Fatal(err)
@@ -145,6 +155,9 @@ func startKDEConnect(t *testing.T) *kdeconnectHost {
 		roots: map[string]*v1.Node{},
 		revs:  map[string]uint64{},
 		wake:  make(chan struct{}, 1),
+
+		panelW: declared.Panels[0].Width,
+		panelH: declared.Panels[0].Height,
 	}
 	dec := v1.NewDecoder(stdout, v1.ToHost)
 	done := make(chan error, 1)
@@ -221,9 +234,9 @@ func (h *kdeconnectHost) openBar() {
 func (h *kdeconnectHost) openPanel() {
 	h.t.Helper()
 	h.mu.Lock()
-	h.slots = recordSlot(h.slots, "panel-1", viewSlot{v1.ViewPanel, 400, 520})
+	h.slots = recordSlot(h.slots, "panel-1", viewSlot{v1.ViewPanel, h.panelW, h.panelH})
 	h.mu.Unlock()
-	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Output: "DP-1", Width: 400, Height: 520}); err != nil {
+	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Output: "DP-1", Width: h.panelW, Height: h.panelH}); err != nil {
 		h.t.Fatal(err)
 	}
 }
