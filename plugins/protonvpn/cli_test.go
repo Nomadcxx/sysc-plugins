@@ -38,6 +38,7 @@ func TestParseStatusErrors(t *testing.T) {
 	}{
 		{"unknown status value", "Status: Weird\n"},
 		{"missing status key", "Server: US-NY#1\nLoad: 30%\n"},
+		{"bad load value", "Status: connected\nLoad: soon%\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

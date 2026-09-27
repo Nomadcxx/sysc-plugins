@@ -185,7 +185,11 @@ func ParseStatus(stdout string) (Status, error) {
 			s.Location = loc
 			s.Country = serverCountry(name)
 		case "load":
-			s.Load, _ = strconv.Atoi(strings.TrimSuffix(val, "%"))
+			n, err := strconv.Atoi(strings.TrimSuffix(val, "%"))
+			if err != nil {
+				return Status{}, fmt.Errorf("protonvpn: bad Load %q", val)
+			}
+			s.Load = n
 		case "protocol":
 			s.Protocol = val
 		}

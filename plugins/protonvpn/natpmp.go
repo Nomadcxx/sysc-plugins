@@ -93,12 +93,12 @@ func (n NATPMP) RequestPort(ctx context.Context) (int, error) {
 
 func (n NATPMP) mapBoth(ctx context.Context, conn *net.UDPConn) (int, error) {
 	var port int
-	for _, op := range []uint8{2, 1} { // UDP first, then TCP
+	for _, op := range []uint8{1, 2} { // UDP (op 1) first, then TCP (op 2)
 		p, err := n.request(ctx, conn, op)
 		if err != nil {
 			return 0, err
 		}
-		if op == 2 {
+		if op == 1 {
 			port = p
 		}
 	}

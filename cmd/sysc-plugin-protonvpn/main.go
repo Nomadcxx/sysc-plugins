@@ -25,7 +25,7 @@ func main() {
 		cliBin:       "protonvpn",
 		lookPath:     exec.LookPath,
 		serversPath:  filepath.Join(home, ".cache", "Proton", "VPN", "serverlist.json"),
-		settingsPath: filepath.Join(home, ".config", "protonvpn", "settings.json"),
+		settingsPath: filepath.Join(home, ".config", "Proton", "VPN", "settings.json"),
 	}
 	if err := runPlugin(os.Stdin, os.Stdout, env); err != nil {
 		os.Exit(1)
@@ -151,7 +151,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	s := &session{
 		env: env, client: c, settings: defaultSettings(), views: map[string]view{},
 		machine: &protonvpn.Machine{},
-		cli:     &protonvpn.CLI{Bin: env.cliBin, Timeout: 30 * time.Second},
+		cli:     &protonvpn.CLI{Bin: env.cliBin, Timeout: 10 * time.Second},
 		async:   make(chan func(), 8),
 		tab:     "connections",
 	}
@@ -217,6 +217,9 @@ func (s *session) startup(ctx context.Context) {
 		s.hasCopyTool = s.probeCopyTool()
 	}
 	s.restoreTab(ctx)
+	if enabled, apps, err := protonvpn.ReadSplitTunnel(s.env.settingsPath); err == nil {
+		s.stEnabled, s.stApps = enabled, apps
+	}
 	s.loadServers()
 	s.scanApps()
 	if s.hasCLI {
@@ -267,7 +270,7 @@ func (s *session) loadServers() {
 		for _, c := range protonvpn.FallbackCountries() {
 			names[c.Code] = c.Name
 		}
-		s.countries = protonvpn.Aggregate(servers, names, false)
+		s.countries = protonvpn.Aggregate(servers, names, true)
 		return
 	}
 	s.countries = protonvpn.FallbackCountries()
@@ -351,6 +354,7 @@ func (s *session) sampleTraffic() {
 	rx, rxOK := read("rx_bytes")
 	tx, txOK := read("tx_bytes")
 	if !rxOK && !txOK {
+		s.machine.SampleTraffic(0, 0, false)
 		return
 	}
 	s.machine.SampleTraffic(rx, tx, true)
@@ -482,7 +486,7 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	case node == "app-query" && m.Event == v1.EventChange:
 		s.appQuery = m.Text
 	case strings.HasPrefix(node, "app-suggest:"):
-		s.editSplitApps(ctx, append(s.stApps, strings.TrimPrefix(node, "app-suggest:")))
+		s.editSplitApps(append(s.stApps, strings.TrimPrefix(node, "app-suggest:")))
 	case strings.HasPrefix(node, "del-app:"):
 		path := strings.TrimPrefix(node, "del-app:")
 		var keep []string
@@ -491,7 +495,7 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 				keep = append(keep, a)
 			}
 		}
-		s.editSplitApps(ctx, keep)
+		s.editSplitApps(keep)
 	case node == "signin-user" && m.Event == v1.EventChange:
 		s.userDraft = m.Text
 	case node == "signin":
@@ -589,23 +593,23 @@ func (s *session) setConfig(ctx context.Context, key, value string) {
 }
 
 func (s *session) toggleSplitTunnel(ctx context.Context) {
-	s.stEnabled = !s.stEnabled
-	if err := protonvpn.WriteSplitTunnel(s.env.settingsPath, s.stEnabled, s.stApps); err != nil {
+	enabled := !s.stEnabled
+	if err := protonvpn.WriteSplitTunnel(s.env.settingsPath, enabled, s.stApps); err != nil {
 		s.fileErr = err.Error()
 		return
 	}
-	if s.stEnabled {
+	s.stEnabled = enabled
+	if enabled {
 		s.notify(ctx, "Split tunneling enabled. Remember to restart affected apps.")
 	}
 }
 
-func (s *session) editSplitApps(ctx context.Context, apps []string) {
-	s.stApps = apps
-	if err := protonvpn.WriteSplitTunnel(s.env.settingsPath, s.stEnabled, s.stApps); err != nil {
+func (s *session) editSplitApps(apps []string) {
+	if err := protonvpn.WriteSplitTunnel(s.env.settingsPath, s.stEnabled, apps); err != nil {
 		s.fileErr = err.Error()
 		return
 	}
-	_ = ctx
+	s.stApps = apps
 }
 
 func (s *session) spawnSignIn() {
@@ -688,19 +692,6 @@ func (s *session) snapshotAll() {
 	}
 }
 
-func (s *session) patch(id string, repl []v1.Replacement) {
-	v := s.views[id]
-	if v.rev == 0 {
-		s.snapshot(id)
-		return
-	}
-	if err := s.client.Patch(id, v.rev, v.rev+1, repl); err != nil {
-		return
-	}
-	v.rev++
-	s.views[id] = v
-}
-
 func (s *session) call(ctx context.Context, kind v1.CallKind, params any) (v1.HostReply, error) {
 	if s.env.callTimeout > 0 {
 		var cancel context.CancelFunc
@@ -717,7 +708,7 @@ func barTree(s *session) *v1.Node {
 
 func tooltipTree(s *session) *v1.Node {
 	snap := s.machine.Snapshot()
-	return protonvpn.Tooltip(protonvpn.BarState{Snap: snap, Mode: s.settings.barMode, Quick: s.settings.quickConnect})
+	return protonvpn.Tooltip(protonvpn.BarState{Snap: snap, Mode: s.settings.barMode, Quick: s.settings.quickConnect, Traffic: s.settings.trafficMonitoring})
 }
 
 func panelTree(s *session) *v1.Node {

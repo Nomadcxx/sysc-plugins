@@ -75,7 +75,11 @@ func TestNATPMPAgainstFakeGateway(t *testing.T) {
 			resp[1] = req[1] // echo opcode
 			resp[7] = 7      // epoch
 			copy(resp[8:10], req[6:8])
-			binary.BigEndian.PutUint16(resp[10:12], 4160) // gateway's mapped port
+			if req[1] == 1 {
+				binary.BigEndian.PutUint16(resp[10:12], 4160) // UDP mapping
+			} else {
+				binary.BigEndian.PutUint16(resp[10:12], 4161) // TCP mapping
+			}
 			binary.BigEndian.PutUint32(resp[12:16], 60)
 			ln.WriteToUDP(resp, peer)
 		}
@@ -88,6 +92,6 @@ func TestNATPMPAgainstFakeGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	if port != 4160 {
-		t.Fatalf("got %d, want the gateway's mapped port", port)
+		t.Fatalf("got %d, want the UDP mapping's port", port)
 	}
 }

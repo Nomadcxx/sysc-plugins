@@ -133,6 +133,7 @@ func countryRow(s ConnectionsState, c Country, expanded bool) *v1.Node {
 	}
 	if c.Maintenance {
 		row.Tone = v1.ToneSubtle
+		row.Tooltip = c.Name + " is under maintenance"
 	}
 	lead := &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
 		{Kind: v1.KindText, Text: c.Name, Bold: true, MaxWidth: nameMax},

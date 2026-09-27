@@ -153,7 +153,7 @@ func portForwardingCard(s ProtectionState) *v1.Node {
 			})
 		}
 		card.Children = append(card.Children, row)
-	case s.Port == 0:
+	case s.Snap.Phase == PhaseConnected && s.Port == 0:
 		card.Children = append(card.Children, &v1.Node{
 			Kind: v1.KindText, Text: "Negotiating port…", Tone: v1.ToneSubtle,
 		})

@@ -9,9 +9,10 @@ import (
 
 // BarState is everything the bar and tooltip render from.
 type BarState struct {
-	Snap  Snapshot
-	Mode  string // icon | code | status
-	Quick string // quick_connect setting, for the tooltip hint
+	Snap    Snapshot
+	Mode    string // icon | code | status
+	Quick   string // quick_connect setting, for the tooltip hint
+	Traffic bool   // traffic_monitoring setting; gates the tooltip rates line
 }
 
 // statusWord is the human phase name shown in status mode and the tooltip.
@@ -123,13 +124,15 @@ func Tooltip(s BarState) *v1.Node {
 	if s.Snap.IP != "" {
 		lines = append(lines, &v1.Node{Kind: v1.KindText, Text: s.Snap.IP, Tone: v1.ToneSubtle})
 	}
-	lines = append(lines, &v1.Node{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
-		{Kind: v1.KindIcon, Icon: "download", Tone: v1.ToneSubtle},
-		{Kind: v1.KindText, Text: formatRate(s.Snap.RxRate), Tabular: true},
-		{Kind: v1.KindText, Text: "·", Tone: v1.ToneSubtle},
-		{Kind: v1.KindIcon, Icon: "upload", Tone: v1.ToneSubtle},
-		{Kind: v1.KindText, Text: formatRate(s.Snap.TxRate), Tabular: true},
-	}})
+	if s.Traffic {
+		lines = append(lines, &v1.Node{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
+			{Kind: v1.KindIcon, Icon: "download", Tone: v1.ToneSubtle},
+			{Kind: v1.KindText, Text: formatRate(s.Snap.RxRate), Tabular: true},
+			{Kind: v1.KindText, Text: "·", Tone: v1.ToneSubtle},
+			{Kind: v1.KindIcon, Icon: "upload", Tone: v1.ToneSubtle},
+			{Kind: v1.KindText, Text: formatRate(s.Snap.TxRate), Tabular: true},
+		}})
+	}
 	if st.Protocol != "" {
 		lines = append(lines, &v1.Node{Kind: v1.KindText, Text: st.Protocol, Tone: v1.ToneSubtle})
 	}

@@ -59,6 +59,10 @@ type harness struct {
 }
 
 func start(t *testing.T) *harness {
+	return startWithSettings(t, `{"features":{"split_tunneling":{"enabled":false,"apps":[]}}}`)
+}
+
+func startWithSettings(t *testing.T, settings string) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "protonvpn")
@@ -86,8 +90,7 @@ func start(t *testing.T) *harness {
 	}
 	// Split tunneling persists into a recognised settings.json;
 	// WriteSplitTunnel refuses to clobber a missing or malformed file.
-	if err := os.WriteFile(env.settingsPath,
-		[]byte(`{"features":{"split_tunneling":{"enabled":false,"apps":[]}}}`), 0o644); err != nil {
+	if err := os.WriteFile(env.settingsPath, []byte(settings), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -376,4 +379,49 @@ func TestSplitTunnelEnableNotifies(t *testing.T) {
 	if !strings.Contains(string(b), `"enabled":true`) && !strings.Contains(string(b), `"enabled": true`) {
 		t.Fatalf("settings.json not enabled: %s", b)
 	}
+}
+
+func TestSplitTunnelStateRestored(t *testing.T) {
+	h := startWithSettings(t, `{"features":{"split_tunneling":{"enabled":true,"apps":["/usr/bin/firefox"]}}}`)
+	p := h.openPanel()
+	h.input("p", p, "tab:protection", v1.EventActivate, "", "")
+	prot := h.snapshotUntil(func(n *v1.Node) bool { return find(n, "st") != nil })
+	if st := find(prot.Root, "st"); st == nil || st.Text != "On" {
+		t.Fatal("split tunnel toggle not restored to On")
+	}
+	if !contains(prot.Root, "/usr/bin/firefox") {
+		t.Fatal("restored app list not rendered")
+	}
+}
+
+func TestSplitTunnelToggleRevertsOnWriteError(t *testing.T) {
+	h := start(t)
+	p := h.openPanel()
+	h.input("p", p, "tab:protection", v1.EventActivate, "", "")
+	prot := h.snapshotUntil(func(n *v1.Node) bool { return find(n, "st") != nil })
+	if err := os.WriteFile(h.env.settingsPath, []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.input("p", prot, "st", v1.EventActivate, "", "")
+	h.snapshotUntil(func(n *v1.Node) bool {
+		st := find(n, "st")
+		return st != nil && st.Text == "Off" && hasTextContaining(n, "protonvpn:")
+	})
+}
+
+// hasTextContaining reports whether any node's text contains sub (contains
+// above is exact-match).
+func hasTextContaining(root *v1.Node, sub string) bool {
+	if root == nil {
+		return false
+	}
+	if strings.Contains(root.Text, sub) {
+		return true
+	}
+	for _, c := range root.Children {
+		if hasTextContaining(c, sub) {
+			return true
+		}
+	}
+	return false
 }
