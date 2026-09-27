@@ -35,6 +35,7 @@ const (
 	clipboardIface      = kdeService + ".device.clipboard"
 	smsIface            = kdeService + ".device.sms"
 	sftpIface           = kdeService + ".device.sftp"
+	mprisremoteIface    = kdeService + ".device.mprisremote"
 	devicePathPrefix    = string(kdeDaemonPath) + "/devices/"
 	notificationsMember = "activeNotifications"
 )

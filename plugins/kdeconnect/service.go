@@ -77,6 +77,10 @@ type Device struct {
 
 	NotificationCount  int
 	NotificationsKnown bool
+
+	// MockupArt is the cached mockup with the phone's current album art
+	// in its screen, "" while nothing reports a cover.
+	MockupArt string
 }
 
 // Snapshot is one immutable view of the daemon. Available false means the
@@ -506,6 +510,7 @@ func (st *daemonState) fetchDevice(bus daemonBus, id string) {
 		st.fetchBattery(bus, dev)
 		st.fetchConnectivity(bus, dev)
 		st.fetchNotifications(bus, dev)
+		st.fetchMedia(bus, dev)
 	}
 }
 
@@ -533,6 +538,26 @@ func (st *daemonState) fetchConnectivity(bus daemonBus, dev *Device) {
 	dev.NetworkType = strOf(props["cellularNetworkType"])
 	dev.NetworkStrength = intOf(props["cellularNetworkStrength"])
 	dev.NetworkKnown = true
+}
+
+// fetchMedia reads the phone's now-playing album art from the remote
+// media plugin and composes it into the device mockup. The daemon caches
+// the cover locally and names it by file:// URL; no cover, or a cover the
+// composite cannot use, shows the plain frame.
+func (st *daemonState) fetchMedia(bus daemonBus, dev *Device) {
+	if !hasPlugin(dev, "mprisremote") {
+		dev.MockupArt = ""
+		return
+	}
+	props, err := getAllProps(bus.object(kdeService, pluginPath(dev.ID, "mprisremote")), mprisremoteIface)
+	if err != nil {
+		return
+	}
+	art, err := mediaMockup(dev, strOf(props["localAlbumArtUrl"]))
+	if err != nil {
+		art = ""
+	}
+	dev.MockupArt = art
 }
 
 // fetchNotifications counts the device's active notifications, behind the
@@ -902,6 +927,9 @@ func updateFromSignal(sig *dbus.Signal, bus daemonBus, st *daemonState) bool {
 			return true
 		case notificationsIface:
 			st.fetchNotifications(bus, dev)
+			return true
+		case mprisremoteIface:
+			st.fetchMedia(bus, dev)
 			return true
 		}
 	}
