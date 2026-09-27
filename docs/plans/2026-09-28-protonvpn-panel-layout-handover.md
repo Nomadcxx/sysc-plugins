@@ -19,8 +19,9 @@ This document keeps the analysis for the record.
   20 countries per page, 20 servers per expanded country, at most 3
   auto-expanded countries, with a pager row. This keeps the view under
   `v1.MaxNodes` (1024).
-- `go.mod` — pins sysc-shell `v0.0.0-20260927145008-3936e7da2013`, the
-  `feat/proton-glyph` commit that adds the `proton` glyph (0xE075).
+- `go.mod` — pins sysc-shell
+  `v0.0.0-20260927162619-c4eaac21be31`, the merged `main` commit that adds
+  the Proton glyph (U+E075).
 
 Tests: `go test -count=1 ./plugins/protonvpn/ ./cmd/sysc-plugin-protonvpn/`
 passes, including `TestConnectionsStaysUnderNodeLimit` (149 countries × 40
@@ -29,12 +30,10 @@ servers), `TestConnectionsPagerPagesTheList`, and
 
 ## Shell-side dependency
 
-The `proton` glyph lives on sysc-shell branch **`feat/proton-glyph`**
-(`3936e7d`, pushed, one commit on top of `origin/main`). It adds
-`svg/proton.svg` (both paths of the official mark, unioned), `uniE075` in
-`build.py`, `iconProton = iconGitHubUnread + 1` in `iconfont.go`, the
-`fontmap.go` face route, and `TestProtonGlyphIsTheMark`. **Not yet merged to
-sysc-shell `main`.**
+sysc-shell merged the Proton glyph to `main` as `c4eaac2` (U+E075). The
+commit adds `svg/proton.svg`, registers the icon in `build.py` and
+`iconfont.go`, routes the rune through `fontmap.go`, updates the generated
+font, and tests it with `TestProtonGlyphIsTheMark`.
 
 ## The failure that was fixed
 
@@ -107,14 +106,11 @@ over `Panel()` at 460×580 and every tab body standalone at the 436px content
 width, with worst-case long names and full pagination. Pre-fix it reproduced
 the journal error above verbatim; post-fix all cases lay out clean.
 
-## Verifying on the laptop
+## Verifying on the target machine
 
-Laptop `192.168.0.64:7777` (user `nomadx`), shell deployed from
-`feat/proton-glyph` via `scripts/deploy --host laptop --force …`; plugin
-binary at `~/sysc-plugins-main/plugins/protonvpn/bin/`. Click the pill at
-(848, 24) with `ydotool` (`YDOTOOL_SOCKET=/tmp/.ydotool_socket`, left button
-`0x00`), then read the journal: the panel should open and no
-`plugin view rejected` line should appear.
+Deploy the shell and plugin through the documented workflow. Activate the
+Proton bar pill and confirm the panel opens without a `plugin view rejected`
+journal entry.
 
 ## Still open from the previous handover
 
