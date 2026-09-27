@@ -14,7 +14,10 @@ jobs:
   # workflow artifact. The tag itself, "<dir>-v<version>", names the plugin
   # and version; every later job re-derives them the same way.
   build:
-    runs-on: ubuntu-latest
+    # Native runner per arch: calendar's cgo build links the host's
+    # libecal-2.0, so a cross-compile from amd64 would need an arm64
+    # sysroot and toolchain. Pure-Go plugins cross-build fine from either.
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     strategy:
       matrix:
         arch: [amd64, arm64]
@@ -23,6 +26,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # Same package the CI job installs; only calendar's cgo build uses it,
+      # and installing it for every plugin keeps the plugin list in one place
+      # (tools/catalog's cgoPlugins map) instead of duplicated here.
+      - name: install libecal
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libecal2.0-dev
       - name: Parse tag
         id: tag
         run: |
