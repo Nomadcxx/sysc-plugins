@@ -47,6 +47,18 @@
     "license": "MIT",
     "homepage": "https://github.com/Nomadcxx/sysc-plugins"
   },
+  "org.sysc.games": {
+    "category": "games",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
+  "org.sysc.protonvpn": {
+    "category": "utilities",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
   "org.sysc.screen-recorder": {
     "category": "media",
     "author": "Nomadcxx",
