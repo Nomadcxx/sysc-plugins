@@ -31,6 +31,10 @@ type fakeObject struct {
 	failWith  error
 	// mountPoint is the sftp object's mountPoint() reply.
 	mountPoint string
+	// mounts is what the sftp object's startBrowsing and mountAndWait
+	// report, and mountError its getMountError reply when they fail.
+	mounts     bool
+	mountError string
 }
 
 func (f *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Call {
@@ -62,6 +66,10 @@ func (f *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Ca
 		return &dbus.Call{Body: []any{body}}
 	case sftpIface + ".mountPoint":
 		return &dbus.Call{Body: []any{f.mountPoint}}
+	case sftpIface + ".startBrowsing", sftpIface + ".mountAndWait":
+		return &dbus.Call{Body: []any{f.mounts}}
+	case sftpIface + ".getMountError":
+		return &dbus.Call{Body: []any{f.mountError}}
 	default:
 		return &dbus.Call{Err: fmt.Errorf("fake: unexpected method %s", method)}
 	}
@@ -173,7 +181,7 @@ func testBus() *fakeBus {
 		pluginPath("devA", "share"): {actions: map[string]bool{
 			shareIface + ".shareUrl": true, shareIface + ".shareText": true, shareIface + ".shareFile": true}},
 		pluginPath("devA", "clipboard"): {actions: map[string]bool{clipboardIface + ".sendClipboard": true}},
-		pluginPath("devA", "sftp"):      {actions: map[string]bool{sftpIface + ".startBrowsing": true}},
+		pluginPath("devA", "sftp"):      {mounts: true},
 		pluginPath("devA", "sms"): {actions: map[string]bool{
 			smsIface + ".sendSms": true, smsIface + ".launchApp": true}},
 		pluginPath("devA", "battery"): {
@@ -747,6 +755,18 @@ func TestClipboardBrowseAndSMSAppActions(t *testing.T) {
 		t.Fatalf("browse event = %+v", e)
 	}
 
+	// A mount the phone refuses reports false; the toast names the
+	// daemon's reason rather than claiming the browser opened.
+	plugin("sftp").mounts = false
+	plugin("sftp").mountError = "Permissions missing: filesystem access"
+	svc.Do(Action{Kind: ActionBrowse, DeviceID: "devA"})
+	e = waitForEvent(t, svc, func(e Event) bool {
+		return e.Kind == EventActionResult && e.Message == "Failed to open the file browser"
+	})
+	if e.Err == nil || e.Detail != "Permissions missing: filesystem access" {
+		t.Fatalf("refused browse event = %+v", e)
+	}
+
 	svc.Do(Action{Kind: ActionLaunchSMSApp, DeviceID: "devA"})
 	e = waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "Opening the SMS app..." })
 	if e.Err != nil || !plugin("sms").asked(smsIface+".launchApp") {
@@ -992,10 +1012,7 @@ func recentImagesBus(mountPoint string) *fakeBus {
 				kdeDeviceIface: deviceProps("Pixel 10 Pro XL", "phone", true, true, []string{"sftp"}),
 			},
 		},
-		pluginPath("devA", "sftp"): {
-			mountPoint: mountPoint,
-			actions:    map[string]bool{sftpIface + ".startBrowsing": true},
-		},
+		pluginPath("devA", "sftp"): {mountPoint: mountPoint, mounts: true},
 	}}
 }
 
@@ -1047,8 +1064,13 @@ func TestRefreshRecentImagesWiresTheMount(t *testing.T) {
 	st.refreshRecentImages(bus, &chosen)
 
 	sftp := bus.objects[pluginPath("devA", "sftp")]
-	if !sftp.asked(sftpIface+".startBrowsing") || !sftp.asked(sftpIface+".mountPoint") {
-		t.Fatalf("sftp calls = %v, want mount then mountPoint", sftp.calls)
+	if !sftp.asked(sftpIface+".mountAndWait") || !sftp.asked(sftpIface+".mountPoint") {
+		t.Fatalf("sftp calls = %v, want mountAndWait then mountPoint", sftp.calls)
+	}
+	// startBrowsing also opens a file manager window; a background scan
+	// that used it raised one on every refresh.
+	if sftp.asked(sftpIface + ".startBrowsing") {
+		t.Fatalf("sftp calls = %v, the scan must not open a file manager", sftp.calls)
 	}
 	if len(st.recentImages) != 1 {
 		t.Fatalf("recentImages = %+v, want one entry", st.recentImages)
