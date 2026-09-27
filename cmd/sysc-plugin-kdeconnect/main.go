@@ -217,6 +217,17 @@ func panelWidth(snap kdeconnect.Snapshot, showCard bool) int {
 	return base
 }
 
+// actionNodes maps the action row's button IDs, and the tap-to-ping card's
+// alias, onto the service actions handleInput fires for them. Kept as data
+// so the routing is testable without a live Service.
+var actionNodes = map[string]kdeconnect.ActionKind{
+	"ping":        kdeconnect.ActionPing,
+	"device-ping": kdeconnect.ActionPing,
+	"ring":        kdeconnect.ActionRing,
+	"browse":      kdeconnect.ActionBrowse,
+	"clipboard":   kdeconnect.ActionClipboard,
+}
+
 // handleInput routes one input event. It reports whether the panel tree
 // changed and needs a republish — toggles, sends, and composer typing (the
 // send gating moves with the draft) do.
@@ -258,8 +269,6 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionRejectPair, DeviceID: strings.TrimPrefix(m.Node, "reject-")})
 	case strings.HasPrefix(m.Node, "pair-"):
 		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionPair, DeviceID: strings.TrimPrefix(m.Node, "pair-")})
-	case m.Node == "device-ping" || m.Node == "ping":
-		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionPing, DeviceID: device})
 	case m.Node == "share":
 		return toggleComposer(ui, kdeconnect.ComposerShare)
 	case m.Node == "sms":
@@ -335,6 +344,11 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 			svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareFile, DeviceID: device, Arg: img.Source})
 		}
 		return true
+	default:
+		// The action row and the tap-to-ping card land here.
+		if kind, ok := actionNodes[m.Node]; ok {
+			svc.Do(kdeconnect.Action{Kind: kind, DeviceID: device})
+		}
 	}
 	return false
 }

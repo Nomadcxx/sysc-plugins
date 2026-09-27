@@ -245,6 +245,14 @@ func PanelTreeForState(snap Snapshot, settings Settings, composer Composer, draf
 			col.Children = append(col.Children, deviceChooserTree(snap, selected, switcherOpen))
 		}
 		col.Children = append(col.Children, actionRowTree(selected, settings))
+		switch composer {
+		case ComposerShare:
+			// Directly under the Actions card: at the tree's tail the
+			// composer falls below the 760px fold and looks dead.
+			col.Children = append(col.Children, shareComposerTree(drafts))
+		case ComposerSMS:
+			col.Children = append(col.Children, smsComposerTree(drafts))
+		}
 		if settings.ShowDeviceCard {
 			// The mockup card sits below the actions so the tall phone
 			// artwork never crowds the controls above it.
@@ -253,12 +261,6 @@ func PanelTreeForState(snap Snapshot, settings Settings, composer Composer, draf
 		col.Children = append(col.Children, infoRowsTree(selected))
 		if grid := recentImagesTree(snap); grid != nil {
 			col.Children = append(col.Children, grid)
-		}
-		switch composer {
-		case ComposerShare:
-			col.Children = append(col.Children, shareComposerTree(drafts))
-		case ComposerSMS:
-			col.Children = append(col.Children, smsComposerTree(drafts))
 		}
 	}
 	return col
@@ -655,7 +657,12 @@ func actionRowTree(dev *Device, settings Settings) *v1.Node {
 }
 
 func actionButton(id, icon, text, name string, enabled bool) *v1.Node {
+	// Fixed width keeps the pills uniform: the wire has no Grow/Flex, and
+	// content-sizing plus the stadium radius made them tight balls. 116 =
+	// (400 panel − 2×8 list pad − 2×10 card pad − 2×8 gap) / 3; slightly
+	// ragged on the 525px wide panels, accepted for one shared size.
 	b := &v1.Node{Kind: v1.KindButton, ID: id, Icon: icon, Text: text, Name: name, Role: "button",
+		Width: 116, Height: 40, Padding: 10,
 		Events: []v1.EventKind{v1.EventActivate}}
 	if !enabled {
 		b.Disabled = true

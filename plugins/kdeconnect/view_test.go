@@ -268,6 +268,34 @@ func TestActionGroupUsesVisibleLabels(t *testing.T) {
 		if button == nil || strings.TrimSpace(button.Text) == "" {
 			t.Fatalf("action %q has no visible label: %+v", id, button)
 		}
+		if button.Width != 116 || button.Height != 40 || button.Padding != 10 {
+			t.Fatalf("action %q not a uniform pill: %+v", id, button)
+		}
+	}
+}
+
+func TestComposerSitsDirectlyBelowTheActionsCard(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		composer Composer
+		fieldID  string
+	}{
+		{ComposerShare, "share-text"},
+		{ComposerSMS, "sms-number"},
+	} {
+		panel := PanelTree(pairedSnap(), testSettings(), tc.composer, Drafts{})
+		actionsAt, composerAt := -1, -1
+		for i, child := range panel.Children {
+			if findButton(child, "ring") != nil {
+				actionsAt = i
+			}
+			if findInput(child, tc.fieldID) != nil {
+				composerAt = i
+			}
+		}
+		if actionsAt < 0 || composerAt != actionsAt+1 {
+			t.Fatalf("%v composer at %d, actions at %d: want directly below", tc.composer, composerAt, actionsAt)
+		}
 	}
 }
 

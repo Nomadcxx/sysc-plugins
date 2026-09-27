@@ -157,3 +157,40 @@ func TestComposerFocusTargetsTheFirstField(t *testing.T) {
 		t.Fatal("an unchanged composer issued a focus")
 	}
 }
+
+func TestActionNodesCoverEveryActionButton(t *testing.T) {
+	panel := kdeconnect.PanelTree(kdeconnect.Snapshot{
+		Available: true, SelectedID: "dev1",
+		Devices: []kdeconnect.Device{{
+			ID: "dev1", Name: "Phone", Type: "phone",
+			Reachable: true, Paired: true,
+			SupportedPlugins: []string{"findmyphone", "ping", "sftp", "clipboard", "share", "sms"},
+		}},
+	}, kdeconnect.Settings{}, kdeconnect.ComposerNone, kdeconnect.Drafts{})
+	seen := map[string]bool{}
+	var walk func(*v1.Node)
+	walk = func(n *v1.Node) {
+		if n == nil {
+			return
+		}
+		seen[n.ID] = true
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(panel)
+	for id := range actionNodes {
+		if id == "device-ping" {
+			continue // the tap-to-ping card alias, not an action-row button
+		}
+		if !seen[id] {
+			t.Fatalf("tree has no %q button for its action", id)
+		}
+	}
+	if _, ok := actionNodes["share"]; ok {
+		t.Fatal("share must stay a composer toggle")
+	}
+	if _, ok := actionNodes["sms"]; ok {
+		t.Fatal("sms must stay a composer toggle")
+	}
+}
