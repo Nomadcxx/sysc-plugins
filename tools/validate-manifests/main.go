@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -128,6 +129,9 @@ func validate(path string, seenIDs map[string]string) error {
 		return fmt.Errorf("schema must be 1, got %d", m.Schema)
 	case m.Name == "":
 		return fmt.Errorf("name is required")
+	// The catalog copies manifest descriptions; an empty one ships a blank entry.
+	case m.Description == "":
+		return fmt.Errorf("description is required")
 	case m.Version == "":
 		return fmt.Errorf("version is required")
 	case !v1.ValidPluginID(m.ID):
@@ -172,8 +176,115 @@ func validate(path string, seenIDs map[string]string) error {
 		if p.Width < 64 || p.Width > 4096 || p.Height < 64 || p.Height > 4096 {
 			return fmt.Errorf("panels[%d] size %dx%d outside 64..4096", i, p.Width, p.Height)
 		}
+		// Mirrors the host rule in sysc-shell internal/plugin/manifest.go:
+		// panel shortcuts are a protocol minor 8 feature.
+		if len(p.Shortcuts) > 0 && m.Protocol.Minor < 8 {
+			return fmt.Errorf("panels[%d]: shortcuts require protocol minor 8", i)
+		}
+	}
+	// The host rejects each capability-gated hostcall at dispatch time
+	// (sysc-shell internal/plugin/hostcall.go); catch it here instead.
+	if err := validateHostcallCaps(path, m.Capabilities); err != nil {
+		return err
 	}
 	return nil
+}
+
+// requiredCap maps a hostcall constant to the capability the host demands
+// for it. Add one row per new gated call, mirroring the host's switch.
+var requiredCap = map[string]string{
+	"CallStateGet":          "state",
+	"CallStateSet":          "state",
+	"CallStateList":         "state",
+	"CallPanelOpen":         "panels",
+	"CallPanelClose":        "panels",
+	"CallPanelResize":       "panels",
+	"CallViewFocus":         "panels",
+	"CallSurfaceOpen":       "floating_surfaces",
+	"CallSurfaceClose":      "floating_surfaces",
+	"CallSurfacePin":        "floating_surfaces",
+	"CallNotify":            "notifications",
+	"CallWallpaperSnapshot": "wallpaper",
+	"CallWallpaperMaskSet":  "wallpaper",
+	"CallClipboardRead":     "clipboard-read",
+	"CallClipboardWrite":    "clipboard-write",
+	"CallOpenURL":           "open-url",
+}
+
+// validateHostcallCaps scans the plugin's Go sources under
+// cmd/sysc-plugin-<dir> for gated hostcalls and reports any call whose
+// capability the manifest does not grant. The import alias varies, so the
+// bare constant name is matched; plugin dirs that do not exist (some plugins
+// are non-Go) pass.
+func validateHostcallCaps(manifestPath string, caps []string) error {
+	pluginDir := filepath.Dir(manifestPath)
+	repoRoot := filepath.Dir(filepath.Dir(pluginDir))
+	cmdDir := filepath.Join(repoRoot, "cmd", "sysc-plugin-"+filepath.Base(pluginDir))
+	used := map[string]bool{}
+	files, err := filepath.Glob(filepath.Join(cmdDir, "*.go"))
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			return err
+		}
+		for call := range requiredCap {
+			// Word-boundary match: the constants are v1.CallFoo and a plain
+			// contains would let CallStateGet hit inside other identifiers.
+			if isBareToken(src, call) {
+				used[call] = true
+			}
+		}
+	}
+	granted := map[string]bool{}
+	for _, c := range caps {
+		granted[c] = true
+	}
+	// Deterministic output: one error per missing capability.
+	missing := map[string][]string{}
+	for call, want := range requiredCap {
+		if used[call] && !granted[want] {
+			missing[want] = append(missing[want], call)
+		}
+	}
+	capsMissing := make([]string, 0, len(missing))
+	for want := range missing {
+		capsMissing = append(capsMissing, want)
+	}
+	sort.Strings(capsMissing)
+	for _, want := range capsMissing {
+		calls := missing[want]
+		sort.Strings(calls)
+		return fmt.Errorf("uses %s but capability %q is not granted", strings.Join(calls, ", "), want)
+	}
+	return nil
+}
+
+func isBareToken(src []byte, token string) bool {
+	for i := 0; i+len(token) <= len(src); {
+		j := strings.Index(string(src[i:]), token)
+		if j < 0 {
+			return false
+		}
+		j += i
+		end := j + len(token)
+		leftOK := j == 0 || !isIdentChar(src[j-1])
+		rightOK := end == len(src) || !isIdentChar(src[end])
+		if leftOK && rightOK {
+			return true
+		}
+		i = end
+	}
+	return false
+}
+
+func isIdentChar(b byte) bool {
+	return b == '_' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || '0' <= b && b <= '9'
 }
 
 func fatal(err error) {
