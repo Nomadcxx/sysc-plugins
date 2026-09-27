@@ -74,17 +74,6 @@ func run(in *os.File, out *os.File) error {
 	// publish pushes the current snapshot into every open view. A non-nil
 	// delta patches the panel views instead of resending them; a patch the
 	// host refuses falls back to the full snapshot at the new revision.
-	lastWidth := 0
-	syncPanel := func() {
-		w := panelWidth(snap, settings.ShowDeviceCard)
-		if w == lastWidth {
-			return
-		}
-		lastWidth = w
-		// Best-effort: the panel can close between publish and the call,
-		// and the host errors a resize with no panel open.
-		_, _ = c.Call(ctx, v1.CallPanelResize, v1.PanelResizeParams{Width: w, Height: panelHeight})
-	}
 	publish := func(delta []v1.Replacement) {
 		for id, v := range views {
 			v.rev++
@@ -105,7 +94,6 @@ func run(in *os.File, out *os.File) error {
 			}
 			_ = c.Snapshot(id, v.rev, root)
 		}
-		syncPanel()
 	}
 
 	for {
@@ -144,9 +132,7 @@ func run(in *os.File, out *os.File) error {
 				if m.View == v1.ViewPanel {
 					// Opening the panel re-reads the daemon first, so the
 					// device state is fresh, the reference shell's behaviour
-					// on popout open. The width class re-syncs too: the
-					// manifest's size is the fallback, not the truth.
-					lastWidth = 0
+					// on popout open.
 					svc.Refresh()
 				}
 				publish(nil)
@@ -189,32 +175,6 @@ func composerFocus(prev, now kdeconnect.Composer) (string, bool) {
 		return "sms-number", true
 	}
 	return "", false
-}
-
-// panelHeight is the popout height the manifest declares and every resize
-// carries: tall enough for the device card's mockup, name, status, and
-// battery meter above the fold; the scroll carries the rest.
-const panelHeight = 760
-
-// panelWidth is the popout width for the snapshot: the manifest's 400 base,
-// widened to the DMS placeholder's 525 while the device card shows a large
-// type's mockup (tablet, desktop, laptop).
-func panelWidth(snap kdeconnect.Snapshot, showCard bool) int {
-	const base, wide = 400, 525
-	if !showCard {
-		return base
-	}
-	for i := range snap.Devices {
-		if snap.Devices[i].ID != snap.SelectedID {
-			continue
-		}
-		switch kdeconnect.MockupKind(&snap.Devices[i]) {
-		case "tablet", "desktop", "laptop":
-			return wide
-		}
-		break
-	}
-	return base
 }
 
 // actionNodes maps the action row's button IDs, and the tap-to-ping card's

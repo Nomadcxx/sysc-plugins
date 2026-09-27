@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -117,28 +118,25 @@ func TestDeviceSwitcherActivationTogglesPanelState(t *testing.T) {
 	}
 }
 
-func TestPanelWidthFollowsTheMockup(t *testing.T) {
+// The panel tree derives every fixed width from kdeconnect.PanelWidth, so
+// the manifest must declare that same width or the cells overflow the panel.
+func TestManifestPanelWidthMatchesTheView(t *testing.T) {
 	t.Parallel()
-	device := func(typ string) kdeconnect.Snapshot {
-		return kdeconnect.Snapshot{SelectedID: "d", Devices: []kdeconnect.Device{{ID: "d", Type: typ}}}
+	raw, err := os.ReadFile("../../plugins/kdeconnect/manifest.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	table := []struct {
-		name     string
-		snap     kdeconnect.Snapshot
-		showCard bool
-		want     int
-	}{
-		{"phone with card", device("phone"), true, 400},
-		{"tablet with card", device("tablet"), true, 525},
-		{"desktop with card", device("desktop"), true, 525},
-		{"laptop with card", device("laptop"), true, 525},
-		{"large type without card", device("tablet"), false, 400},
-		{"no selected device", kdeconnect.Snapshot{}, true, 400},
+	var manifest struct {
+		Panels []struct {
+			ID    string `json:"id"`
+			Width int    `json:"width"`
+		} `json:"panels"`
 	}
-	for _, row := range table {
-		if got := panelWidth(row.snap, row.showCard); got != row.want {
-			t.Fatalf("%s: panelWidth = %d, want %d", row.name, got, row.want)
-		}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Panels) != 1 || manifest.Panels[0].Width != kdeconnect.PanelWidth {
+		t.Fatalf("manifest panels = %+v, want one panel %d wide", manifest.Panels, kdeconnect.PanelWidth)
 	}
 }
 

@@ -92,8 +92,8 @@ func TestRecentImagesTreeGrid(t *testing.T) {
 			cell = rows[1].Children[0]
 		}
 		image := findImage(cell, "recent-"+img.ID)
-		if image == nil || image.Path != img.Thumb || image.ImageSize != 96 {
-			t.Fatalf("image %d = %+v, want Path %q at size 96", i, image, img.Thumb)
+		if image == nil || image.Path != img.Thumb || image.ImageSize != cellWidth {
+			t.Fatalf("image %d = %+v, want Path %q at size %d", i, image, img.Thumb, cellWidth)
 		}
 		open := findButton(cell, "recent-open-"+img.ID)
 		if open == nil || open.Icon != "folder-open" || open.Role != "button" {
@@ -268,8 +268,33 @@ func TestActionGroupUsesVisibleLabels(t *testing.T) {
 		if button == nil || strings.TrimSpace(button.Text) == "" {
 			t.Fatalf("action %q has no visible label: %+v", id, button)
 		}
-		if button.Width != 116 || button.Height != 40 || button.Padding != 10 {
+		if button.Width != cellWidth || button.Height != 40 || button.Padding != 10 {
 			t.Fatalf("action %q not a uniform pill: %+v", id, button)
+		}
+	}
+}
+
+// Three cells and their gaps fill a card exactly: the wire has no flex, so a
+// grid that falls short leaves a ragged right edge and one that overshoots
+// fails layout.
+func TestGridCellsFillTheCardWidth(t *testing.T) {
+	t.Parallel()
+	if got := 2*listPad + 2*cardPad + 3*cellWidth + 2*cellGap; got != PanelWidth {
+		t.Fatalf("list pad + card pad + 3 cells + gaps = %d, want the panel width %d", got, PanelWidth)
+	}
+	panel := PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{})
+	if panel.Padding != listPad {
+		t.Fatalf("list padding = %d, want %d", panel.Padding, listPad)
+	}
+	actions := findSection(panel, func(n *v1.Node) bool {
+		return n.Kind == v1.KindColumn && n.Fill == "card" && contains(allTexts(n), "Actions")
+	})
+	if actions == nil || actions.Padding != cardPad {
+		t.Fatalf("actions card = %+v, want padding %d", actions, cardPad)
+	}
+	for _, row := range actions.Children[1:] {
+		if row.Gap != cellGap {
+			t.Fatalf("action row gap = %d, want %d", row.Gap, cellGap)
 		}
 	}
 }
@@ -398,9 +423,19 @@ func TestDeviceCardChipsAndStatus(t *testing.T) {
 		t.Fatal("pairing-in-progress status missing")
 	}
 
-	connected := deviceCard(PanelTree(pairedSnap(), testSettings(), ComposerNone, Drafts{}), "Galaxy Tab")
+	connected := deviceCard(PanelTreeForState(pairedSnap(), testSettings(), ComposerNone, Drafts{}, true), "Galaxy Tab")
 	if contains(allTexts(connected), "Offline") || contains(allTexts(connected), "Not paired") {
-		t.Fatalf("connected card grew a status line: %v", allTexts(connected))
+		t.Fatalf("connected card shows a disconnected status: %v", allTexts(connected))
+	}
+	if !contains(allTexts(connected), "Connected") {
+		t.Fatalf("connected card has no status line: %v", allTexts(connected))
+	}
+
+	// The chips must be a row: the host gives a trailing column the rest of
+	// the width, so a chips column never reaches the card's right edge.
+	header := card.Children[0]
+	if !header.PinEnd || len(header.Children) != 2 || header.Children[1].Kind != v1.KindRow {
+		t.Fatalf("card header = %+v, want a pin-end row ending in a chips row", header)
 	}
 }
 
@@ -771,6 +806,9 @@ func TestInfoRowsAndBatteryIcons(t *testing.T) {
 	})
 	if rows == nil {
 		t.Fatal("info rows missing")
+	}
+	if rows.Fill != "card" || rows.Padding != cardPad {
+		t.Fatalf("info rows chrome = fill=%q padding=%d, want their own card", rows.Fill, rows.Padding)
 	}
 	// Stacked layout: value is the second text of the label column.
 	if got := rows.Children[0].Children[1].Children[1].Text; got != "98%" {
@@ -1209,33 +1247,16 @@ func TestDeviceCardUsesVerticalContent(t *testing.T) {
 	}
 }
 
-func TestBarTreeChargingFill(t *testing.T) {
+// The bar pill is the phone glyph alone, charging or not: a charge fill
+// widened it into a meter the bar design does not want. The panel carries
+// the charge level.
+func TestBarTreeStaysIconOnlyWhileCharging(t *testing.T) {
 	t.Parallel()
 	snap := pairedSnap()
 	snap.Devices[0].BatteryCharging = true
 	pill := BarTree(snap).Children[0]
-	if len(pill.Children) != 2 {
-		t.Fatalf("charging pill children = %d, want fill then icon", len(pill.Children))
-	}
-	fill := pill.Children[0]
-	if fill.Kind != v1.KindProgress || fill.Key != "kdeconnect-pill" || !fill.Animate {
-		t.Fatalf("charging fill = %+v", fill)
-	}
-	if fill.Tone != v1.ToneAccent || fill.Value != 0.98 {
-		t.Fatalf("charging fill tone/value = %q %v", fill.Tone, fill.Value)
-	}
-	if pill.Children[1].Kind != v1.KindIcon || pill.Children[1].Icon != "smartphone" {
-		t.Fatalf("charging pill icon = %+v", pill.Children[1])
-	}
-	low := pairedSnap()
-	low.Devices[0].BatteryCharging = true
-	low.Devices[0].BatteryCharge = 12
-	if fill := BarTree(low).Children[0].Children[0]; fill.Tone != v1.ToneError {
-		t.Fatalf("low charging fill tone = %q, want error", fill.Tone)
-	}
-	idle := BarTree(pairedSnap()).Children[0]
-	if len(idle.Children) != 0 || idle.Icon != "smartphone" {
-		t.Fatalf("idle pill changed: %+v", idle)
+	if len(pill.Children) != 0 || pill.Icon != "smartphone" || pill.Text != "" {
+		t.Fatalf("charging pill = %+v, want the smartphone glyph alone", pill)
 	}
 }
 

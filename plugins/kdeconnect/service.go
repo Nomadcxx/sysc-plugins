@@ -593,13 +593,16 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 		})
 		return
 	}
-	var method string
+	// Pairing is the device object's own interface; every other action is a
+	// plugin method, which the daemon exports on the plugin's object under
+	// the device (…/devices/<id>/ping), the path the readings already use.
+	var method, plugin string
 	var args []any
 	switch a.Kind {
 	case ActionRing:
-		method = findMyPhoneIface + ".ring"
+		method, plugin = findMyPhoneIface+".ring", "findmyphone"
 	case ActionPing:
-		method = pingIface + ".sendPing"
+		method, plugin = pingIface+".sendPing", "ping"
 	case ActionPair:
 		method = kdeDeviceIface + ".requestPairing"
 	case ActionAcceptPair:
@@ -609,9 +612,9 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 	case ActionUnpair:
 		method = kdeDeviceIface + ".unpair"
 	case ActionShareURL:
-		method, args = shareIface+".shareUrl", []any{a.Arg}
+		method, plugin, args = shareIface+".shareUrl", "share", []any{a.Arg}
 	case ActionShareText:
-		method, args = shareIface+".shareText", []any{a.Arg}
+		method, plugin, args = shareIface+".shareText", "share", []any{a.Arg}
 	case ActionShareFile:
 		// DMS routes file shares through shareUrl with a file:// URI; the
 		// daemon's shareFile method is never used by it.
@@ -624,13 +627,13 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 			})
 			return
 		}
-		method, args = shareIface+".shareUrl", []any{fileURL}
+		method, plugin, args = shareIface+".shareUrl", "share", []any{fileURL}
 	case ActionClipboard:
-		method = clipboardIface + ".sendClipboard"
+		method, plugin = clipboardIface+".sendClipboard", "clipboard"
 	case ActionBrowse:
-		method = sftpIface + ".startBrowsing"
+		method, plugin = sftpIface+".startBrowsing", "sftp"
 	case ActionLaunchSMSApp:
-		method = smsIface + ".launchApp"
+		method, plugin = smsIface+".launchApp", "sms"
 	default:
 		st.emit(Event{
 			Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: displayName(dev),
@@ -639,7 +642,11 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 		})
 		return
 	}
-	call := bus.object(kdeService, devicePath(a.DeviceID)).Call(method, 0, args...)
+	path := devicePath(a.DeviceID)
+	if plugin != "" {
+		path = pluginPath(a.DeviceID, plugin)
+	}
+	call := bus.object(kdeService, path).Call(method, 0, args...)
 	if call.Err != nil {
 		st.emit(Event{
 			Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,

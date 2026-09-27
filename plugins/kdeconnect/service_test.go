@@ -163,12 +163,19 @@ func testBus() *fakeBus {
 			actions: map[string]bool{
 				kdeDeviceIface + ".requestPairing": true, kdeDeviceIface + ".acceptPairing": true,
 				kdeDeviceIface + ".cancelPairing": true, kdeDeviceIface + ".unpair": true,
-				findMyPhoneIface + ".ring": true, pingIface + ".sendPing": true,
-				shareIface + ".shareUrl": true, shareIface + ".shareText": true, shareIface + ".shareFile": true,
-				clipboardIface + ".sendClipboard": true, sftpIface + ".startBrowsing": true,
-				smsIface + ".sendSms": true, smsIface + ".launchApp": true,
 			},
 		},
+		// Plugin methods live on the plugin's own object under the device,
+		// as the live daemon exports them; the device object answers only
+		// its own interface.
+		pluginPath("devA", "findmyphone"): {actions: map[string]bool{findMyPhoneIface + ".ring": true}},
+		pluginPath("devA", "ping"):        {actions: map[string]bool{pingIface + ".sendPing": true}},
+		pluginPath("devA", "share"): {actions: map[string]bool{
+			shareIface + ".shareUrl": true, shareIface + ".shareText": true, shareIface + ".shareFile": true}},
+		pluginPath("devA", "clipboard"): {actions: map[string]bool{clipboardIface + ".sendClipboard": true}},
+		pluginPath("devA", "sftp"):      {actions: map[string]bool{sftpIface + ".startBrowsing": true}},
+		pluginPath("devA", "sms"): {actions: map[string]bool{
+			smsIface + ".sendSms": true, smsIface + ".launchApp": true}},
 		pluginPath("devA", "battery"): {
 			ifaces: map[string]map[string]dbus.Variant{
 				batteryIface: batteryProps(98, false),
@@ -571,8 +578,24 @@ func TestRingAction(t *testing.T) {
 	if e.Err != nil || e.Message != "Ringing Pixel 10 Pro XL..." {
 		t.Fatalf("ring event = %+v", e)
 	}
-	if !bus.objects[devicePath("devA")].asked(findMyPhoneIface + ".ring") {
+	if !bus.objects[pluginPath("devA", "findmyphone")].asked(findMyPhoneIface + ".ring") {
 		t.Fatal("ring never called")
+	}
+}
+
+func TestPingAction(t *testing.T) {
+	bus := testBus()
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
+	svc.Do(Action{Kind: ActionPing, DeviceID: "devA"})
+	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult })
+	if e.Err != nil || e.Message != "Ping sent to Pixel 10 Pro XL" {
+		t.Fatalf("ping event = %+v", e)
+	}
+	if !bus.objects[pluginPath("devA", "ping")].asked(pingIface + ".sendPing") {
+		t.Fatal("sendPing never called on the ping object")
 	}
 }
 
@@ -625,7 +648,7 @@ func TestShareAndFileMarshalling(t *testing.T) {
 	defer svc.Close()
 
 	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
-	dev := bus.objects[devicePath("devA")]
+	dev := bus.objects[pluginPath("devA", "share")]
 
 	svc.Do(Action{Kind: ActionShareURL, DeviceID: "devA", Arg: "https://example.com"})
 	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "Shared with Pixel 10 Pro XL" })
@@ -708,25 +731,25 @@ func TestClipboardBrowseAndSMSAppActions(t *testing.T) {
 	defer svc.Close()
 
 	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
-	dev := bus.objects[devicePath("devA")]
+	plugin := func(name string) *fakeObject { return bus.objects[pluginPath("devA", name)] }
 
 	svc.Do(Action{Kind: ActionClipboard, DeviceID: "devA"})
 	e := waitForEvent(t, svc, func(e Event) bool {
 		return e.Kind == EventActionResult && e.Message == "Clipboard sent to Pixel 10 Pro XL"
 	})
-	if e.Err != nil || !dev.asked(clipboardIface+".sendClipboard") {
+	if e.Err != nil || !plugin("clipboard").asked(clipboardIface+".sendClipboard") {
 		t.Fatalf("clipboard event = %+v", e)
 	}
 
 	svc.Do(Action{Kind: ActionBrowse, DeviceID: "devA"})
 	e = waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "Opening the file browser..." })
-	if e.Err != nil || !dev.asked(sftpIface+".startBrowsing") {
+	if e.Err != nil || !plugin("sftp").asked(sftpIface+".startBrowsing") {
 		t.Fatalf("browse event = %+v", e)
 	}
 
 	svc.Do(Action{Kind: ActionLaunchSMSApp, DeviceID: "devA"})
 	e = waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "Opening the SMS app..." })
-	if e.Err != nil || !dev.asked(smsIface+".launchApp") {
+	if e.Err != nil || !plugin("sms").asked(smsIface+".launchApp") {
 		t.Fatalf("sms app event = %+v", e)
 	}
 }

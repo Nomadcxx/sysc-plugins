@@ -33,6 +33,30 @@ func deviceIcon(dev *Device) string {
 	return "devices"
 }
 
+// PanelWidth is the popout width the manifest declares, one size for every
+// device type. The wire has no grow or flex and a list left-aligns natural
+// widths, so every fixed width in the panel derives from it here.
+const PanelWidth = 480
+
+const (
+	listPad = 12 // the panel list's inset
+	cardPad = 14 // every card's inset
+	cellGap = 10 // the gap between grid cells and between pills
+	// cellWidth splits a card's inner width into three equal cells: the
+	// action pills and the recent-image thumbnails. 136 at a 480 panel.
+	cellWidth = (PanelWidth - 2*listPad - 2*cardPad - 2*cellGap) / 3
+	// pillHeight and pillPad size every inline button, so Use, Request
+	// pairing, Accept and the composer sends read as one control family.
+	pillHeight = 36
+	pillPad    = 14
+)
+
+// pill sizes an inline button to the panel's shared pill metrics.
+func pill(b *v1.Node) *v1.Node {
+	b.Height, b.Padding = pillHeight, pillPad
+	return b
+}
+
 // mockupAssetDir overrides the directory the mockup artwork resolves from;
 // empty means beside the running executable, the installed plugin's
 // ../assets. Tests point it at a temp directory.
@@ -110,49 +134,20 @@ func selectedDevice(snap Snapshot) *Device {
 
 // BarTree is the bar pill: the offline glyph with N/A while the daemon is
 // unreachable, and — matching the reference pill — the offline glyph again
-// whenever the selected device is not reachable, with the percent only for
-// a connected, reporting device. The whole control opens the panel. While
-// the device charges, the pill carries its charge level as an animated,
-// tinted fill ahead of the glyph (sysc-447): error below 20, accent
-// otherwise — the wire has no warning/success fills.
+// whenever the selected device is not reachable. It stays a glyph while the
+// device charges; the panel and tooltip carry the charge level. The whole
+// control opens the panel.
 func BarTree(snap Snapshot) *v1.Node {
 	icon, label := "smartphone", "N/A"
-	var fill *v1.Node
 	if snap.Available {
 		label = ""
-		if dev := selectedDevice(snap); dev != nil {
-			if !dev.Reachable {
-				icon = "devices_other"
-			}
-			if dev.BatteryCharging && dev.BatteryKnown && dev.BatteryCharge >= 0 {
-				value := float64(dev.BatteryCharge) / 100
-				if value > 1 {
-					value = 1
-				}
-				tone := v1.ToneAccent
-				if dev.BatteryCharge < 20 {
-					tone = v1.ToneError
-				}
-				fill = &v1.Node{Kind: v1.KindProgress, Key: "kdeconnect-pill",
-					Value: value, Animate: true, Tone: tone, Width: 64}
-			}
+		if dev := selectedDevice(snap); dev != nil && !dev.Reachable {
+			icon = "devices_other"
 		}
 	}
-	button := &v1.Node{Kind: v1.KindButton, ID: "open",
-		Name: "Open phone connect", Role: "button",
-		Events: []v1.EventKind{v1.EventActivate}}
-	if fill != nil {
-		// The converter replaces a button's icon-synthesized children with
-		// explicit ones, so the charging pill carries its own glyph (and
-		// label) after the fill.
-		button.Children = []*v1.Node{fill, {Kind: v1.KindIcon, Icon: icon}}
-		if label != "" {
-			button.Children = append(button.Children, &v1.Node{Kind: v1.KindText, Text: label})
-		}
-	} else {
-		button.Icon, button.Text = icon, label
-	}
-	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{button}}
+	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{Kind: v1.KindButton, ID: "open",
+		Icon: icon, Text: label, Name: "Open phone connect", Role: "button",
+		Events: []v1.EventKind{v1.EventActivate}}}}
 }
 
 // TooltipTree names the backend, the selected device's state, and — when
@@ -218,7 +213,7 @@ func PanelTree(snap Snapshot, settings Settings, composer Composer, drafts Draft
 // the panel tree pure. The compact chooser remains visible so the selected
 // device is always clear; opening it reveals every device and its actions.
 func PanelTreeForState(snap Snapshot, settings Settings, composer Composer, drafts Drafts, switcherOpen bool) *v1.Node {
-	col := &v1.Node{Kind: v1.KindList, Gap: 10, Padding: 8, Children: []*v1.Node{headerTree(snap)}}
+	col := &v1.Node{Kind: v1.KindList, Gap: 10, Padding: listPad, Children: []*v1.Node{headerTree(snap)}}
 	if !snap.Available {
 		col.Children = append(col.Children, unavailableCard())
 		return col
@@ -306,7 +301,7 @@ func headerTree(snap Snapshot) *v1.Node {
 // stateCard is one full-width message card with a bold headline over a
 // muted hint.
 func stateCard(headline, hint string) *v1.Node {
-	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 4,
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: cardPad, Gap: 4,
 		Children: []*v1.Node{
 			{Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
 				{Kind: v1.KindIcon, Icon: "devices_other"},
@@ -315,16 +310,16 @@ func stateCard(headline, hint string) *v1.Node {
 					{Kind: v1.KindText, Text: hint, Tone: v1.ToneSubtle},
 				}},
 			}},
-			{Kind: v1.KindButton, ID: "retry", Icon: "restart_alt", Text: "Retry",
+			pill(&v1.Node{Kind: v1.KindButton, ID: "retry", Icon: "restart_alt", Text: "Retry",
 				Name: "Retry device discovery", Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}},
+				Events: []v1.EventKind{v1.EventActivate}}),
 		}}
 }
 
 // unavailableCard is the DMS UnavailableMessage: an error-styled card that
 // names the problem and the fix.
 func unavailableCard() *v1.Node {
-	return &v1.Node{Kind: v1.KindColumn, Fill: "error-container", Radius: 12, Padding: 14, Gap: 4,
+	return &v1.Node{Kind: v1.KindColumn, Fill: "error-container", Radius: 12, Padding: cardPad, Gap: 4,
 		Children: []*v1.Node{
 			{Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
 				{Kind: v1.KindIcon, Icon: "devices_other", Tone: v1.ToneError},
@@ -333,9 +328,9 @@ func unavailableCard() *v1.Node {
 					{Kind: v1.KindText, Text: "Start kdeconnectd to use this plugin.", Tone: v1.ToneError},
 				}},
 			}},
-			{Kind: v1.KindButton, ID: "retry", Icon: "restart_alt", Text: "Retry",
+			pill(&v1.Node{Kind: v1.KindButton, ID: "retry", Icon: "restart_alt", Text: "Retry",
 				Name: "Retry KDE Connect discovery", Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}},
+				Events: []v1.EventKind{v1.EventActivate}}),
 		}}
 }
 
@@ -366,7 +361,7 @@ func deviceChooserTree(snap Snapshot, selected *Device, open bool) *v1.Node {
 // sends and one file-path field, the DMS ShareDialog's contents, with the
 // same send gating — URI only for a valid URI, text only when non-empty.
 func shareComposerTree(drafts Drafts) *v1.Node {
-	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 8,
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: cardPad, Gap: 8,
 		Children: []*v1.Node{
 			composerHeader("Share", "link", "share-close"),
 			{Kind: v1.KindTextInput, ID: "share-text", Name: "URL or text to share", Role: "textbox",
@@ -389,7 +384,7 @@ func shareComposerTree(drafts Drafts) *v1.Node {
 // smsComposerTree is the SMS card: number and single-line body with send
 // gated on both, plus the launch-app escape hatch, the DMS SmsDialog.
 func smsComposerTree(drafts Drafts) *v1.Node {
-	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 8,
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: cardPad, Gap: 8,
 		Children: []*v1.Node{
 			composerHeader("New message", "notifications", "sms-close"),
 			{Kind: v1.KindTextInput, ID: "sms-number", Name: "Phone number", Role: "textbox",
@@ -399,9 +394,9 @@ func smsComposerTree(drafts Drafts) *v1.Node {
 			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
 				gatedButton("sms-send", "send", "Send", "Send the message",
 					drafts.SmsNumber != "" && drafts.SmsBody != ""),
-				{Kind: v1.KindButton, ID: "sms-app", Text: "Open app",
+				pill(&v1.Node{Kind: v1.KindButton, ID: "sms-app", Text: "Open app",
 					Name: "Open the SMS app on the device", Role: "button",
-					Events: []v1.EventKind{v1.EventActivate}},
+					Events: []v1.EventKind{v1.EventActivate}}),
 			}},
 		}}
 }
@@ -430,7 +425,7 @@ func gatedButton(id, icon, text, name string, enabled bool) *v1.Node {
 	if !enabled {
 		b.Disabled = true
 	}
-	return b
+	return pill(b)
 }
 
 // isURILike reports whether the text carries a URI scheme and no spaces,
@@ -449,39 +444,39 @@ var uriScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:`)
 // accept and reject) and an outgoing one (waiting plus cancel).
 func pairingCard(dev *Device) *v1.Node {
 	hint := "Pairing request sent. Accept it on the device."
-	actions := []*v1.Node{{
+	actions := []*v1.Node{pill(&v1.Node{
 		Kind: v1.KindButton, ID: "pair-cancel", Icon: "close", Text: "Cancel", Fill: "error-container",
 		Name: "Cancel the pairing request", Role: "button",
 		Events: []v1.EventKind{v1.EventActivate},
-	}}
+	})}
 	if dev.PairRequestedByPeer {
 		hint = "Accept the pairing request."
 		if dev.VerificationKey != "" {
 			hint = "Verification: " + dev.VerificationKey
 		}
 		actions = []*v1.Node{
-			{Kind: v1.KindButton, ID: "pair-accept", Icon: "check", Text: "Accept", Fill: "accent",
+			pill(&v1.Node{Kind: v1.KindButton, ID: "pair-accept", Icon: "check", Text: "Accept", Fill: "accent",
 				Name: "Accept the pairing request", Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}},
-			{Kind: v1.KindButton, ID: "pair-reject", Icon: "close", Text: "Reject", Fill: "error-container",
+				Events: []v1.EventKind{v1.EventActivate}}),
+			pill(&v1.Node{Kind: v1.KindButton, ID: "pair-reject", Icon: "close", Text: "Reject", Fill: "error-container",
 				Name: "Reject the pairing request", Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}},
+				Events: []v1.EventKind{v1.EventActivate}}),
 		}
 	}
-	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 6,
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: cardPad, Gap: 6,
 		Children: []*v1.Node{
 			{Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
 				{Kind: v1.KindIcon, Icon: deviceIcon(dev)},
 				{Kind: v1.KindText, Text: dev.Name, Bold: true, Size: "title"},
 			}},
 			{Kind: v1.KindText, Text: hint, Tone: v1.ToneSubtle},
-			{Kind: v1.KindRow, Gap: 8, Children: actions},
+			{Kind: v1.KindRow, Gap: cellGap, Children: actions},
 		}}
 }
 
 // unpairedCard offers the pairing request for a known but unpaired device.
 func unpairedCard(dev *Device) *v1.Node {
-	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 6,
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: cardPad, Gap: 6,
 		Children: []*v1.Node{
 			{Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
 				{Kind: v1.KindIcon, Icon: deviceIcon(dev)},
@@ -490,9 +485,9 @@ func unpairedCard(dev *Device) *v1.Node {
 					{Kind: v1.KindText, Text: "Not paired", Size: "caption", Tone: v1.ToneSubtle},
 				}},
 			}},
-			{Kind: v1.KindButton, ID: "pair", Icon: "link", Text: "Request pairing", Fill: "accent",
+			pill(&v1.Node{Kind: v1.KindButton, ID: "pair", Icon: "link", Text: "Request pairing", Fill: "accent",
 				Name: "Request pairing with the device", Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}},
+				Events: []v1.EventKind{v1.EventActivate}}),
 		}}
 }
 
@@ -509,7 +504,7 @@ func switcherCardTree(dev *Device, selected bool) *v1.Node {
 		}},
 	}}
 
-	chips := []*v1.Node{}
+	var chips []*v1.Node
 	if dev.BatteryKnown && dev.BatteryCharge >= 0 {
 		chips = append(chips,
 			&v1.Node{Kind: v1.KindIcon, Icon: batteryIconName(dev)},
@@ -519,10 +514,12 @@ func switcherCardTree(dev *Device, selected bool) *v1.Node {
 		chips = append(chips, &v1.Node{Kind: v1.KindIcon, Icon: networkStrengthIcon(dev.NetworkStrength)})
 	}
 	if len(chips) > 0 {
-		// Two children make the header a pin-end row: the chips column sits
-		// at the card's right edge, the DMS card's status row.
+		// Two children make the header a pin-end row: the chips row sits at
+		// the card's right edge, the DMS card's status row. A row, not a
+		// column: a trailing column takes the remaining width and its
+		// left-aligned chips never reach the edge.
 		header = &v1.Node{Kind: v1.KindRow, Gap: 10, PinEnd: true, Children: []*v1.Node{
-			header, {Kind: v1.KindColumn, Gap: 2, Children: chips}}}
+			header, {Kind: v1.KindRow, Gap: 4, Children: chips}}}
 	}
 
 	// The select affordance leads the action row; pairing actions follow on
@@ -531,35 +528,36 @@ func switcherCardTree(dev *Device, selected bool) *v1.Node {
 	if selected {
 		selectText, selectName = "Selected", dev.Name+" is selected"
 	}
-	actions := []*v1.Node{{
+	actions := []*v1.Node{pill(&v1.Node{
 		Kind: v1.KindButton, ID: "select-" + dev.ID, Text: selectText, Disabled: selected,
 		Name: selectName, Role: "button", Events: []v1.EventKind{v1.EventActivate},
-	}}
+	})}
 	switch {
 	case dev.PairRequestedByPeer:
 		actions = append(actions,
-			&v1.Node{Kind: v1.KindButton, ID: "accept-" + dev.ID, Text: "Accept", Fill: "accent",
+			pill(&v1.Node{Kind: v1.KindButton, ID: "accept-" + dev.ID, Text: "Accept", Fill: "accent",
 				Name: "Accept pairing with " + dev.Name, Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}},
-			&v1.Node{Kind: v1.KindButton, ID: "reject-" + dev.ID, Text: "Reject", Fill: "error-container",
+				Events: []v1.EventKind{v1.EventActivate}}),
+			pill(&v1.Node{Kind: v1.KindButton, ID: "reject-" + dev.ID, Text: "Reject", Fill: "error-container",
 				Name: "Reject pairing with " + dev.Name, Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}})
+				Events: []v1.EventKind{v1.EventActivate}}))
 	case dev.Reachable && !dev.Paired:
 		actions = append(actions,
-			&v1.Node{Kind: v1.KindButton, ID: "pair-" + dev.ID, Text: "Request pairing", Fill: "accent",
+			pill(&v1.Node{Kind: v1.KindButton, ID: "pair-" + dev.ID, Text: "Request pairing", Fill: "accent",
 				Name: "Request pairing with " + dev.Name, Role: "button",
-				Events: []v1.EventKind{v1.EventActivate}})
+				Events: []v1.EventKind{v1.EventActivate}}))
 	}
 
-	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 10, Padding: 10, Gap: 8,
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: cardPad, Gap: 10,
 		Children: []*v1.Node{
 			header,
-			{Kind: v1.KindRow, Gap: 8, Children: actions},
+			{Kind: v1.KindRow, Gap: cellGap, Children: actions},
 		}}
 }
 
-// cardStatus is the DMS DeviceCard's status line: pairing states first, the
-// empty string when the device is simply connected.
+// cardStatus is the DMS DeviceCard's status line: pairing states first, then
+// Connected, so every card's name sits over a status line at the same
+// height rather than over an empty one.
 func cardStatus(dev *Device) string {
 	switch {
 	case dev.PairRequestedByPeer:
@@ -571,7 +569,7 @@ func cardStatus(dev *Device) string {
 	case !dev.Reachable:
 		return "Offline"
 	}
-	return ""
+	return "Connected"
 }
 
 func cardStatusTone(dev *Device) v1.Tone {
@@ -605,7 +603,7 @@ func deviceCardTree(dev *Device) *v1.Node {
 	return &v1.Node{Kind: v1.KindButton, ID: "device-ping",
 		Name: "Tap to ping " + dev.Name, Role: "button",
 		Events: []v1.EventKind{v1.EventActivate},
-		Fill:   "card", Radius: 12, Padding: 14, Gap: 6,
+		Fill:   "card", Radius: 12, Padding: cardPad, Gap: 6,
 		Children: []*v1.Node{{Kind: v1.KindColumn, Gap: 6, Children: children}}}
 }
 
@@ -618,7 +616,7 @@ func batteryProgressNode(dev *Device) *v1.Node {
 		value = 1
 	}
 	return &v1.Node{Key: "battery-progress", Kind: v1.KindProgress, Value: value,
-		Animate: true, Width: 180, CenterX: true}
+		Animate: true, Width: 2 * cellWidth, CenterX: true}
 }
 
 // actionRowTree groups capability-gated actions into labelled, host-sized
@@ -650,19 +648,17 @@ func actionRowTree(dev *Device, settings Settings) *v1.Node {
 		if end > len(buttons) {
 			end = len(buttons)
 		}
-		rows = append(rows, &v1.Node{Kind: v1.KindRow, Gap: 8, Children: buttons[start:end]})
+		rows = append(rows, &v1.Node{Kind: v1.KindRow, Gap: cellGap, Children: buttons[start:end]})
 	}
-	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 10, Gap: 6,
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: cardPad, Gap: 8,
 		Children: rows}
 }
 
 func actionButton(id, icon, text, name string, enabled bool) *v1.Node {
-	// Fixed width keeps the pills uniform: the wire has no Grow/Flex, and
-	// content-sizing plus the stadium radius made them tight balls. 116 =
-	// (400 panel − 2×8 list pad − 2×10 card pad − 2×8 gap) / 3; slightly
-	// ragged on the 525px wide panels, accepted for one shared size.
+	// A grid cell wide: the wire has no Grow/Flex, and content-sizing plus
+	// the stadium radius made the pills tight, ragged balls.
 	b := &v1.Node{Kind: v1.KindButton, ID: id, Icon: icon, Text: text, Name: name, Role: "button",
-		Width: 116, Height: 40, Padding: 10,
+		Width: cellWidth, Height: 40, Padding: 10,
 		Events: []v1.EventKind{v1.EventActivate}}
 	if !enabled {
 		b.Disabled = true
@@ -670,10 +666,11 @@ func actionButton(id, icon, text, name string, enabled bool) *v1.Node {
 	return b
 }
 
-// infoRowsTree is the selected device's reading rows: battery, signal
-// strength, network type, and the notification count.
+// infoRowsTree is the selected device's reading rows — battery, signal
+// strength, network type, and the notification count — in a card of their
+// own, so they read as one block under the device card.
 func infoRowsTree(dev *Device) *v1.Node {
-	col := &v1.Node{Kind: v1.KindColumn, Gap: 8}
+	col := &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: cardPad, Gap: 10}
 	if row := batteryRowNode(dev); row != nil {
 		col.Children = append(col.Children, row)
 	}
@@ -731,18 +728,18 @@ func recentImagesTree(snap Snapshot) *v1.Node {
 	if len(snap.RecentImages) == 0 {
 		return nil
 	}
-	card := &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: 14, Gap: 6,
+	card := &v1.Node{Kind: v1.KindColumn, Fill: "card", Radius: 12, Padding: cardPad, Gap: 6,
 		Children: []*v1.Node{{Kind: v1.KindText, Text: "Recent", Bold: true}}}
 	for start := 0; start < len(snap.RecentImages); start += 3 {
 		end := start + 3
 		if end > len(snap.RecentImages) {
 			end = len(snap.RecentImages)
 		}
-		row := &v1.Node{Kind: v1.KindRow, Gap: 8}
+		row := &v1.Node{Kind: v1.KindRow, Gap: cellGap}
 		for _, img := range snap.RecentImages[start:end] {
 			row.Children = append(row.Children, &v1.Node{Kind: v1.KindColumn, Gap: 4,
 				Children: []*v1.Node{
-					{Kind: v1.KindImage, ID: "recent-" + img.ID, Path: img.Thumb, ImageSize: 96},
+					{Kind: v1.KindImage, ID: "recent-" + img.ID, Path: img.Thumb, ImageSize: cellWidth},
 					{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
 						{Kind: v1.KindButton, ID: "recent-open-" + img.ID, Icon: "folder-open",
 							Name: "Open " + path.Base(img.Source), Role: "button",
