@@ -119,7 +119,10 @@ func NewIndex(zoneTab, isoTab, tzdata io.Reader) *Index {
 			if strings.Contains(name, "/") || name == "UTC" {
 				ix.ids[fold(name)] = target
 			}
-			ix.add(Match{ID: target, City: ShortLabel(name), Country: ix.country[target], Alias: true})
+			city := ShortLabel(name)
+			if !legacyAbbreviation(city) {
+				ix.add(Match{ID: target, City: city, Country: ix.country[target], Alias: true})
+			}
 		}
 	})
 	ix.ids["utc"] = "UTC"
@@ -154,20 +157,58 @@ const (
 	rankIDSubstring
 )
 
-func (e entry) rank(q string) (int, bool) {
+func (e entry) rank(q string) (int, int, bool) {
 	switch {
 	case e.cityKey == q:
-		return rankExactName, true
+		return rankExactName, 0, true
 	case e.countryKey != "" && e.countryKey == q:
-		return rankExactCountry, true
-	case !e.Alias && wordPrefix(e.cityKey, q):
-		return rankCityPrefix, true
-	case e.Alias && wordPrefix(e.cityKey, q):
-		return rankAliasPrefix, true
-	case e.countryKey != "" && wordPrefix(e.countryKey, q):
-		return rankCountry, true
-	case !e.Alias && strings.Contains(e.idKey, q):
-		return rankIDSubstring, true
+		return rankExactCountry, 0, true
+	case !e.Alias:
+		if rest, ok := prefixRemainder(e.cityKey, q); ok {
+			return rankCityPrefix, rest, true
+		}
+	case e.Alias:
+		if rest, ok := prefixRemainder(e.cityKey, q); ok {
+			return rankAliasPrefix, rest, true
+		}
+	}
+	if e.countryKey != "" {
+		if rest, ok := prefixRemainder(e.countryKey, q); ok {
+			return rankCountry, rest, true
+		}
+	}
+	if !e.Alias && strings.Contains(e.idKey, q) {
+		return rankIDSubstring, 0, true
+	}
+	return 0, 0, false
+}
+
+func legacyAbbreviation(name string) bool {
+	// Uppercase link names are legacy timezone codes, not city aliases.
+	if name == "" {
+		return false
+	}
+	hasLetter := false
+	for _, r := range name {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			hasLetter = true
+		case r >= '0' && r <= '9', r == '+', r == '-':
+		default:
+			return false
+		}
+	}
+	return hasLetter
+}
+
+func prefixRemainder(s, q string) (int, bool) {
+	if strings.HasPrefix(s, q) {
+		return len(s) - len(q), true
+	}
+	for i := 1; i < len(s); i++ {
+		if (s[i-1] == ' ' || s[i-1] == '-') && strings.HasPrefix(s[i:], q) {
+			return len(s) - i - len(q), true
+		}
 	}
 	return 0, false
 }
@@ -182,23 +223,24 @@ func (ix *Index) Search(query string, limit int) []Match {
 		return nil
 	}
 	type scored struct {
-		m    Match
-		rank int
+		m         Match
+		rank      int
+		remainder int
 	}
 	best := map[string]scored{}
-	consider := func(m Match, rank int) {
-		if cur, ok := best[m.ID]; !ok || rank < cur.rank {
-			best[m.ID] = scored{m, rank}
+	consider := func(m Match, rank, remainder int) {
+		if cur, ok := best[m.ID]; !ok || rank < cur.rank || rank == cur.rank && remainder < cur.remainder {
+			best[m.ID] = scored{m, rank, remainder}
 		}
 	}
 	if id, ok := ix.ids[q]; ok {
-		consider(Match{ID: id, City: ShortLabel(id), Country: ix.country[id]}, rankExactID)
+		consider(Match{ID: id, City: ShortLabel(id), Country: ix.country[id]}, rankExactID, 0)
 	} else if strings.Contains(raw, "/") && ValidZone(raw) {
-		consider(Match{ID: raw, City: ShortLabel(raw)}, rankExactID)
+		consider(Match{ID: raw, City: ShortLabel(raw)}, rankExactID, 0)
 	}
 	for _, e := range ix.entries {
-		if r, ok := e.rank(q); ok {
-			consider(e.Match, r)
+		if r, remainder, ok := e.rank(q); ok {
+			consider(e.Match, r, remainder)
 		}
 	}
 	out := make([]scored, 0, len(best))
@@ -208,6 +250,11 @@ func (ix *Index) Search(query string, limit int) []Match {
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].rank != out[j].rank {
 			return out[i].rank < out[j].rank
+		}
+		// ponytail: the shortest matching suffix is the relevance signal; city
+		// popularity would require a maintained weights table.
+		if out[i].remainder != out[j].remainder {
+			return out[i].remainder < out[j].remainder
 		}
 		if a, b := fold(out[i].m.City), fold(out[j].m.City); a != b {
 			return a < b
@@ -222,18 +269,6 @@ func (ix *Index) Search(query string, limit int) []Match {
 		ms[i] = s.m
 	}
 	return ms
-}
-
-func wordPrefix(s, q string) bool {
-	if strings.HasPrefix(s, q) {
-		return true
-	}
-	for i := 1; i < len(s); i++ {
-		if (s[i-1] == ' ' || s[i-1] == '-') && strings.HasPrefix(s[i:], q) {
-			return true
-		}
-	}
-	return false
 }
 
 var accentFold = map[rune]rune{

@@ -51,7 +51,7 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 		"nodata": {Providers: []ProviderReport{{ID: "alpha", Name: "Alpha", State: StateNoData}}},
 		"opencode-no-subscription": {Providers: []ProviderReport{{ID: "opencode-go", Name: "OpenCode Go",
 			State: StateNoData, Err: "OpenCode Go subscription required (HTTP 403)"}}},
-		"empty":  {},
+		"empty": {},
 	}
 	hist := []float64{10, 20, 40}
 	for name, r := range states {

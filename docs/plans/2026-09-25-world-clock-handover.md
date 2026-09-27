@@ -163,9 +163,12 @@ Constraints for any visual change:
 - The clean default screenshot showed the empty search field collapsing to its intrinsic one-space width, which left the add button at the left. The field now gets the remaining panel width; an automated geometry assertion and interactive state screenshots are deferred.
 - The World Clock binary was rebuilt from this worktree and its plugin process restarted by the host. The existing symlink already points to this worktree. A clean default-panel screenshot was captured; remaining live states are deferred.
 - 2026-09-26 recheck: the suite was rerun on the merged code with `-race -p 2` and passes.
+- **D3 completed 2026-09-26:** closer city-prefix matches rank first, uppercase
+  legacy timezone links are not treated as cities, and `GMT` resolves to the
+  single `UTC` result. Fixtures cover the Paris/Paramaribo, Estonia/`EST`, and
+  GMT link cases.
+- The `hour24=false` lint now covers every panel state, all four bar modes, and
+  populated and capped tooltips.
 - **Still open:**
-  - Part 2 areas 1–5 and 7–9 are not started.
-  - The `hour24=false` lint covers only two states (acceptance item 2).
-  - D3 still has three soft spots with the real tables: `par` lists Paramaribo before Paris,
-    `est` lists America/Panama (labelled EST) before Tallinn, and `gmt` shows both Etc/GMT and
-    UTC.
+  - Part 2's visual review has not started; begin with the user's screenshots
+    and get approval for a design before changing views.

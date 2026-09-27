@@ -43,6 +43,13 @@ func TestBarModes(t *testing.T) {
 		}
 		lintBar(t, Bar(c.mode, z, c.cycle))
 	}
+	twelveHour := append([]Reading(nil), z...)
+	for i := range twelveHour {
+		twelveHour[i].Clock = "12:04 PM"
+	}
+	for _, c := range cases {
+		lintBar(t, Bar(c.mode, twelveHour, c.cycle))
+	}
 	short := []Reading{
 		{Label: "UTC", Clock: "12:04", OnBar: true},
 		{Label: "Berlin", Clock: "14:04", OnBar: true},
@@ -116,5 +123,19 @@ func TestTooltipListsZonesAndCaps(t *testing.T) {
 	}
 	if !hasText(Tooltip(nil), "No zones on the bar", v1.ToneSubtle) {
 		t.Fatal("empty tooltip")
+	}
+	twelveHour := append([]Reading(nil), barZones()...)
+	for i := range twelveHour {
+		twelveHour[i].Clock = "12:04 PM"
+	}
+	for _, f := range shelllint.Tree(Tooltip(twelveHour), v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight) {
+		t.Errorf("12-hour tooltip: %s", f)
+	}
+	many12Hour := append([]Reading(nil), many...)
+	for i := range many12Hour {
+		many12Hour[i].Clock = "12:00 PM"
+	}
+	for _, f := range shelllint.Tree(Tooltip(many12Hour), v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight) {
+		t.Errorf("12-hour capped tooltip: %s", f)
 	}
 }

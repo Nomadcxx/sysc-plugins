@@ -5,4 +5,10 @@ L Asia/Kolkata Asia/Bombay
 L America/Panama EST
 L Europe/Brussels CET
 L Etc/GMT GMT
+L Etc/GMT GMT+0
+L Etc/GMT GMT-0
+L Etc/GMT GMT0
+L Etc/GMT Etc/GMT+0
+L Etc/GMT Etc/GMT-0
+L Etc/GMT Etc/GMT0
 L Europe/Kyiv Europe/Kiev

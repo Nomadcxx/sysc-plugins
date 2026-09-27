@@ -72,6 +72,12 @@ func TestPanelLintEveryState(t *testing.T) {
 	}
 	for name, s := range states {
 		lintPanel(t, name, s)
+		twelveHour := s
+		twelveHour.Readings = append([]Reading(nil), s.Readings...)
+		for i := range twelveHour.Readings {
+			twelveHour.Readings[i].Clock = "12:04 PM"
+		}
+		lintPanel(t, name+" 12-hour", twelveHour)
 	}
 }
 

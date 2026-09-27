@@ -72,11 +72,19 @@ func TestSearchCountryName(t *testing.T) {
 func TestSearchWholeCountryRanksBeforeCityPrefix(t *testing.T) {
 	t.Parallel()
 	ix := fixtureIndex(t)
-	for query, want := range map[string]string{"india": "Asia/Kolkata", "georgia": "Asia/Tbilisi", "par": "America/Paramaribo"} {
+	for query, want := range map[string]string{"india": "Asia/Kolkata", "georgia": "Asia/Tbilisi"} {
 		got := ix.Search(query, 5)
 		if len(got) == 0 || got[0].ID != want {
 			t.Errorf("%s first match = %+v, want %s", query, got, want)
 		}
+	}
+}
+
+func TestSearchPrefixPrefersCloserCityName(t *testing.T) {
+	t.Parallel()
+	got := fixtureIndex(t).Search("par", 5)
+	if len(got) < 2 || got[0].ID != "Europe/Paris" || got[1].ID != "America/Paramaribo" {
+		t.Fatalf("par = %+v, want Paris before Paramaribo", got)
 	}
 }
 
@@ -88,8 +96,6 @@ func TestSearchLinkNamesUseCanonicalTargetsAndCityAliases(t *testing.T) {
 		"kiev":       "Europe/Kyiv",
 		"calcutta":   "Asia/Kolkata",
 		"bombay":     "Asia/Kolkata",
-		"est":        "America/Panama",
-		"cet":        "Europe/Brussels",
 	} {
 		got := ix.Search(query, 5)
 		if len(got) == 0 || got[0].ID != want {
@@ -101,10 +107,21 @@ func TestSearchLinkNamesUseCanonicalTargetsAndCityAliases(t *testing.T) {
 			}
 		}
 	}
+	if got := ix.Search("est", 5); len(got) == 0 || got[0].ID != "Europe/Tallinn" {
+		t.Errorf("est = %+v, want Tallinn first", got)
+	}
+	for _, m := range ix.Search("est", 5) {
+		if m.ID == "America/Panama" {
+			t.Errorf("est returned legacy abbreviation as a city: %+v", m)
+		}
+	}
+	if got := ix.Search("cet", 5); len(got) != 0 {
+		t.Errorf("cet = %+v, want no city matches for a legacy abbreviation", got)
+	}
 	got := ix.Search("gmt", 5)
 	ids := matchIDs(got)
-	if !reflect.DeepEqual(ids, []string{"Etc/GMT", "UTC"}) {
-		t.Errorf("gmt = %v, want Etc/GMT and UTC", ids)
+	if !reflect.DeepEqual(ids, []string{"UTC"}) {
+		t.Errorf("gmt = %v, want its single canonical UTC match", ids)
 	}
 	for _, query := range []string{"kiev", "calcutta", "bombay"} {
 		if got := ix.Search(query, 1); len(got) != 1 || !got[0].Alias {
