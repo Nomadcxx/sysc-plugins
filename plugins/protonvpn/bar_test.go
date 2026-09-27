@@ -127,9 +127,11 @@ func TestBarLintEveryState(t *testing.T) {
 }
 
 func TestTooltipLint(t *testing.T) {
-	root := Tooltip(BarState{Snap: Snapshot{Phase: PhaseConnected, IP: "198.51.100.7", Status: Status{Server: "US-NY#1", Location: "New York, United States", Country: "US", Protocol: "wireguard"}, RxRate: 1024, TxRate: 512}})
-	if findings := lint.Tree(root, v1.ViewTooltip, lint.TooltipWidth, lint.TooltipHeight); len(findings) > 0 {
-		t.Fatalf("%v", findings)
+	for _, phase := range []Phase{PhaseDisconnected, PhaseConnecting, PhaseConnected, PhaseDisconnecting, PhaseError} {
+		root := Tooltip(BarState{Snap: Snapshot{Phase: phase, Err: "Tunnel setup failed", IP: "198.51.100.7", Status: Status{Server: "US-NY#1", Location: "New York, United States", Country: "US", Protocol: "wireguard"}, RxRate: 1024, TxRate: 512, Port: 51820}})
+		if findings := lint.Tree(root, v1.ViewTooltip, lint.TooltipWidth, lint.TooltipHeight); len(findings) > 0 {
+			t.Fatalf("phase %v: %v", phase, findings)
+		}
 	}
 }
 

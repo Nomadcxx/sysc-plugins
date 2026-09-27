@@ -115,23 +115,38 @@ func connectionCard(s PanelState) *v1.Node {
 	}
 }
 
-// tabBody dispatches the active tab. The flag spike passed, so connections
-// always render emoji flags from here; standalone tests keep the knob.
+// tabBody dispatches the active tab, capping the list height at whatever
+// the 580-tall panel has left after padding, card, nav, banner and error
+// line (lint is silent on column overflow, so the math lives here; the
+// tab list's own 404 default fits only the spare hasCLI no-err case).
 func tabBody(s PanelState) *v1.Node {
+	var body *v1.Node
 	switch s.Tab {
 	case "protection":
 		p := s.Prot
 		p.Snap = s.Snap
-		return ProtectionTree(p)
+		body = ProtectionTree(p)
 	case "account":
 		a := s.Acct
 		a.Snap = s.Snap
-		return AccountTree(a)
+		body = AccountTree(a)
+	default:
+		c := s.Conns
+		c.Snap = s.Snap
+		c.Flags = true
+		body = ConnectionsTree(c)
 	}
-	c := s.Conns
-	c.Snap = s.Snap
-	c.Flags = true
-	return ConnectionsTree(c)
+	avail := 580 - 2*12 - 96 - 36 - 2*8
+	if !s.HasCLI {
+		avail -= 16 + 8
+	}
+	if s.Snap.Err != "" {
+		avail -= 16 + 8
+	}
+	if body.Height > avail {
+		body.Height = avail
+	}
+	return body
 }
 
 // Panel is the 460×580 panel: optional CLI banner, the connection card, the
