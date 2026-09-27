@@ -47,15 +47,50 @@ func Pill(running map[string]Run, libraryMissing bool, now time.Time) *v1.Node {
 		}
 		n.Tabular = true
 	default:
-		first := newest(running)
+		first := newestFirst(running)[0].Name
 		n.Text = fitLabel(first, fmt.Sprintf(" +%d", len(running)-1))
 	}
 	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{n}}
 }
 
-// fitLabel keeps "name+suffix" within the 24-byte text budget of a bar pill
-// (240x32 capsule minus icon/padding; measured bytes x8px). Long Lutris titles
-// would otherwise overflow and the host would refuse the whole view.
+// TooltipTree returns the hover view for the bar pill. Tooltip views reject
+// interactive and panel-only nodes (segmented, list, button), so this is a
+// plain read-only column; the host opens one for every bar widget.
+func TooltipTree(running map[string]Run, libraryMissing bool, libraryCount int, now time.Time) *v1.Node {
+	root := &v1.Node{Kind: v1.KindColumn, Gap: 4}
+	root.Children = append(root.Children, &v1.Node{Kind: v1.KindText, Text: "Games", Bold: true})
+	switch {
+	case libraryMissing:
+		root.Children = append(root.Children, &v1.Node{Kind: v1.KindText, Text: "Lutris library not found", Tone: v1.ToneSubtle})
+	case len(running) == 0:
+		root.Children = append(root.Children, &v1.Node{Kind: v1.KindText, Text: "No games running", Tone: v1.ToneSubtle})
+		if libraryCount > 0 {
+			root.Children = append(root.Children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d games in library", libraryCount), Tone: v1.ToneSubtle})
+		}
+	default:
+		// 280x200 slot, 16px text lines: title + 6 rows + "+N more" fits.
+		const maxRows = 6
+		list := newestFirst(running)
+		for i, r := range list {
+			if i == maxRows {
+				root.Children = append(root.Children, &v1.Node{Kind: v1.KindText,
+					Text: fmt.Sprintf("+%d more", len(list)-maxRows), Tone: v1.ToneSubtle})
+				break
+			}
+			root.Children = append(root.Children, &v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
+				{Kind: v1.KindIcon, Icon: "play_arrow", IconSize: 14},
+				{Kind: v1.KindText, Text: fitLabel(r.Name, "")},
+				{Kind: v1.KindText, Text: Elapsed(r.Start, now), Tone: v1.ToneSubtle, Tabular: true},
+			}})
+		}
+	}
+	return root
+}
+
+// fitLabel keeps "name+suffix" within a 24-byte text budget (bar pill 240x32
+// capsule minus icon/padding; tooltip row 280 wide minus icon and elapsed;
+// measured bytes x8px). Long Lutris titles would otherwise overflow and the
+// host would refuse the whole view.
 func fitLabel(name, suffix string) string {
 	const budget = 24
 	if len(name)+len(suffix) <= budget {
@@ -71,15 +106,12 @@ func fitLabel(name, suffix string) string {
 	return name[:keep] + "…" + suffix
 }
 
-func newest(running map[string]Run) string {
-	type kv struct {
-		name  string
-		start time.Time
-	}
-	list := make([]kv, 0, len(running))
+// newestFirst orders runs by start time, newest first.
+func newestFirst(running map[string]Run) []Run {
+	list := make([]Run, 0, len(running))
 	for _, r := range running {
-		list = append(list, kv{r.Name, r.Start})
+		list = append(list, r)
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].start.After(list[j].start) })
-	return list[0].name
+	sort.Slice(list, func(i, j int) bool { return list[i].Start.After(list[j].Start) })
+	return list
 }
