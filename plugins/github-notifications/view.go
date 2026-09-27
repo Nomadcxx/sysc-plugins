@@ -152,15 +152,17 @@ func inboxBody(snapshot InboxSnapshot, query string) *v1.Node {
 			children = append(children, notificationRow(item))
 		}
 	}
-	if snapshot.NeedsRefresh {
-		children = append(children, &v1.Node{Kind: v1.KindRow, Height: 38, Gap: 8, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: "Refresh the inbox before loading older threads", Tone: v1.ToneSubtle},
-			button("load-more-inbox", "Refresh + load older", "Refresh the inbox and load the next page", ""),
-		}})
-	} else if snapshot.HasMore {
-		children = append(children, &v1.Node{Kind: v1.KindRow, Height: 38, Gap: 8, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: "Showing " + snapshot.CountLabel() + " unread threads", Tone: v1.ToneSubtle},
-			button("load-more-inbox", "Load older", "Load the next inbox page", ""),
+	// Older pages exist only while HasMore holds; mark-all clears it. After a
+	// single read the page cursor is stale (NeedsRefresh), and the handler
+	// refreshes before loading, so the control stays the same short pill.
+	if snapshot.HasMore && len(items) > 0 {
+		name := "Load the next inbox page"
+		if snapshot.NeedsRefresh {
+			name = "Refresh the inbox and load the next page"
+		}
+		children = append(children, &v1.Node{Kind: v1.KindRow, Height: 38, Gap: 8, Width: rowWidth, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: "Showing " + snapshot.CountLabel() + " unread", Size: "caption", Tone: v1.ToneSubtle},
+			button("load-more-inbox", "Load older", name, ""),
 		}})
 	}
 	return &v1.Node{Kind: v1.KindColumn, ID: "inbox-feed", Gap: 6, Children: children}
@@ -182,8 +184,8 @@ func workBody(snapshot WorkSnapshot, query string) *v1.Node {
 		}
 	}
 	if snapshot.HasMore {
-		children = append(children, &v1.Node{Kind: v1.KindRow, Height: 38, Gap: 8, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %s", len(snapshot.Items), snapshot.CountLabel()), Tone: v1.ToneSubtle},
+		children = append(children, &v1.Node{Kind: v1.KindRow, Height: 38, Gap: 8, Width: rowWidth, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %s", len(snapshot.Items), snapshot.CountLabel()), Size: "caption", Tone: v1.ToneSubtle},
 			button("load-more-work", "Load more", "Load the next page of work items", ""),
 		}})
 	}

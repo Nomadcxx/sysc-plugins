@@ -247,3 +247,34 @@ func nodeCount(root *v1.Node) int {
 	}
 	return n
 }
+
+// Marking one thread or the whole inbox read leaves the page cursor stale.
+// The footer must still fit, offer older pages only when some exist, and
+// never survive mark-all into an empty inbox.
+func TestInboxFooterAfterMarkingRead(t *testing.T) {
+	items := []Item{mustItem(t, rawItem("1", "Repair retry handling", "PullRequest", "review_requested"))}
+	cases := []struct {
+		name     string
+		inbox    InboxSnapshot
+		wantMore bool
+	}{
+		{"after mark all", InboxSnapshot{Status: StatusReady, NeedsRefresh: true}, false},
+		{"after one read, last page", InboxSnapshot{Status: StatusReady, Items: items, NeedsRefresh: true}, false},
+		{"after one read, older pages", InboxSnapshot{Status: StatusReady, Items: items, NeedsRefresh: true, HasMore: true}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := PanelTreeForState(PanelState{Mode: ModeInbox, StatusLine: "123 unread · updated 14:32", Inbox: tc.inbox})
+			more := findNode(root, "load-more-inbox")
+			if (more != nil) != tc.wantMore {
+				t.Fatalf("load-more present = %v, want %v", more != nil, tc.wantMore)
+			}
+			if more != nil && more.Text != "Load older" {
+				t.Fatalf("load-more label = %q, want the short %q", more.Text, "Load older")
+			}
+			if findings := shelllint.Tree(root, v1.ViewPanel, 420, 640); len(findings) != 0 {
+				t.Fatalf("layout findings: %+v", findings)
+			}
+		})
+	}
+}
