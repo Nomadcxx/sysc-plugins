@@ -331,6 +331,30 @@ func TestRightClickQuickConnect(t *testing.T) {
 	h.awaitArgs("disconnect\n")
 }
 
+func TestBarClickOpensPanelOnce(t *testing.T) {
+	h := start(t)
+	b := h.openBar()
+	// The shell delivers a primary click as press (pointer) plus release
+	// (activate); only the release may open, or the pair toggles closed.
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "b", Revision: b.Revision, Node: "bar", Event: v1.EventPointer, Button: v1.ButtonPrimary})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "b", Revision: b.Revision, Node: "bar", Event: v1.EventActivate, Output: "DP-1", Generation: 3})
+	open := h.awaitCall("panel.open", func(c v1.HostCall) bool {
+		var params v1.PanelParams
+		return callParamsIs(c, v1.CallPanelOpen, func(raw json.RawMessage) bool {
+			return json.Unmarshal(raw, &params) == nil && params.Entry == "panel" &&
+				params.Output == "DP-1" && params.Generation == 3 && params.Instance == "b"
+		})
+	})
+	_ = open
+	select {
+	case call := <-h.calls:
+		if call.Call == v1.CallPanelOpen {
+			t.Fatal("one click sent two panel.open calls")
+		}
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
 func TestSettingsChangeRearms(t *testing.T) {
 	h := start(t)
 	b := h.openBar()

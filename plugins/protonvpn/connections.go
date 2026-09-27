@@ -14,6 +14,7 @@ type ConnectionsState struct {
 	QueryReseed uint64
 	Countries   []Country
 	Expanded    string // country code currently expanded
+	Page        int    // zero-based country page
 	Flags       bool   // flag emoji spike outcome (true = render flag emoji)
 	Notice      string // "Server list unavailable"
 }
@@ -33,6 +34,17 @@ const (
 	serverNameMax = 170 // server name clip
 )
 
+// The shell rejects any view over v1.MaxNodes (1024), so the country list is
+// paged and each expanded country shows a bounded slice of its servers.
+// Worst case: 20 country rows plus four expanded countries (one manual, three
+// auto) at 20 servers each, well under the limit.
+const (
+	countriesPerPage  = 20
+	serversPerCountry = 20
+	autoExpandMax     = 3
+	pagerHeight       = 36
+)
+
 // ConnectionsTree is the Connections tab: quick connect, search, an optional
 // outage notice, and the country list with one country expanded.
 func ConnectionsTree(s ConnectionsState) *v1.Node {
@@ -45,13 +57,19 @@ func ConnectionsTree(s ConnectionsState) *v1.Node {
 		})
 		list.Height = listHeight - noticeHeight - 4
 	}
-	list.Children = countryList(s)
+	entries := countryEntries(s)
+	page, pages := clampPage(s.Page, len(entries))
+	list.Children = countryList(s, entries, page)
 	if len(list.Children) == 0 && s.Query != "" {
 		list.Children = append(list.Children, &v1.Node{
 			Kind: v1.KindText, Text: "No matching location", Tone: v1.ToneSubtle,
 		})
 	}
 	root.Children = append(root.Children, list)
+	if pages > 1 {
+		list.Height -= pagerHeight + 4
+		root.Children = append(root.Children, pagerRow(page, pages, len(entries)))
+	}
 	return root
 }
 
@@ -88,13 +106,22 @@ func searchRow(s ConnectionsState) *v1.Node {
 	}}
 }
 
-// countryList filters the countries against the query and interleaves the
-// expanded country's server rows. A country-name or code match keeps the
-// manual expansion state; a server-name match surfaces its country
-// auto-expanded with only the matching servers.
-func countryList(s ConnectionsState) []*v1.Node {
+// countryEntry is one country in the filtered list, with the servers to show
+// when it is expanded.
+type countryEntry struct {
+	country  Country
+	expanded bool
+	servers  []Server
+}
+
+// countryEntries filters the countries against the query and decides which
+// are expanded. A country-name or code match keeps the manual expansion
+// state; a server-name match surfaces its country auto-expanded with only
+// the matching servers, capped so a broad query cannot blow the node budget.
+func countryEntries(s ConnectionsState) []countryEntry {
 	q := strings.ToLower(s.Query)
-	var rows []*v1.Node
+	var entries []countryEntry
+	auto := 0
 	for _, c := range s.Countries {
 		countryMatch := q != "" &&
 			(strings.Contains(strings.ToLower(c.Name), q) || strings.Contains(strings.ToLower(c.Code), q))
@@ -107,18 +134,73 @@ func countryList(s ConnectionsState) []*v1.Node {
 		if q != "" && !countryMatch && len(serverMatches) == 0 {
 			continue
 		}
-		auto := q != "" && !countryMatch && len(serverMatches) > 0
-		expanded := s.Expanded == c.Code || auto
-		rows = append(rows, countryRow(s, c, expanded))
-		if expanded {
-			servers := c.Servers
-			if auto {
-				servers = serverMatches
+		autoExpand := q != "" && !countryMatch && len(serverMatches) > 0 && auto < autoExpandMax
+		if autoExpand {
+			auto++
+		}
+		e := countryEntry{country: c, expanded: s.Expanded == c.Code || autoExpand}
+		if e.expanded {
+			e.servers = c.Servers
+			if autoExpand {
+				e.servers = serverMatches
 			}
-			rows = append(rows, serversColumn(c, servers))
+		}
+		entries = append(entries, e)
+	}
+	return entries
+}
+
+// countryList renders one page of entries, interleaving the expanded
+// country's server rows.
+func countryList(s ConnectionsState, entries []countryEntry, page int) []*v1.Node {
+	start := page * countriesPerPage
+	end := min(start+countriesPerPage, len(entries))
+	var rows []*v1.Node
+	for _, e := range entries[start:end] {
+		rows = append(rows, countryRow(s, e.country, e.expanded))
+		if e.expanded {
+			rows = append(rows, serversColumn(e.country, e.servers))
 		}
 	}
 	return rows
+}
+
+// clampPage keeps the requested page inside the entry count.
+func clampPage(page, entries int) (int, int) {
+	pages := (entries + countriesPerPage - 1) / countriesPerPage
+	if pages < 1 {
+		pages = 1
+	}
+	if page < 0 {
+		page = 0
+	}
+	if page >= pages {
+		page = pages - 1
+	}
+	return page, pages
+}
+
+// CountryPages is how many pages the current filter needs; the session
+// clamps its page against this before stepping.
+func CountryPages(s ConnectionsState) int {
+	_, pages := clampPage(0, len(countryEntries(s)))
+	return pages
+}
+
+// pagerRow steps through the country pages.
+func pagerRow(page, pages, total int) *v1.Node {
+	first := page*countriesPerPage + 1
+	last := min((page+1)*countriesPerPage, total)
+	return &v1.Node{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
+		{Kind: v1.KindButton, ID: "page:prev", Name: "Previous page", Role: "button",
+			Icon: "chevron_left", Fill: "soft", Width: 36, Height: 32, Disabled: page == 0,
+			Events: []v1.EventKind{v1.EventActivate}},
+		{Kind: v1.KindText, Text: fmt.Sprintf("%d–%d of %d", first, last, total),
+			Tone: v1.ToneSubtle, Tabular: true},
+		{Kind: v1.KindButton, ID: "page:next", Name: "Next page", Role: "button",
+			Icon: "chevron_right", Fill: "soft", Width: 36, Height: 32, Disabled: page >= pages-1,
+			Events: []v1.EventKind{v1.EventActivate}},
+	}}
 }
 
 // countryRow is one list entry: flag or code badge, name over the server
@@ -228,11 +310,22 @@ func connectButton(c Country) *v1.Node {
 	}
 }
 
-// serversColumn is the indented server list under an expanded country.
+// serversColumn is the indented server list under an expanded country,
+// capped so a country with thousands of servers stays inside the node budget.
 func serversColumn(c Country, servers []Server) *v1.Node {
 	col := &v1.Node{Kind: v1.KindColumn, Padding: 8, Gap: 4}
-	for _, srv := range servers {
+	shown := servers
+	if len(shown) > serversPerCountry {
+		shown = shown[:serversPerCountry]
+	}
+	for _, srv := range shown {
 		col.Children = append(col.Children, serverRow(srv))
+	}
+	if len(servers) > len(shown) {
+		col.Children = append(col.Children, &v1.Node{
+			Kind: v1.KindText, Tone: v1.ToneSubtle,
+			Text: fmt.Sprintf("Showing %d of %d servers — search to narrow", len(shown), len(servers)),
+		})
 	}
 	return col
 }

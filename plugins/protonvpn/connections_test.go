@@ -1,6 +1,7 @@
 package protonvpn
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -144,5 +145,79 @@ func TestConnectionsLintEveryState(t *testing.T) {
 				t.Fatalf("phase %v: %v", phase, findings)
 			}
 		}
+	}
+}
+
+// countNodes is the shell's own budget check, kept local so the test fails
+// here rather than at the panel-open round trip.
+func countNodes(n *v1.Node) int {
+	if n == nil {
+		return 0
+	}
+	total := 1
+	for _, c := range n.Children {
+		total += countNodes(c)
+	}
+	return total
+}
+
+// TestConnectionsStaysUnderNodeLimit pins the paging and server caps against
+// a real catalogue: 149 countries, the big ones holding thousands of servers.
+// The shell rejects any view over v1.MaxNodes, so every shape the tab can
+// take must fit.
+func TestConnectionsStaysUnderNodeLimit(t *testing.T) {
+	countries := make([]Country, 0, 149)
+	for i := 0; i < 149; i++ {
+		servers := make([]Server, 0, 40)
+		for j := 0; j < 40; j++ {
+			servers = append(servers, Server{Name: fmt.Sprintf("C%03d-S%02d#1", i, j), Load: 30, Up: true})
+		}
+		countries = append(countries, Country{
+			Code: fmt.Sprintf("C%03d", i), Name: fmt.Sprintf("Country %03d", i),
+			Load: 30, Servers: servers,
+		})
+	}
+	for _, st := range []ConnectionsState{
+		{Countries: countries},
+		{Countries: countries, Expanded: "C000"},
+		{Countries: countries, Query: "S01"}, // server-name match auto-expands
+		{Countries: countries, Page: 7},
+	} {
+		root := ConnectionsTree(st)
+		if n := countNodes(root); n > v1.MaxNodes {
+			t.Fatalf("state %+v: %d nodes over the %d limit", st, n, v1.MaxNodes)
+		}
+		if findings := lint.Tree(root, v1.ViewPanel, 460, 404); len(findings) > 0 {
+			t.Fatalf("state %+v: %v", st, findings)
+		}
+	}
+}
+
+// TestConnectionsPagerPagesTheList checks the pager shows the right slice and
+// that the last page holds the remainder.
+func TestConnectionsPagerPagesTheList(t *testing.T) {
+	countries := make([]Country, 0, 45)
+	for i := 0; i < 45; i++ {
+		countries = append(countries, Country{
+			Code: fmt.Sprintf("C%02d", i), Name: fmt.Sprintf("Country %02d", i),
+			Servers: []Server{{Name: fmt.Sprintf("C%02d#1", i), Up: true}},
+		})
+	}
+	first := ConnectionsTree(ConnectionsState{Countries: countries})
+	assertTextContains(t, first, "1–20 of 45")
+	if lookupNode(first, "country:C20") != nil {
+		t.Fatal("page 0 leaked a page-1 country")
+	}
+	last := ConnectionsTree(ConnectionsState{Countries: countries, Page: 2})
+	assertTextContains(t, last, "41–45 of 45")
+	if lookupNode(last, "country:C00") != nil {
+		t.Fatal("last page leaked a page-0 country")
+	}
+	findNode(t, last, "country:C44")
+	if btn := findNode(t, last, "page:next"); !btn.Disabled {
+		t.Fatal("next enabled on the last page")
+	}
+	if btn := findNode(t, first, "page:prev"); !btn.Disabled {
+		t.Fatal("prev enabled on the first page")
 	}
 }

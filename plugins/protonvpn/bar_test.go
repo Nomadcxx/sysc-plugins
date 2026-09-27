@@ -46,11 +46,11 @@ func TestBarStates(t *testing.T) {
 		wantIcon string
 		wantTone v1.Tone
 	}{
-		{PhaseDisconnected, "vpn_key_off", v1.ToneSubtle},
-		{PhaseConnecting, "bolt", v1.ToneAccent},
-		{PhaseDisconnecting, "bolt", v1.ToneAccent},
-		{PhaseConnected, "shield", v1.ToneAccent},
-		{PhaseError, "gpp_bad", v1.ToneError},
+		{PhaseDisconnected, "proton", v1.ToneSubtle},
+		{PhaseConnecting, "proton", v1.ToneAccent},
+		{PhaseDisconnecting, "proton", v1.ToneAccent},
+		{PhaseConnected, "proton", v1.ToneAccent},
+		{PhaseError, "proton", v1.ToneError},
 	}
 	for _, tc := range cases {
 		n := Bar(BarState{Snap: Snapshot{Phase: tc.phase, Status: Status{Country: "US"}}, Mode: "code"})
