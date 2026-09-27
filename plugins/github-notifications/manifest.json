@@ -3,7 +3,7 @@
   "id": "org.sysc.github-notifications",
   "name": "GitHub Notifications",
   "description": "Triage unread GitHub notifications, open work, and contribution activity from the panel.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "protocol": {
     "major": 1,
     "minor": 4
@@ -55,28 +55,6 @@
       "default": 100,
       "min": 1,
       "max": 100
-    },
-    {
-      "key": "display_mode",
-      "type": "select",
-      "label": "Bar display",
-      "default": "icon_and_count",
-      "options": [
-        {
-          "value": "icon_and_count",
-          "label": "Icon and count"
-        },
-        {
-          "value": "icon_only",
-          "label": "Icon only"
-        }
-      ]
-    },
-    {
-      "key": "hide_when_zero",
-      "type": "bool",
-      "label": "Hide count when zero",
-      "default": false
     }
   ]
 }

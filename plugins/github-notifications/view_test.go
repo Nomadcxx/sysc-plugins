@@ -14,11 +14,11 @@ import (
 func TestTreesValidate(t *testing.T) {
 	items := NormalizeList([]RawItem{rawItem("1", "Fix the thing", "PullRequest", "review_requested"), rawItem("2", "CI failed", "CheckSuite", "ci_activity")})
 
-	bar := BarTree("3", true)
+	bar := BarTree(true)
 	if err := v1.Validate(bar, v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
-	if err := v1.Validate(BarTree("", false), v1.ViewBar); err != nil {
+	if err := v1.Validate(BarTree(false), v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
 	if err := v1.Validate(TooltipTree("3 unread · updated 10:00"), v1.ViewTooltip); err != nil {
@@ -33,7 +33,10 @@ func TestTreesValidate(t *testing.T) {
 }
 
 func TestBarTreeIsIconOnlyAndOpensOnBothMouseButtons(t *testing.T) {
-	bar := BarTree("50", true)
+	if button := findNode(BarTree(false), "open"); button == nil || button.Icon != "github" {
+		t.Fatalf("read bar button = %+v, want the plain GitHub mark", button)
+	}
+	bar := BarTree(true)
 	if err := v1.Validate(bar, v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
@@ -41,8 +44,8 @@ func TestBarTreeIsIconOnlyAndOpensOnBothMouseButtons(t *testing.T) {
 	if button == nil {
 		t.Fatal("bar has no addressed open button")
 	}
-	if button.Kind != v1.KindButton || button.Icon != "github" || button.Text != "" || len(button.Children) != 0 {
-		t.Fatalf("bar button = %+v, want only the GitHub mark", button)
+	if button.Kind != v1.KindButton || button.Icon != "github-unread" || button.Text != "" || len(button.Children) != 0 {
+		t.Fatalf("bar button = %+v, want only the GitHub mark with its unread dot", button)
 	}
 	if button.Name == "" || button.Role != "button" {
 		t.Fatalf("bar button is not accessible: %+v", button)
@@ -147,7 +150,8 @@ func TestViewsFitAtManifestSizesWithFullPages(t *testing.T) {
 		width  int
 		height int
 	}{
-		{"bar", BarTree("100+", true), v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight},
+		{"bar", BarTree(false), v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight},
+		{"bar-unread", BarTree(true), v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight},
 		{"tooltip", TooltipTree("100 unread · updated 10:00"), v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight},
 		{"inbox", PanelTreeForState(PanelState{Mode: ModeInbox, Inbox: InboxSnapshot{Status: StatusReady, Items: inboxItems, HasMore: true}}), v1.ViewPanel, 420, 640},
 		{"work", PanelTreeForState(PanelState{Mode: ModeWork, WorkKind: WorkReviews, Work: WorkSnapshot{Status: StatusReady, Items: workItems, TotalCount: 200, HasMore: true}}), v1.ViewPanel, 420, 640},
@@ -162,6 +166,20 @@ func TestViewsFitAtManifestSizesWithFullPages(t *testing.T) {
 				t.Fatalf("layout findings: %+v", findings)
 			}
 		})
+	}
+}
+
+func TestPanelHeaderFitsWithLiveStatus(t *testing.T) {
+	root := PanelTreeForState(PanelState{
+		Mode:       ModeInbox,
+		StatusLine: "123 unread · updated 14:32 (cached)",
+		Inbox:      InboxSnapshot{Status: StatusReady},
+	})
+	if refresh := findNode(root, "refresh"); refresh == nil || refresh.Text != "Refresh" {
+		t.Fatal("panel header has no Refresh action")
+	}
+	if findings := shelllint.Tree(root, v1.ViewPanel, 420, 640); len(findings) != 0 {
+		t.Fatalf("layout findings: %+v", findings)
 	}
 }
 

@@ -13,13 +13,21 @@ import (
 )
 
 func TestBarClicksOpenGitHubPanel(t *testing.T) {
-	cases := []struct {
-		name   string
+	type clickEvent struct {
 		event  v1.EventKind
 		button v1.PointerButton
+	}
+	cases := []struct {
+		name   string
+		events []clickEvent
 	}{
-		{name: "left", event: v1.EventActivate},
-		{name: "right", event: v1.EventPointer, button: v1.ButtonSecondary},
+		{name: "left", events: []clickEvent{
+			{event: v1.EventPointer, button: v1.ButtonPrimary},
+			{event: v1.EventActivate},
+		}},
+		{name: "right", events: []clickEvent{
+			{event: v1.EventPointer, button: v1.ButtonSecondary},
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,7 +111,8 @@ func TestBarClicksOpenGitHubPanel(t *testing.T) {
 			}
 
 			const viewID = "github-bar"
-			if err := send(&v1.ViewOpen{ViewID: viewID, View: v1.ViewBar, Entry: "bar", Output: "DP-1", Generation: 7}); err != nil {
+			const instance = "github-notifications-smoke"
+			if err := send(&v1.ViewOpen{ViewID: viewID, View: v1.ViewBar, Entry: "bar", Instance: instance, Output: "DP-1", Generation: 7}); err != nil {
 				t.Fatal(err)
 			}
 			var snapshot *v1.ViewSnapshot
@@ -112,25 +121,36 @@ func TestBarClicksOpenGitHubPanel(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("bar snapshot timed out")
 			}
-			if err := send(&v1.InputEvent{ViewID: viewID, Revision: snapshot.Revision, Node: "open", Event: tc.event, Button: tc.button, Output: "DP-1", Generation: 7}); err != nil {
-				t.Fatal(err)
+			for _, event := range tc.events {
+				if err := send(&v1.InputEvent{ViewID: viewID, Revision: snapshot.Revision, Node: "open", Event: event.event, Button: event.button, Output: "DP-1", Generation: 7}); err != nil {
+					t.Fatal(err)
+				}
 			}
-			var call *v1.HostCall
-			select {
-			case call = <-panelCalls:
-			case <-time.After(2 * time.Second):
-				t.Fatal("bar click did not call panel.open")
+			var calls []*v1.HostCall
+			deadline := time.NewTimer(300 * time.Millisecond)
+			defer deadline.Stop()
+		collect:
+			for {
+				select {
+				case call := <-panelCalls:
+					calls = append(calls, call)
+					if err := send(&v1.HostReply{ID: call.ID, OK: true, Result: json.RawMessage(`null`)}); err != nil {
+						t.Fatal(err)
+					}
+				case <-deadline.C:
+					break collect
+				}
+			}
+			if len(calls) != 1 {
+				t.Fatalf("bar click made %d panel.open calls, want exactly one", len(calls))
 			}
 			var got v1.PanelParams
-			if err := json.Unmarshal(call.Params, &got); err != nil {
+			if err := json.Unmarshal(calls[0].Params, &got); err != nil {
 				t.Fatal(err)
 			}
-			want := v1.PanelParams{Entry: "panel", Output: "DP-1", Generation: 7, Instance: viewID}
+			want := v1.PanelParams{Entry: "panel", Output: "DP-1", Generation: 7, Instance: instance}
 			if got != want {
 				t.Fatalf("panel.open params = %+v, want %+v", got, want)
-			}
-			if err := send(&v1.HostReply{ID: call.ID, OK: true, Result: json.RawMessage(`null`)}); err != nil {
-				t.Fatal(err)
 			}
 		})
 	}

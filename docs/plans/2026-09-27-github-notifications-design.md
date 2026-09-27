@@ -29,7 +29,7 @@ The contribution calendar is useful profile context, but it is not notification 
 
 Keep the current 420×640 panel. Use a compact, native shell panel with clear hierarchy: scrollable lists for Inbox and Work, and a compact calendar for Activity. The panel should feel like a quiet triage surface: the selected view and unread state are easy to spot, while timestamps and repository context stay secondary.
 
-The bar launcher is the GitHub Octocat mark by itself. Left and right clicks open the panel; unread counts stay inside the panel and notification toasts.
+The bar launcher is the GitHub Octocat mark by itself; when anything is unread it switches to the shell's `github-unread` glyph, the same mark with a small dot in its top-right corner. There is no count. Left and right clicks open the panel; the existing hover tooltip remains a status hint.
 
 ```text
 ┌ GitHub · Updated 2m ago                         ↻ ┐

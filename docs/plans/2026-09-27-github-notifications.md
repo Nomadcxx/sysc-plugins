@@ -130,7 +130,7 @@ Run: `git add plugins/github-notifications/service.go plugins/github-notificatio
 
 **Step 1: Add failing tree and layout tests**
 
-Assert the icon-only GitHub bar button and its primary/pointer event declarations, accessible name, header, primary Inbox/Work/Activity switch, work category switch, search input, separate mark-read control, account-wide mark-all name, row type labels, lower-bound/page footer, Activity summary, 53-week heatmap, day tooltips, and all empty/loading/stale/error variants. Verify the shell catalogue contains a non-empty GitHub mark. Run `shelllint.Tree` for bar, tooltip, and representative 420×640 panels; include page-full lists at the maximum page size and check the heatmap stays below `v1.MaxNodes`.
+Assert the icon-only GitHub bar button and its primary/pointer event declarations, accessible name, header, primary Inbox/Work/Activity switch, work category switch, search input, separate mark-read control, account-wide mark-all name, row type labels, lower-bound/page footer, Activity summary, 53-week heatmap, day tooltips, and all empty/loading/stale/error variants. Verify the shell catalogue contains a non-empty GitHub mark. Run `shelllint.Tree` for both bar variants (`github`, `github-unread` catalogue glyphs), the tooltip, and representative 420×640 panels. Include page-full lists at the maximum page size and check the heatmap stays below `v1.MaxNodes`.
 
 Run: `go test -count=1 -p 1 ./plugins/github-notifications -run 'Test(Trees|Panel|ViewsFit)'`
 
@@ -172,7 +172,7 @@ Make the receive loop handle UI messages while the coordinator runs `gh`. Open t
 
 **Step 3: Keep settings compatible and update manifest metadata**
 
-Set `per_page`'s default and maximum to 100, preserving its saved value, and relabel it “Rows per inbox page”. Remove the obsolete bar count settings. Keep the other defaults. Update the description and bump the manifest version to 0.3.0. Do not add settings or capabilities.
+Set `per_page`'s default and maximum to 100, preserving its saved value, and relabel it “Rows per inbox page”. Remove the obsolete bar count settings. Keep the other defaults. Update the description and set the manifest and handshake version to 0.3.1. Do not add settings or capabilities.
 
 **Step 4: Run protocol and focused package tests**
 

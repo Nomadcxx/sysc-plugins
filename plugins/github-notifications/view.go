@@ -29,22 +29,17 @@ type PanelState struct {
 	Activity   ActivitySnapshot
 }
 
-// BarTree renders the unread-only bar count.
-func BarTree(countText string, hasUnread bool) *v1.Node {
-	icon := "notifications"
-	if countText == "" && !hasUnread {
-		icon = "notifications-off"
+// BarTree is a quiet, icon-only launcher for the GitHub panel. Unread
+// notifications swap in the catalogue's dotted mark instead of a count.
+func BarTree(hasUnread bool) *v1.Node {
+	icon := "github"
+	if hasUnread {
+		icon = "github-unread"
 	}
-	row := &v1.Node{Kind: v1.KindRow, Gap: 6}
-	if countText != "" {
-		row.Children = append(row.Children,
-			&v1.Node{Kind: v1.KindIcon, Icon: icon},
-			&v1.Node{Kind: v1.KindText, Text: countText, Tabular: true},
-		)
-	} else {
-		row.Children = append(row.Children, &v1.Node{Kind: v1.KindIcon, Icon: icon})
-	}
-	return row
+	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{
+		Kind: v1.KindButton, ID: "open", Name: "Open GitHub Notifications", Role: "button",
+		Icon: icon, Tooltip: "GitHub Notifications", Events: []v1.EventKind{v1.EventActivate, v1.EventPointer},
+	}}}
 }
 
 func TooltipTree(statusLine string) *v1.Node {
@@ -71,11 +66,15 @@ func PanelTreeForState(state PanelState) *v1.Node {
 	if state.WorkKind == "" {
 		state.WorkKind = WorkReviews
 	}
+	refresh := button("refresh", "Refresh", "Refresh GitHub feeds", "")
+	refresh.Icon = "refresh"
 	children := []*v1.Node{
-		{Kind: v1.KindRow, Height: 42, Gap: 8, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: "GitHub", Size: "title", Bold: true},
-			{Kind: v1.KindText, Text: state.StatusLine, Tone: v1.ToneSubtle, PinEnd: true},
-			button("refresh", "Refresh", "Refresh GitHub feeds", ""),
+		{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+			{Kind: v1.KindRow, Height: 36, Gap: 8, PinEnd: true, Children: []*v1.Node{
+				{Kind: v1.KindText, Text: "GitHub", Size: "title", Bold: true},
+				refresh,
+			}},
+			{Kind: v1.KindText, Text: state.StatusLine, Tone: v1.ToneSubtle, Size: "caption"},
 		}},
 		modeRow(state.Mode, state.Inbox),
 	}
@@ -85,24 +84,36 @@ func PanelTreeForState(state PanelState) *v1.Node {
 		children = append(children,
 			input("search", "Search work items…", state.Search, state.ViewID),
 			workCategoryRow(state.WorkKind, state.WorkFeeds),
-			workBody(state.Work, state.Search),
+			feedList(workListHeight, workBody(state.Work, state.Search)),
 		)
 	case ModeActivity:
 		children = append(children, activityBody(state.Activity))
 	default:
 		children = append(children,
-			&v1.Node{Kind: v1.KindRow, Height: 42, Gap: 8, Children: []*v1.Node{
+			&v1.Node{Kind: v1.KindRow, Height: 40, Gap: 8, PinEnd: true, Children: []*v1.Node{
 				input("search", "Search notifications…", state.Search, state.ViewID),
 				button("mark-all", "Mark all read", "Mark all GitHub account notifications read", ""),
 			}},
-			inboxBody(state.Inbox, state.Search),
+			feedList(inboxListHeight, inboxBody(state.Inbox, state.Search)),
 		)
 	}
-	return &v1.Node{Kind: v1.KindList, ID: "github-panel", Key: "github-panel", Height: 640, Padding: 14, Gap: 8, Children: children}
+	return &v1.Node{Kind: v1.KindColumn, ID: "github-panel", Key: "github-panel", Padding: 14, Gap: 8, Children: children}
+}
+
+// The feed lists take what the 640px panel leaves under the fixed header,
+// tabs, and search controls, so the header never scrolls away and the list's
+// scrollbar never paints over it.
+const (
+	inboxListHeight = 430
+	workListHeight  = 380
+)
+
+func feedList(height int, body *v1.Node) *v1.Node {
+	return &v1.Node{Kind: v1.KindList, ID: body.ID, Key: body.ID, Height: height, Gap: 6, Children: body.Children}
 }
 
 func modeRow(mode string, inbox InboxSnapshot) *v1.Node {
-	return &v1.Node{Kind: v1.KindRow, Height: 38, Gap: 6, Children: []*v1.Node{
+	return &v1.Node{Kind: v1.KindSegmented, Height: 40, Gap: 2, Children: []*v1.Node{
 		tab("mode:inbox", "Inbox · "+inbox.CountLabel(), mode == ModeInbox, "Unread notification threads"),
 		tab("mode:work", "Work", mode == ModeWork, "Review requests, your pull requests, and assigned issues"),
 		tab("mode:activity", "Activity", mode == ModeActivity, "Your contribution activity for the trailing year"),
@@ -122,7 +133,7 @@ func workCategoryRow(kind WorkKind, feeds map[WorkKind]WorkSnapshot) *v1.Node {
 		}
 		children = append(children, tab("work:"+string(category.kind), category.label+count, kind == category.kind, category.label))
 	}
-	return &v1.Node{Kind: v1.KindRow, Height: 36, Gap: 6, Children: children}
+	return &v1.Node{Kind: v1.KindSegmented, Height: 36, Gap: 2, Children: children}
 }
 
 func inboxBody(snapshot InboxSnapshot, query string) *v1.Node {
@@ -267,11 +278,15 @@ func notificationRow(item Item) *v1.Node {
 		marker = "CI"
 	}
 	return &v1.Node{Kind: v1.KindColumn, Key: "notification:" + item.ID, Gap: 2, Children: []*v1.Node{
-		{Kind: v1.KindRow, Height: 40, Gap: 6, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: marker, Width: 40, Size: "caption", Tone: v1.ToneAccent},
-			{Kind: v1.KindButton, ID: "open:" + item.ID, Text: bounded(item.Title, 80), Name: bounded("Open "+item.Title+" in GitHub", v1.MaxIdentBytes), Role: "button", Events: []v1.EventKind{v1.EventActivate}, Width: 180, MaxWidth: 168},
-			{Kind: v1.KindText, Text: item.RelativeTime, Width: 32, Tabular: true, Tone: v1.ToneSubtle},
-			{Kind: v1.KindButton, ID: "read:" + item.ID, Text: "Read", Name: bounded("Mark "+item.Title+" as read", v1.MaxIdentBytes), Role: "button", Events: []v1.EventKind{v1.EventActivate}, Width: 48},
+		{Kind: v1.KindRow, Height: 36, Gap: 6, PinEnd: true, Children: []*v1.Node{
+			{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
+				{Kind: v1.KindText, Text: marker, Width: 34, Size: "caption", Tone: v1.ToneAccent},
+				{Kind: v1.KindButton, ID: "open:" + item.ID, Text: bounded(item.Title, 80), Name: bounded("Open "+item.Title+" in GitHub", v1.MaxIdentBytes), Role: "button", Events: []v1.EventKind{v1.EventActivate}, Width: 220, MaxWidth: 220},
+			}},
+			{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
+				{Kind: v1.KindText, Text: item.RelativeTime, Width: 30, Tabular: true, Tone: v1.ToneSubtle},
+				{Kind: v1.KindButton, ID: "read:" + item.ID, Text: "Read", Name: bounded("Mark "+item.Title+" as read", v1.MaxIdentBytes), Role: "button", Events: []v1.EventKind{v1.EventActivate}, Fill: "soft", Shape: "stadium", Padding: 8, Height: 28},
+			}},
 		}},
 		{Kind: v1.KindText, Text: item.Repo + " · " + item.ReasonLabel, Tone: v1.ToneSubtle, Size: "caption"},
 	}}
@@ -283,10 +298,12 @@ func workRow(item WorkItem) *v1.Node {
 		marker = "Issue"
 	}
 	return &v1.Node{Kind: v1.KindColumn, Key: "work:" + workToken(item.URL), Gap: 2, Children: []*v1.Node{
-		{Kind: v1.KindRow, Height: 40, Gap: 6, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: marker, Width: 40, Size: "caption", Tone: v1.ToneAccent},
-			{Kind: v1.KindButton, ID: WorkOpenID(item), Text: bounded(item.Title, 110), Name: bounded("Open "+item.Title+" in GitHub", 120), Role: "button", Events: []v1.EventKind{v1.EventActivate}, Width: 252, MaxWidth: 238},
-			{Kind: v1.KindText, Text: item.RelativeTime, Width: 42, Tabular: true, Tone: v1.ToneSubtle},
+		{Kind: v1.KindRow, Height: 36, Gap: 6, PinEnd: true, Children: []*v1.Node{
+			{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
+				{Kind: v1.KindText, Text: marker, Width: 34, Size: "caption", Tone: v1.ToneAccent},
+				{Kind: v1.KindButton, ID: WorkOpenID(item), Text: bounded(item.Title, 110), Name: bounded("Open "+item.Title+" in GitHub", 120), Role: "button", Events: []v1.EventKind{v1.EventActivate}, Width: 280, MaxWidth: 280},
+			}},
+			{Kind: v1.KindText, Text: item.RelativeTime, Width: 36, Tabular: true, Tone: v1.ToneSubtle},
 		}},
 		{Kind: v1.KindText, Text: fmt.Sprintf("%s · #%d", item.Repo, item.Number), Tone: v1.ToneSubtle, Size: "caption"},
 	}}
@@ -322,18 +339,18 @@ func input(id, placeholder, value, viewID string) *v1.Node {
 		Name: placeholder, Role: "textbox", Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}, Height: 40, Width: 248}
 }
 
+// button is the panel's action pill; an empty fill takes the soft default.
 func button(id, label, name, fill string) *v1.Node {
+	if fill == "" {
+		fill = "soft"
+	}
 	return &v1.Node{Kind: v1.KindButton, ID: id, Text: label, Name: bounded(name, v1.MaxIdentBytes), Role: "button",
-		Events: []v1.EventKind{v1.EventActivate}, Fill: fill}
+		Events: []v1.EventKind{v1.EventActivate}, Fill: fill, Shape: "stadium", Padding: 10, Height: 32}
 }
 
 func tab(id, label string, selected bool, name string) *v1.Node {
-	fill := ""
-	if selected {
-		fill = "container"
-	}
 	return &v1.Node{Kind: v1.KindButton, ID: id, Text: label, Name: bounded(name, v1.MaxIdentBytes), Role: "tab",
-		Fill: fill, Events: []v1.EventKind{v1.EventActivate}}
+		Selected: selected, Padding: 3, Events: []v1.EventKind{v1.EventActivate}}
 }
 
 func message(id, text string, isError bool) *v1.Node {
