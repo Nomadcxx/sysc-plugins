@@ -278,3 +278,18 @@ func TestInboxFooterAfterMarkingRead(t *testing.T) {
 		})
 	}
 }
+
+// Search text must sit clear of the stadium's caps: the host insets field
+// text by Padding, and the field must stay tall enough for the inset line.
+func TestSearchFieldsInsetTheirText(t *testing.T) {
+	for _, mode := range []string{ModeInbox, ModeWork} {
+		root := PanelTreeForState(PanelState{Mode: mode, Search: "retry handling"})
+		search := findNode(root, "search")
+		if search == nil || search.Padding < 12 || search.Height-2*search.Padding < 18 {
+			t.Fatalf("%s search = %+v, want padding >= 12 leaving an 18px line", mode, search)
+		}
+		if findings := shelllint.Tree(root, v1.ViewPanel, 420, 640); len(findings) != 0 {
+			t.Fatalf("%s layout findings: %+v", mode, findings)
+		}
+	}
+}

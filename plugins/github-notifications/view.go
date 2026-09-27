@@ -91,7 +91,7 @@ func PanelTreeForState(state PanelState) *v1.Node {
 		children = append(children, activityBody(state.Activity))
 	default:
 		children = append(children,
-			&v1.Node{Kind: v1.KindRow, Height: 40, Gap: 8, PinEnd: true, Children: []*v1.Node{
+			&v1.Node{Kind: v1.KindRow, Height: searchHeight, Gap: 8, PinEnd: true, Children: []*v1.Node{
 				input("search", "Search notifications…", state.Search, state.ViewID),
 				button("mark-all", "Mark all read", "Mark all GitHub account notifications read", ""),
 			}},
@@ -105,8 +105,9 @@ func PanelTreeForState(state PanelState) *v1.Node {
 // tabs, and search controls, so the header never scrolls away and the list's
 // scrollbar never paints over it.
 const (
-	inboxListHeight = 430
-	workListHeight  = 380
+	inboxListHeight = 426
+	workListHeight  = 376
+	searchHeight    = 44
 )
 
 func feedList(height int, body *v1.Node) *v1.Node {
@@ -415,7 +416,10 @@ func workSearch(value, viewID string) *v1.Node {
 
 func input(id, placeholder, value, viewID string) *v1.Node {
 	return &v1.Node{Kind: v1.KindTextInput, ID: id, Key: "github-search:" + viewID, Text: value, Placeholder: placeholder,
-		Name: placeholder, Role: "textbox", Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}, Height: 40, Width: 248}
+		Name: placeholder, Role: "textbox", Events: []v1.EventKind{v1.EventChange, v1.EventSubmit},
+		// The host insets field text by Padding on every side: 12 clears the
+		// stadium's caps, and 44 tall leaves the inset line its full height.
+		Height: searchHeight, Width: 248, Padding: 12}
 }
 
 // button is the panel's action pill; an empty fill takes the soft default.
