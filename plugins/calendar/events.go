@@ -73,30 +73,58 @@ func ValidateEvents(events []Event) error {
 	}
 	seen := make(map[string]bool, len(events))
 	for i, event := range events {
-		if event.ID == "" || len(event.ID) > 256 {
-			return fmt.Errorf("calendar: event %d has invalid ID", i)
+		if err := validateEvent(event, i); err != nil {
+			return err
 		}
 		if seen[event.ID] {
 			return fmt.Errorf("calendar: duplicate event ID %q", event.ID)
 		}
 		seen[event.ID] = true
-		if event.Summary == "" || len(event.Summary) > maxEventSummary || len(event.Description) > maxEventDescription || len(event.Location) > maxEventLocation {
-			return fmt.Errorf("calendar: event %q has invalid text bounds", event.ID)
-		}
-		if len(event.URL) > maxEventURL || event.URL != "" && !SafeHTTPURL(event.URL) {
-			return fmt.Errorf("calendar: event %q has an unsafe meeting URL", event.ID)
-		}
-		if event.AllDay {
-			start, errStart := time.Parse("2006-01-02", event.StartDate)
-			end, errEnd := time.Parse("2006-01-02", event.EndDate)
-			if errStart != nil || errEnd != nil || !start.Before(end) {
-				return fmt.Errorf("calendar: event %q has invalid all-day dates", event.ID)
-			}
-		} else if event.Start.IsZero() || event.End.IsZero() || !event.Start.Before(event.End) {
-			return fmt.Errorf("calendar: event %q has invalid time interval", event.ID)
-		}
 	}
 	return nil
+}
+
+func validateEvent(event Event, i int) error {
+	if event.ID == "" || len(event.ID) > 256 {
+		return fmt.Errorf("calendar: event %d has invalid ID", i)
+	}
+	if event.Summary == "" || len(event.Summary) > maxEventSummary || len(event.Description) > maxEventDescription || len(event.Location) > maxEventLocation {
+		return fmt.Errorf("calendar: event %q has invalid text bounds", event.ID)
+	}
+	if len(event.URL) > maxEventURL || event.URL != "" && !SafeHTTPURL(event.URL) {
+		return fmt.Errorf("calendar: event %q has an unsafe meeting URL", event.ID)
+	}
+	if event.AllDay {
+		start, errStart := time.Parse("2006-01-02", event.StartDate)
+		end, errEnd := time.Parse("2006-01-02", event.EndDate)
+		if errStart != nil || errEnd != nil || !start.Before(end) {
+			return fmt.Errorf("calendar: event %q has invalid all-day dates", event.ID)
+		}
+	} else if event.Start.IsZero() || event.End.IsZero() || !event.Start.Before(event.End) {
+		return fmt.Errorf("calendar: event %q has invalid time interval", event.ID)
+	}
+	return nil
+}
+
+// filterValid keeps only the events that pass per-event validation, dropping
+// duplicate IDs, and returns one error message per dropped event.
+func filterValid(events []Event) ([]Event, []string) {
+	seen := make(map[string]bool, len(events))
+	kept := make([]Event, 0, len(events))
+	var dropped []string
+	for i, event := range events {
+		if err := validateEvent(event, i); err != nil {
+			dropped = append(dropped, err.Error())
+			continue
+		}
+		if seen[event.ID] {
+			dropped = append(dropped, fmt.Sprintf("calendar: dropped duplicate event ID %q", event.ID))
+			continue
+		}
+		seen[event.ID] = true
+		kept = append(kept, event)
+	}
+	return kept, dropped
 }
 
 func SafeHTTPURL(raw string) bool {

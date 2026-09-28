@@ -34,9 +34,9 @@ func TestICalendarParsesFoldedTextAndExpandedOccurrences(t *testing.T) {
 		"URL:https://meet.example/room\r\nEND:VEVENT\r\n" +
 		"BEGIN:VEVENT\r\nUID:holiday\r\nDTSTART;VALUE=DATE:20260916\r\n" +
 		"DTEND;VALUE=DATE:20260918\r\nSUMMARY:Leave\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
-	got, err := parseICalendar("work", "Work", "#0a7bde", ics)
-	if err != nil {
-		t.Fatal(err)
+	got, errs := parseICalendar("work", "Work", "#0a7bde", ics)
+	if len(errs) != 0 {
+		t.Fatal(errs[0])
 	}
 	if len(got) != 2 {
 		t.Fatalf("parsed %d events, want 2", len(got))
@@ -62,9 +62,9 @@ func TestICalendarDurationUsesCalendarDaysAcrossDST(t *testing.T) {
 	ics := "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:overnight\r\n" +
 		"DTSTART;TZID=Australia/Melbourne:20261003T120000\r\nDURATION:P1DT2H\r\n" +
 		"SUMMARY:On call\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
-	got, err := parseICalendar("work", "Work", "", ics)
-	if err != nil {
-		t.Fatal(err)
+	got, errs := parseICalendar("work", "Work", "", ics)
+	if len(errs) != 0 {
+		t.Fatal(errs[0])
 	}
 	if len(got) != 1 {
 		t.Fatalf("parsed %d events, want 1", len(got))
@@ -85,10 +85,25 @@ func TestICalendarRejectsUnknownZoneAndMalformedComponents(t *testing.T) {
 		{"unterminated event", "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20260915T100000Z\r\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := parseICalendar("work", "Work", "", tc.ics); err == nil {
+			if _, errs := parseICalendar("work", "Work", "", tc.ics); len(errs) == 0 {
 				t.Fatal("malformed calendar was accepted")
 			}
 		})
+	}
+}
+
+func TestICalendarKeepsValidEventsAroundMalformedOnes(t *testing.T) {
+	ics := "BEGIN:VCALENDAR\r\n" +
+		"BEGIN:VEVENT\r\nUID:bad\r\nDTSTART;TZID=Mars/Olympus:20260915T100000\r\nSUMMARY:Broken\r\nEND:VEVENT\r\n" +
+		"BEGIN:VEVENT\r\nUID:good\r\nDTSTART:20260915T100000Z\r\nDTEND:20260915T110000Z\r\nSUMMARY:Keep me\r\nEND:VEVENT\r\n" +
+		"BEGIN:VEVENT\r\nUID:no-dtstart\r\nSUMMARY:Also broken\r\nEND:VEVENT\r\n" +
+		"END:VCALENDAR\r\n"
+	got, errs := parseICalendar("work", "Work", "", ics)
+	if len(got) != 1 || got[0].Summary != "Keep me" {
+		t.Fatalf("valid event lost: %+v errors=%v", got, errs)
+	}
+	if len(errs) != 2 {
+		t.Fatalf("got %d per-event errors, want 2: %v", len(errs), errs)
 	}
 }
 

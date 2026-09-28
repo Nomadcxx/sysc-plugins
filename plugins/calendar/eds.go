@@ -237,19 +237,24 @@ func QueryEDS(ctx context.Context, start, end time.Time) (EDSResult, error) {
 			out.Errors = append(out.Errors, wire.FatalError)
 		}
 		for _, item := range wire.Events {
-			events, err := parseICalendar(item.CalendarID, item.Calendar, item.Color, item.ICal)
-			if err != nil {
-				out.Errors = append(out.Errors, item.Calendar+": "+err.Error())
-				continue
-			}
+			// ponytail: one malformed VEVENT must not discard the rest of its
+			// calendar; that was the "unreliable events" failure mode.
+			events, eventErrors := parseICalendar(item.CalendarID, item.Calendar, item.Color, item.ICal)
 			out.Events = append(out.Events, events...)
+			for _, message := range eventErrors {
+				out.Errors = append(out.Errors, item.Calendar+": "+message)
+			}
 		}
 		if len(out.Events) > maxEvents {
 			out.Events = out.Events[:maxEvents]
 			out.Truncated = true
 		}
 		if err := ValidateEvents(out.Events); err != nil {
-			return EDSResult{}, err
+			kept, dropped := filterValid(out.Events)
+			out.Events = kept
+			for _, message := range dropped {
+				out.Errors = append(out.Errors, message)
+			}
 		}
 		sortEvents(out.Events)
 		return out, nil
@@ -261,9 +266,10 @@ type icalProperty struct {
 	value  string
 }
 
-func parseICalendar(calendarID, calendarName, color, data string) ([]Event, error) {
+func parseICalendar(calendarID, calendarName, color, data string) ([]Event, []string) {
 	lines := unfoldICalendar(data)
 	var events []Event
+	var errors []string
 	var fields map[string]icalProperty
 	nested := 0
 	for _, line := range lines {
@@ -284,9 +290,10 @@ func parseICalendar(calendarID, calendarName, color, data string) ([]Event, erro
 				if fields != nil {
 					event, err := eventFromICalendar(calendarID, calendarName, color, fields)
 					if err != nil {
-						return events, err
+						errors = append(errors, err.Error())
+					} else {
+						events = append(events, event)
 					}
-					events = append(events, event)
 				}
 				fields = nil
 			} else if fields != nil && nested > 0 {
@@ -301,9 +308,9 @@ func parseICalendar(calendarID, calendarName, color, data string) ([]Event, erro
 		}
 	}
 	if fields != nil {
-		return events, fmt.Errorf("unterminated VEVENT")
+		errors = append(errors, "unterminated VEVENT")
 	}
-	return events, nil
+	return events, errors
 }
 
 func unfoldICalendar(data string) []string {
