@@ -43,6 +43,16 @@ jobs:
             echo "tag '$tag' is not <dir>-v<version>" >&2
             exit 1
           fi
+      - name: Verify manifest version
+        run: |
+          set -euo pipefail
+          dir="${{ steps.tag.outputs.dir }}"
+          version="${{ steps.tag.outputs.version }}"
+          manifest="$(jq -r '.version' "plugins/$dir/manifest.json")"
+          if [[ "$manifest" != "$version" ]]; then
+            echo "tag $dir-v$version does not match manifest version $manifest" >&2
+            exit 1
+          fi
       - name: Package
         run: |
           set -euo pipefail

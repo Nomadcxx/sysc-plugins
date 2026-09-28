@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -74,7 +75,9 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 		}
 		if last.Mode == recorder.Failed && last.Err != notified {
 			notified = last.Err
-			_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{Summary: "Screen Recorder", Body: last.Err + "\n" + last.Logs, Urgency: v1.UrgencyNormal})
+			if _, err := c.Call(ctx, v1.CallNotify, v1.NotifyParams{Summary: "Screen Recorder", Body: notifyBody(last.Err, last.Logs), Urgency: v1.UrgencyNormal}); err != nil {
+				fmt.Fprintln(os.Stderr, "sysc-plugin-screen-recorder: notify:", err)
+			}
 		}
 		if last.Artifact != "" && last.Artifact != notified && last.Mode == recorder.Idle {
 			notified = last.Artifact
@@ -148,6 +151,19 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 			}
 		}
 	}
+}
+
+// maxNotifyBody matches the host's notify body limit; longer bodies are
+// rejected outright, so truncate instead of losing the toast.
+const maxNotifyBody = 16 << 10
+
+func notifyBody(errText, logs string) string {
+	body := errText + "\n" + logs
+	if len(body) <= maxNotifyBody {
+		return body
+	}
+	const marker = "\n... (truncated)"
+	return body[:maxNotifyBody-len(marker)] + marker
 }
 
 func restore(ctx context.Context, c *v1.Client, rec *recorder.Recorder) {

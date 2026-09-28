@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseStatus(t *testing.T) {
@@ -133,6 +134,24 @@ func TestCLITypedMethodsWrapStderr(t *testing.T) {
 	c = &CLI{Bin: silent}
 	if _, err := c.Status(ctx); err == nil || strings.Contains(err.Error(), ": ") {
 		t.Fatalf("Status err = %v, want bare error when stderr empty", err)
+	}
+}
+
+func TestRunHonorsCallerDeadlineOverFallback(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "slow-protonvpn")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &CLI{Bin: bin}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, _, err := c.run(ctx, 100*time.Millisecond, "connect"); err == nil {
+		t.Fatal("expected deadline error")
+	}
+	if elapsed := time.Since(start); elapsed < 400*time.Millisecond {
+		t.Fatalf("fallback timeout cut off caller deadline after %v", elapsed)
 	}
 }
 

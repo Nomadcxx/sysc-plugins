@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	"github.com/Nomadcxx/sysc-plugins/plugins/aiusage"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -24,7 +25,7 @@ func main() {
 
 func run(in, out *os.File) error {
 	c := v1.NewClient(in, out)
-	hello, err := c.Handshake(v1.Identity{ID: "org.sysc.aiusage", Name: "AI Usage", Version: "0.1.0"})
+	hello, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.aiusage", Name: "AI Usage", Version: "0.1.0"}))
 	if err != nil {
 		return err
 	}

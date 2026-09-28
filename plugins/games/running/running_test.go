@@ -2,7 +2,9 @@ package running
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -69,6 +71,23 @@ func TestScanEmptyInputs(t *testing.T) {
 	}
 }
 
+func TestScanSiblingPrefixes(t *testing.T) {
+	root := fakeProc(t, map[string]string{
+		"10": "/Games/Hades II/start.sh\x00",
+		"11": "/Games/Hades/start.sh\x00",
+	})
+	got, err := Scan([]string{"/Games/Hades", "/Games/Hades II"}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["/Games/Hades"].PID != 11 {
+		t.Fatalf("Hades matched wrong pid: %+v", got)
+	}
+	if got["/Games/Hades II"].PID != 10 {
+		t.Fatalf("Hades II matched wrong pid: %+v", got)
+	}
+}
+
 func TestStopTerminatesProcessGroup(t *testing.T) {
 	cmd := spawn(t, "sleep", "60")
 	if err := Stop(cmd.Process.Pid, 2*time.Second); err != nil {
@@ -88,4 +107,36 @@ func TestStopForcesAfterGrace(t *testing.T) {
 		t.Fatal("returned before grace elapsed")
 	}
 	waitGone(t, cmd)
+}
+
+func TestStopSignalsGroupOfNonLeader(t *testing.T) {
+	leader := spawn(t, "sleep", "60")
+	child := exec.Command("sleep", "60")
+	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: leader.Process.Pid}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _, _ = child.Process.Wait() })
+	if pgid, err := syscall.Getpgid(child.Process.Pid); err != nil || pgid != leader.Process.Pid {
+		t.Fatalf("child not in leader group: pgid=%d err=%v", pgid, err)
+	}
+	if err := Stop(child.Process.Pid, 2*time.Second); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	waitGone(t, child)
+	waitGone(t, leader)
+}
+
+func TestStopRefusesOwnProcessGroup(t *testing.T) {
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
+	if err := Stop(cmd.Process.Pid, 50*time.Millisecond); err == nil {
+		t.Fatal("Stop must refuse a process in the plugin's own group")
+	}
+	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("process was signalled despite refusal: %v", err)
+	}
 }

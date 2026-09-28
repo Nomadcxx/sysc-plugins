@@ -66,9 +66,15 @@ func (c *CLI) timeout() time.Duration {
 	return c.Timeout
 }
 
+// run executes the binary, applying timeout only when ctx carries no
+// deadline of its own: a caller budgeting 60s for a slow connect must not be
+// cut off by the CLI's shorter fallback.
 func (c *CLI) run(ctx context.Context, timeout time.Duration, args ...string) (string, string, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	cmd := exec.CommandContext(ctx, c.bin(), args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -78,7 +84,8 @@ func (c *CLI) run(ctx context.Context, timeout time.Duration, args ...string) (s
 }
 
 // Run executes the protonvpn binary with the given args under c.Timeout
-// (default 10s), returning captured stdout and stderr alongside any error.
+// (default 10s) when ctx has no deadline, returning captured stdout and
+// stderr alongside any error.
 func (c *CLI) Run(ctx context.Context, args ...string) (string, string, error) {
 	return c.run(ctx, c.timeout(), args...)
 }
@@ -143,7 +150,7 @@ func connectArgs(target string) []string {
 }
 
 // Connect runs `protonvpn connect` with the given target (see connectArgs).
-// Uses a 15s timeout.
+// Uses a 15s timeout when ctx has no deadline; a caller deadline wins.
 func (c *CLI) Connect(ctx context.Context, target string) (string, string, error) {
 	return c.run(ctx, 15*time.Second, connectArgs(target)...)
 }

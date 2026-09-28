@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -41,6 +42,20 @@ type refreshResult struct {
 	err    error
 }
 
+// lockedWriter makes each message write atomic. v1.Encoder has no lock of
+// its own but performs exactly one Write per message, so guarding Write is
+// enough for snapshots and host calls to share stdout from any goroutine.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {
 		os.Exit(1)
@@ -52,7 +67,7 @@ func run(in io.Reader, out io.Writer) error {
 }
 
 func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendarQuery) error {
-	c := v1.NewClient(in, out)
+	c := v1.NewClient(in, &lockedWriter{w: out})
 	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.calendar", Name: "Calendar", Version: "0.3.0"})); err != nil {
 		return err
 	}

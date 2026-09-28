@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +40,21 @@ func TestFetchGridHappyPath(t *testing.T) {
 	}
 	if filepath.Dir(path) != dest {
 		t.Errorf("path %q outside dest", path)
+	}
+}
+
+func TestFetchGridEscapesSlug(t *testing.T) {
+	var gotURI string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		gotURI = r.RequestURI
+		fmt.Fprint(w, `{"data":[]}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	FetchGrid(context.Background(), srv.Client(), "key", srv.URL, "hades ii/2", t.TempDir())
+	if !strings.Contains(gotURI, "hades%20ii%2F2") {
+		t.Fatalf("slug not escaped: %q", gotURI)
 	}
 }
 

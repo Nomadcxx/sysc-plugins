@@ -20,10 +20,10 @@ type Match struct {
 }
 
 // Scan maps gameDir -> a live process whose cmdline mentions that directory.
-// Games start as group leaders (Lutris, wine, native alike), so Stop can
-// signal the whole group.
-// ponytail: cmdline-substring match — a false positive needs a process naming
-// the game dir in argv; upgrade path is exe-path + ppid checks per runner.
+// Stop resolves the process group before signalling, so the match does not
+// have to be the group leader.
+// ponytail: argv match — a false positive needs a process naming the game dir
+// in argv; upgrade path is exe-path + ppid checks per runner.
 func Scan(gameDirs []string, procRoot string) (map[string]Match, error) {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
@@ -51,13 +51,13 @@ func Scan(gameDirs []string, procRoot string) (map[string]Match, error) {
 		if err != nil || len(raw) == 0 {
 			continue
 		}
-		line := string(bytes.ReplaceAll(raw, []byte{0}, []byte(" ")))
+		args := bytes.Split(raw, []byte{0})
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
 		for dir := range pending {
-			if strings.Contains(line, dir) {
+			if matchesDir(args, dir) {
 				out[dir] = Match{PID: pid, Start: info.ModTime()}
 				delete(pending, dir)
 			}
@@ -66,8 +66,38 @@ func Scan(gameDirs []string, procRoot string) (map[string]Match, error) {
 	return out, nil
 }
 
-// Stop signals the whole process group: TERM, then KILL after grace.
+// matchesDir reports whether any argv entry is the install dir itself or a
+// path inside it. Matching per argument (not substring) keeps sibling
+// installs like "Hades" and "Hades II" from sharing a process.
+func matchesDir(args [][]byte, dir string) bool {
+	dir = strings.TrimSuffix(dir, "/")
+	if dir == "" {
+		return false
+	}
+	prefix := dir + "/"
+	for _, arg := range args {
+		if string(arg) == dir || strings.HasPrefix(string(arg), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// Stop signals the whole process group: TERM, then KILL after grace. The
+// matched pid may be a helper rather than the group leader, so resolve the
+// group first.
 func Stop(pid int, grace time.Duration) error {
+	pgid, err := syscall.Getpgid(pid)
+	if err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return fmt.Errorf("resolve process group: %w", err)
+	}
+	if own, err := syscall.Getpgid(0); err == nil && pgid == own {
+		return fmt.Errorf("process %d shares this plugin's process group; refusing to signal it", pid)
+	}
+	pid = pgid
 	if err := kill(-pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("signal game group: %w", err)
 	}

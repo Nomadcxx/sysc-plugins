@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,7 +51,7 @@ func FetchGrid(ctx context.Context, do Doer, apiKey, baseURL, slug, destDir stri
 		return c
 	}
 	dest := filepath.Join(destDir, slugFile(slug)+"-grid.jpg")
-	data, ok := sgdbGet(ctx, do, apiKey, baseURL+"/search/autocomplete/"+slug+"?languages=en")
+	data, ok := sgdbGet(ctx, do, apiKey, baseURL+"/search/autocomplete/"+url.PathEscape(slug)+"?languages=en")
 	if !ok {
 		return ""
 	}

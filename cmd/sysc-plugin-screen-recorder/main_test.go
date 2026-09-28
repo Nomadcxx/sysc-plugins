@@ -428,3 +428,17 @@ func TestPluginHideInactive(t *testing.T) {
 		return n != nil && n.Kind == v1.KindRow && len(n.Children) == 0
 	})
 }
+
+func TestNotifyBodyTruncatesToHostLimit(t *testing.T) {
+	short := notifyBody("boom", "one line")
+	if short != "boom\none line" {
+		t.Fatalf("short body altered: %q", short)
+	}
+	long := notifyBody("boom", strings.Repeat("x", maxNotifyBody*2))
+	if len(long) > maxNotifyBody {
+		t.Fatalf("body %d bytes exceeds host limit %d", len(long), maxNotifyBody)
+	}
+	if !strings.HasSuffix(long, "(truncated)") {
+		t.Fatalf("truncated body missing marker: %q", long[len(long)-40:])
+	}
+}

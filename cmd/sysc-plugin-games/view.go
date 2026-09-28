@@ -95,7 +95,7 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 		s.closeSwitcherIfIdle(ctx)
 	case strings.HasPrefix(node, "sw-open-"):
 		s.selected, s.actions = strings.TrimPrefix(node, "sw-open-"), false
-		_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation})
+		_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
 	case strings.HasPrefix(node, "favtoggle-"):
 		id := strings.TrimPrefix(node, "favtoggle-")
 		s.prefs.Favorites[id] = !s.prefs.Favorites[id]
