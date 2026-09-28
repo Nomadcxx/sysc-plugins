@@ -132,21 +132,6 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 		}
 	}()
 
-	prefs := make(chan struct {
-		ids []string
-		err error
-	}, 1)
-	go func() {
-		ids, err := loadHiddenCalendars(ctx, c)
-		select {
-		case prefs <- struct {
-			ids []string
-			err error
-		}{ids, err}:
-		case <-ctx.Done():
-		}
-	}()
-
 	var lastClockKey, lastMinuteKey string
 	var publishOne func(string) error
 	publishOne = func(id string) error {
@@ -174,6 +159,11 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 			if err := publishOne(id); err != nil {
 				return err
 			}
+		}
+		// ponytail: best-effort snapshot publish; the next publish retries, so
+		// a failed state.set (or a shutdown cancelling it) must never be fatal.
+		if raw, marshalErr := json.Marshal(calendar.BuildControlCenterSnapshot(visibleEvents(model.Events(), hidden), len(sources), now())); marshalErr == nil {
+			_, _ = hostCall(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "control_center", Value: raw})
 		}
 		lastClockKey = clockKey(visibleEvents(model.Events(), hidden), now())
 		lastMinuteKey = now().Format("200601021504")
@@ -227,6 +217,16 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 			default:
 			}
 		}
+	}
+
+	// ponytail: load hidden calendars synchronously before the first publish
+	// so startup host-call order is deterministic (state.get, then snapshot).
+	ids, prefErr := loadHiddenCalendars(ctx, c)
+	if prefErr != nil {
+		status.ActionError = "Calendar preferences could not be loaded: " + truncateText(prefErr.Error(), 256)
+	}
+	for _, id := range ids {
+		hidden[id] = true
 	}
 
 	if err := publishAll(); err != nil {
@@ -295,21 +295,6 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 			}
 			if err := publishAll(); err != nil {
 				return err
-			}
-		case pref := <-prefs:
-			if pref.err != nil {
-				status.ActionError = "Calendar preferences could not be loaded: " + truncateText(pref.err.Error(), 256)
-				if err := publishAll(); err != nil {
-					return err
-				}
-			} else if len(pref.ids) > 0 {
-				hidden = make(map[string]bool, len(pref.ids))
-				for _, id := range pref.ids {
-					hidden[id] = true
-				}
-				if err := publishAll(); err != nil {
-					return err
-				}
 			}
 		case message := <-incoming:
 			switch message := message.(type) {

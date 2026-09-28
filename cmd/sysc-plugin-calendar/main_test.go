@@ -67,11 +67,26 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 		})
 	}()
 
-	lines := make(chan []byte, 16)
+	stamped := make(chan []byte, 16)
 	go func() {
 		scanner := bufio.NewScanner(plugin)
 		for scanner.Scan() {
-			lines <- append([]byte(nil), scanner.Bytes()...)
+			stamped <- append([]byte(nil), scanner.Bytes()...)
+		}
+		close(stamped)
+	}()
+	// Snapshot publishing adds state.set host calls; answer them in-line so
+	// the strict message script below only sees what it expects.
+	lines := make(chan []byte, 16)
+	go func() {
+		for line := range stamped {
+			var call v1.HostCall
+			if json.Unmarshal(line, &call) == nil && call.Type == v1.TypeHostCall && call.Call == v1.CallStateSet {
+				reply, _ := json.Marshal(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: json.RawMessage(`{}`)})
+				_, _ = host.Write(append(reply, '\n'))
+				continue
+			}
+			lines <- line
 		}
 		close(lines)
 	}()
@@ -88,15 +103,24 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 	sendHostJSON(t, host, v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: result})
 	sendHostJSON(t, host, v1.ViewOpen{Type: "view.open", ViewID: "calendar-panel", View: v1.ViewPanel, Entry: "panel", Width: calendar.PanelWidth, Height: calendar.PanelHeight})
 
-	var populated v1.ViewSnapshot
+	// Snapshot publishes can land while the test reads; keep the LAST
+// event-bearing snapshot so the input revision is never stale.
+var populated v1.ViewSnapshot
 	for {
-		line := nextPluginLine(t, lines)
-		if err := json.Unmarshal(line, &populated); err != nil {
-			t.Fatal(err)
-		}
-		if populated.Type == v1.TypeViewSnapshot && findWireNode(populated.Root, "event-"+fixture.ID) != nil {
+		line, ok := nextPluginLineIdle(t, lines, 300*time.Millisecond)
+		if !ok {
 			break
 		}
+		var snapshot v1.ViewSnapshot
+		if err := json.Unmarshal(line, &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Type == v1.TypeViewSnapshot && findWireNode(snapshot.Root, "event-"+fixture.ID) != nil {
+			populated = snapshot
+		}
+	}
+	if populated.Revision == 0 {
+		t.Fatal("no populated month snapshot")
 	}
 	if err := v1.Validate(populated.Root, v1.ViewPanel); err != nil {
 		t.Fatalf("populated month tree: %v", err)
@@ -207,6 +231,21 @@ func sendHostJSON(t *testing.T, writer io.Writer, message any) {
 	}
 	if _, err := writer.Write(append(data, '\n')); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func nextPluginLineIdle(t *testing.T, lines <-chan []byte, idle time.Duration) ([]byte, bool) {
+	t.Helper()
+	timer := time.NewTimer(idle)
+	defer timer.Stop()
+	select {
+	case line, open := <-lines:
+		if !open {
+			return nil, false
+		}
+		return line, true
+	case <-timer.C:
+		return nil, false
 	}
 }
 
