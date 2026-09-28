@@ -36,8 +36,8 @@ sitting, grooming, scratching, stretching and sleeping -- and the shell
 animates them on its own frame clock (protocol minor 8 sprite cycles), so the
 plugin sends a message per act, never per pose. It reads `/proc/stat` only.
 
-AI Usage is a new plugin built from the patterns in its prior-art research
-(docs/plans/2026-09-19-aiusage-research.md), including the owner's own
+AI Usage is a new plugin built from the patterns in its prior-art research,
+including the owner's own
 noctalia ai-usagebar plugin. Its codex session-file collector reads session
 logs only — never authentication files, never the network — and pasted API
 keys live in the host's own settings store and are sent only to their

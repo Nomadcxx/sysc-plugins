@@ -2,9 +2,7 @@
 
 This is the author-facing guide to releasing a plugin from this repository
 and to the shape any third-party source repository needs to be readable by
-sysc-shell's built-in plugin store. The mechanics are also described, from
-the tooling side, in
-[docs/plans/2026-09-25-plugin-release-pipeline.md](plans/2026-09-25-plugin-release-pipeline.md).
+sysc-shell's built-in plugin store.
 
 ## Tags
 
