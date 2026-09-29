@@ -161,6 +161,27 @@ func TestRecorderAdoptedFromPersistedOwnership(t *testing.T) {
 	}
 }
 
+// An adopted backend that exits on its own must wake the loop, not leave the
+// recorder stuck in Adopted forever.
+func TestRecorderAdoptedExitFails(t *testing.T) {
+	cfg := mustConfig(t, map[string]any{"directory": t.TempDir()})
+	args, err := cfg.RecordArgs("DP-1", filepath.Join(cfg.Directory, "live.mp4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := startFake(t, "hang", args)
+	waitReady(t, p)
+	r := New(cfg, testOpts("hang"))
+	t.Cleanup(r.Close)
+	r.Recover(Ownership{PID: p.PID(), Exe: os.Args[0], Args: args})
+	waitMode(t, r, Adopted)
+
+	if err := p.Stop(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	waitMode(t, r, Failed)
+}
+
 func TestFilenameConfiguredPattern(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

@@ -232,13 +232,33 @@ func Adopt(scan Scanner, exe string, args []string) (*Proc, error) {
 	if len(hits) > 1 {
 		return nil, fmt.Errorf("recorder: %d matching processes", len(hits))
 	}
-	return &Proc{
+	p := &Proc{
 		path:    hits[0].Exe,
 		args:    append([]string{}, hits[0].Args...),
 		pid:     hits[0].PID,
 		done:    make(chan struct{}),
 		running: true,
-	}, nil
+	}
+	go p.watch()
+	return p, nil
+}
+
+// watch closes done when an adopted process exits. Adopted procs have no
+// exec.Cmd to Wait on, so liveness is polled with signal 0.
+// ponytail: polling can miss a PID reused within the interval; pidfd if that
+// ever matters.
+func (p *Proc) watch() {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		if syscall.Kill(p.pid, 0) != nil {
+			p.mu.Lock()
+			p.running = false
+			p.mu.Unlock()
+			close(p.done)
+			return
+		}
+	}
 }
 
 func sameExe(got, want string) bool {
