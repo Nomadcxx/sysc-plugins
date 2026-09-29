@@ -51,8 +51,9 @@ make install
 ```
 
 `make install` builds every plugin and symlinks each directory into
-`$XDG_CONFIG_HOME/sysc-shell/plugins` (usually `~/.config/sysc-shell/plugins`). Because they are
-symlinks, the clone has to stay where it is. Then open the plugin manager and enable the ones you want.
+`$XDG_CONFIG_HOME/sysc-shell/plugins` (usually `~/.config/sysc-shell/plugins`) under its manifest id
+(for example `org.sysc.timer`). Because they are symlinks, the clone has to stay where it is. Then
+open the plugin manager and enable the ones you want.
 
 To update, pull and run `make install` again.
 

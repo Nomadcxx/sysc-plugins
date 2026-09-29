@@ -28,7 +28,10 @@ install: build
 	@mkdir -p "$(USER_PLUGIN_ROOT)"
 	@set -e; for entry in $(PLUGINS); do \
 		dir=$${entry##*:}; \
-		ln -sfn "$$PWD/plugins/$$dir" "$(USER_PLUGIN_ROOT)/$$dir"; \
+		id=$$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "plugins/$$dir/manifest.json" | head -1); \
+		[ -n "$$id" ] || { echo "install: no id in plugins/$$dir/manifest.json" >&2; exit 1; }; \
+		ln -sfn "$$PWD/plugins/$$dir" "$(USER_PLUGIN_ROOT)/$$id"; \
+		if [ -L "$(USER_PLUGIN_ROOT)/$$dir" ]; then rm -f "$(USER_PLUGIN_ROOT)/$$dir"; fi; \
 	done
 	@echo "Installed $(words $(PLUGINS)) plugins into $(USER_PLUGIN_ROOT)"
 
