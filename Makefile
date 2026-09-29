@@ -15,7 +15,7 @@ PLUGINS := \
 	sysc-plugin-protonvpn:protonvpn
 USER_PLUGIN_ROOT := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/sysc-shell/plugins
 
-.PHONY: build install test vet fmt validate catalog-validate clean
+.PHONY: build install link test vet fmt validate catalog-validate clean
 
 build:
 	@set -e; for entry in $(PLUGINS); do \
@@ -24,16 +24,22 @@ build:
 		go build -trimpath -o "plugins/$$dir/bin/$$cmd" "./cmd/$$cmd"; \
 	done
 
-install: build
+install: build link
+
+link:
 	@mkdir -p "$(USER_PLUGIN_ROOT)"
 	@set -e; for entry in $(PLUGINS); do \
 		dir=$${entry##*:}; \
 		id=$$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "plugins/$$dir/manifest.json" | head -1); \
 		[ -n "$$id" ] || { echo "install: no id in plugins/$$dir/manifest.json" >&2; exit 1; }; \
-		ln -sfn "$$PWD/plugins/$$dir" "$(USER_PLUGIN_ROOT)/$$id"; \
+		dest="$(USER_PLUGIN_ROOT)/$$id"; \
+		if [ -e "$$dest" ] && [ ! -L "$$dest" ]; then \
+			echo "install: $$dest is a real directory (catalog install); rm -rf it to link the checkout" >&2; exit 1; \
+		fi; \
+		ln -sfn "$$PWD/plugins/$$dir" "$$dest"; \
 		if [ -L "$(USER_PLUGIN_ROOT)/$$dir" ]; then rm -f "$(USER_PLUGIN_ROOT)/$$dir"; fi; \
 	done
-	@echo "Installed $(words $(PLUGINS)) plugins into $(USER_PLUGIN_ROOT)"
+	@echo "Linked $(words $(PLUGINS)) plugins into $(USER_PLUGIN_ROOT)"
 
 test:
 	go test -race ./...
