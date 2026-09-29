@@ -995,20 +995,36 @@ func scanRecentImages(root, mountPoint string, max int, sub bool) ([]string, err
 	return paths, nil
 }
 
-// thumbnail decodes src, scales the longest side to recentImageMaxLongEdge
-// with Catmull-Rom resampling, encodes JPEG, and caches the result under
-// cacheDir. The cache key hashes src with its mtime so a touched file
-// re-thumbnails and a stale entry never serves.
-func thumbnail(src, cacheDir string) (string, error) {
+// thumbnail decodes src — which must resolve to a regular file under
+// mount, the same prefix rule the scan root enforces — scales the longest
+// side to recentImageMaxLongEdge with Catmull-Rom resampling, encodes
+// JPEG, and caches the result under cacheDir. The cache key hashes src
+// with its mtime so a touched file re-thumbnails and a stale entry never
+// serves.
+func thumbnail(src, cacheDir, mount string) (string, error) {
 	if src == "" {
 		return "", errors.New("kdeconnect: thumbnail needs a source path")
 	}
-	info, err := os.Stat(src)
+	// find -P prints matching symlinks by name, so the bytes to read must
+	// be re-confirmed after resolution: a paired device cannot plant
+	// photo.jpg -> /home/<user>/... and have the panel open it (issue #21).
+	resolved, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return "", fmt.Errorf("kdeconnect: resolve %s: %w", src, err)
+	}
+	cleanedMount, err := filepath.EvalSymlinks(filepath.Clean(mount))
+	if err != nil {
+		return "", fmt.Errorf("kdeconnect: resolve mount %s: %w", mount, err)
+	}
+	if resolved != cleanedMount && !strings.HasPrefix(resolved, cleanedMount+string(filepath.Separator)) {
+		return "", fmt.Errorf("kdeconnect: %s resolves outside SFTP mount %s", src, cleanedMount)
+	}
+	info, err := os.Stat(resolved)
 	if err != nil {
 		return "", fmt.Errorf("kdeconnect: stat %s: %w", src, err)
 	}
-	if info.IsDir() {
-		return "", fmt.Errorf("kdeconnect: %s is a directory", src)
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("kdeconnect: %s is not a regular file", src)
 	}
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", fmt.Errorf("kdeconnect: mkdir %s: %w", cacheDir, err)
@@ -1018,7 +1034,7 @@ func thumbnail(src, cacheDir string) (string, error) {
 	if body, err := os.ReadFile(cached); err == nil && len(body) >= 4 && body[0] == 0xff && body[1] == 0xd8 {
 		return cached, nil
 	}
-	raw, err := os.ReadFile(src)
+	raw, err := os.ReadFile(resolved)
 	if err != nil {
 		return "", fmt.Errorf("kdeconnect: read %s: %w", src, err)
 	}
@@ -1126,7 +1142,7 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 	}
 	images := make([]RecentImage, 0, len(paths))
 	for _, p := range paths {
-		thumb, err := thumbnail(p, recentImageThumbDir)
+		thumb, err := thumbnail(p, recentImageThumbDir, mount)
 		if err != nil {
 			continue // an unreadable or undecodable file drops out of the grid
 		}

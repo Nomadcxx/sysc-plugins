@@ -948,7 +948,7 @@ func TestThumbnailRoundTripAndCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cached, err := thumbnail(src, cache)
+	cached, err := thumbnail(src, cache, srcDir)
 	if err != nil {
 		t.Fatalf("thumbnail: %v", err)
 	}
@@ -968,7 +968,7 @@ func TestThumbnailRoundTripAndCache(t *testing.T) {
 	}
 
 	// A second call returns the same path unchanged.
-	again, err := thumbnail(src, cache)
+	again, err := thumbnail(src, cache, srcDir)
 	if err != nil {
 		t.Fatalf("thumbnail second call: %v", err)
 	}
@@ -980,7 +980,7 @@ func TestThumbnailRoundTripAndCache(t *testing.T) {
 func TestThumbnailRejectsMissingSource(t *testing.T) {
 	t.Parallel()
 	cache := t.TempDir()
-	if _, err := thumbnail(filepath.Join(t.TempDir(), "no.png"), cache); err == nil {
+	if _, err := thumbnail(filepath.Join(t.TempDir(), "no.png"), cache, t.TempDir()); err == nil {
 		t.Fatal("thumbnail accepted a missing source")
 	}
 }
@@ -1139,5 +1139,39 @@ func TestRefreshRecentImagesDegradesToEmptyGrid(t *testing.T) {
 	st.refreshRecentImages(bus, &chosen)
 	if len(st.recentImages) != 0 {
 		t.Fatalf("foreign root produced %+v", st.recentImages)
+	}
+}
+
+func TestThumbnailRejectsSymlinkOutsideMount(t *testing.T) {
+	t.Parallel()
+	cache := t.TempDir()
+	mount := t.TempDir()
+	outside := t.TempDir()
+	pic := filepath.Join(outside, "pic.png")
+	f, err := os.Create(pic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(f, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A paired device plants photo.jpg -> a local file outside the mount.
+	link := filepath.Join(mount, "photo.jpg")
+	if err := os.Symlink(pic, link); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := thumbnail(link, cache, mount); err == nil {
+		t.Fatalf("thumbnail returned symlink target outside mount: %s", got)
+	}
+	// A link that stays inside the mount still thumbnails.
+	inside := filepath.Join(mount, "inner.png")
+	if err := os.Link(pic, inside); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := thumbnail(inside, cache, mount); err != nil {
+		t.Fatalf("file inside mount rejected: %v", err)
 	}
 }
