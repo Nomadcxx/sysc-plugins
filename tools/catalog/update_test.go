@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -91,6 +93,20 @@ func TestUpdateCreatesFirstRow(t *testing.T) {
 	}
 }
 
+// withReadmeServer points readmeBaseURL at a server that serves body for the
+// tag-pinned README path, and returns the base URL.
+func withReadmeServer(t *testing.T, body []byte) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	old := readmeBaseURL
+	readmeBaseURL = srv.URL
+	t.Cleanup(func() { readmeBaseURL = old })
+	return srv.URL
+}
+
 func TestUpdatePinsReadmeWhenPresent(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -103,6 +119,7 @@ func TestUpdatePinsReadmeWhenPresent(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
 			const body = "# Timer\n\nA simple timer.\n"
+			base := withReadmeServer(t, []byte(body))
 			if tc.readme {
 				writeFile(t, filepath.Join(root, "plugins", "timer", "README.md"), body)
 			}
@@ -134,13 +151,40 @@ func TestUpdatePinsReadmeWhenPresent(t *testing.T) {
 				return
 			}
 			sum := sha256.Sum256([]byte(body))
-			if doc.Plugins[0].Readme.URL != "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/timer-v1.0.0/plugins/timer/README.md" {
+			if doc.Plugins[0].Readme.URL != base+"/Nomadcxx/sysc-plugins/timer-v1.0.0/plugins/timer/README.md" {
 				t.Errorf("readme URL = %q", doc.Plugins[0].Readme.URL)
 			}
 			if doc.Plugins[0].Readme.SHA256 != hex.EncodeToString(sum[:]) {
 				t.Errorf("readme sha256 = %q, want %x", doc.Plugins[0].Readme.SHA256, sum)
 			}
 		})
+	}
+}
+
+// The catalog job checks out main, so a README edited after the tag must not
+// leak into the pinned hash: the hash has to come from the tag URL's bytes.
+func TestUpdatePinsReadmeFromTagNotWorkingTree(t *testing.T) {
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	const tagged = "# Timer\n\nTagged bytes.\n"
+	base := withReadmeServer(t, []byte(tagged))
+	writeFile(t, filepath.Join(root, "plugins", "timer", "README.md"), "# Timer\n\nWorking tree bytes, edited after the tag.\n")
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
+	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+		t.Fatalf("updateCatalog: %v", err)
+	}
+
+	cat := readCatalogFile(t, filepath.Join(root, "catalog.json"))
+	e := entryByID(t, cat, "org.sysc.timer")
+	if e.Readme == nil {
+		t.Fatal("expected a pinned readme")
+	}
+	sum := sha256.Sum256([]byte(tagged))
+	if e.Readme.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("readme sha256 = %s, want tag bytes %x", e.Readme.SHA256, sum)
+	}
+	if e.Readme.URL != base+"/Nomadcxx/sysc-plugins/timer-v1.0.0/plugins/timer/README.md" {
+		t.Fatalf("readme URL = %q", e.Readme.URL)
 	}
 }
 

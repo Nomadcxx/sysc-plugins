@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -183,25 +184,42 @@ func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.
 	return e
 }
 
+// readmeBaseURL is the raw host README URLs are pinned to. Tests point it at
+// an httptest server.
+var readmeBaseURL = "https://raw.githubusercontent.com"
+
 // readPluginReadme returns a tag-pinned URL and hash for the plugin README,
-// when the tagged tree includes one.
+// when the tagged tree includes one. The hash is computed from the bytes the
+// URL serves, so the two can never disagree; the working tree only decides
+// whether the plugin ships a README at all.
 func readPluginReadme(repoRoot, pluginDir, tag string) (*catalog.Screenshot, error) {
-	path := filepath.Join(repoRoot, "plugins", pluginDir, "README.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
+	if _, err := os.Stat(filepath.Join(repoRoot, "plugins", pluginDir, "README.md")); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
+	url := fmt.Sprintf("%s/Nomadcxx/sysc-plugins/%s/plugins/%s/README.md", readmeBaseURL, tag, pluginDir)
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("readme: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("readme %s: status %s", url, resp.Status)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, catalog.MaxReadmeBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("readme %s: %w", url, err)
+	}
 	if int64(len(data)) > catalog.MaxReadmeBytes {
 		return nil, fmt.Errorf("plugins/%s/README.md is larger than %d bytes", pluginDir, catalog.MaxReadmeBytes)
 	}
 	sum := sha256.Sum256(data)
-	return &catalog.Screenshot{
-		URL:    fmt.Sprintf("https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/%s/plugins/%s/README.md", tag, pluginDir),
-		SHA256: hex.EncodeToString(sum[:]),
-	}, nil
+	return &catalog.Screenshot{URL: url, SHA256: hex.EncodeToString(sum[:])}, nil
 }
 
 // scanAssets finds <id>-<version>-linux-<arch>.tar.gz files in dist and
