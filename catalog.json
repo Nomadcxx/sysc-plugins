@@ -317,6 +317,10 @@
       "category": "productivity",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "readme": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/notes-v1.0.0/plugins/notes/README.md",
+        "sha256": "34839e8b9e6684f0a13beaf9d3d554feb3207ef03e83fd4b0a50ae5b1cbc27d6"
+      },
       "added_at": "2026-09-29T04:04:41.093803063Z",
       "updated_at": "2026-09-29T04:04:41.093803063Z",
       "version": "1.0.0",
@@ -476,6 +480,10 @@
       "category": "appearance",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "readme": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/wallpaper-depth-v1.0.0/plugins/wallpaper-depth/README.md",
+        "sha256": "71af85f0c1e78c5e9c4b4ba9632b3133e2e6bfefae7f41b38821d786fe4efed6"
+      },
       "added_at": "2026-09-29T04:04:44.823473836Z",
       "updated_at": "2026-09-29T04:04:44.823473836Z",
       "version": "1.0.0",
