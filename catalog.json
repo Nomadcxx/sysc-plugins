@@ -2,6 +2,435 @@
   "schema": 1,
   "plugins": [
     {
+      "id": "org.sysc.aiusage",
+      "name": "AI Usage",
+      "author": "Nomadcxx",
+      "description": "Shows AI coding-assistant usage quotas in the bar with a detail panel and threshold alerts.",
+      "category": "monitoring",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:19.099273867Z",
+      "updated_at": "2026-09-29T04:04:19.099273867Z",
+      "version": "0.1.0",
+      "protocol": {
+        "major": 1,
+        "minor": 4
+      },
+      "capabilities": [
+        "notifications",
+        "panels",
+        "settings",
+        "state"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/aiusage-v0.1.0/org.sysc.aiusage-0.1.0-linux-amd64.tar.gz",
+          "sha256": "48e50b4899ed9d57c5bd26b45462611aceaac8bf932729919536ac865580d29b",
+          "size": 5537258
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/aiusage-v0.1.0/org.sysc.aiusage-0.1.0-linux-arm64.tar.gz",
+          "sha256": "e4ee3ad120491fbd8c5bcef91b0e048a36fe6e0334934483cde643c951820ee4",
+          "size": 5080166
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/aiusage-v0.1.0"
+    },
+    {
+      "id": "org.sysc.calendar",
+      "name": "Calendar",
+      "author": "Nomadcxx",
+      "description": "A read-only EDS calendar with event views, details, and safe actions.",
+      "category": "productivity",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:20.323735366Z",
+      "updated_at": "2026-09-29T04:04:20.323735366Z",
+      "version": "0.3.0",
+      "protocol": {
+        "major": 1,
+        "minor": 8
+      },
+      "capabilities": [
+        "panels",
+        "settings",
+        "state",
+        "clipboard-write",
+        "open-url"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.3.0/org.sysc.calendar-0.3.0-linux-amd64.tar.gz",
+          "sha256": "346ab936a51f34cc1e73c77ff45f86cd9abfed5544b209315b2c2083c7ca943a",
+          "size": 2393502
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.3.0/org.sysc.calendar-0.3.0-linux-arm64.tar.gz",
+          "sha256": "6d85f8e0046f8570bd1626942bbf91cd0807fa2b1fbe0b46003ba7558495c00a",
+          "size": 2201138
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/calendar-v0.3.0"
+    },
+    {
+      "id": "org.sysc.cat",
+      "name": "Cat",
+      "author": "Nomadcxx",
+      "description": "An animated cat in the bar that walks and gallops with CPU load, and grooms, stretches and naps while the machine idles.",
+      "category": "monitoring",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:21.885938661Z",
+      "updated_at": "2026-09-29T04:04:21.885938661Z",
+      "version": "1.0.0",
+      "protocol": {
+        "major": 1,
+        "minor": 9
+      },
+      "capabilities": [
+        "panels",
+        "settings"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/cat-v1.0.0/org.sysc.cat-1.0.0-linux-amd64.tar.gz",
+          "sha256": "5513dbff19c6fbc5dfa95737564942bc046bdfb02d1283bd6d46c4e2f423a773",
+          "size": 2133278
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/cat-v1.0.0/org.sysc.cat-1.0.0-linux-arm64.tar.gz",
+          "sha256": "35977f1ddc63028cf0b9bc0393be1e1ef92aa970bb95868284ed4fe9e1bcbaf5",
+          "size": 1970730
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/cat-v1.0.0"
+    },
+    {
+      "id": "org.sysc.faith",
+      "name": "Faith",
+      "author": "Nomadcxx",
+      "description": "A cross on the bar that offers a prayer when clicked, and a Scripture panel with cross-references and commentary.",
+      "category": "utilities",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:23.893040961Z",
+      "updated_at": "2026-09-29T04:04:23.893040961Z",
+      "version": "0.1.0",
+      "protocol": {
+        "major": 1,
+        "minor": 4
+      },
+      "capabilities": [
+        "notifications",
+        "panels",
+        "settings",
+        "state"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/faith-v0.1.0/org.sysc.faith-0.1.0-linux-amd64.tar.gz",
+          "sha256": "b92d488ae2756d6e2d46c8e35f3f3d349834f4fdd1454b1df14b329481521538",
+          "size": 14159873
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/faith-v0.1.0/org.sysc.faith-0.1.0-linux-arm64.tar.gz",
+          "sha256": "1e66be33f9bf2a9c7960ba5fb98d162cc0af8ab5e2974f670e74ea68e80ab86c",
+          "size": 13714866
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/faith-v0.1.0"
+    },
+    {
+      "id": "org.sysc.games",
+      "name": "Games",
+      "author": "Nomadcxx",
+      "description": "Lutris game deck: launch, running truth, session history, cover art.",
+      "category": "other",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:26.687720363Z",
+      "updated_at": "2026-09-29T04:04:26.687720363Z",
+      "version": "0.1.0",
+      "protocol": {
+        "major": 1,
+        "minor": 8
+      },
+      "capabilities": [
+        "floating_surfaces",
+        "notifications",
+        "panels",
+        "settings",
+        "state"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/games-v0.1.0/org.sysc.games-0.1.0-linux-amd64.tar.gz",
+          "sha256": "0a018df308072f038d09b17728e8141ea53429ee7a700bd7499bf5ace8e9f9f0",
+          "size": 7640189
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/games-v0.1.0/org.sysc.games-0.1.0-linux-arm64.tar.gz",
+          "sha256": "d810a52ab1f5172bbeef4f7f1ee74b2ee8ef09993966f5ff75d368db13491994",
+          "size": 7243524
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/games-v0.1.0"
+    },
+    {
+      "id": "org.sysc.github-notifications",
+      "name": "GitHub Notifications",
+      "author": "Nomadcxx",
+      "description": "Triage unread GitHub notifications, open work, and contribution activity from the panel.",
+      "category": "productivity",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:27.882402109Z",
+      "updated_at": "2026-09-29T04:04:27.882402109Z",
+      "version": "0.3.1",
+      "protocol": {
+        "major": 1,
+        "minor": 4
+      },
+      "capabilities": [
+        "notifications",
+        "panels",
+        "settings",
+        "state"
+      ],
+      "requires": {
+        "commands": [
+          "gh"
+        ]
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/github-notifications-v0.3.1/org.sysc.github-notifications-0.3.1-linux-amd64.tar.gz",
+          "sha256": "bfec3fe25d1f9e4afe9a6d883956074062dd079df317f6dd009cf1f50387bb38",
+          "size": 2582507
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/github-notifications-v0.3.1/org.sysc.github-notifications-0.3.1-linux-arm64.tar.gz",
+          "sha256": "5245bbe91713e941f84eff0b4eff6942dccf8f6842ae44e02b92aca53f1d6dca",
+          "size": 2392788
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/github-notifications-v0.3.1"
+    },
+    {
+      "id": "org.sysc.kdeconnect",
+      "name": "Phone Connect",
+      "author": "Nomadcxx",
+      "description": "Connects to a paired phone over KDE Connect, showing battery, notifications, and recent photos in the bar panel.",
+      "category": "utilities",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:29.220559384Z",
+      "updated_at": "2026-09-29T04:04:29.220559384Z",
+      "version": "0.1.0",
+      "protocol": {
+        "major": 1,
+        "minor": 6
+      },
+      "capabilities": [
+        "notifications",
+        "panels",
+        "settings",
+        "state"
+      ],
+      "requires": {
+        "commands": [
+          "kdeconnect-cli"
+        ]
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/kdeconnect-v0.1.0/org.sysc.kdeconnect-0.1.0-linux-amd64.tar.gz",
+          "sha256": "a38ceff41c44b193131b00a3d799bc53bb0a8186a9f080f5612e10d8ce27b41d",
+          "size": 3682264
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/kdeconnect-v0.1.0/org.sysc.kdeconnect-0.1.0-linux-arm64.tar.gz",
+          "sha256": "4f430fbe235b10a807dcea7c76c1693550f5a439aab7517984153a725559007e",
+          "size": 3391643
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/kdeconnect-v0.1.0"
+    },
+    {
+      "id": "org.sysc.mini-docker",
+      "name": "Mini Docker",
+      "author": "Nomadcxx",
+      "description": "Shows the Docker whale in the bar with a panel to manage containers.",
+      "category": "system",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:30.307779681Z",
+      "updated_at": "2026-09-29T04:04:30.307779681Z",
+      "version": "0.4.0",
+      "protocol": {
+        "major": 1,
+        "minor": 4
+      },
+      "capabilities": [
+        "panels",
+        "settings"
+      ],
+      "requires": {
+        "commands": [
+          "docker"
+        ]
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.0/org.sysc.mini-docker-0.4.0-linux-amd64.tar.gz",
+          "sha256": "7b6076b2c866dddbd46f5abd5defd3d285b1e3a0863ea8d30ff51fe73bf7d1cb",
+          "size": 2552403
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.0/org.sysc.mini-docker-0.4.0-linux-arm64.tar.gz",
+          "sha256": "94183a1f81d573126ee166d294a91d7473f0a74f2e47168438fdeb65dcaf3b4e",
+          "size": 2364788
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/mini-docker-v0.4.0"
+    },
+    {
+      "id": "org.sysc.notes",
+      "name": "Notes",
+      "author": "Nomadcxx",
+      "description": "A quick notes editor in the bar panel that lists and autosaves markdown files to a folder.",
+      "category": "productivity",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:41.093803063Z",
+      "updated_at": "2026-09-29T04:04:41.093803063Z",
+      "version": "1.0.0",
+      "protocol": {
+        "major": 1,
+        "minor": 8
+      },
+      "capabilities": [
+        "notifications",
+        "panels",
+        "settings",
+        "state",
+        "floating_surfaces",
+        "clipboard-read"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.0.0/org.sysc.notes-1.0.0-linux-amd64.tar.gz",
+          "sha256": "886c57622bc21534bd6a24a99ce34e4ccbc3bd9f6d6eaa9af19bbbbe13ce4466",
+          "size": 2524874
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.0.0/org.sysc.notes-1.0.0-linux-arm64.tar.gz",
+          "sha256": "26d235eaffe001dd47837a433c28f707c5e74bc17ebb3472073398b34e2ab62b",
+          "size": 2340539
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/notes-v1.0.0"
+    },
+    {
+      "id": "org.sysc.protonvpn",
+      "name": "ProtonVPN",
+      "author": "Nomadcxx",
+      "description": "ProtonVPN from the bar: quick connect, server picker, split tunnel, and protection status.",
+      "category": "utilities",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:42.299091194Z",
+      "updated_at": "2026-09-29T04:04:42.299091194Z",
+      "version": "1.0.0",
+      "protocol": {
+        "major": 1,
+        "minor": 8
+      },
+      "capabilities": [
+        "panels",
+        "settings",
+        "state",
+        "notifications",
+        "clipboard-write"
+      ],
+      "requires": {
+        "commands": [
+          "protonvpn"
+        ]
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.0/org.sysc.protonvpn-1.0.0-linux-amd64.tar.gz",
+          "sha256": "8a645fd9ce5abf94a0ff414321404fad227ba2e4d1a1f561cd184face9b0648e",
+          "size": 2777182
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.0/org.sysc.protonvpn-1.0.0-linux-arm64.tar.gz",
+          "sha256": "52c8f90696e68bb32952ba02a1488dfeee9ad44bd97675c4aa35ce62d22dd9eb",
+          "size": 2564105
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/protonvpn-v1.0.0"
+    },
+    {
+      "id": "org.sysc.screen-recorder",
+      "name": "Screen Recorder",
+      "author": "Nomadcxx",
+      "description": "Records the screen or a window to video from the bar, with optional audio and a replay buffer.",
+      "category": "media",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:43.430378614Z",
+      "updated_at": "2026-09-29T04:04:43.430378614Z",
+      "version": "1.0.0",
+      "protocol": {
+        "major": 1,
+        "minor": 0
+      },
+      "capabilities": [
+        "notifications",
+        "panels",
+        "settings",
+        "state"
+      ],
+      "requires": {
+        "commands": [
+          "gpu-screen-recorder"
+        ]
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screen-recorder-v1.0.0/org.sysc.screen-recorder-1.0.0-linux-amd64.tar.gz",
+          "sha256": "59a19020cbae46d3fb59cd2c1531358354f67f7f972264babf17df7e1500f363",
+          "size": 2324776
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screen-recorder-v1.0.0/org.sysc.screen-recorder-1.0.0-linux-arm64.tar.gz",
+          "sha256": "29dfa729e3028fdeac78c21c3c0b8220863dfda9e3a745172c6f93332a668abe",
+          "size": 2148371
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screen-recorder-v1.0.0"
+    },
+    {
       "id": "org.sysc.timer",
       "name": "Pomodoro Timer",
       "author": "Nomadcxx",
@@ -38,6 +467,83 @@
         }
       },
       "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/timer-v1.4.0"
+    },
+    {
+      "id": "org.sysc.wallpaper-depth",
+      "name": "Wallpaper Depth",
+      "author": "Nomadcxx",
+      "description": "Generates a depth mask for the current image wallpaper to place foreground scenery over a centred desktop clock.",
+      "category": "appearance",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:44.823473836Z",
+      "updated_at": "2026-09-29T04:04:44.823473836Z",
+      "version": "1.0.0",
+      "protocol": {
+        "major": 1,
+        "minor": 7
+      },
+      "capabilities": [
+        "panels",
+        "settings",
+        "state",
+        "wallpaper"
+      ],
+      "requires": {
+        "commands": [
+          "python3"
+        ]
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/wallpaper-depth-v1.0.0/org.sysc.wallpaper-depth-1.0.0-linux-amd64.tar.gz",
+          "sha256": "9e5c2c63f2974208e3f3739d4400c650e7dbe2ddcffe81b272d1acef0e5afae5",
+          "size": 2335414
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/wallpaper-depth-v1.0.0/org.sysc.wallpaper-depth-1.0.0-linux-arm64.tar.gz",
+          "sha256": "4847ae8b89bcaab7e59138d7dfcb3afd851c84e108e5ceddb928361afcf49b42",
+          "size": 2158251
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/wallpaper-depth-v1.0.0"
+    },
+    {
+      "id": "org.sysc.world-clock",
+      "name": "World Clock",
+      "author": "Nomadcxx",
+      "description": "Search and manage labelled world clocks in the bar and panel.",
+      "category": "utilities",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-09-29T04:04:45.91999474Z",
+      "updated_at": "2026-09-29T04:04:45.91999474Z",
+      "version": "2.0.0",
+      "protocol": {
+        "major": 1,
+        "minor": 7
+      },
+      "capabilities": [
+        "panels",
+        "settings",
+        "state"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/world-clock-v2.0.0/org.sysc.world-clock-2.0.0-linux-amd64.tar.gz",
+          "sha256": "be1efc72da46253bb50f9052359cf34ec40b3a44931250b7761ed43eeb3ed11f",
+          "size": 2195547
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/world-clock-v2.0.0/org.sysc.world-clock-2.0.0-linux-arm64.tar.gz",
+          "sha256": "87eda702855cc4a0fa4d445ee7fedc92b2f17bb371287956fd2443764ab5fccb",
+          "size": 2030354
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/world-clock-v2.0.0"
     }
   ]
 }
