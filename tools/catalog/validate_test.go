@@ -73,6 +73,21 @@ func TestValidateCatalogCatchesMissingMetaEntry(t *testing.T) {
 	}
 }
 
+func TestValidateCatalogCatchesInvalidMetaCategory(t *testing.T) {
+	root := buildValidatingRepo(t)
+	writeFile(t, filepath.Join(root, catalogMetaFile), `{
+		"org.sysc.timer": {"category": "games", "author": "Nomadcxx"}
+	}`)
+	var out bytes.Buffer
+	err := validateCatalog(root, false, false, &out)
+	if err == nil {
+		t.Fatalf("expected a validation failure, output: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "games") {
+		t.Fatalf("expected the failure to name the invalid category, got: %s", out.String())
+	}
+}
+
 func TestValidateCommunityRequiresScreenshot(t *testing.T) {
 	root := buildValidatingRepo(t)
 	var out bytes.Buffer

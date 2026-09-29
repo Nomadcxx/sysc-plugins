@@ -90,6 +90,9 @@ func updateCatalog(repoRoot, tag, dist string, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
 	}
+	if err := checkMetaCategories(metaAll); err != nil {
+		return fmt.Errorf("update: %w", err)
+	}
 	meta, ok := metaAll[manifest.ID]
 	if !ok {
 		return fmt.Errorf("update: %s has no entry for %q", catalogMetaFile, manifest.ID)
@@ -220,6 +223,18 @@ func readPluginReadme(repoRoot, pluginDir, tag string) (*catalog.Screenshot, err
 	}
 	sum := sha256.Sum256(data)
 	return &catalog.Screenshot{URL: url, SHA256: hex.EncodeToString(sum[:])}, nil
+}
+
+// checkMetaCategories fails when catalog-meta.json names a category outside
+// the shell's closed set; catalog.Entry.Validate would silently remap it to
+// "other" instead.
+func checkMetaCategories(metaAll map[string]catalogMeta) error {
+	for id, meta := range metaAll {
+		if !slices.Contains(catalog.Categories, meta.Category) {
+			return fmt.Errorf("%s: %s category %q is not one of %v", catalogMetaFile, id, meta.Category, catalog.Categories)
+		}
+	}
+	return nil
 }
 
 // scanAssets finds <id>-<version>-linux-<arch>.tar.gz files in dist and

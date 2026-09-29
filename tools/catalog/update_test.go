@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -185,6 +186,19 @@ func TestUpdatePinsReadmeFromTagNotWorkingTree(t *testing.T) {
 	}
 	if e.Readme.URL != base+"/Nomadcxx/sysc-plugins/timer-v1.0.0/plugins/timer/README.md" {
 		t.Fatalf("readme URL = %q", e.Readme.URL)
+	}
+}
+
+func TestUpdateRefusesInvalidMetaCategory(t *testing.T) {
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	writeFile(t, filepath.Join(root, catalogMetaFile), `{
+		"org.sysc.timer": {"category": "games", "author": "Nomadcxx"}
+	}`)
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
+	err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), "games") {
+		t.Fatalf("expected a category error naming games, got %v", err)
 	}
 }
 

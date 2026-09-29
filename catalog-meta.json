@@ -48,7 +48,7 @@
     "homepage": "https://github.com/Nomadcxx/sysc-plugins"
   },
   "org.sysc.games": {
-    "category": "games",
+    "category": "media",
     "author": "Nomadcxx",
     "license": "MIT",
     "homepage": "https://github.com/Nomadcxx/sysc-plugins"

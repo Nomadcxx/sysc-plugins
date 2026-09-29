@@ -57,6 +57,10 @@ func validateCatalog(repoRoot string, community, fetch bool, w io.Writer) error 
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
+	if err := checkMetaCategories(metaAll); err != nil {
+		fmt.Fprintf(w, "FAIL %v\n", err)
+		failures++
+	}
 	dirsByID, err := pluginDirsByID(repoRoot)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
