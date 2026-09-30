@@ -2,11 +2,120 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
+
+func TestPanelActionsRunOncePerClick(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	in, host, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, out, err := os.Pipe()
+	if err != nil {
+		in.Close()
+		host.Close()
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- run(in, out) }()
+	t.Cleanup(func() {
+		host.Close()
+		reader.Close()
+		in.Close()
+		out.Close()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("plugin did not stop")
+		}
+	})
+	enc, dec := v1.NewEncoder(host), v1.NewDecoder(reader, v1.ToHost)
+	send := func(m v1.Message) {
+		t.Helper()
+		if err := enc.Encode(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next := func() v1.Message {
+		t.Helper()
+		if err := reader.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		m, err := dec.Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	send(&v1.HostHello{Supported: []v1.Version{{Major: 1, Minor: 7}}})
+	if _, ok := next().(*v1.PluginHello); !ok {
+		t.Fatal("missing plugin hello")
+	}
+	values := map[string]any{}
+	for _, key := range []string{"track_claude", "track_codex", "track_commandcode", "alerts_enabled"} {
+		values[key] = false
+	}
+	send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: values})
+	var calls []v1.HostCall
+	waitView := func(id string) {
+		t.Helper()
+		for {
+			switch m := next().(type) {
+			case *v1.HostCall:
+				if m.Call == v1.CallPanelOpen || m.Call == v1.CallPanelClose {
+					calls = append(calls, *m)
+				}
+				send(&v1.HostReply{ID: m.ID, OK: true, Result: json.RawMessage(`{}`)})
+			case *v1.ViewSnapshot:
+				if m.ViewID == id {
+					return
+				}
+			}
+		}
+	}
+	send(&v1.ViewOpen{ViewID: "bar", View: v1.ViewBar, Entry: "bar", Instance: "placement-1"})
+	waitView("bar")
+	for _, step := range []struct {
+		node, source, target string
+		kind                 v1.CallKind
+	}{
+		{"open", "bar", "panel", v1.CallPanelOpen},
+		{"settings", "panel", "settings", v1.CallPanelOpen},
+		{"back", "settings", "panel", v1.CallPanelOpen},
+		{"settings", "panel", "settings", v1.CallPanelOpen},
+		{"close", "settings", "settings", v1.CallPanelClose},
+	} {
+		calls = nil
+		for _, event := range []v1.EventKind{v1.EventPointer, v1.EventActivate} {
+			send(&v1.InputEvent{ViewID: step.source, Node: step.node, Event: event, Button: v1.ButtonPrimary, Output: "DP-1"})
+		}
+		// A later view is a processing barrier, without a sleep or an idle timeout.
+		send(&v1.ViewOpen{ViewID: "barrier", View: v1.ViewBar, Entry: "bar"})
+		waitView("barrier")
+		send(&v1.ViewClose{ViewID: "barrier"})
+		if len(calls) != 1 || calls[0].Call != step.kind {
+			t.Fatalf("%s click made %d panel calls: %+v", step.node, len(calls), calls)
+		}
+		var params v1.PanelParams
+		if err := json.Unmarshal(calls[0].Params, &params); err != nil || params.Entry != step.target {
+			t.Fatalf("%s target = %+v, err=%v", step.node, params, err)
+		}
+		if step.kind == v1.CallPanelOpen {
+			if step.source != "bar" {
+				send(&v1.ViewClose{ViewID: step.source})
+			}
+			send(&v1.ViewOpen{ViewID: step.target, View: v1.ViewPanel, Entry: step.target, Instance: "placement-1"})
+			waitView(step.target)
+		}
+	}
+}
 
 func TestPanelEntryForActionSwitchesBetweenUsageAndSettings(t *testing.T) {
 	for _, tc := range []struct {

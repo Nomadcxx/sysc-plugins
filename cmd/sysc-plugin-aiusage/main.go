@@ -234,16 +234,20 @@ func run(in, out *os.File) error {
 				}
 				publish()
 			case *v1.InputEvent:
+				if m.Event != v1.EventActivate {
+					continue
+				}
 				switch {
 				case m.Node == "open":
 					_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 				case m.Node == "settings" || m.Node == "back":
 					source := views[m.ViewID]
-					if err := switchPanel(ctx, c.Call, m.Node, v1.PanelParams{
+					switchErr := switchPanel(ctx, c.Call, m.Node, v1.PanelParams{
 						Entry: source.entry, Output: m.Output,
 						Generation: m.Generation, Instance: source.instance,
-					}); err != nil {
-						fmt.Fprintf(os.Stderr, "aiusage: panel action %q failed: %v\n", m.Node, err)
+					})
+					if switchErr != nil {
+						fmt.Fprintf(os.Stderr, "aiusage: panel action %q failed: %v\n", m.Node, switchErr)
 					}
 				case m.Node == "close":
 					source := views[m.ViewID]
