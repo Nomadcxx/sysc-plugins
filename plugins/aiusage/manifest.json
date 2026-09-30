@@ -120,16 +120,23 @@
     {
       "key": "refresh_interval",
       "type": "int",
-      "label": "Refresh interval (s)",
+      "label": "Refresh interval (seconds)",
+      "description": "How often provider usage is checked.",
       "default": 300,
       "min": 60,
       "max": 3600
     },
-    {"key": "alerts_enabled", "type": "bool", "label": "Threshold alerts", "default": true},
+    {
+      "key": "alerts_enabled",
+      "type": "bool",
+      "label": "Threshold alerts",
+      "description": "Send desktop alerts at the thresholds below.",
+      "default": true
+    },
     {
       "key": "warn_threshold",
       "type": "int",
-      "label": "Warn at %",
+      "label": "Warn at (%)",
       "default": 85,
       "min": 50,
       "max": 99,
@@ -138,7 +145,7 @@
     {
       "key": "critical_threshold",
       "type": "int",
-      "label": "Critical at %",
+      "label": "Critical at (%)",
       "default": 95,
       "min": 51,
       "max": 99,
@@ -147,7 +154,8 @@
     {
       "key": "alert_thresholds",
       "type": "string",
-      "label": "Per-provider warn overrides",
+      "label": "Provider warning overrides",
+      "description": "Comma-separated provider:percent pairs, such as claude:80.",
       "default": "",
       "visible_when": {"key": "alerts_enabled", "equals": true}
     },
@@ -178,12 +186,13 @@
     {
       "key": "history_retention",
       "type": "select",
-      "label": "History retention (lines)",
+      "label": "History retention",
+      "description": "Number of recent readings kept for usage charts.",
       "default": "2000",
       "options": [
-        {"value": "500", "label": "500"},
-        {"value": "2000", "label": "2000"},
-        {"value": "10000", "label": "10000"}
+        {"value": "500", "label": "500 readings"},
+        {"value": "2000", "label": "2,000 readings"},
+        {"value": "10000", "label": "10,000 readings"}
       ]
     }
   ]

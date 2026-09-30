@@ -584,6 +584,20 @@ func TestSettingsPanelHasBackButton(t *testing.T) {
 	}
 }
 
+func TestSettingsPanelHeaderUsesCardSurface(t *testing.T) {
+	tree := SettingsPanelTree()
+	if len(tree.Children) != 1 {
+		t.Fatalf("settings header children = %d, want one surfaced header", len(tree.Children))
+	}
+	header := tree.Children[0]
+	if header.Kind != v1.KindColumn || header.Fill != "card" || header.Shape != "card" {
+		t.Fatalf("settings header = %+v, want themed card surface", header)
+	}
+	if findText(header, "Settings save automatically.") == nil {
+		t.Fatal("settings header missing concise save guidance")
+	}
+}
+
 func TestSettingsPanelHasCloseButton(t *testing.T) {
 	button := findNodeID(SettingsPanelTree(), "close")
 	if button == nil || button.Kind != v1.KindButton || button.Name == "" || button.Role != "button" ||

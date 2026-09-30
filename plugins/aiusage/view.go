@@ -353,21 +353,24 @@ func PanelTree(r Report, selected string, hist []float64, cfg Config, hostMinor 
 // SettingsPanelTree is the plugin-owned header above the shell's validated
 // settings form. The host supplies the form for this manifest entry.
 func SettingsPanelTree() *v1.Node {
-	return &v1.Node{Kind: v1.KindColumn, Gap: 6, Children: []*v1.Node{
-		{Kind: v1.KindRow, Gap: 8, Height: panelHeaderHeight, Children: []*v1.Node{
-			{Kind: v1.KindButton, ID: "back", Icon: "chevron_left",
-				Name: "Back to AI Usage", Role: "button", Tooltip: "Return to AI Usage",
-				Events: []v1.EventKind{v1.EventActivate}},
-			{Kind: v1.KindIcon, Icon: "settings"},
-			{Kind: v1.KindColumn, Width: 180, Children: []*v1.Node{
-				{Kind: v1.KindText, Text: "AI Usage Settings", Bold: true, Size: "title"},
+	return &v1.Node{Kind: v1.KindColumn, Children: []*v1.Node{{
+		Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: 12, Gap: 8,
+		Children: []*v1.Node{
+			{Kind: v1.KindRow, Gap: 8, Height: panelHeaderHeight, Children: []*v1.Node{
+				{Kind: v1.KindButton, ID: "back", Icon: "chevron_left",
+					Name: "Back to AI Usage", Role: "button", Tooltip: "Return to AI Usage",
+					Events: []v1.EventKind{v1.EventActivate}},
+				{Kind: v1.KindIcon, Icon: "settings"},
+				{Kind: v1.KindColumn, Width: 180, Children: []*v1.Node{
+					{Kind: v1.KindText, Text: "AI Usage Settings", Bold: true, Size: "title"},
+				}},
+				{Kind: v1.KindButton, ID: "close", Text: "Close",
+					Name: "Close AI Usage settings", Role: "button", Tooltip: "Close settings popup",
+					Events: []v1.EventKind{v1.EventActivate}},
 			}},
-			{Kind: v1.KindButton, ID: "close", Text: "Close",
-				Name: "Close AI Usage settings", Role: "button", Tooltip: "Close settings popup",
-				Events: []v1.EventKind{v1.EventActivate}},
-		}},
-		{Kind: v1.KindText, Text: "Manage providers, credentials, refresh, and alerts.", Tone: v1.ToneSubtle, Size: "caption"},
-	}}
+			{Kind: v1.KindText, Text: "Settings save automatically.", Tone: v1.ToneSubtle, Size: "caption"},
+		},
+	}}}
 }
 
 // PanelPreferredHeight is the pane viewport needed to show the header, rollup,
