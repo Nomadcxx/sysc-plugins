@@ -104,8 +104,8 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 	sendHostJSON(t, host, v1.ViewOpen{Type: "view.open", ViewID: "calendar-panel", View: v1.ViewPanel, Entry: "panel", Width: calendar.PanelWidth, Height: calendar.PanelHeight})
 
 	// Snapshot publishes can land while the test reads; keep the LAST
-// event-bearing snapshot so the input revision is never stale.
-var populated v1.ViewSnapshot
+	// event-bearing snapshot so the input revision is never stale.
+	var populated v1.ViewSnapshot
 	for {
 		line, ok := nextPluginLineIdle(t, lines, 300*time.Millisecond)
 		if !ok {
