@@ -15,6 +15,7 @@ it.
 | **Games** | Lutris game deck: launch games, see what's running, session history, cover art | Lutris |
 | **GitHub Notifications** | Triage unread GitHub notifications and contribution activity from the panel | `gh` |
 | **Mini Docker** | The Docker whale in the bar, with a panel to manage containers | `docker` |
+| **Moonbit** | System cleaner: scan and clean progress from the bar, with a category review panel | `moonbit` |
 | **Notes** | Quick notes in a bar panel, autosaved as markdown files to a folder | |
 | **Phone Connect** | A paired phone's battery, notifications and recent photos, over KDE Connect | `kdeconnect-cli` |
 | **Pomodoro Timer** | Work and break sessions in the bar | |
