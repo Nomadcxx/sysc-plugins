@@ -12,7 +12,8 @@ PLUGINS := \
 	sysc-plugin-faith:faith \
 	sysc-plugin-cat:cat \
 	sysc-plugin-games:games \
-	sysc-plugin-protonvpn:protonvpn
+	sysc-plugin-protonvpn:protonvpn \
+	sysc-plugin-moonbit:moonbit
 USER_PLUGIN_ROOT := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/sysc-shell/plugins
 
 .PHONY: build install link test vet fmt validate catalog-validate clean
