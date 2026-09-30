@@ -14,14 +14,15 @@ import (
 )
 
 const (
-	panelPaneHeight       = 406
-	panelContentInset     = 22 // retain the shell panel/card inset without the settings wrapper
-	panelContentChrome    = 2 * panelContentInset
-	panelHeaderHeight     = 28
-	providerRowHeight     = 42
-	fleetRollupHeight     = 60
-	providerListGap       = 2
-	providerDividerHeight = 1
+	panelPaneHeight           = 406
+	panelContentInset         = 22 // retain the shell panel/card inset without the settings wrapper
+	panelContentChrome        = 2 * panelContentInset
+	panelHeaderHeight         = 28
+	settingsPanelHeaderHeight = 36
+	providerRowHeight         = 42
+	fleetRollupHeight         = 60
+	providerListGap           = 2
+	providerDividerHeight     = 1
 )
 
 // View builders turn a Report snapshot into plugin/v1 view trees. They are
@@ -356,7 +357,7 @@ func SettingsPanelTree() *v1.Node {
 	return &v1.Node{Kind: v1.KindColumn, Children: []*v1.Node{{
 		Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: 12, Gap: 8,
 		Children: []*v1.Node{
-			{Kind: v1.KindRow, Gap: 8, Height: panelHeaderHeight, Children: []*v1.Node{
+			{Kind: v1.KindRow, Gap: 8, Height: settingsPanelHeaderHeight, Children: []*v1.Node{
 				{Kind: v1.KindButton, ID: "back", Icon: "chevron_left",
 					Name: "Back to AI Usage", Role: "button", Tooltip: "Return to AI Usage",
 					Events: []v1.EventKind{v1.EventActivate}},
@@ -365,6 +366,7 @@ func SettingsPanelTree() *v1.Node {
 					{Kind: v1.KindText, Text: "AI Usage Settings", Bold: true, Size: "title"},
 				}},
 				{Kind: v1.KindButton, ID: "close", Text: "Close",
+					Width: 72, Height: 32, Padding: 8,
 					Name: "Close AI Usage settings", Role: "button", Tooltip: "Close settings popup",
 					Events: []v1.EventKind{v1.EventActivate}},
 			}},

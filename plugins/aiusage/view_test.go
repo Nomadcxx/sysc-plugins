@@ -604,6 +604,9 @@ func TestSettingsPanelHasCloseButton(t *testing.T) {
 		len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
 		t.Fatalf("close action = %+v, want accessible close button", button)
 	}
+	if button.Width != 72 || button.Height != 32 || button.Padding != 8 {
+		t.Fatalf("close geometry = %dx%d with %dpx padding, want 72x32 with 8px padding", button.Width, button.Height, button.Padding)
+	}
 }
 
 func findNodeID(n *v1.Node, id string) *v1.Node {
