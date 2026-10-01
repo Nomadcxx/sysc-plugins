@@ -217,17 +217,23 @@ func run(in *os.File, out *os.File) error {
 		return call(ctx, c, v1.CallSurfacePin, v1.SurfacePinParams{View: result.ViewID, Pinned: pinned}, nil)
 	}
 
-	// afterRename carries a renamed note's sticky colour and pins to its new
-	// name and reopens its stickies so their title bars follow.
+	// afterRename points a renamed note's stickies at the new name, carries
+	// its colour and pins over, and reopens the stickies so their title bars
+	// follow.
 	afterRename := func(oldName, newName string) {
+		retargetStickies(views, oldName, newName)
 		if err := migrateNoteState(ctx, c, oldName, newName, &pins, loadPins); err != nil {
 			sess.Notify("Could not move sticky settings to the new name: " + err.Error())
 			return
 		}
+		var reopen []string
 		for id, v := range views {
-			if v.kind != v1.ViewFloating || v.name != oldName {
-				continue
+			if v.kind == v1.ViewFloating && v.name == newName {
+				reopen = append(reopen, id)
 			}
+		}
+		for _, id := range reopen {
+			v := views[id]
 			if err := call(ctx, c, v1.CallSurfaceClose, v1.SurfaceCloseParams{View: id}, nil); err != nil {
 				sess.Notify(err.Error())
 				continue
@@ -330,6 +336,9 @@ func run(in *os.File, out *os.File) error {
 				}
 				delete(views, m.ViewID)
 				pub.forget(m.ViewID)
+				if from, to, ok := sess.TakeRename(); ok {
+					afterRename(from, to)
+				}
 				snapshot()
 			case *v1.ViewResync:
 				if v, ok := views[m.ViewID]; ok {
@@ -482,13 +491,29 @@ func handleSticky(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.
 	}
 }
 
+// retargetStickies points every sticky on oldName at newName. It runs before
+// anything that can fail, so a sticky never edits a name the session no
+// longer holds.
+func retargetStickies(views map[string]view, oldName, newName string) {
+	for id, v := range views {
+		if v.kind == v1.ViewFloating && v.name == oldName {
+			v.name = newName
+			views[id] = v
+		}
+	}
+}
+
 func closeDeleted(ctx context.Context, c *v1.Client, name string, views map[string]view, pins *[]pinnedSurface, loadPins func() error) error {
 	var closeErr error
 	for id, v := range views {
 		if v.kind == v1.ViewFloating && v.name == name {
 			if err := call(ctx, c, v1.CallSurfaceClose, v1.SurfaceCloseParams{View: id}, nil); err != nil {
 				closeErr = errors.Join(closeErr, err)
+				continue
 			}
+			// Gone from the map now, or the next refresh asks the session
+			// for the deleted file and reports it as an error.
+			delete(views, id)
 		}
 	}
 	if err := setState(ctx, c, colorStateBase+notes.Token(name), nil); err != nil {

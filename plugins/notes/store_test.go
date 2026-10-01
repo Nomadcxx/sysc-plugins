@@ -200,7 +200,7 @@ func TestSessionConflictKeepLocalAndCleanExternalReload(t *testing.T) {
 	}
 }
 
-func TestFailedFlushRetainsBufferAndBlocksNavigation(t *testing.T) {
+func TestFailedSaveKeepsTheBufferAcrossNavigation(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir, "md")
 	if err != nil {
@@ -226,8 +226,11 @@ func TestFailedFlushRetainsBufferAndBlocksNavigation(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(dir, "note.md")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Select(""); err == nil {
-		t.Fatal("leaving the note discarded a buffer after save failed")
+	if err := sess.Select(""); err != nil {
+		t.Fatalf("a note that will not save must not trap the editor: %v", err)
+	}
+	if err := sess.Select("note.md"); err != nil {
+		t.Fatal(err)
 	}
 	got := sess.Snap()
 	if got.Selected != "note.md" || got.Body != "local text that must survive" || !got.Dirty || got.SaveError == "" {

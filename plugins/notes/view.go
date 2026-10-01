@@ -353,7 +353,7 @@ func stickyStatus(d Document) (string, v1.Tone) {
 	case d.Error != "":
 		return d.Error, v1.ToneError
 	case d.Conflict != "":
-		return "Changed elsewhere · yours kept", v1.ToneError
+		return "Changed elsewhere · resolve in Notes", v1.ToneError
 	case d.Dirty:
 		return "Saving…", v1.ToneSubtle
 	}

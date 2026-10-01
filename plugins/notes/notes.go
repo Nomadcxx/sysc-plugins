@@ -138,9 +138,10 @@ func (s *Session) Document(name string) (Document, error) {
 	return *doc, nil
 }
 
-// Select makes name the note in the editor. It saves every open note and
-// commits a pending title first; if either fails the selection stays put so
-// no edit is lost. An empty name clears the selection.
+// Select makes name the note in the editor. It tries to save every open note
+// and commits a pending title first. A note that will not save keeps its text
+// and error in memory, so it never blocks moving to another note; a failed
+// rename does keep the selection, once. An empty name clears the selection.
 func (s *Session) Select(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -151,9 +152,7 @@ func (s *Session) selectLocked(name string) error {
 	if s.store == nil {
 		return errors.New("notes: folder is unavailable")
 	}
-	if err := s.flushAllLocked(); err != nil {
-		return err
-	}
+	s.saveAllLocked()
 	if err := s.commitTitleLocked(); err != nil {
 		return err
 	}
@@ -163,7 +162,19 @@ func (s *Session) selectLocked(name string) error {
 		}
 	}
 	s.selected, s.pendingDelete = name, ""
+	s.dropIdleLocked()
 	return nil
+}
+
+// dropIdleLocked forgets documents with nothing unsaved that the editor is
+// not showing, so the tick only re-reads notes that are open somewhere. A
+// sticky's document comes back on its next refresh.
+func (s *Session) dropIdleLocked() {
+	for name, doc := range s.docs {
+		if name != s.selected && !doc.Dirty && doc.Conflict == "" && doc.Error == "" {
+			delete(s.docs, name)
+		}
+	}
 }
 
 func (s *Session) OpenScratch() error {
@@ -238,9 +249,7 @@ func (s *Session) createLocked(title, body string) (string, error) {
 	if len(body) > v1.MaxInputBytes {
 		return "", fmt.Errorf("notes: text exceeds the %d-byte editor limit", v1.MaxInputBytes)
 	}
-	if err := s.flushAllLocked(); err != nil {
-		return "", err
-	}
+	s.saveAllLocked()
 	if err := s.commitTitleLocked(); err != nil {
 		return "", err
 	}
@@ -324,6 +333,14 @@ func (s *Session) flushDocLocked(doc *Document) error {
 	}
 	doc.Disk, doc.Dirty, doc.Conflict, doc.Error, doc.Modified = doc.Body, false, "", "", s.now()
 	return nil
+}
+
+// saveAllLocked tries to save every document and leaves any failure on the
+// document itself, where its editor or sticky shows it.
+func (s *Session) saveAllLocked() {
+	for _, doc := range s.docs {
+		_ = s.flushDocLocked(doc)
+	}
 }
 
 func (s *Session) flushAllLocked() error {
@@ -484,9 +501,7 @@ func (s *Session) ConfirmDeleteName() (string, error) {
 	if name == "" {
 		return "", errors.New("notes: no delete is pending")
 	}
-	if err := s.flushAllLocked(); err != nil {
-		return "", err
-	}
+	s.saveAllLocked()
 	if err := s.store.Delete(name); err != nil {
 		return "", fmt.Errorf("notes: delete %s: %w", name, err)
 	}
@@ -498,13 +513,15 @@ func (s *Session) ConfirmDeleteName() (string, error) {
 	return name, nil
 }
 
+// Close is the panel closing, which is the title field's blur: a typed title
+// becomes a rename, then every note is saved.
 func (s *Session) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.store == nil {
 		return nil
 	}
-	return s.flushAllLocked()
+	return errors.Join(s.commitTitleLocked(), s.flushAllLocked())
 }
 
 func (s *Session) SetStore(store *Store) error {

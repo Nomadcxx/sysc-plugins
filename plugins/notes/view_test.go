@@ -247,3 +247,10 @@ func TestStickyDotsAreRingedSoTheyShowOnTheirOwnPaper(t *testing.T) {
 		}
 	}
 }
+
+func TestConflictedStickySaysWhereToResolveIt(t *testing.T) {
+	tree := StickyTree(Document{Name: "a.md", Dirty: true, Conflict: "theirs"}, "sun")
+	if findText(tree, "Changed elsewhere · resolve in Notes") == nil {
+		t.Fatal("a conflicted sticky must point at the panel, where Reload and Keep mine live")
+	}
+}

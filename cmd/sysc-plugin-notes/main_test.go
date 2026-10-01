@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,5 +104,55 @@ func TestStickyAndPanelShareOneDocument(t *testing.T) {
 	sess.Tick()
 	if snap := sess.Snap(); snap.Body != "from sticky" {
 		t.Fatalf("panel sees %q", snap.Body)
+	}
+}
+
+// fakeHost is a client whose host answers every call with an empty OK.
+func fakeHost(t *testing.T) *v1.Client {
+	t.Helper()
+	toPlugin, hostOut := io.Pipe()
+	hostIn, fromPlugin := io.Pipe()
+	c := v1.NewClient(toPlugin, fromPlugin)
+	go func() {
+		dec := json.NewDecoder(hostIn)
+		enc := json.NewEncoder(hostOut)
+		for {
+			var call struct {
+				ID string `json:"id"`
+			}
+			if err := dec.Decode(&call); err != nil {
+				return
+			}
+			_ = enc.Encode(map[string]any{"type": v1.TypeHostReply, "id": call.ID, "ok": true})
+		}
+	}()
+	go func() {
+		for {
+			if _, err := c.Recv(); err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() { hostOut.Close(); fromPlugin.Close() })
+	return c
+}
+
+func TestDeleteForgetsTheClosedStickies(t *testing.T) {
+	c := fakeHost(t)
+	views := map[string]view{"s1": {kind: v1.ViewFloating, name: "a.md"}, "p1": {kind: v1.ViewPanel}}
+	var pins []pinnedSurface
+	if err := closeDeleted(context.Background(), c, "a.md", views, &pins, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := views["s1"]; ok {
+		t.Fatal("a closed sticky stays in views, so the next snapshot reports the deleted file as an error")
+	}
+}
+
+func TestRetargetStickiesFollowsARename(t *testing.T) {
+	views := map[string]view{"s1": {kind: v1.ViewFloating, name: "a.md"}, "s2": {kind: v1.ViewFloating, name: "b.md"}}
+	retargetStickies(views, "a.md", "alpha.md")
+	if views["s1"].name != "alpha.md" || views["s2"].name != "b.md" {
+		t.Fatalf("views = %+v", views)
 	}
 }

@@ -245,3 +245,48 @@ func TestOpenScratchCreatesAndSelects(t *testing.T) {
 		t.Fatalf("selected %q", s.Selected())
 	}
 }
+
+func TestConflictOnOneNoteDoesNotBlockOthers(t *testing.T) {
+	s, now := testSession(t)
+	mustCreateNote(t, s, "a.md", "base")
+	mustCreateNote(t, s, "b.md", "other")
+	must(t, s.TypeNote("a.md", "typed in a sticky"))
+	must(t, s.store.Save("a.md", "changed in Obsidian"))
+	*now = now.Add(time.Second)
+	s.Tick()
+	must(t, s.Select("b.md"))
+	if _, err := s.CreateFromQuery(); err != nil {
+		t.Fatalf("a conflict on another note blocked create: %v", err)
+	}
+	must(t, s.Select("a.md"))
+	if snap := s.Snap(); !snap.Conflict || snap.Body != "typed in a sticky" {
+		t.Fatalf("the conflicted note must open with its text and banner: %+v", snap)
+	}
+}
+
+func TestSelectDropsCleanDocumentsItIsNotShowing(t *testing.T) {
+	s, now := testSession(t)
+	for _, n := range []string{"a.md", "b.md", "c.md"} {
+		mustCreateNote(t, s, n, n)
+		must(t, s.Select(n))
+	}
+	must(t, s.TypeNote("a.md", "unsaved"))
+	must(t, s.store.Save("a.md", "changed in Obsidian"))
+	*now = now.Add(time.Second)
+	s.Tick()
+	must(t, s.Select("b.md"))
+	if len(s.docs) != 2 || s.docs["a.md"] == nil || s.docs["b.md"] == nil {
+		t.Fatalf("docs kept = %v, want only the selected note and the one that cannot save", len(s.docs))
+	}
+}
+
+func TestCloseCommitsAPendingTitle(t *testing.T) {
+	s := newTestSession(t)
+	mustCreateNote(t, s, "a.md", "x")
+	must(t, s.Select("a.md"))
+	s.SetTitleDraft("alpha")
+	must(t, s.Close())
+	if _, _, err := s.store.Read("alpha.md"); err != nil {
+		t.Fatalf("closing the panel must commit the typed title: %v", err)
+	}
+}
