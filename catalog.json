@@ -313,20 +313,20 @@
       "id": "org.sysc.notes",
       "name": "Notes",
       "author": "Nomadcxx",
-      "description": "A quick notes editor in the bar panel that lists and autosaves markdown files to a folder.",
+      "description": "Markdown notes and pastel sticky notes for your Obsidian folder, with one box to search or start a note.",
       "category": "productivity",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
       "readme": {
-        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/notes-v1.0.0/plugins/notes/README.md",
-        "sha256": "34839e8b9e6684f0a13beaf9d3d554feb3207ef03e83fd4b0a50ae5b1cbc27d6"
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/notes-v1.1.0/plugins/notes/README.md",
+        "sha256": "0a7e86ed5812b257596df5ec4360f48127835124a80d3c351999763e816e5b05"
       },
       "added_at": "2026-09-29T04:04:41.093803063Z",
-      "updated_at": "2026-09-29T04:04:41.093803063Z",
-      "version": "1.0.0",
+      "updated_at": "2026-10-01T22:44:45.571876571Z",
+      "version": "1.1.0",
       "protocol": {
         "major": 1,
-        "minor": 8
+        "minor": 11
       },
       "capabilities": [
         "notifications",
@@ -341,17 +341,50 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.0.0/org.sysc.notes-1.0.0-linux-amd64.tar.gz",
-          "sha256": "886c57622bc21534bd6a24a99ce34e4ccbc3bd9f6d6eaa9af19bbbbe13ce4466",
-          "size": 2524874
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.1.0/org.sysc.notes-1.1.0-linux-amd64.tar.gz",
+          "sha256": "3a8fcc10a807e796dcf3d9ad7a886ae5105f5635578b0dfa0f54ba43b22634d9",
+          "size": 2610479
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.0.0/org.sysc.notes-1.0.0-linux-arm64.tar.gz",
-          "sha256": "26d235eaffe001dd47837a433c28f707c5e74bc17ebb3472073398b34e2ab62b",
-          "size": 2340539
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.1.0/org.sysc.notes-1.1.0-linux-arm64.tar.gz",
+          "sha256": "b0d549078f3776548e8b91d94033c74c11863ccabcf8abe141ecdf77dba1223e",
+          "size": 2418088
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/notes-v1.0.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/notes-v1.1.0",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "protocol": {
+            "major": 1,
+            "minor": 8
+          },
+          "capabilities": [
+            "notifications",
+            "panels",
+            "settings",
+            "state",
+            "floating_surfaces",
+            "clipboard-read"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.0.0/org.sysc.notes-1.0.0-linux-amd64.tar.gz",
+              "sha256": "886c57622bc21534bd6a24a99ce34e4ccbc3bd9f6d6eaa9af19bbbbe13ce4466",
+              "size": 2524874
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.0.0/org.sysc.notes-1.0.0-linux-arm64.tar.gz",
+              "sha256": "26d235eaffe001dd47837a433c28f707c5e74bc17ebb3472073398b34e2ab62b",
+              "size": 2340539
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/notes-v1.0.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.protonvpn",
