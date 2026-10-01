@@ -60,6 +60,33 @@ func TestViewsPassTheHostLint(t *testing.T) {
 	for _, f := range shelllint.Tree(BarTree(), v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight) {
 		t.Errorf("bar: %s", f)
 	}
+	for _, f := range shelllint.Tree(TooltipTree(), v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight) {
+		t.Errorf("tooltip: %s", f)
+	}
+}
+
+func TestTooltipIsReadOnlyText(t *testing.T) {
+	var ids []string
+	root := TooltipTree()
+	buttonIDs(root, &ids)
+	if len(ids) != 0 {
+		t.Fatalf("a tooltip holds buttons %v; the host rejects that", ids)
+	}
+	if !hasTextNode(root, "Screenshot") {
+		t.Fatalf("tooltip does not say what the button is: %+v", root)
+	}
+}
+
+func hasTextNode(n *v1.Node, text string) bool {
+	if n.Kind == v1.KindText && n.Text == text {
+		return true
+	}
+	for _, c := range n.Children {
+		if hasTextNode(c, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestShortenPath(t *testing.T) {

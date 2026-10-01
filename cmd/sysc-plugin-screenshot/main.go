@@ -65,9 +65,12 @@ func run(in io.Reader, out io.Writer) error {
 
 	snapshot := func(id string, v *view) {
 		var root *v1.Node
-		if v.kind == v1.ViewBar {
+		switch v.kind {
+		case v1.ViewBar:
 			root = screenshot.BarTree()
-		} else {
+		case v1.ViewTooltip:
+			root = screenshot.TooltipTree()
+		default:
 			root = screenshot.PanelTree(launcher.Model())
 		}
 		if err := c.Snapshot(id, v.rev+1, root); err == nil {
@@ -107,7 +110,7 @@ func run(in io.Reader, out io.Writer) error {
 				v := &view{kind: m.View, instance: m.Instance}
 				views[m.ViewID] = v
 				snapshot(m.ViewID, v)
-				if m.View != v1.ViewBar {
+				if m.View == v1.ViewPanel {
 					go func() {
 						cctx, cancelCall := context.WithTimeout(ctx, callTimeout)
 						defer cancelCall()

@@ -158,3 +158,25 @@ func TestPanelReadsTheDirectoryAndDrawsItsCaption(t *testing.T) {
 		t.Fatalf("directory call %v, caption drawn %v; want both", sawDirectoryCall, sawCaption)
 	}
 }
+
+// The shell opens a tooltip view for every bar widget, and rejects one that
+// holds a control. It was found live: the panel tree was answered to it.
+func TestTooltipViewGetsReadOnlyText(t *testing.T) {
+	h := startPlugin(t)
+	h.send(&v1.ViewOpen{ViewID: "t1", View: v1.ViewTooltip, Entry: "bar", Output: "eDP-1", Width: shelllint.TooltipWidth, Height: shelllint.TooltipHeight})
+	snap, ok := h.next(time.Second).(*v1.ViewSnapshot)
+	if !ok {
+		t.Fatal("no tooltip snapshot")
+	}
+	for _, f := range shelllint.Tree(snap.Root, v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight) {
+		t.Errorf("tooltip snapshot: %s", f)
+	}
+	if hasButton(snap.Root, "region") || hasButton(snap.Root, "close") {
+		t.Fatalf("a tooltip carries panel controls: %+v", snap.Root)
+	}
+	if m := h.next(300 * time.Millisecond); m != nil {
+		if _, isCall := m.(*v1.HostCall); isCall {
+			t.Fatalf("a tooltip view triggered a host call: %#v", m)
+		}
+	}
+}

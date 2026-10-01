@@ -35,6 +35,13 @@ func BarTree() *v1.Node {
 	}}}
 }
 
+// TooltipTree is read-only text: the host rejects a control in a tooltip.
+func TooltipTree() *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, Padding: 8, Children: []*v1.Node{
+		{Kind: v1.KindText, Text: "Screenshot"},
+	}}
+}
+
 func row(id, text, icon string) *v1.Node {
 	return &v1.Node{
 		Kind: v1.KindButton, ID: id, Key: id, Icon: icon, Text: text,
