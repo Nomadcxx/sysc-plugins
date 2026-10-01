@@ -12,7 +12,7 @@ import (
 
 const (
 	panelW = 360
-	panelH = 320
+	panelH = 260
 )
 
 func buttonIDs(n *v1.Node, out *[]string) {

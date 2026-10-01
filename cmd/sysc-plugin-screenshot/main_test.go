@@ -132,7 +132,7 @@ func TestBarShowsOneButtonAndItOpensThePanel(t *testing.T) {
 
 func TestPanelReadsTheDirectoryAndDrawsItsCaption(t *testing.T) {
 	h := startPlugin(t)
-	h.send(&v1.ViewOpen{ViewID: "p1", View: v1.ViewPanel, Entry: "panel", Output: "eDP-1", Width: 360, Height: 320})
+	h.send(&v1.ViewOpen{ViewID: "p1", View: v1.ViewPanel, Entry: "panel", Output: "eDP-1", Width: 360, Height: 260})
 
 	var sawDirectoryCall, sawCaption bool
 	deadline := time.Now().Add(2 * time.Second)
@@ -146,7 +146,7 @@ func TestPanelReadsTheDirectoryAndDrawsItsCaption(t *testing.T) {
 			raw, _ := json.Marshal(v1.ScreenshotDirectoryResult{Directory: "/home/u/Pictures/Screenshots"})
 			h.send(&v1.HostReply{ID: m.ID, OK: true, Result: raw})
 		case *v1.ViewSnapshot:
-			for _, f := range shelllint.Tree(m.Root, v1.ViewPanel, 360, 320) {
+			for _, f := range shelllint.Tree(m.Root, v1.ViewPanel, 360, 260) {
 				t.Errorf("panel snapshot: %s", f)
 			}
 			if hasText(m.Root, "/home/u/Pictures/Screenshots") {

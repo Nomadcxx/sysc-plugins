@@ -10,6 +10,6 @@
   "requires": {"commands": []},
   "services": [{"id": "screenshot"}],
   "widgets": [{"id": "bar", "settings": []}],
-  "panels": [{"id": "panel", "width": 360, "height": 320, "placement": "attached"}],
+  "panels": [{"id": "panel", "width": 360, "height": 260, "placement": "attached"}],
   "settings": []
 }
