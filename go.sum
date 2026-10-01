@@ -1,5 +1,5 @@
-github.com/Nomadcxx/sysc-shell v0.0.0-20260929042114-44f14a32b2e9 h1:bF9sgJtNEh+Mh2GuNblWZMaFmmj2ikxk7e1K3OtPO7s=
-github.com/Nomadcxx/sysc-shell v0.0.0-20260929042114-44f14a32b2e9/go.mod h1:M1myQ61M1sGLlp7K8yBEeKGUX4jm1psqHUSdwPOKytg=
+github.com/Nomadcxx/sysc-shell v0.0.0-20261001072030-1908fc5cd30c h1:49yEbBmUcLtov/tsbDQAZYSlrNo2F0ehhW2iAHY1PPw=
+github.com/Nomadcxx/sysc-shell v0.0.0-20261001072030-1908fc5cd30c/go.mod h1:8vtr7tYJOFqtQTgDoRdmoRn8rrl+MLxyBPr81W2iEC0=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/go-text/typesetting v0.3.5-0.20260729084153-ddb7ff96ad4d h1:eBCCzHDJ79YDC3G7fnGuBbA/o+aEl0hSgRZYVbKzYsk=
