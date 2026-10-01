@@ -43,6 +43,9 @@ func TestHostRulesMirrored(t *testing.T) {
 		{"shortcuts_need_minor8", "", 7, `["panels"]`, "shortcuts require protocol minor 8"},
 		{"hostcall_needs_capability", "CallSurfaceOpen", 8, `["panels"]`, `capability "floating_surfaces" is not granted`},
 		{"granted_and_new_enough", "CallSurfaceOpen", 8, `["panels", "floating_surfaces"]`, ""},
+		{"screenshot_needs_capability", "CallScreenshotStart", 10, `["panels"]`, `capability "screenshot" is not granted`},
+		{"screenshot_directory_needs_capability", "CallScreenshotDirectory", 10, `["panels"]`, `capability "screenshot" is not granted`},
+		{"screenshot_granted", "CallScreenshotStart", 10, `["panels", "screenshot"]`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
