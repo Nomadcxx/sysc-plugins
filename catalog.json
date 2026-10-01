@@ -435,6 +435,42 @@
       "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screen-recorder-v1.0.0"
     },
     {
+      "id": "org.sysc.screenshot",
+      "name": "Screenshot",
+      "author": "Nomadcxx",
+      "description": "Takes a region, window or screen screenshot from a bar button, using the shell's own capture engine.",
+      "category": "media",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "added_at": "2026-10-01T07:33:47.825338184Z",
+      "updated_at": "2026-10-01T07:33:47.825338184Z",
+      "version": "1.0.0",
+      "protocol": {
+        "major": 1,
+        "minor": 10
+      },
+      "capabilities": [
+        "panels",
+        "screenshot"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screenshot-v1.0.0/org.sysc.screenshot-1.0.0-linux-amd64.tar.gz",
+          "sha256": "c57d9023d25aef2b586328952829beb4752990d4c76f45f5fbf966bdc598626f",
+          "size": 2248836
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screenshot-v1.0.0/org.sysc.screenshot-1.0.0-linux-arm64.tar.gz",
+          "sha256": "4cf158a0937b723ca883827f128866d56df78df74cd971f068645909f8640b94",
+          "size": 2077471
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screenshot-v1.0.0"
+    },
+    {
       "id": "org.sysc.timer",
       "name": "Pomodoro Timer",
       "author": "Nomadcxx",
