@@ -17,38 +17,40 @@ import (
 func TestPluginNotesGateCreateEditAutosaveRenameFavoriteDelete(t *testing.T) {
 	h := startNotes(t)
 	h.openPanel()
-	h.click("new")
-	h.waitNode(func(n *v1.Node) bool { return findID(n, "body") != nil })
-	title := nodeText(h.lastRoot(), "title")
-	if title == "" {
-		t.Fatal("create left no title")
-	}
+	// Enter with no match creates a note named after the search text.
+	h.change("omnibox", "Groceries")
+	h.submit("omnibox", "Groceries")
+	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "title") == "Groceries" })
+	waitFile(t, filepath.Join(h.notes, "Groceries.md"), "Groceries\n")
+
 	h.change("body", "c")
 	h.change("body", "ca")
 	h.change("body", "café")
-	name := title + ".md"
-	waitFile(t, filepath.Join(h.notes, name), "café")
+	waitFile(t, filepath.Join(h.notes, "Groceries.md"), "café")
 
+	// A title draft is committed when another note is picked.
 	h.change("title", "kept")
-	h.submit("title", "kept")
+	h.click("scratch")
 	waitFile(t, filepath.Join(h.notes, "kept.md"), "café")
+	if _, err := os.Stat(filepath.Join(h.notes, "Groceries.md")); !os.IsNotExist(err) {
+		t.Fatalf("rename left the old file: %v", err)
+	}
 
-	h.click("back")
-	favoriteID := "fav:" + notes.Token("kept.md")
-	h.waitNode(func(n *v1.Node) bool { return findID(n, favoriteID) != nil })
-	h.click(favoriteID)
+	openID := "open:" + notes.Token("kept.md")
+	h.waitNode(func(n *v1.Node) bool { return findID(n, openID) != nil })
+	h.click(openID)
+	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "body") == "café" })
+	h.click("favorite")
 	h.waitNode(func(n *v1.Node) bool {
-		button := findID(n, favoriteID)
-		return button != nil && button.Text == "★"
+		button := findID(n, "favorite")
+		return button != nil && button.Name == "Unfavourite" && findID(n, "pinned-heading") != nil
 	})
 	waitPinned(t, h.notes, "kept.md")
 
-	h.click("open:" + notes.Token("kept.md"))
-	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "body") == "café" })
-	h.click("delete-current")
+	h.click("delete")
 	h.waitNode(func(n *v1.Node) bool { return findID(n, "confirm-delete") != nil })
 	h.click("confirm-delete")
-	h.waitNode(func(n *v1.Node) bool { return findID(n, "new") != nil && findID(n, "open:kept.md") == nil })
+	h.waitNode(func(n *v1.Node) bool { return findID(n, openID) == nil && findID(n, "body") == nil })
 	if _, err := os.Stat(filepath.Join(h.notes, "kept.md")); !os.IsNotExist(err) {
 		t.Fatalf("delete left the file: %v", err)
 	}
@@ -64,8 +66,6 @@ func TestPluginNotesGateImportsClipboardAndAcceptsLauncherCapture(t *testing.T) 
 		t.Fatal("clipboard import action missing despite the granted capability")
 	}
 	h.click("clipboard-import")
-	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "capture") == "Imported from the clipboard" })
-	h.click("capture-save")
 	root := h.waitNode(func(n *v1.Node) bool { return nodeText(n, "body") == "Imported from the clipboard" })
 	waitFile(t, filepath.Join(h.notes, nodeText(root, "title")+".md"), "Imported from the clipboard")
 
@@ -91,7 +91,7 @@ func TestPluginNotesGateExternalChangeAndReadOnly(t *testing.T) {
 	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "body") == "disk" })
 
 	h.change("body", "typed")
-	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "save-state") == "Unsaved changes · autosaving" })
+	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "save-state") == "Saving…" })
 	if err := os.WriteFile(path, []byte("other"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestPluginNotesGateExternalChangeAndReadOnly(t *testing.T) {
 	h.waitNode(func(n *v1.Node) bool { return findID(n, "reload") == nil && nodeText(n, "body") == "typed" })
 
 	h.change("body", "kept")
-	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "save-state") == "Unsaved changes · autosaving" })
+	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "save-state") == "Saving…" })
 	if err := os.Chmod(h.notes, 0o555); err != nil {
 		t.Fatal(err)
 	}
@@ -224,8 +224,8 @@ func startNotes(t *testing.T) *notesHost {
 		}
 	}()
 	if err := h.send(&v1.HostHello{
-		Supported:    []v1.Version{{Major: 1, Minor: 8}},
-		Plugin:       v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.0.0"},
+		Supported:    []v1.Version{{Major: 1, Minor: 11}},
+		Plugin:       v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.1.0"},
 		Capabilities: []string{"notifications", "panels", "settings", "state", "clipboard-read"},
 		Limits:       v1.DefaultLimits,
 	}); err != nil {
@@ -261,12 +261,12 @@ func (h *notesHost) send(m v1.Message) error {
 func (h *notesHost) openPanel() {
 	h.t.Helper()
 	h.mu.Lock()
-	h.slots = recordSlot(h.slots, "panel-1", viewSlot{v1.ViewPanel, 420, 800})
+	h.slots = recordSlot(h.slots, "panel-1", viewSlot{v1.ViewPanel, notes.PanelWidth, notes.PanelHeight})
 	h.mu.Unlock()
-	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Output: "DP-1", Width: 420, Height: 800}); err != nil {
+	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Output: "DP-1", Width: notes.PanelWidth, Height: notes.PanelHeight}); err != nil {
 		h.t.Fatal(err)
 	}
-	h.waitNode(func(n *v1.Node) bool { return findID(n, "new") != nil })
+	h.waitNode(func(n *v1.Node) bool { return findID(n, "omnibox") != nil })
 }
 
 func (h *notesHost) click(id string) {
