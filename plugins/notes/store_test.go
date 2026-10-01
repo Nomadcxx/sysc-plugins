@@ -4,8 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestStoreSearchFavoritesAndDirectChildren(t *testing.T) {
@@ -254,5 +256,90 @@ func TestRenameAndConfirmedDelete(t *testing.T) {
 	}
 	if _, _, err := s.Read(name); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("deleted note still exists: %v", err)
+	}
+}
+
+func openTestStore(t *testing.T) *Store {
+	t.Helper()
+	s, err := Open(t.TempDir(), "md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func mustCreate(t *testing.T, s *Store, name, body string) {
+	t.Helper()
+	if err := s.Create(name, body); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDisplayTitleUsesFirstLineForCaptureNames(t *testing.T) {
+	cases := map[[2]string]string{
+		{"note-2026-10-01-091233.md", "\n# Call back about the lease\nbody"}: "Call back about the lease",
+		{"note-2026-10-01-091233-02.md", ""}:                                 "note-2026-10-01-091233-02",
+		{"Weekly review.md", "# Something else"}:                             "Weekly review",
+	}
+	for in, want := range cases {
+		if got := displayTitle(in[0], in[1]); got != want {
+			t.Errorf("displayTitle(%q) = %q, want %q", in[0], got, want)
+		}
+	}
+}
+
+func TestListShowsDisplayTitlesAndWordCounts(t *testing.T) {
+	s := openTestStore(t)
+	mustCreate(t, s, "note-2026-10-01-091233.md", "Call back\nabout the lease")
+	items, err := s.List("", false)
+	if err != nil || len(items) != 1 || items[0].Title != "Call back" || items[0].Words != 5 {
+		t.Fatalf("items = %+v, %v", items, err)
+	}
+}
+
+func TestCreateTitledNamesTheFileAfterTheTitle(t *testing.T) {
+	s := openTestStore(t)
+	name, err := s.CreateTitled("Groceries", "Groceries\n")
+	if err != nil || name != "Groceries.md" {
+		t.Fatalf("got %q, %v", name, err)
+	}
+	name, err = s.CreateTitled("Groceries", "")
+	if err != nil || name != "Groceries 2.md" {
+		t.Fatalf("collision got %q, %v", name, err)
+	}
+}
+
+func TestCreateTitledSanitisesHostileTitles(t *testing.T) {
+	s := openTestStore(t)
+	for _, title := range []string{"../escape", "a/b\\c:d", "   ", ".hidden", strings.Repeat("x", 300), strings.Repeat("é", 100)} {
+		name, err := s.CreateTitled(title, "")
+		if err != nil {
+			t.Fatalf("%q: %v", title, err)
+		}
+		if strings.ContainsAny(name, `/\:`) || strings.HasPrefix(name, ".") || len(name) > 84 || !utf8.ValidString(name) {
+			t.Errorf("%q produced unsafe name %q", title, name)
+		}
+	}
+}
+
+func TestListRereadsOnlyChangedFiles(t *testing.T) {
+	s := openTestStore(t)
+	mustCreate(t, s, "a.md", "alpha")
+	if _, err := s.List("", false); err != nil {
+		t.Fatal(err)
+	}
+	reads := s.bodyReads
+	if _, err := s.List("", false); err != nil {
+		t.Fatal(err)
+	}
+	if s.bodyReads != reads {
+		t.Fatalf("unchanged folder re-read %d bodies", s.bodyReads-reads)
+	}
+	if err := s.Save("a.md", "alpha beta gamma"); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := s.List("gamma", false)
+	if len(items) != 1 || s.bodyReads != reads+1 {
+		t.Fatalf("changed file not re-read: items %d reads %d", len(items), s.bodyReads-reads)
 	}
 }
