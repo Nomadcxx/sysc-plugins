@@ -2,7 +2,7 @@
   "schema": 1,
   "id": "org.sysc.notes",
   "name": "Notes",
-  "description": "A quick notes editor in the bar panel that lists and autosaves markdown files to a folder.",
+  "description": "Markdown notes and pastel sticky notes for your Obsidian folder, with one box to search or start a note.",
   "version": "1.0.0",
   "protocol": {"major": 1, "minor": 8},
   "exec": "bin/sysc-plugin-notes",
@@ -10,7 +10,7 @@
   "requires": {"commands": []},
   "services": [{"id": "notes"}],
   "widgets": [{"id": "bar", "settings": []}],
-  "panels": [{"id": "panel", "width": 420, "height": 800, "placement": "attached"}],
+  "panels": [{"id": "panel", "width": 760, "height": 540, "placement": "attached"}],
   "settings": [
     {"key": "notes_dir", "type": "folder", "label": "Notes directory", "default": "~/Documents/Notes"},
     {"key": "extension", "type": "string", "label": "Extension", "default": "md"}

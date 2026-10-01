@@ -6,113 +6,189 @@ import (
 	"testing"
 	"time"
 
-	lint "github.com/Nomadcxx/sysc-shell/plugin/lint"
+	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-func TestManagerAndEditorFitTheNotesPanel(t *testing.T) {
-	longTitle := strings.Repeat("A very long Obsidian note title ", 8)
-	summary := Snapshot{
-		Notes: []Summary{{Name: longTitle + ".md", Title: longTitle, Preview: strings.Repeat("Useful preview text ", 12), Modified: time.Now(), Favorite: true}},
+var viewNow = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+
+func findByID(n *v1.Node, id string) *v1.Node {
+	if n == nil {
+		return nil
 	}
-	states := []Snapshot{
-		{},
-		{ScanError: "The configured notes folder cannot be read"},
-		{Query: "no match"},
-		summary,
-		{Selected: "long.md", Title: "A long note", Body: strings.Repeat("Markdown line\n", 120), Dirty: true},
-		{Selected: "conflict.md", Title: "Conflict", Conflict: true, ConflictBody: "external body", PendingDelete: "conflict.md", SaveError: "The file is read-only", ScanError: "Sticky notes need on-demand layer-shell focus"},
+	if n.ID == id {
+		return n
 	}
-	for i, state := range states {
-		if findings := lint.Tree(PanelTree(state, true), v1.ViewPanel, 420, 800); len(findings) != 0 {
-			t.Errorf("state %d does not fit: %v", i, findings)
+	for _, c := range n.Children {
+		if f := findByID(c, id); f != nil {
+			return f
+		}
+	}
+	return nil
+}
+
+func findText(n *v1.Node, text string) *v1.Node {
+	if n == nil {
+		return nil
+	}
+	if n.Text == text {
+		return n
+	}
+	for _, c := range n.Children {
+		if f := findText(c, text); f != nil {
+			return f
+		}
+	}
+	return nil
+}
+
+func panelFixtures() map[string]Snapshot {
+	notes := []Summary{
+		{Name: "Weekly review.md", Title: "Weekly review", Preview: "Ship notes redesign", Modified: viewNow.Add(-20 * time.Minute), Favorite: true},
+		{Name: "x.md", Title: strings.Repeat("Unbroken", 30), Preview: strings.Repeat("y", 400), Modified: viewNow.Add(-50 * time.Hour)},
+		{Name: "scratchpad.md", Title: "scratchpad", Preview: "loose ends", Modified: viewNow},
+	}
+	sel := Snapshot{Notes: notes, Selected: "Weekly review.md", Title: "Weekly review", Body: "# Weekly review", Words: 3, Modified: viewNow, Favorite: true, Now: viewNow}
+	conflict, del, dirty, failed := sel, sel, sel, sel
+	conflict.Conflict, conflict.SaveError = true, "This note changed outside Notes"
+	del.PendingDelete = "Weekly review.md"
+	dirty.Dirty = true
+	failed.SaveError = "Save failed: " + strings.Repeat("permission denied ", 10)
+	long := sel
+	long.Title = strings.Repeat("A very long note title ", 12)
+	return map[string]Snapshot{
+		"empty":    {Now: viewNow},
+		"library":  {Notes: notes, Now: viewNow},
+		"selected": sel, "conflict": conflict, "delete": del, "dirty": dirty, "failed": failed, "long-title": long,
+		"notice":  {Notes: notes, Notice: "The clipboard has no plain text", Now: viewNow},
+		"scan":    {ScanError: "notes: scan folder: permission denied", Now: viewNow},
+		"search":  {Query: "nothing", Now: viewNow},
+		"sort-az": {Notes: notes, SortByName: true, Now: viewNow},
+	}
+}
+
+func TestPanelFitsEveryState(t *testing.T) {
+	for name, snap := range panelFixtures() {
+		for _, clip := range []bool{true, false} {
+			for _, f := range shelllint.Tree(PanelTree(snap, clip), v1.ViewPanel, PanelWidth, PanelHeight) {
+				t.Errorf("%s clip=%v: %s", name, clip, f)
+			}
 		}
 	}
 }
 
-func TestStickyTreeUsesSelectedColorAndPinStateAndFits(t *testing.T) {
-	doc := Document{Name: "Planning.md", Body: "Write the first draft"}
-	root := StickyTree(doc, "mint", true)
-	if root.Fill != "note-mint" {
-		t.Fatalf("sticky fill = %q", root.Fill)
+func TestBarAndTooltipFit(t *testing.T) {
+	for _, f := range shelllint.Tree(BarTree(), v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight) {
+		t.Errorf("bar: %s", f)
 	}
-	if findings := lint.Tree(root, v1.ViewFloating, 380, 500); len(findings) != 0 {
-		t.Fatalf("sticky does not fit: %v", findings)
+	for _, tip := range []*v1.Node{TooltipTree(12, viewNow.Add(-time.Hour), viewNow), TooltipTree(0, time.Time{}, viewNow)} {
+		for _, f := range shelllint.Tree(tip, v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight) {
+			t.Errorf("tooltip: %s", f)
+		}
 	}
-	if got := root.Children[2].Children[0].Text; got != "Always on top" {
-		t.Fatalf("pin status = %q", got)
-	}
-	if got := root.Children[0].Children[1].Name; got != "Mint note color (selected)" {
-		t.Errorf("selected color name = %q", got)
+	if findText(TooltipTree(12, viewNow.Add(-time.Hour), viewNow), "12 notes · last edited 1h ago") == nil {
+		t.Error("tooltip must say how many notes and when one last changed")
 	}
 }
 
-func TestManagerOnlyShowsClipboardImportWhenGranted(t *testing.T) {
-	for _, tc := range []struct {
-		granted bool
-		want    bool
-	}{{false, false}, {true, true}} {
-		root := PanelTree(Snapshot{}, tc.granted)
-		found := false
-		var walk func(*v1.Node)
-		walk = func(n *v1.Node) {
-			if n == nil {
-				return
-			}
-			if n.ID == "clipboard-import" {
-				found = true
-			}
-			for _, child := range n.Children {
-				walk(child)
-			}
-		}
-		walk(root)
-		if found != tc.want {
-			t.Errorf("clipboard import found=%v with grant=%v", found, tc.granted)
-		}
-		if findings := lint.Tree(root, v1.ViewPanel, 420, 800); len(findings) != 0 {
-			t.Errorf("clipboard grant=%v layout: %v", tc.granted, findings)
-		}
+func TestNoticeDoesNotHideLibrary(t *testing.T) {
+	tree := PanelTree(panelFixtures()["notice"], false)
+	if findByID(tree, "notice-dismiss") == nil || findByID(tree, "open:"+Token("Weekly review.md")) == nil {
+		t.Fatal("notice must sit above a visible library")
 	}
 }
 
-func TestManagerLargeLibraryStaysWithinPluginTreeLimits(t *testing.T) {
-	items := make([]Summary, 120)
+func TestSelectedRowIsMarkedAndEditorShown(t *testing.T) {
+	tree := PanelTree(panelFixtures()["selected"], false)
+	row := findByID(tree, "open:"+Token("Weekly review.md"))
+	if row.Fill != "chip" || row.Stroke != 1 {
+		t.Errorf("selected row fill %q stroke %d", row.Fill, row.Stroke)
+	}
+	if findByID(tree, "body") == nil || findByID(tree, "favorite").Icon != "star" {
+		t.Error("editor or favourite action missing")
+	}
+	if findText(tree, "3 words · edited Just now") == nil {
+		t.Error("footer must show word count and age")
+	}
+}
+
+func TestEmptySelectionShowsGuidance(t *testing.T) {
+	tree := PanelTree(panelFixtures()["library"], false)
+	if findByID(tree, "body") != nil || findText(tree, "No note open") == nil {
+		t.Fatal("unselected panel must show the empty editor state")
+	}
+}
+
+func TestScratchpadIsFirstAndNotRepeated(t *testing.T) {
+	tree := PanelTree(panelFixtures()["library"], false)
+	list := findByID(tree, "library")
+	if list.Children[0].ID != "scratch" {
+		t.Fatalf("first library row = %q, want scratch", list.Children[0].ID)
+	}
+	if findByID(tree, "open:"+Token("scratchpad.md")) != nil {
+		t.Fatal("the scratchpad must not appear again among the notes")
+	}
+}
+
+func TestClipboardButtonOnlyWhenGranted(t *testing.T) {
+	if findByID(PanelTree(Snapshot{}, false), "clipboard-import") != nil {
+		t.Fatal("paste offered without clipboard access")
+	}
+	if findByID(PanelTree(Snapshot{}, true), "clipboard-import") == nil {
+		t.Fatal("paste missing with clipboard access")
+	}
+}
+
+func TestOmniboxIsTheHostSearchField(t *testing.T) {
+	box := findByID(PanelTree(Snapshot{Query: "lease"}, false), "omnibox")
+	if box == nil || box.Name != "Search" || box.Text != "lease" || box.Padding == 0 {
+		t.Fatalf("omnibox = %+v", box)
+	}
+}
+
+func TestEmptySearchOffersToCreate(t *testing.T) {
+	if findText(PanelTree(panelFixtures()["search"], false), "No matches · Enter creates “nothing”") == nil {
+		t.Fatal("a search with no matches must say Enter creates it")
+	}
+}
+
+func TestLargeLibraryStaysWithinTreeLimits(t *testing.T) {
+	items := make([]Summary, 300)
 	for i := range items {
-		items[i] = Summary{Name: fmt.Sprintf("note-%03d.md", i), Title: fmt.Sprintf("Note %03d", i), Favorite: i < 60}
+		items[i] = Summary{Name: fmt.Sprintf("note-%03d.md", i), Title: fmt.Sprintf("Note %03d", i), Favorite: i < 40}
 	}
-	root := PanelTree(Snapshot{Notes: items}, false)
+	root := PanelTree(Snapshot{Notes: items, Now: viewNow}, false)
 	if err := v1.Validate(root, v1.ViewPanel); err != nil {
-		t.Fatalf("large manager tree exceeds protocol limits: %v", err)
+		t.Fatalf("large library exceeds protocol limits: %v", err)
 	}
-	var cards, notices int
-	var walk func(*v1.Node)
-	walk = func(n *v1.Node) {
-		if n == nil {
-			return
-		}
-		if strings.HasPrefix(n.Key, "note:") {
-			cards++
-		}
-		if n.ID == "favorites-more" || n.ID == "recent-more" {
-			notices++
-		}
-		for _, child := range n.Children {
-			walk(child)
+	if findText(root, fmt.Sprintf("Showing %d of 300 · search to narrow", maxRows)) == nil {
+		t.Fatal("a truncated library must say so")
+	}
+}
+
+// realTextHeight is what the system faces measure a label at; shelllint's
+// fixed 16px metric passes rows the live shell refuses.
+const realTextHeight = 20
+
+func rowsLeaveRoomForRealText(t *testing.T, name string, n *v1.Node) {
+	t.Helper()
+	if n == nil {
+		return
+	}
+	if n.Kind == v1.KindRow && n.Height > 0 {
+		for _, c := range n.Children {
+			if c.Kind == v1.KindText && n.Height-2*n.Padding < realTextHeight {
+				t.Errorf("%s: row %q holds text %q in %dpx", name, n.ID, c.Text, n.Height-2*n.Padding)
+			}
 		}
 	}
-	walk(root)
-	if cards != 120 || notices != 0 {
-		t.Fatalf("large manager showed %d cards and %d limit notices", cards, notices)
+	for _, c := range n.Children {
+		rowsLeaveRoomForRealText(t, name, c)
 	}
-	items = append(items, Summary{Name: "overflow.md", Title: "Overflow"})
-	root = PanelTree(Snapshot{Notes: items}, false)
-	if err := v1.Validate(root, v1.ViewPanel); err != nil {
-		t.Fatalf("manager with a truncated section exceeds protocol limits: %v", err)
-	}
-	cards, notices = 0, 0
-	walk(root)
-	if cards != 120 || notices != 1 {
-		t.Fatalf("truncated manager showed %d cards and %d limit notices", cards, notices)
+}
+
+func TestPanelRowsLeaveRoomForRealText(t *testing.T) {
+	for name, snap := range panelFixtures() {
+		rowsLeaveRoomForRealText(t, name, PanelTree(snap, true))
 	}
 }
