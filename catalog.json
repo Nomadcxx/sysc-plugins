@@ -318,12 +318,12 @@
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
       "readme": {
-        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/notes-v1.1.0/plugins/notes/README.md",
-        "sha256": "0a7e86ed5812b257596df5ec4360f48127835124a80d3c351999763e816e5b05"
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/notes-v1.2.0/plugins/notes/README.md",
+        "sha256": "7f0bf43b731d253c02554e95c41c3e3a45cd9db019e5267456bc7386c05f43de"
       },
       "added_at": "2026-09-29T04:04:41.093803063Z",
-      "updated_at": "2026-10-01T22:44:45.571876571Z",
-      "version": "1.1.0",
+      "updated_at": "2026-10-01T23:16:55.076892246Z",
+      "version": "1.2.0",
       "protocol": {
         "major": 1,
         "minor": 11
@@ -341,18 +341,49 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.1.0/org.sysc.notes-1.1.0-linux-amd64.tar.gz",
-          "sha256": "3a8fcc10a807e796dcf3d9ad7a886ae5105f5635578b0dfa0f54ba43b22634d9",
-          "size": 2610479
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.2.0/org.sysc.notes-1.2.0-linux-amd64.tar.gz",
+          "sha256": "84ac0f463cc1beb982c4953b9512aa98e0327dab0a5aac285da12d82b5e269b3",
+          "size": 2619522
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.1.0/org.sysc.notes-1.1.0-linux-arm64.tar.gz",
-          "sha256": "b0d549078f3776548e8b91d94033c74c11863ccabcf8abe141ecdf77dba1223e",
-          "size": 2418088
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.2.0/org.sysc.notes-1.2.0-linux-arm64.tar.gz",
+          "sha256": "e6c6bd3f080b4f79091e3e9467cea7f529f7d69f25bde5d7b6a03482f986209a",
+          "size": 2425903
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/notes-v1.1.0",
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/notes-v1.2.0",
       "releases": [
+        {
+          "version": "1.1.0",
+          "protocol": {
+            "major": 1,
+            "minor": 11
+          },
+          "capabilities": [
+            "notifications",
+            "panels",
+            "settings",
+            "state",
+            "floating_surfaces",
+            "clipboard-read"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.1.0/org.sysc.notes-1.1.0-linux-amd64.tar.gz",
+              "sha256": "3a8fcc10a807e796dcf3d9ad7a886ae5105f5635578b0dfa0f54ba43b22634d9",
+              "size": 2610479
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.1.0/org.sysc.notes-1.1.0-linux-arm64.tar.gz",
+              "sha256": "b0d549078f3776548e8b91d94033c74c11863ccabcf8abe141ecdf77dba1223e",
+              "size": 2418088
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/notes-v1.1.0"
+        },
         {
           "version": "1.0.0",
           "protocol": {
