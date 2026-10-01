@@ -41,8 +41,16 @@ func TestStoreSearchFavoritesAndDirectChildren(t *testing.T) {
 	if err := os.Symlink(filepath.Join(t.TempDir(), "outside"), filepath.Join(s.Dir, "link.md")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.List("", false); err == nil {
-		t.Fatal("symlink note was silently followed or ignored")
+	// A link is never followed and never listed, but it is counted, not
+	// ignored, and it does not blank the rest of the library.
+	items, err = s.List("", false)
+	if err != nil || len(items) != 2 || s.Skipped() != 1 {
+		t.Fatalf("with a link: items %d, skipped %d, err %v", len(items), s.Skipped(), err)
+	}
+	for _, it := range items {
+		if it.Name == "link.md" {
+			t.Fatal("symlink note was followed")
+		}
 	}
 	if err := s.Delete("../outside.md"); err == nil {
 		t.Fatal("path traversal was accepted")
@@ -352,5 +360,45 @@ func TestListRereadsOnlyChangedFiles(t *testing.T) {
 	items, _ := s.List("gamma", false)
 	if len(items) != 1 || s.bodyReads != reads+1 {
 		t.Fatalf("changed file not re-read: items %d reads %d", len(items), s.bodyReads-reads)
+	}
+}
+
+// A rewrite of the same size inside one coarse mtime tick must not leave the
+// library showing the old text: the change time still moves.
+func TestListCacheSeesASameSizeRewrite(t *testing.T) {
+	st, err := Open(t.TempDir(), "md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(st.Dir, "a.md")
+	if err := os.WriteFile(path, []byte("aaaa"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(path)
+	if _, err := st.List("", false); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(path, []byte("bbbb"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	items, err := st.List("", false)
+	if err != nil || len(items) != 1 || items[0].Preview != "bbbb" {
+		t.Fatalf("list = %+v %v, want the rewritten text", items, err)
+	}
+}
+
+func TestDisplayTitleForStickies(t *testing.T) {
+	for name, want := range map[string]string{
+		"scratchpad.md":             ScratchpadTitle,
+		"Groceries.md":              "Groceries",
+		"note-2026-10-01-123809.md": "Call the plumber",
+	} {
+		if got := DisplayTitle(name, "\n# Call the plumber\nmore"); got != want {
+			t.Errorf("DisplayTitle(%q) = %q, want %q", name, got, want)
+		}
 	}
 }

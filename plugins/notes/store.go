@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -28,16 +29,37 @@ type Store struct {
 	favorites map[string]bool
 	now       func() time.Time
 	// cache holds what List derived from each note, keyed by name and valid
-	// while the file's size and modification time are unchanged, so an open
-	// panel does not re-read every body on each refresh.
+	// while the file's stamp is unchanged, so an open panel does not re-read
+	// every body on each refresh. lower is the searchable text; search needs
+	// the whole body, and a note is capped at maxNoteBytes.
 	cache map[string]listEntry
 	// bodyReads counts note bodies List actually read, for tests.
 	bodyReads int
+	// skipped is how many notes the last List could not show: a link, an
+	// oversized or an unreadable file.
+	skipped int
+}
+
+// fileStamp is what says a file is unchanged since it was read. Size and
+// mtime alone miss a same-size rewrite inside one coarse mtime tick; the
+// inode moves on an atomic replace and the change time on any write.
+type fileStamp struct {
+	size  int64
+	mod   time.Time
+	ino   uint64
+	ctime int64
+}
+
+func stampOf(info os.FileInfo) fileStamp {
+	st := fileStamp{size: info.Size(), mod: info.ModTime()}
+	if sys, ok := info.Sys().(*syscall.Stat_t); ok {
+		st.ino, st.ctime = sys.Ino, sys.Ctim.Nano()
+	}
+	return st
 }
 
 type listEntry struct {
-	size    int64
-	mod     time.Time
+	stamp   fileStamp
 	title   string
 	preview string
 	lower   string
@@ -49,6 +71,16 @@ var captureName = regexp.MustCompile(`^note-\d{4}-\d{2}-\d{2}-\d{6}(-\d{2}| \d+)
 // displayTitle is how the library names a note. A generated capture name says
 // nothing, so it shows the note's first line without heading marks; any other
 // file shows its own name.
+// DisplayTitle is the title a note shows outside the library, such as on its
+// sticky's title bar: the Scratchpad by name, a captured note by its first
+// line, anything else by its file name.
+func DisplayTitle(name, body string) string {
+	if isScratch(name) {
+		return ScratchpadTitle
+	}
+	return displayTitle(name, body)
+}
+
 func displayTitle(name, body string) string {
 	stem := strings.TrimSuffix(name, filepath.Ext(name))
 	if !captureName.MatchString(stem) {
@@ -109,6 +141,13 @@ func Open(dir, ext string) (*Store, error) {
 
 func (s *Store) Extension() string   { return s.Ext }
 func (s *Store) ScratchName() string { return "scratchpad." + s.Ext }
+
+// Skipped is how many notes the last List could not show.
+func (s *Store) Skipped() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.skipped
+}
 
 func (s *Store) validName(name string) error {
 	if name == "" || name == "." || name == ".." || filepath.Base(name) != name || strings.HasPrefix(name, ".") || strings.ContainsAny(name, `/\\`) {
@@ -241,6 +280,8 @@ func (s *Store) List(query string, byName bool) ([]Summary, error) {
 		return nil, fmt.Errorf("notes: scan folder: %w", err)
 	}
 	needle := strings.ToLower(strings.TrimSpace(query))
+	skipped := 0
+	defer func() { s.skipped = skipped }()
 	out := make([]Summary, 0, len(entries))
 	seen := make(map[string]bool, len(entries))
 	for _, entry := range entries {
@@ -251,27 +292,34 @@ func (s *Store) List(query string, byName bool) ([]Summary, error) {
 		path := filepath.Join(s.Dir, name)
 		info, err := os.Lstat(path)
 		if err != nil {
-			return nil, fmt.Errorf("notes: inspect %s: %w", name, err)
+			// Gone between the directory read and now, or unreadable.
+			skipped++
+			continue
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return nil, fmt.Errorf("notes: refusing symlink %s", name)
+			// Notes never follows a link out of the folder, but one link is
+			// no reason to show nothing.
+			skipped++
+			continue
 		}
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		seen[name] = true
+		stamp := stampOf(info)
 		entry, ok := s.cache[name]
-		if !ok || entry.size != info.Size() || !entry.mod.Equal(info.ModTime()) {
+		if !ok || entry.stamp != stamp {
 			body, err := readListBody(name, path)
 			if err != nil {
-				return nil, err
+				skipped++
+				continue
 			}
 			s.bodyReads++
 			title := displayTitle(name, body)
-			entry = listEntry{size: info.Size(), mod: info.ModTime(), title: title, preview: excerpt(body, 150),
+			entry = listEntry{stamp: stamp, title: title, preview: excerpt(body, 150),
 				lower: strings.ToLower(title + "\n" + body), words: len(strings.Fields(body))}
 			s.cache[name] = entry
 		}
+		seen[name] = true
 		if needle != "" && !strings.Contains(entry.lower, needle) {
 			continue
 		}
@@ -317,9 +365,12 @@ func readListBody(name, path string) (string, error) {
 // note: unsafe characters become spaces, a collision gains " 2", " 3", and a
 // title with nothing usable left falls back to a dated capture name. It
 // returns the created file's name.
-func (s *Store) CreateTitled(title, body string) (string, error) {
+// cleanTitle turns a title into a file name stem, the same way for a new
+// note and a rename: characters a path or an Obsidian link cannot carry
+// become spaces, runs of space collapse, and the result is at most 80 bytes.
+func cleanTitle(title string) string {
 	base := strings.Map(func(r rune) rune {
-		if strings.ContainsRune(`/\:*?"<>|`, r) || r < 0x20 {
+		if strings.ContainsRune(`/\:*?"<>|[]#^`, r) || r < 0x20 {
 			return ' '
 		}
 		return r
@@ -332,6 +383,11 @@ func (s *Store) CreateTitled(title, body string) (string, error) {
 		}
 		base = strings.Trim(base[:cut], ". ")
 	}
+	return base
+}
+
+func (s *Store) CreateTitled(title, body string) (string, error) {
+	base := cleanTitle(title)
 	if base == "" {
 		now := s.now
 		if now == nil {

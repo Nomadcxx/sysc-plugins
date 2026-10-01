@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -21,6 +20,9 @@ import (
 const (
 	pinnedStateKey = "sticky-pinned"
 	colorStateBase = "sticky-color."
+	// keyStateBase records the shell surface key a note's sticky uses, once
+	// a rename has moved it off the default.
+	keyStateBase = "sticky-key."
 	// A new sticky opens at stickyOrigin and each further one on the same
 	// output steps down and right, wrapping after stickyCascade.
 	stickyOriginX, stickyOriginY = 56, 92
@@ -36,6 +38,10 @@ type view struct {
 	pinned     bool
 	output     string
 	generation uint32
+	// slot is the cascade place a sticky opened at, when this session
+	// placed it.
+	slot    int
+	hasSlot bool
 }
 
 type pinnedSurface struct {
@@ -63,15 +69,30 @@ func (p publisher) changed(id string, tree *v1.Node) bool {
 func (p publisher) forget(id string) { delete(p, id) }
 
 // cascade is where the next sticky on output opens.
-func cascade(views map[string]view, output string) (x, y int) {
+// cascade places a new sticky at the first cascade slot no open sticky on
+// output holds, so closing one frees its place; when every slot is taken it
+// wraps by count.
+func cascade(views map[string]view, output string) (x, y, slot int) {
+	used := make([]bool, stickyCascade)
 	n := 0
 	for _, v := range views {
-		if v.kind == v1.ViewFloating && v.output == output {
-			n++
+		if v.kind != v1.ViewFloating || v.output != output {
+			continue
+		}
+		n++
+		if v.hasSlot && v.slot >= 0 && v.slot < stickyCascade {
+			used[v.slot] = true
 		}
 	}
-	step := (n % stickyCascade) * stickyStep
-	return stickyOriginX + step, stickyOriginY + step
+	slot = n % stickyCascade
+	for i, taken := range used {
+		if !taken {
+			slot = i
+			break
+		}
+	}
+	step := slot * stickyStep
+	return stickyOriginX + step, stickyOriginY + step, slot
 }
 
 func main() {
@@ -82,7 +103,7 @@ func main() {
 
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
-	hello, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.1.0"}))
+	hello, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.2.0"}))
 	if err != nil {
 		return err
 	}
@@ -148,14 +169,8 @@ func run(in *os.File, out *os.File) error {
 			case v1.ViewBar:
 				tree = notes.BarTree()
 			case v1.ViewTooltip:
-				s := library()
-				var last time.Time
-				for _, n := range s.Notes {
-					if n.Modified.After(last) {
-						last = n.Modified
-					}
-				}
-				tree = notes.TooltipTree(len(s.Notes), last, s.Now)
+				count, last := sess.Stats()
+				tree = notes.TooltipTree(count, last, library().Now)
 			case v1.ViewFloating:
 				doc, err := sess.Document(v.name)
 				if err != nil {
@@ -189,9 +204,12 @@ func run(in *os.File, out *os.File) error {
 			return errors.New("notes: output identity is unavailable for a sticky note")
 		}
 		s := ensure()
-		if _, err := s.Document(name); err != nil {
+		doc, err := s.Document(name)
+		if err != nil {
 			return err
 		}
+		// A sticky on a blank note is a reason to keep it.
+		s.Keep(name)
 		if err := loadPins(); err != nil {
 			return err
 		}
@@ -200,9 +218,13 @@ func run(in *os.File, out *os.File) error {
 			return err
 		}
 		color = validColor(color)
-		x, y := cascade(views, output)
+		x, y, slot := cascade(views, output)
+		key, err := stickyKey(ctx, c, name)
+		if err != nil {
+			return err
+		}
 		params := v1.SurfaceOpenParams{
-			Key: "note:" + notes.Token(name), Title: strings.TrimSuffix(name, filepath.Ext(name)),
+			Key: key, Title: notes.DisplayTitle(name, doc.Body),
 			Output: output, Generation: generation, X: x, Y: y, Width: stickyWidth, Height: stickyHeight,
 		}
 		var result v1.SurfaceResult
@@ -213,7 +235,7 @@ func run(in *os.File, out *os.File) error {
 			return errors.New("notes: shell did not return a sticky view")
 		}
 		pinned := isPinned(pins, name, output)
-		views[result.ViewID] = view{kind: v1.ViewFloating, name: name, color: color, pinned: pinned, output: output, generation: generation}
+		views[result.ViewID] = view{kind: v1.ViewFloating, name: name, color: color, pinned: pinned, output: output, generation: generation, slot: slot, hasSlot: true}
 		return call(ctx, c, v1.CallSurfacePin, v1.SurfacePinParams{View: result.ViewID, Pinned: pinned}, nil)
 	}
 
@@ -286,12 +308,15 @@ func run(in *os.File, out *os.File) error {
 			case *v1.ViewOpen:
 				ensure()
 				v := view{kind: m.View, output: m.Output, generation: m.Generation}
+				if old, ok := views[m.ViewID]; ok {
+					v.slot, v.hasSlot = old.slot, old.hasSlot
+				}
 				if m.View == v1.ViewFloating {
 					if err := loadPins(); err != nil {
 						sess.Notify("Could not load sticky note state: " + err.Error())
 					} else {
 						for _, pin := range pins {
-							if "note:"+notes.Token(pin.Name) == m.Entry {
+							if key, err := stickyKey(ctx, c, pin.Name); err == nil && key == m.Entry {
 								v.name, v.pinned = pin.Name, isPinned(pins, pin.Name, m.Output)
 								break
 							}
@@ -299,7 +324,10 @@ func run(in *os.File, out *os.File) error {
 					}
 					if v.name == "" {
 						for _, candidate := range views {
-							if candidate.kind == v1.ViewFloating && "note:"+notes.Token(candidate.name) == m.Entry {
+							if candidate.kind != v1.ViewFloating {
+								continue
+							}
+							if key, err := stickyKey(ctx, c, candidate.name); err == nil && key == m.Entry {
 								v.name, v.color, v.pinned = candidate.name, candidate.color, candidate.pinned
 								break
 							}
@@ -430,6 +458,12 @@ func handlePanel(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.I
 		fail(sess.Reload())
 	case m.Node == "keep":
 		fail(sess.KeepLocal())
+	case m.Node == "save":
+		fail(sess.SaveNow())
+	case m.Node == "restore":
+		fail(sess.Restore())
+	case m.Node == "discard":
+		fail(sess.Discard())
 	case strings.HasPrefix(m.Node, "open:"):
 		if name := findNoteName(snap.Notes, strings.TrimPrefix(m.Node, "open:")); name != "" {
 			fail(sess.Select(name))
@@ -516,6 +550,9 @@ func closeDeleted(ctx context.Context, c *v1.Client, name string, views map[stri
 			delete(views, id)
 		}
 	}
+	if err := setState(ctx, c, keyStateBase+notes.Token(name), nil); err != nil {
+		closeErr = errors.Join(closeErr, err)
+	}
 	if err := setState(ctx, c, colorStateBase+notes.Token(name), nil); err != nil {
 		closeErr = errors.Join(closeErr, err)
 	}
@@ -531,7 +568,29 @@ func closeDeleted(ctx context.Context, c *v1.Client, name string, views map[stri
 	return closeErr
 }
 
+// stickyKey is the shell surface key for name's sticky. The shell keeps a
+// sticky's position and size under it, so a rename carries it to the new name
+// (see migrateNoteState); a note never renamed uses the default.
+func stickyKey(ctx context.Context, c *v1.Client, name string) (string, error) {
+	key := "note:" + notes.Token(name)
+	_, err := getState(ctx, c, keyStateBase+notes.Token(name), &key)
+	return key, err
+}
+
 func migrateNoteState(ctx context.Context, c *v1.Client, oldName, newName string, pins *[]pinnedSurface, loadPins func() error) error {
+	key, err := stickyKey(ctx, c, oldName)
+	if err != nil {
+		return err
+	}
+	if err := setState(ctx, c, keyStateBase+notes.Token(newName), key); err != nil {
+		return err
+	}
+	// The old name may be reused by a new note, which must not inherit the
+	// renamed sticky's geometry.
+	fresh := fmt.Sprintf("note:%s:%d", notes.Token(oldName), time.Now().UnixNano())
+	if err := setState(ctx, c, keyStateBase+notes.Token(oldName), fresh); err != nil {
+		return err
+	}
 	color := "sun"
 	found, err := getState(ctx, c, colorStateBase+notes.Token(oldName), &color)
 	if err != nil {

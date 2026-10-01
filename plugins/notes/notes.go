@@ -26,6 +26,9 @@ type Document struct {
 	Dirty    bool
 	Error    string
 	Conflict string
+	// Missing says the file was moved or deleted outside Notes while open;
+	// Body still holds the text.
+	Missing  bool
 	Modified time.Time
 	Edited   time.Time
 }
@@ -33,18 +36,21 @@ type Document struct {
 // Snapshot is everything the panel draws: the library and the selected note
 // together, since both are on screen at once.
 type Snapshot struct {
-	Notes         []Summary
-	Selected      string
-	Title         string
-	Body          string
-	Dirty         bool
-	SaveError     string
-	Conflict      bool
-	ConflictBody  string
-	Favorite      bool
-	Words         int
-	Modified      time.Time
-	ScanError     string
+	Notes        []Summary
+	Selected     string
+	Title        string
+	Body         string
+	Dirty        bool
+	SaveError    string
+	Conflict     bool
+	ConflictBody string
+	Missing      bool
+	Favorite     bool
+	Words        int
+	Modified     time.Time
+	ScanError    string
+	// Skipped counts notes the library could not show.
+	Skipped       int
 	Notice        string
 	PendingDelete string
 	Query         string
@@ -67,14 +73,17 @@ type Session struct {
 	// renamed records a rename the session made on its own (rename on
 	// leave), for the caller to carry sticky state across.
 	renamedFrom, renamedTo string
-	now                    func() time.Time
+	// blank names notes New made with no text. One still empty when the
+	// user moves on is removed, so New leaves no empty files behind.
+	blank map[string]bool
+	now   func() time.Time
 }
 
 func NewSession(store *Store, now func() time.Time) *Session {
 	if now == nil {
 		now = time.Now
 	}
-	return &Session{store: store, docs: map[string]*Document{}, now: now}
+	return &Session{store: store, docs: map[string]*Document{}, blank: map[string]bool{}, now: now}
 }
 
 func (s *Session) Snap() Snapshot {
@@ -103,8 +112,12 @@ func (s *Session) snapLocked() Snapshot {
 		if s.titleDraft != "" {
 			snap.Title = s.titleDraft
 		}
+		if isScratch(doc.Name) {
+			snap.Title = ScratchpadTitle
+		}
 		snap.Body, snap.Dirty, snap.SaveError = doc.Body, doc.Dirty, doc.Error
 		snap.ConflictBody, snap.Conflict = doc.Conflict, doc.Conflict != ""
+		snap.Missing = doc.Missing
 		snap.Words, snap.Modified = len(strings.Fields(doc.Body)), doc.Modified
 		snap.Favorite = s.store.IsFavorite(doc.Name)
 	}
@@ -113,6 +126,7 @@ func (s *Session) snapLocked() Snapshot {
 		snap.ScanError = err.Error()
 	} else {
 		snap.Notes = items
+		snap.Skipped = s.store.Skipped()
 	}
 	if s.folderError != "" {
 		snap.ScanError = s.folderError
@@ -156,6 +170,7 @@ func (s *Session) selectLocked(name string) error {
 	if err := s.commitTitleLocked(); err != nil {
 		return err
 	}
+	s.discardBlankLocked(name)
 	if name != "" {
 		if err := s.ensureLocked(name); err != nil {
 			return err
@@ -257,9 +272,68 @@ func (s *Session) createLocked(title, body string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	s.discardBlankLocked(name)
 	s.docs[name] = &Document{Name: name, Body: body, Disk: body, Modified: s.now()}
 	s.selected, s.pendingDelete = name, ""
+	if body == "" {
+		s.blank[name] = true
+	}
 	return name, nil
+}
+
+// discardBlankLocked removes every note New made that is still empty, other
+// than keep. A note whose file has text, however it got there, stays.
+func (s *Session) discardBlankLocked(keep string) {
+	for name := range s.blank {
+		if name == keep {
+			continue
+		}
+		delete(s.blank, name)
+		if doc := s.docs[name]; doc != nil && (doc.Dirty || doc.Body != "") {
+			continue
+		}
+		if body, _, err := s.store.Read(name); err != nil || body != "" {
+			continue
+		}
+		if err := s.store.Delete(name); err != nil {
+			continue
+		}
+		delete(s.docs, name)
+		if s.selected == name {
+			s.selected = ""
+		}
+	}
+}
+
+// Keep marks name as wanted though it may still be empty: a sticky is open
+// on it.
+func (s *Session) Keep(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.blank, name)
+}
+
+// Stats is what the bar tooltip reports: the notes in the folder, ignoring
+// the panel's search and the Scratchpad, and the latest edit to any of them.
+func (s *Session) Stats() (count int, last time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.store == nil {
+		return 0, time.Time{}
+	}
+	items, err := s.store.List("", false)
+	if err != nil {
+		return 0, time.Time{}
+	}
+	for _, n := range items {
+		if n.Modified.After(last) {
+			last = n.Modified
+		}
+		if !isScratch(n.Name) {
+			count++
+		}
+	}
+	return count, last
 }
 
 func firstLine(body string) string {
@@ -322,7 +396,14 @@ func (s *Session) flushDocLocked(doc *Document) error {
 	if doc == nil || !doc.Dirty {
 		return nil
 	}
+	if doc.Missing {
+		return errors.New(missingNote)
+	}
 	conflict, err := s.store.SaveIfUnchanged(doc.Name, doc.Disk, doc.Body)
+	if errors.Is(err, os.ErrNotExist) {
+		doc.Missing, doc.Error = true, missingNote
+		return errors.New(missingNote)
+	}
 	if errors.Is(err, errNoteChanged) {
 		doc.Conflict, doc.Error = conflict, "This note changed outside Notes"
 		return errors.New(doc.Error)
@@ -360,6 +441,16 @@ func (s *Session) Tick() {
 	}
 	for _, doc := range s.docs {
 		body, modified, readErr := s.store.Read(doc.Name)
+		if errors.Is(readErr, os.ErrNotExist) {
+			// Moved or deleted elsewhere. Saving would recreate it behind the
+			// user's back, so the text waits for Restore or Discard.
+			doc.Missing, doc.Error = true, missingNote
+			continue
+		}
+		if readErr == nil && doc.Missing {
+			// Back again (undone elsewhere): compare as usual from here.
+			doc.Missing, doc.Error = false, ""
+		}
 		if readErr == nil && !doc.Dirty && body != doc.Disk {
 			doc.Body, doc.Disk, doc.Modified = body, body, modified
 		}
@@ -395,6 +486,65 @@ func (s *Session) Reload(names ...string) error {
 		s.docs[name] = doc
 	}
 	doc.Body, doc.Disk, doc.Dirty, doc.Error, doc.Conflict, doc.Modified = body, body, false, "", "", modified
+	return nil
+}
+
+// SaveNow writes the selected note at once, with any pending title, for
+// Ctrl+S: autosave would get there within a second, but a writer who asks to
+// save should not have to wait to see "Saved".
+func (s *Session) SaveNow() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.commitTitleLocked(); err != nil {
+		return err
+	}
+	return s.flushDocLocked(s.docs[s.selected])
+}
+
+// missingNote is the error a note shows once its file has gone.
+const missingNote = "Moved or deleted outside Notes"
+
+// Restore writes a missing note's text back under its old name. It never
+// replaces a file: if one has appeared there since, that is a conflict.
+func (s *Session) Restore(names ...string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	doc := s.docs[s.target(names)]
+	if doc == nil || !doc.Missing {
+		return errors.New("notes: nothing to restore")
+	}
+	err := s.store.Create(doc.Name, doc.Body)
+	if errors.Is(err, os.ErrExist) {
+		disk, modified, readErr := s.store.Read(doc.Name)
+		if readErr != nil {
+			return readErr
+		}
+		doc.Missing, doc.Disk, doc.Modified = false, disk, modified
+		doc.Conflict, doc.Error = disk, "This note changed outside Notes"
+		return nil
+	}
+	if err != nil {
+		doc.Error = "Save failed: " + err.Error()
+		return err
+	}
+	doc.Missing, doc.Disk, doc.Dirty, doc.Error, doc.Conflict, doc.Modified = false, doc.Body, false, "", "", s.now()
+	return nil
+}
+
+// Discard lets a missing note go: its text is dropped and it closes.
+func (s *Session) Discard(names ...string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	name := s.target(names)
+	doc := s.docs[name]
+	if doc == nil || !doc.Missing {
+		return errors.New("notes: nothing to discard")
+	}
+	delete(s.docs, name)
+	delete(s.blank, name)
+	if s.selected == name {
+		s.selected, s.titleDraft = "", ""
+	}
 	return nil
 }
 
@@ -441,11 +591,11 @@ func (s *Session) CommitTitle() error {
 func (s *Session) commitTitleLocked() error {
 	draft := strings.TrimSpace(s.titleDraft)
 	doc := s.docs[s.selected]
-	if draft == "" || doc == nil {
+	if draft == "" || doc == nil || isScratch(doc.Name) {
 		s.titleDraft = ""
 		return nil
 	}
-	base := strings.TrimSpace(strings.TrimSuffix(filepath.Base(draft), "."+s.store.Ext))
+	base := cleanTitle(strings.TrimSuffix(draft, "."+s.store.Ext))
 	newName := base + "." + s.store.Ext
 	if base == "" || newName == doc.Name {
 		s.titleDraft = ""
@@ -462,6 +612,8 @@ func (s *Session) commitTitleLocked() error {
 		return fmt.Errorf("notes: rename to %s: %w", newName, err)
 	}
 	old := doc.Name
+	// Naming a note is a reason to keep it, empty or not.
+	delete(s.blank, old)
 	delete(s.docs, old)
 	doc.Name = newName
 	s.docs[newName] = doc
@@ -521,7 +673,9 @@ func (s *Session) Close() error {
 	if s.store == nil {
 		return nil
 	}
-	return errors.Join(s.commitTitleLocked(), s.flushAllLocked())
+	err := errors.Join(s.commitTitleLocked(), s.flushAllLocked())
+	s.discardBlankLocked("")
+	return err
 }
 
 func (s *Session) SetStore(store *Store) error {
