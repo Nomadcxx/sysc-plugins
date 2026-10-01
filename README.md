@@ -16,7 +16,7 @@ it.
 | **GitHub Notifications** | Triage unread GitHub notifications and contribution activity from the panel | `gh` |
 | **Mini Docker** | The Docker whale in the bar, with a panel to manage containers | `docker` |
 | **Moonbit** | System cleaner: scan and clean progress from the bar, with a category review panel | `moonbit` |
-| **Notes** | Quick notes in a bar panel, autosaved as markdown files to a folder | |
+| **Notes** | Markdown notes and pastel sticky notes for an Obsidian folder, with one box to search or start a note | |
 | **Phone Connect** | A paired phone's battery, notifications and recent photos, over KDE Connect | `kdeconnect-cli` |
 | **Pomodoro Timer** | Work and break sessions in the bar | |
 | **ProtonVPN** | Quick connect, server picker, split tunnel and protection status | `protonvpn` |

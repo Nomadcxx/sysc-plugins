@@ -2,191 +2,291 @@ package notes
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestUnavailableStoreKeepsFolderErrorVisible(t *testing.T) {
-	sess := NewSession(nil, time.Now)
-	sess.ReportError("Could not open notes folder: test failure")
-	if got := sess.Snap().LibraryError; got != "Could not open notes folder: test failure" {
-		t.Fatalf("folder error = %q", got)
-	}
-}
-
-func TestSessionListCreateOpenAndBack(t *testing.T) {
-	t.Parallel()
-	s, now := testSession(t)
-	if s.Page() != "list" {
-		t.Fatalf("page = %q", s.Page())
-	}
-	if err := s.Create(); err != nil {
-		t.Fatal(err)
-	}
-	if s.Page() != "editor" || s.Current() == "" {
-		t.Fatalf("create did not open editor: %+v", s.Snap())
-	}
-	s.Back()
-	if s.Page() != "list" {
-		t.Fatalf("back = %q", s.Page())
-	}
-	if err := s.Open("scratchpad.md"); err != nil {
-		t.Fatal(err)
-	}
-	if s.Page() != "editor" || s.Current() != "scratchpad.md" {
-		t.Fatal("scratchpad not opened")
-	}
-	_ = now
-}
-
-func TestSessionDirtyAutosaveFlushAndSaveError(t *testing.T) {
-	t.Parallel()
-	s, now := testSession(t)
-	if err := s.Create(); err != nil {
-		t.Fatal(err)
-	}
-	name := s.Current()
-	s.Type("hello")
-	if !s.Dirty() {
-		t.Fatal("typed text was not dirty")
-	}
-	s.Tick()
-	body, _, err := s.store.Read(name)
-	if err != nil || body == "hello" {
-		t.Fatalf("saved before idle: %q %v", body, err)
-	}
-	*now = now.Add(2 * time.Second)
-	s.Tick()
-	body, _, err = s.store.Read(name)
-	if err != nil || body != "hello" {
-		t.Fatalf("autosave = %q %v", body, err)
-	}
-	if s.Dirty() {
-		t.Fatal("still dirty after autosave")
-	}
-	s.Type("kept")
-	if err := os.Chmod(s.store.Dir, 0555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(s.store.Dir, 0755) })
-	*now = now.Add(2 * time.Second)
-	s.Tick()
-	_ = os.Chmod(s.store.Dir, 0755)
-	if s.Snap().SaveErr == "" || s.Buffer() != "kept" {
-		t.Fatalf("save error = %+v", s.Snap())
-	}
-	s.Type("closed")
-	_ = os.Chmod(s.store.Dir, 0755)
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	body, _, err = s.store.Read(name)
-	if err != nil || body != "closed" {
-		t.Fatalf("close flush = %q %v", body, err)
-	}
-}
-
-func TestSessionPinRenameDeleteConfirm(t *testing.T) {
-	t.Parallel()
-	s, _ := testSession(t)
-	if err := s.Create(); err != nil {
-		t.Fatal(err)
-	}
-	old := s.Current()
-	s.Type("x")
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Pin(old, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Open(old); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Rename("renamed.md"); err != nil {
-		t.Fatal(err)
-	}
-	if s.Current() != "renamed.md" {
-		t.Fatalf("current = %q", s.Current())
-	}
-	s.Back()
-	s.ProposeDelete("renamed.md")
-	s.CancelPending()
-	if _, _, err := s.store.Read("renamed.md"); err != nil {
-		t.Fatal("cancel deleted the note")
-	}
-	s.ProposeDelete("renamed.md")
-	if err := s.ConfirmDelete(); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := s.store.Read("renamed.md"); err == nil {
-		t.Fatal("confirm left the file")
-	}
-}
-
-func TestSessionExternalCleanAndDirtyConflict(t *testing.T) {
-	t.Parallel()
-	s, _ := testSession(t)
-	if err := s.Create(); err != nil {
-		t.Fatal(err)
-	}
-	name := s.Current()
-	s.Type("local")
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Open(name); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.store.Save(name, "disk"); err != nil {
-		t.Fatal(err)
-	}
-	s.Tick()
-	if s.Buffer() != "disk" || s.Dirty() {
-		t.Fatalf("clean reload = %+v", s.Snap())
-	}
-	s.Type("typed")
-	if err := s.store.Save(name, "other"); err != nil {
-		t.Fatal(err)
-	}
-	s.Tick()
-	if !s.Snap().Conflict || s.Buffer() != "typed" {
-		t.Fatalf("dirty conflict = %+v", s.Snap())
-	}
-	s.KeepLocal()
-	if s.Snap().Conflict || s.Buffer() != "typed" || !s.Dirty() {
-		t.Fatalf("keep local = %+v", s.Snap())
-	}
-	if err := s.store.Save(name, "again"); err != nil {
-		t.Fatal(err)
-	}
-	s.Tick()
-	s.Reload()
-	if s.Buffer() != "again" || s.Dirty() || s.Snap().Conflict {
-		t.Fatalf("reload = %+v", s.Snap())
-	}
-}
-
 func testSession(t *testing.T) (*Session, *time.Time) {
 	t.Helper()
-	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
-	clock := now
+	clock := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
 	st, err := Open(t.TempDir(), "md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	st.now = func() time.Time { return clock }
-	s := NewSession(st, func() time.Time { return clock })
-	return s, &clock
+	return NewSession(st, func() time.Time { return clock }), &clock
 }
 
-func TestSessionCounts(t *testing.T) {
-	t.Parallel()
+func newTestSession(t *testing.T) *Session {
+	t.Helper()
 	s, _ := testSession(t)
-	_ = s.Create()
-	s.Type("two words")
+	return s
+}
+
+func mustCreateNote(t *testing.T, s *Session, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(s.store.Dir, name), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnavailableFolderErrorLasts(t *testing.T) {
+	sess := NewSession(nil, time.Now)
+	sess.ReportFolderError("Could not open notes folder: test failure")
+	sess.ClearNotice()
+	if got := sess.Snap().ScanError; got != "Could not open notes folder: test failure" {
+		t.Fatalf("folder error = %q", got)
+	}
+}
+
+func TestSubmitQueryOpensTopMatchOrCreates(t *testing.T) {
+	s := newTestSession(t)
+	mustCreateNote(t, s, "Weekly review.md", "ship it")
+	s.Search("weekly")
+	name, err := s.SubmitQuery()
+	if err != nil || name != "Weekly review.md" || s.Selected() != name {
+		t.Fatalf("match: %q %v selected %q", name, err, s.Selected())
+	}
+	s.Search("Groceries")
+	name, err = s.SubmitQuery()
+	if err != nil || name != "Groceries.md" {
+		t.Fatalf("create: %q %v", name, err)
+	}
+	if snap := s.Snap(); snap.Body != "Groceries\n" || snap.Query != "" || snap.Selected != "Groceries.md" {
+		t.Fatalf("new note body %q query %q selected %q", snap.Body, snap.Query, snap.Selected)
+	}
+}
+
+func TestSubmitQuerySanitisesFilename(t *testing.T) {
+	s := newTestSession(t)
+	s.Search("../../etc/passwd")
+	name, err := s.SubmitQuery()
+	if err != nil || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") {
+		t.Fatalf("got %q %v", name, err)
+	}
+	s.Search("   ")
+	if name, err := s.SubmitQuery(); err != nil || name != "" {
+		t.Fatalf("blank query must do nothing, got %q %v", name, err)
+	}
+}
+
+func TestCreateFromQueryMakesBlankDatedNoteWhenEmpty(t *testing.T) {
+	s := newTestSession(t)
+	name, err := s.CreateFromQuery()
+	if err != nil || name != "note-2026-09-02-120000.md" || s.Snap().Body != "" {
+		t.Fatalf("blank create = %q %v", name, err)
+	}
+}
+
+func TestCreateWithBodyNamesNoteAfterFirstLine(t *testing.T) {
+	s := newTestSession(t)
+	name, err := s.CreateWithBody("\n# Pasted idea\nmore text")
+	if err != nil || name != "Pasted idea.md" || s.Selected() != name {
+		t.Fatalf("paste create = %q %v", name, err)
+	}
+}
+
+func TestNoticeClearsOnNextSuccess(t *testing.T) {
+	s := newTestSession(t)
+	s.Notify("The clipboard has no plain text")
+	if s.Snap().Notice == "" {
+		t.Fatal("notice not shown")
+	}
+	s.ClearNotice()
+	if got := s.Snap(); got.Notice != "" || got.ScanError != "" {
+		t.Fatalf("notice %q scan %q", got.Notice, got.ScanError)
+	}
+}
+
+func TestSelectCommitsAPendingTitle(t *testing.T) {
+	s := newTestSession(t)
+	mustCreateNote(t, s, "a.md", "x")
+	mustCreateNote(t, s, "b.md", "y")
+	must(t, s.Select("a.md"))
+	s.SetTitleDraft("alpha")
+	if got := s.Snap().Title; got != "alpha" {
+		t.Fatalf("draft title shown as %q", got)
+	}
+	must(t, s.Select("b.md"))
+	if _, _, err := s.store.Read("alpha.md"); err != nil {
+		t.Fatalf("rename on leave did not happen: %v", err)
+	}
+	if from, to, ok := s.TakeRename(); !ok || from != "a.md" || to != "alpha.md" {
+		t.Fatalf("rename not reported: %q %q %v", from, to, ok)
+	}
+	if _, _, ok := s.TakeRename(); ok {
+		t.Fatal("a rename is reported once")
+	}
+}
+
+func TestFailedRenameDoesNotBlockTheNextSelection(t *testing.T) {
+	s := newTestSession(t)
+	mustCreateNote(t, s, "a.md", "x")
+	mustCreateNote(t, s, "b.md", "y")
+	must(t, s.Select("a.md"))
+	s.SetTitleDraft("b")
+	if err := s.Select("b.md"); err == nil {
+		t.Fatal("renaming onto an existing note must fail")
+	}
+	if s.Selected() != "a.md" {
+		t.Fatal("a failed rename must keep the selection")
+	}
+	must(t, s.Select("b.md"))
+}
+
+func TestSnapshotCarriesListAndSelectionTogether(t *testing.T) {
+	s := newTestSession(t)
+	mustCreateNote(t, s, "a.md", "one two three")
+	must(t, s.Select("a.md"))
 	snap := s.Snap()
-	if snap.Words != 2 || snap.Chars != 9 {
-		t.Fatalf("counts = %+v", snap)
+	if len(snap.Notes) != 1 || snap.Selected != "a.md" || snap.Words != 3 || snap.Now.IsZero() {
+		t.Fatalf("snap = %+v", snap)
+	}
+}
+
+func TestSessionDirtyAutosaveFlushAndSaveError(t *testing.T) {
+	s, now := testSession(t)
+	name, err := s.CreateFromQuery()
+	must(t, err)
+	must(t, s.Type("hello"))
+	if !s.Dirty() {
+		t.Fatal("typed text was not dirty")
+	}
+	s.Tick()
+	if body, _, err := s.store.Read(name); err != nil || body == "hello" {
+		t.Fatalf("saved before idle: %q %v", body, err)
+	}
+	*now = now.Add(2 * time.Second)
+	s.Tick()
+	if body, _, err := s.store.Read(name); err != nil || body != "hello" {
+		t.Fatalf("autosave = %q %v", body, err)
+	}
+	must(t, s.Type("kept"))
+	if err := os.Chmod(s.store.Dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(s.store.Dir, 0o755) })
+	*now = now.Add(2 * time.Second)
+	s.Tick()
+	_ = os.Chmod(s.store.Dir, 0o755)
+	if s.Snap().SaveError == "" || s.Buffer() != "kept" {
+		t.Fatalf("save error = %+v", s.Snap())
+	}
+	must(t, s.Type("closed"))
+	must(t, s.Close())
+	if body, _, err := s.store.Read(name); err != nil || body != "closed" {
+		t.Fatalf("close flush = %q %v", body, err)
+	}
+}
+
+func TestSessionFavoriteDeleteConfirm(t *testing.T) {
+	s := newTestSession(t)
+	mustCreateNote(t, s, "draft.md", "x")
+	must(t, s.SetFavorite("draft.md", true))
+	must(t, s.Select("draft.md"))
+	if !s.Snap().Favorite {
+		t.Fatal("favourite not shown")
+	}
+	s.ProposeDelete("draft.md")
+	s.CancelPending()
+	if _, _, err := s.store.Read("draft.md"); err != nil {
+		t.Fatal("cancel deleted the note")
+	}
+	s.ProposeDelete("draft.md")
+	name, err := s.ConfirmDeleteName()
+	if err != nil || name != "draft.md" || s.Selected() != "" {
+		t.Fatalf("confirm = %q %v selected %q", name, err, s.Selected())
+	}
+	if _, _, err := s.store.Read("draft.md"); err == nil {
+		t.Fatal("confirm left the file")
+	}
+}
+
+func TestSessionExternalCleanAndDirtyConflict(t *testing.T) {
+	s := newTestSession(t)
+	mustCreateNote(t, s, "n.md", "local")
+	must(t, s.Select("n.md"))
+	must(t, s.store.Save("n.md", "disk"))
+	s.Tick()
+	if s.Buffer() != "disk" || s.Dirty() {
+		t.Fatalf("clean reload = %+v", s.Snap())
+	}
+	must(t, s.Type("typed"))
+	must(t, s.store.Save("n.md", "other"))
+	s.Tick()
+	if !s.Snap().Conflict || s.Buffer() != "typed" {
+		t.Fatalf("dirty conflict = %+v", s.Snap())
+	}
+	must(t, s.KeepLocal())
+	if s.Snap().Conflict || s.Buffer() != "typed" || !s.Dirty() {
+		t.Fatalf("keep local = %+v", s.Snap())
+	}
+	must(t, s.store.Save("n.md", "again"))
+	s.Tick()
+	must(t, s.Reload())
+	if s.Buffer() != "again" || s.Dirty() || s.Snap().Conflict {
+		t.Fatalf("reload = %+v", s.Snap())
+	}
+}
+
+func TestOpenScratchCreatesAndSelects(t *testing.T) {
+	s := newTestSession(t)
+	must(t, s.OpenScratch())
+	if s.Selected() != "scratchpad.md" {
+		t.Fatalf("selected %q", s.Selected())
+	}
+}
+
+func TestConflictOnOneNoteDoesNotBlockOthers(t *testing.T) {
+	s, now := testSession(t)
+	mustCreateNote(t, s, "a.md", "base")
+	mustCreateNote(t, s, "b.md", "other")
+	must(t, s.TypeNote("a.md", "typed in a sticky"))
+	must(t, s.store.Save("a.md", "changed in Obsidian"))
+	*now = now.Add(time.Second)
+	s.Tick()
+	must(t, s.Select("b.md"))
+	if _, err := s.CreateFromQuery(); err != nil {
+		t.Fatalf("a conflict on another note blocked create: %v", err)
+	}
+	must(t, s.Select("a.md"))
+	if snap := s.Snap(); !snap.Conflict || snap.Body != "typed in a sticky" {
+		t.Fatalf("the conflicted note must open with its text and banner: %+v", snap)
+	}
+}
+
+func TestSelectDropsCleanDocumentsItIsNotShowing(t *testing.T) {
+	s, now := testSession(t)
+	for _, n := range []string{"a.md", "b.md", "c.md"} {
+		mustCreateNote(t, s, n, n)
+		must(t, s.Select(n))
+	}
+	must(t, s.TypeNote("a.md", "unsaved"))
+	must(t, s.store.Save("a.md", "changed in Obsidian"))
+	*now = now.Add(time.Second)
+	s.Tick()
+	must(t, s.Select("b.md"))
+	if len(s.docs) != 2 || s.docs["a.md"] == nil || s.docs["b.md"] == nil {
+		t.Fatalf("docs kept = %v, want only the selected note and the one that cannot save", len(s.docs))
+	}
+}
+
+func TestCloseCommitsAPendingTitle(t *testing.T) {
+	s := newTestSession(t)
+	mustCreateNote(t, s, "a.md", "x")
+	must(t, s.Select("a.md"))
+	s.SetTitleDraft("alpha")
+	must(t, s.Close())
+	if _, _, err := s.store.Read("alpha.md"); err != nil {
+		t.Fatalf("closing the panel must commit the typed title: %v", err)
 	}
 }

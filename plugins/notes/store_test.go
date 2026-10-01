@@ -4,8 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestStoreSearchFavoritesAndDirectChildren(t *testing.T) {
@@ -126,27 +128,34 @@ func TestFailedFavoriteWriteRollsBackMemoryState(t *testing.T) {
 	}
 }
 
-func TestCaptureNamesDoNotOverwriteWithinOneSecond(t *testing.T) {
+func TestBlankCreatesDoNotOverwriteWithinOneSecond(t *testing.T) {
 	s, err := Open(t.TempDir(), "md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := func() time.Time { return time.Date(2026, 9, 24, 12, 34, 56, 0, time.UTC) }
+	s.now = now
 	sess := NewSession(s, now)
-	if err := sess.Capture("one"); err != nil {
+	first, err := sess.CreateFromQuery()
+	if err != nil {
 		t.Fatal(err)
 	}
-	first := sess.Snap().Current
-	if err := sess.Capture("two"); err != nil {
+	if err := sess.Type("one"); err != nil {
 		t.Fatal(err)
 	}
-	second := sess.Snap().Current
-	if first == second || first != "note-2026-09-24-123456.md" || second != "note-2026-09-24-123456-02.md" {
-		t.Fatalf("capture names = %q and %q", first, second)
+	second, err := sess.CreateFromQuery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || first != "note-2026-09-24-123456.md" || second != "note-2026-09-24-123456 2.md" {
+		t.Fatalf("blank note names = %q and %q", first, second)
 	}
 	body, _, err := s.Read(first)
 	if err != nil || body != "one" {
 		t.Fatalf("first note = %q, %v", body, err)
+	}
+	if got := displayTitle(second, "Second idea"); got != "Second idea" {
+		t.Fatalf("a numbered capture name must still show its first line, got %q", got)
 	}
 }
 
@@ -160,7 +169,7 @@ func TestSessionConflictKeepLocalAndCleanExternalReload(t *testing.T) {
 	}
 	nowAt := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 	sess := NewSession(s, func() time.Time { return nowAt })
-	if err := sess.Open("plan.md"); err != nil {
+	if err := sess.Select("plan.md"); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Type("local version"); err != nil {
@@ -191,7 +200,7 @@ func TestSessionConflictKeepLocalAndCleanExternalReload(t *testing.T) {
 	}
 }
 
-func TestFailedFlushRetainsBufferAndBlocksNavigation(t *testing.T) {
+func TestFailedSaveKeepsTheBufferAcrossNavigation(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir, "md")
 	if err != nil {
@@ -201,7 +210,7 @@ func TestFailedFlushRetainsBufferAndBlocksNavigation(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess := NewSession(s, time.Now)
-	if err := sess.Open("note.md"); err != nil {
+	if err := sess.Select("note.md"); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Type("local text that must survive"); err != nil {
@@ -217,11 +226,14 @@ func TestFailedFlushRetainsBufferAndBlocksNavigation(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(dir, "note.md")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Back(); err == nil {
-		t.Fatal("back discarded a buffer after save failed")
+	if err := sess.Select(""); err != nil {
+		t.Fatalf("a note that will not save must not trap the editor: %v", err)
+	}
+	if err := sess.Select("note.md"); err != nil {
+		t.Fatal(err)
 	}
 	got := sess.Snap()
-	if got.Current != "note.md" || got.Body != "local text that must survive" || !got.Dirty || got.SaveError == "" {
+	if got.Selected != "note.md" || got.Body != "local text that must survive" || !got.Dirty || got.SaveError == "" {
 		t.Fatalf("buffer not retained: %+v", got)
 	}
 	if body, err := os.ReadFile(outside); err != nil || string(body) != "untouched" {
@@ -238,13 +250,14 @@ func TestRenameAndConfirmedDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess := NewSession(s, time.Now)
-	if err := sess.Open("draft.md"); err != nil {
+	if err := sess.Select("draft.md"); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Rename("Roadmap"); err != nil {
+	sess.SetTitleDraft("Roadmap")
+	if err := sess.CommitTitle(); err != nil {
 		t.Fatal(err)
 	}
-	if got := sess.Snap(); got.Current != "Roadmap.md" || got.Title != "Roadmap" {
+	if got := sess.Snap(); got.Selected != "Roadmap.md" || got.Title != "Roadmap" {
 		t.Fatalf("renamed state = %+v", got)
 	}
 	sess.ProposeDelete("Roadmap.md")
@@ -254,5 +267,90 @@ func TestRenameAndConfirmedDelete(t *testing.T) {
 	}
 	if _, _, err := s.Read(name); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("deleted note still exists: %v", err)
+	}
+}
+
+func openTestStore(t *testing.T) *Store {
+	t.Helper()
+	s, err := Open(t.TempDir(), "md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func mustCreate(t *testing.T, s *Store, name, body string) {
+	t.Helper()
+	if err := s.Create(name, body); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDisplayTitleUsesFirstLineForCaptureNames(t *testing.T) {
+	cases := map[[2]string]string{
+		{"note-2026-10-01-091233.md", "\n# Call back about the lease\nbody"}: "Call back about the lease",
+		{"note-2026-10-01-091233-02.md", ""}:                                 "note-2026-10-01-091233-02",
+		{"Weekly review.md", "# Something else"}:                             "Weekly review",
+	}
+	for in, want := range cases {
+		if got := displayTitle(in[0], in[1]); got != want {
+			t.Errorf("displayTitle(%q) = %q, want %q", in[0], got, want)
+		}
+	}
+}
+
+func TestListShowsDisplayTitlesAndWordCounts(t *testing.T) {
+	s := openTestStore(t)
+	mustCreate(t, s, "note-2026-10-01-091233.md", "Call back\nabout the lease")
+	items, err := s.List("", false)
+	if err != nil || len(items) != 1 || items[0].Title != "Call back" || items[0].Words != 5 {
+		t.Fatalf("items = %+v, %v", items, err)
+	}
+}
+
+func TestCreateTitledNamesTheFileAfterTheTitle(t *testing.T) {
+	s := openTestStore(t)
+	name, err := s.CreateTitled("Groceries", "Groceries\n")
+	if err != nil || name != "Groceries.md" {
+		t.Fatalf("got %q, %v", name, err)
+	}
+	name, err = s.CreateTitled("Groceries", "")
+	if err != nil || name != "Groceries 2.md" {
+		t.Fatalf("collision got %q, %v", name, err)
+	}
+}
+
+func TestCreateTitledSanitisesHostileTitles(t *testing.T) {
+	s := openTestStore(t)
+	for _, title := range []string{"../escape", "a/b\\c:d", "   ", ".hidden", strings.Repeat("x", 300), strings.Repeat("é", 100)} {
+		name, err := s.CreateTitled(title, "")
+		if err != nil {
+			t.Fatalf("%q: %v", title, err)
+		}
+		if strings.ContainsAny(name, `/\:`) || strings.HasPrefix(name, ".") || len(name) > 84 || !utf8.ValidString(name) {
+			t.Errorf("%q produced unsafe name %q", title, name)
+		}
+	}
+}
+
+func TestListRereadsOnlyChangedFiles(t *testing.T) {
+	s := openTestStore(t)
+	mustCreate(t, s, "a.md", "alpha")
+	if _, err := s.List("", false); err != nil {
+		t.Fatal(err)
+	}
+	reads := s.bodyReads
+	if _, err := s.List("", false); err != nil {
+		t.Fatal(err)
+	}
+	if s.bodyReads != reads {
+		t.Fatalf("unchanged folder re-read %d bodies", s.bodyReads-reads)
+	}
+	if err := s.Save("a.md", "alpha beta gamma"); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := s.List("gamma", false)
+	if len(items) != 1 || s.bodyReads != reads+1 {
+		t.Fatalf("changed file not re-read: items %d reads %d", len(items), s.bodyReads-reads)
 	}
 }

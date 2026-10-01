@@ -67,9 +67,14 @@ func validateCatalog(repoRoot string, community, fetch bool, w io.Writer) error 
 	}
 
 	for _, e := range cat.Entries {
-		if err := validateEntry(repoRoot, e, metaAll, dirsByID, community); err != nil {
+		pending, err := validateEntry(repoRoot, e, metaAll, dirsByID, community)
+		if err != nil {
 			fmt.Fprintf(w, "FAIL %s: %v\n", e.ID, err)
 			failures++
+			continue
+		}
+		if pending != "" {
+			fmt.Fprintf(w, "ok   %s (manifest %s awaits release; row is %s)\n", e.ID, pending, e.Release.Version)
 			continue
 		}
 		fmt.Fprintf(w, "ok   %s\n", e.ID)
@@ -91,18 +96,27 @@ func validateCatalog(repoRoot string, community, fetch bool, w io.Writer) error 
 }
 
 // validateEntry checks one decoded, already-schema-valid catalog row against
-// catalog-meta.json and its plugin's manifest.
-func validateEntry(repoRoot string, e catalog.Entry, metaAll map[string]catalogMeta, dirsByID map[string]string, community bool) error {
+// catalog-meta.json and its plugin's manifest. A manifest whose version is not
+// the row's describes an unreleased version: the row still names what
+// shipped, and the release workflow rewrites and fetch-checks it from the tag.
+// That version is returned and the manifest fields are not compared.
+func validateEntry(repoRoot string, e catalog.Entry, metaAll map[string]catalogMeta, dirsByID map[string]string, community bool) (pending string, err error) {
 	if _, ok := metaAll[e.ID]; !ok {
-		return fmt.Errorf("no %s entry for %q", catalogMetaFile, e.ID)
+		return "", fmt.Errorf("no %s entry for %q", catalogMetaFile, e.ID)
 	}
 	dir, ok := dirsByID[e.ID]
 	if !ok {
-		return fmt.Errorf("no plugins/<dir> declares id %q", e.ID)
+		return "", fmt.Errorf("no plugins/<dir> declares id %q", e.ID)
 	}
 	m, err := readManifest(filepath.Join(repoRoot, "plugins", dir))
 	if err != nil {
-		return err
+		return "", err
+	}
+	if community && e.Screenshot == nil {
+		return "", fmt.Errorf("no screenshot; required for the community catalog")
+	}
+	if m.Version != e.Release.Version {
+		return m.Version, nil
 	}
 
 	var mismatches []string
@@ -123,13 +137,9 @@ func validateEntry(repoRoot string, e catalog.Entry, metaAll map[string]catalogM
 		mismatches = append(mismatches, fmt.Sprintf("requires.commands: manifest %v, catalog %v", m.Requires.Commands, e.Requires.Commands))
 	}
 	if len(mismatches) > 0 {
-		return fmt.Errorf("%s", strings.Join(mismatches, "; "))
+		return "", fmt.Errorf("%s", strings.Join(mismatches, "; "))
 	}
-
-	if community && e.Screenshot == nil {
-		return fmt.Errorf("no screenshot; required for the community catalog")
-	}
-	return nil
+	return "", nil
 }
 
 // fetchEntry downloads every asset and screenshot a row names, across its

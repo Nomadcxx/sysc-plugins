@@ -4,210 +4,270 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
+// Panel geometry, in logical pixels: a 280px library beside a 432px editor,
+// the AI Usage master/detail shape.
 const (
-	FillCard     = "card"
-	FillSoft     = "soft"
-	maxNoteCards = 60
+	PanelWidth, PanelHeight = 760, 540
+	pad, paneGap            = 16, 16
+	leftW                   = 280
+	rightW                  = PanelWidth - 2*pad - paneGap - leftW // 432
+	innerH                  = PanelHeight - 2*pad                  // 508
+	ctl                     = 36
+	listPad                 = 6
+	// Rows stop 12px short of the list's inner edge so its scrollbar never
+	// covers a row.
+	rowW, rowH = leftW - 2*listPad - 12, 60
+	rightGap   = 10
+	bannerH    = 52
+	footerH    = 24
+	// maxRows keeps the library inside the protocol's node budget (a row is
+	// six nodes); search narrows anything longer.
+	maxRows = 120
 )
 
 func BarTree() *v1.Node {
 	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{
-		{Kind: v1.KindButton, ID: "open", Text: "Notes", Name: "Open Notes", Role: "button", Events: []v1.EventKind{v1.EventActivate}},
+		{Kind: v1.KindButton, ID: "open", Icon: "sticky_note_2", Name: "Open Notes", Role: "button", Width: 28, Height: 28, Events: []v1.EventKind{v1.EventActivate}},
 	}}
 }
 
-func TooltipTree() *v1.Node {
+func TooltipTree(count int, last, now time.Time) *v1.Node {
+	line := "No notes yet"
+	if count > 0 {
+		line = fmt.Sprintf("%d notes · last edited %s", count, relativeTime(last, now))
+		if count == 1 {
+			line = "1 note · last edited " + relativeTime(last, now)
+		}
+	}
 	return &v1.Node{Kind: v1.KindColumn, Children: []*v1.Node{
 		{Kind: v1.KindText, Text: "Notes", Bold: true, Size: "label"},
-		{Kind: v1.KindText, Text: "Open your Markdown library", Tone: v1.ToneSubtle},
+		{Kind: v1.KindText, Text: line, Tone: v1.ToneSubtle, Size: "caption"},
 	}}
 }
 
-func PanelTree(s Snapshot, clipboardImport bool) *v1.Node {
-	if s.Editing {
-		return editorTree(s)
-	}
-	capture := input("capture", "capture", "Capture a thought…", s.CaptureText, 52, true)
-	captureChildren := []*v1.Node{capture}
-	if clipboardImport {
-		captureChildren = append(captureChildren, button("clipboard-import", "Paste", "Import plain text from the system clipboard", ""))
-	}
-	captureChildren = append(captureChildren, button("capture-save", "Save", "Capture note", "accent"))
-	children := []*v1.Node{
-		&v1.Node{Kind: v1.KindRow, Key: "header", Height: 42, Gap: 8, Children: []*v1.Node{
-			text("title", "Notes", "headline", false),
-			button("new", "+  New note", "Create a blank note", "accent"),
-		}},
-		text("subtitle", "Your ideas, saved as Markdown", "caption", true),
-		&v1.Node{Kind: v1.KindRow, Key: "capture-card", Fill: FillCard, Radius: 16, Padding: 12, Gap: 10, Children: captureChildren},
-		&v1.Node{Kind: v1.KindRow, Key: "scratchpad", Fill: FillSoft, Radius: 14, Padding: 10, Gap: 8, Children: []*v1.Node{
-			column("scratch-info", 40, 0, 2,
-				text("scratch-title", "Scratchpad", "label", false),
-				text("scratch-subtitle", "Always here · autosaves", "caption", true)),
-			button("scratch", "Open", "Open Scratchpad", ""),
-		}},
-		input("search", "search", "Search titles and notes…", s.Query, 48, false),
-		&v1.Node{Kind: v1.KindRow, Height: 42, Children: []*v1.Node{
-			text("library-label", fmt.Sprintf("LIBRARY  ·  %d", len(s.Notes)), "caption", true),
-			button("sort", sortLabel(s.SortByName), "Change note ordering", ""),
-		}},
-	}
-	if s.LibraryError != "" {
-		children = append(children, notice("library-error", s.LibraryError, true))
-	} else if len(s.Notes) == 0 {
-		copy := "Create your first note or capture a thought above."
-		if s.Query != "" {
-			copy = "No notes match this search. Try a shorter phrase."
-		}
-		children = append(children, notice("empty-library", copy, false))
-	} else {
-		var favorites, recent []Summary
-		for _, note := range s.Notes {
-			if note.Favorite {
-				favorites = append(favorites, note)
-			} else {
-				recent = append(recent, note)
-			}
-		}
-		children = append(children, text("favorites-heading", fmt.Sprintf("FAVORITES  ·  %d", len(favorites)), "caption", true))
-		if len(favorites) == 0 {
-			children = append(children, text("favorites-empty", "Favorite a note to keep it close", "caption", true))
-		} else {
-			children = append(children, noteList("favorite-notes", favorites, 170))
-			if len(favorites) > maxNoteCards {
-				children = append(children, text("favorites-more", fmt.Sprintf("Showing %d of %d · search to narrow", maxNoteCards, len(favorites)), "caption", true))
-			}
-		}
-		children = append(children, text("recent-heading", fmt.Sprintf("RECENT  ·  %d", len(recent)), "caption", true))
-		if len(recent) == 0 {
-			children = append(children, text("recent-empty", "No other notes yet", "caption", true))
-		} else {
-			children = append(children, noteList("recent-notes", recent, 210))
-			if len(recent) > maxNoteCards {
-				children = append(children, text("recent-more", fmt.Sprintf("Showing %d of %d · search to narrow", maxNoteCards, len(recent)), "caption", true))
-			}
-		}
-	}
-	return &v1.Node{Kind: v1.KindList, ID: "library", Key: "library", Height: 800, Padding: 16, Gap: 10, Children: children}
+func PanelTree(s Snapshot, clipboard bool) *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, Padding: pad, Children: []*v1.Node{
+		{Kind: v1.KindRow, Height: innerH, Gap: paneGap, Children: []*v1.Node{libraryPane(s, clipboard), editorPane(s)}},
+	}}
 }
 
-func noteList(id string, items []Summary, height int) *v1.Node {
-	rows := make([]*v1.Node, 0, min(len(items), maxNoteCards))
-	for _, note := range items[:min(len(items), maxNoteCards)] {
-		rows = append(rows, noteCard(note))
+func libraryPane(s Snapshot, clipboard bool) *v1.Node {
+	searchW := leftW - ctl - 8
+	var tools []*v1.Node
+	if clipboard {
+		searchW -= ctl + 8
+		tools = append(tools, iconButton("clipboard-import", "content_paste", "New note from clipboard", ""))
 	}
-	return &v1.Node{Kind: v1.KindList, ID: id, Key: id, Height: height, Gap: 8, Children: rows}
+	tools = append(tools, iconButton("new", "note_add", "New note from the search text", "accent"))
+	box := &v1.Node{Kind: v1.KindRow, Height: 44, Gap: 8, Children: append([]*v1.Node{{
+		Kind: v1.KindTextInput, ID: "omnibox", Key: "omnibox", Name: "Search", Role: "textbox",
+		Placeholder: "Search or create…", Text: s.Query, Width: searchW, Height: 44, Padding: 12,
+		Events: []v1.EventKind{v1.EventChange, v1.EventSubmit},
+	}}, tools...)}
+	children := []*v1.Node{box}
+	listH := innerH - 44 - 8
+	if s.Notice != "" {
+		children = append(children, banner("notice", s.Notice, true, leftW, iconButton("notice-dismiss", "close", "Dismiss message", "")))
+		listH -= bannerH + 8
+	}
+	children = append(children, &v1.Node{Kind: v1.KindList, ID: "library", Key: "library", Fill: "card", Radius: 14,
+		Padding: listPad, Gap: 6, Height: listH, Children: libraryRows(s)})
+	return &v1.Node{Kind: v1.KindColumn, Width: leftW, Gap: 8, Children: children}
 }
 
-func noteCard(note Summary) *v1.Node {
-	favoriteName, favoriteText := "Favorite "+note.Title, "☆"
-	if note.Favorite {
-		favoriteText = "★"
+func isScratch(name string) bool { return strings.HasPrefix(name, "scratchpad.") }
+
+func libraryRows(s Snapshot) []*v1.Node {
+	scratchPreview := "Always here"
+	var pinned, rest []Summary
+	for _, n := range s.Notes {
+		switch {
+		case isScratch(n.Name):
+			if n.Preview != "" {
+				scratchPreview = n.Preview
+			}
+		case n.Favorite:
+			pinned = append(pinned, n)
+		default:
+			rest = append(rest, n)
+		}
 	}
-	preview := note.Preview
+	rows := []*v1.Node{noteRow("scratch", ScratchpadTitle, scratchPreview, "", isScratch(s.Selected), "edit")}
+	if s.ScanError != "" {
+		return append(rows, caption("scan-error", s.ScanError, v1.ToneError))
+	}
+	shown, total := 0, len(pinned)+len(rest)
+	add := func(items []Summary) {
+		for _, n := range items {
+			if shown == maxRows {
+				return
+			}
+			rows = append(rows, noteRow("open:"+Token(n.Name), n.Title, n.Preview, relativeTime(n.Modified, s.Now), n.Name == s.Selected, ""))
+			shown++
+		}
+	}
+	if len(pinned) > 0 {
+		rows = append(rows, sectionHeader("pinned-heading", fmt.Sprintf("Pinned · %d", len(pinned)), nil))
+		add(pinned)
+	}
+	sort := "Recent"
+	if s.SortByName {
+		sort = "A–Z"
+	}
+	rows = append(rows, sectionHeader("notes-heading", fmt.Sprintf("Notes · %d", len(rest)), textButton("sort", sort, "Change note order", "")))
+	add(rest)
+	switch {
+	case total == 0 && strings.TrimSpace(s.Query) != "":
+		rows = append(rows, caption("empty-library", "No matches · Enter creates “"+strings.TrimSpace(s.Query)+"”", v1.ToneSubtle))
+	case total == 0:
+		rows = append(rows, caption("empty-library", "No notes yet. Type above and press Enter.", v1.ToneSubtle))
+	case shown < total:
+		rows = append(rows, caption("library-more", fmt.Sprintf("Showing %d of %d · search to narrow", shown, total), v1.ToneSubtle))
+	}
+	return rows
+}
+
+// noteRow is one library entry: the title and its age on the first line, a
+// preview under it. Rows blend into the list card; only the selection stands
+// out, with the AI Usage tint and accent rim.
+func noteRow(id, title, preview, age string, selected bool, icon string) *v1.Node {
+	row := &v1.Node{Kind: v1.KindButton, ID: id, Key: "row:" + id, Name: accessible("Open " + title), Role: "button",
+		Fill: "card", Radius: 10, Padding: 10, Width: rowW, Height: rowH, Events: []v1.EventKind{v1.EventActivate}}
+	if selected {
+		row.Fill, row.Stroke, row.StrokeFill = "chip", 1, "accent"
+	}
+	head := []*v1.Node{{Kind: v1.KindText, Text: title, Bold: true, Size: "label"}}
+	if icon != "" {
+		head = append([]*v1.Node{{Kind: v1.KindIcon, Icon: icon, IconSize: 16, Tone: v1.ToneSubtle}}, head...)
+	}
+	if age != "" {
+		head = append(head, &v1.Node{Kind: v1.KindText, Text: age, Size: "caption", Tone: v1.ToneSubtle, Tabular: true})
+	}
 	if preview == "" {
-		preview = "No preview yet"
+		preview = "Empty note"
 	}
-	token := Token(note.Name)
-	return &v1.Node{Kind: v1.KindColumn, Key: "note:" + token, Fill: FillCard, Radius: 14, Padding: 10, Gap: 4, Children: []*v1.Node{
-		{Kind: v1.KindRow, Height: 42, Gap: 6, Children: []*v1.Node{
-			{Kind: v1.KindButton, ID: "open:" + token, Text: note.Title, Width: 240, MaxWidth: 220, Height: 36, Padding: 6, Name: accessible("Open note " + note.Title), Role: "button", Events: []v1.EventKind{v1.EventActivate}},
-			button("fav:"+token, favoriteText, accessible(favoriteName), ""),
-		}},
-		text("preview:"+token, preview, "body", false),
-		{Kind: v1.KindRow, Height: 42, Gap: 6, Children: []*v1.Node{
-			text("modified:"+token, relativeTime(note.Modified), "caption", true),
-			button("sticky:"+token, "Sticky", accessible("Open "+note.Title+" as a sticky note"), "soft"),
-		}},
-	}}
+	row.Children = []*v1.Node{{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+		{Kind: v1.KindRow, Height: 22, Gap: 6, PinEnd: age != "", Children: head},
+		{Kind: v1.KindText, Text: preview, Size: "caption", Tone: v1.ToneSubtle},
+	}}}
+	return row
 }
 
-func editorTree(s Snapshot) *v1.Node {
-	status := "Saved to your notes folder"
-	statusTone := v1.ToneSubtle
-	if s.Dirty {
-		status = "Unsaved changes · autosaving"
+func sectionHeader(id, label string, action *v1.Node) *v1.Node {
+	children := []*v1.Node{{Kind: v1.KindText, ID: id, Text: label, Size: "caption", Tone: v1.ToneSubtle, Bold: true}}
+	if action != nil {
+		children = append(children, action)
 	}
-	if s.SaveError != "" {
-		status, statusTone = s.SaveError, v1.ToneError
+	return &v1.Node{Kind: v1.KindRow, Width: rowW, Height: 32, Padding: 2, PinEnd: action != nil, Children: children}
+}
+
+func editorPane(s Snapshot) *v1.Node {
+	if s.Selected == "" {
+		// Centred by a spacer: the plugin vocabulary has no vertical centring.
+		contentH := 20 + 10 + 16 // label, gap, caption
+		art := EmptyArtPath()
+		if art != "" {
+			contentH += 140 + 10
+		}
+		children := []*v1.Node{{Kind: v1.KindColumn, Height: (innerH - contentH) / 2}}
+		if art != "" {
+			children = append(children, &v1.Node{Kind: v1.KindImage, Path: art, ImageW: 200, ImageH: 140, Name: "Sticky notes", Role: "img", CenterX: true})
+		}
+		children = append(children,
+			&v1.Node{Kind: v1.KindText, Text: "No note open", Bold: true, Size: "label", CenterX: true},
+			&v1.Node{Kind: v1.KindText, Text: "Search, pick a note, or press Enter to start one.", Size: "caption", Tone: v1.ToneSubtle, CenterX: true})
+		return &v1.Node{Kind: v1.KindColumn, Width: rightW, Gap: 10, Children: children}
 	}
-	children := []*v1.Node{
-		{Kind: v1.KindRow, Height: 44, Gap: 8, Children: []*v1.Node{
-			button("back", "←  Library", "Back to Notes library", ""),
-			text("editor-heading", "Note", "title", false),
-		}},
-		input("title", "title:"+Token(s.Current), "Note title", s.Title, 52, false),
-		{Kind: v1.KindRow, Height: 42, Gap: 8, Children: []*v1.Node{
-			button("favorite-current", favoriteLabel(s.Pinned), "Toggle favorite", ""),
-			button("sticky-current", "Open sticky", "Open this note as a sticky note", "soft"),
-			button("delete-current", "Delete", "Delete this note", ""),
-		}},
-		&v1.Node{Kind: v1.KindTextInput, ID: "body", Key: "editor-body:" + Token(s.Current), Name: "Markdown note body", Role: "textbox", Events: []v1.EventKind{v1.EventChange}, Text: s.Body, Height: 470, Multiline: true},
-		{Kind: v1.KindText, ID: "save-state", Text: status, Tone: statusTone, Size: "caption"},
+	token := Token(s.Selected)
+	favName, favFill := "Favourite", ""
+	if s.Favorite {
+		favName, favFill = "Unfavourite", "accent"
 	}
-	if s.LibraryError != "" {
-		children = append(children, notice("library-error", s.LibraryError, true))
-	}
+	children := []*v1.Node{{Kind: v1.KindRow, Height: 44, Gap: 8, Children: []*v1.Node{
+		{Kind: v1.KindTextInput, ID: "title", Key: "title:" + token, Name: "Note title", Role: "textbox", Text: s.Title,
+			Width: rightW - 3*ctl - 3*8, Height: 44, Padding: 12, Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
+		iconButton("favorite", "star", favName, favFill),
+		iconButton("sticky", "sticky_note_2", "Open as sticky note", ""),
+		iconButton("delete", "delete", "Delete note", ""),
+	}}}
+	banners := 0
 	if s.Conflict {
-		children = append(children, notice("conflict", "This note changed in another app. Choose which copy to keep.", true),
-			&v1.Node{Kind: v1.KindRow, Height: 42, Gap: 8, Children: []*v1.Node{
-				button("reload", "Reload file", "Discard local text and reload file", ""),
-				button("keep", "Keep my text", "Overwrite file with local text", "accent"),
-			}})
+		children = append(children, banner("conflict", "Changed in another app.", false, rightW,
+			textButton("reload", "Reload file", "Discard your text and reload the file", ""),
+			textButton("keep", "Keep mine", "Overwrite the file with your text", "accent")))
+		banners++
 	}
 	if s.PendingDelete != "" {
-		children = append(children, notice("delete-confirm", "Delete this Markdown file? This cannot be undone.", true),
-			&v1.Node{Kind: v1.KindRow, Height: 42, Gap: 8, Children: []*v1.Node{
-				button("cancel", "Cancel", "Cancel delete", ""),
-				button("confirm-delete", "Delete note", "Confirm delete note", "error"),
-			}})
+		children = append(children, banner("delete-confirm", "Delete this note for good?", true, rightW,
+			textButton("cancel", "Cancel", "Keep the note", ""),
+			textButton("confirm-delete", "Delete", "Delete the note file", "error")))
+		banners++
 	}
-	return &v1.Node{Kind: v1.KindList, ID: "editor", Key: "editor", Height: 800, Padding: 16, Gap: 10, Children: children}
+	bodyH := innerH - 44 - footerH - rightGap*(2+banners) - bannerH*banners
+	children = append(children, &v1.Node{Kind: v1.KindTextInput, ID: "body", Key: "editor-body:" + token, Name: "Note text", Role: "textbox",
+		Events: []v1.EventKind{v1.EventChange}, Text: s.Body, Height: bodyH, Multiline: true, Padding: 12})
+	status, tone := "Saved", v1.ToneSubtle
+	switch {
+	case s.SaveError != "":
+		status, tone = s.SaveError, v1.ToneError
+	case s.Dirty:
+		status = "Saving…"
+	}
+	meta := fmt.Sprintf("%d words · edited %s", s.Words, relativeTime(s.Modified, s.Now))
+	if s.Words == 1 {
+		meta = "1 word · edited " + relativeTime(s.Modified, s.Now)
+	}
+	metaW := len(meta)*8 + 8
+	children = append(children, &v1.Node{Kind: v1.KindRow, Height: footerH, Gap: 8, PinEnd: true, Children: []*v1.Node{
+		{Kind: v1.KindColumn, Width: rightW - metaW - 8, Children: []*v1.Node{{Kind: v1.KindText, ID: "save-state", Text: status, Tone: tone, Size: "caption"}}},
+		{Kind: v1.KindText, Text: meta, Size: "caption", Tone: v1.ToneSubtle, Tabular: true},
+	}})
+	return &v1.Node{Kind: v1.KindColumn, Width: rightW, Gap: rightGap, Children: children}
 }
 
-func StickyTree(doc Document, color string, pinned bool) *v1.Node {
-	colors := []struct{ id, label string }{{"sun", "Sunshine"}, {"mint", "Mint"}, {"sky", "Sky"}, {"rose", "Rose"}, {"lilac", "Lilac"}}
-	buttons := make([]*v1.Node, 0, len(colors))
-	token := Token(doc.Name)
-	for _, c := range colors {
-		fill := stickyFill(c.id)
-		label := c.label + " note color"
-		mark := "●"
-		if c.id == color {
-			fill = "accent"
-			label += " (selected)"
-			mark = "✓"
-		}
-		buttons = append(buttons, &v1.Node{Kind: v1.KindButton, ID: "color:" + token + ":" + c.id, Text: mark, Fill: fill, Width: 34, Height: 34, Name: label, Role: "button", Events: []v1.EventKind{v1.EventActivate}})
+func iconButton(id, icon, name, fill string) *v1.Node {
+	return &v1.Node{Kind: v1.KindButton, ID: id, Icon: icon, Name: name, Tooltip: name, Role: "button", Fill: fill, Shape: "circle",
+		Width: ctl, Height: ctl, Events: []v1.EventKind{v1.EventActivate}}
+}
+
+func textButton(id, text, name, fill string) *v1.Node {
+	return &v1.Node{Kind: v1.KindButton, ID: id, Text: text, Name: name, Tooltip: name, Role: "button", Fill: fill,
+		Width: textButtonWidth(text), Height: 28, Padding: 6, Events: []v1.EventKind{v1.EventActivate}}
+}
+
+func textButtonWidth(text string) int { return len(text)*8 + 24 }
+
+// banner is a one-line message with trailing actions. The text sits in a
+// sized column so a long message clips instead of pushing the actions out.
+func banner(id, text string, isError bool, width int, actions ...*v1.Node) *v1.Node {
+	// The text takes the fill's paired foreground; an error tone on the error
+	// container is pink on red.
+	fill := "soft"
+	if isError {
+		fill = "error-container"
 	}
-	return &v1.Node{Kind: v1.KindColumn, ID: "sticky:" + token, Key: "sticky:" + token, Padding: 14, Gap: 10, Fill: stickyFill(color), Radius: 16, Children: []*v1.Node{
-		{Kind: v1.KindRow, Height: 38, Gap: 4, Children: buttons},
-		&v1.Node{Kind: v1.KindTextInput, ID: "sticky-body:" + token, Key: "sticky-body:" + token, Name: "Sticky note Markdown body", Role: "textbox", Events: []v1.EventKind{v1.EventChange}, Text: doc.Body, Height: 230, Multiline: true},
-		{Kind: v1.KindRow, Height: 28, Gap: 8, Children: []*v1.Node{
-			text("sticky-layer:"+token, stickyLayerLabel(pinned), "caption", true),
-			{Kind: v1.KindText, ID: "sticky-status:" + token, Text: stickyStatus(doc), Tone: stickyTone(doc), Size: "caption"},
-		}},
+	actionsW := 0
+	for i, a := range actions {
+		if i > 0 {
+			actionsW += 8
+		}
+		actionsW += a.Width
+	}
+	group := &v1.Node{Kind: v1.KindRow, Width: actionsW, Height: ctl, Gap: 8, Children: actions}
+	return &v1.Node{Kind: v1.KindRow, ID: id, Height: bannerH, Padding: 8, Gap: 8, Radius: 12, Fill: fill, PinEnd: true, Children: []*v1.Node{
+		{Kind: v1.KindColumn, Width: width - 16 - 8 - actionsW, Padding: 6, Children: []*v1.Node{{Kind: v1.KindText, Text: text}}},
+		group,
 	}}
 }
 
-func stickyFill(color string) string {
-	switch color {
-	case "mint":
-		return "note-mint"
-	case "sky":
-		return "note-sky"
-	case "rose":
-		return "note-rose"
-	case "lilac":
-		return "note-lilac"
-	default:
-		return "note-sun"
-	}
+func caption(id, text string, tone v1.Tone) *v1.Node {
+	return &v1.Node{Kind: v1.KindText, ID: id, Text: text, Size: "caption", Tone: tone}
 }
 
 func Token(name string) string {
@@ -229,90 +289,11 @@ func accessible(value string) string {
 	return value[:limit]
 }
 
-func stickyStatus(d Document) string {
-	if d.Error != "" {
-		return d.Error
-	}
-	if d.Conflict != "" {
-		return "Changed outside Notes · local text kept"
-	}
-	if d.Dirty {
-		return "Saving…"
-	}
-	return "Saved · Markdown"
-}
-
-func stickyTone(d Document) v1.Tone {
-	if d.Error != "" || d.Conflict != "" {
-		return v1.ToneError
-	}
-	return v1.ToneSubtle
-}
-func conditionalFill(on bool) string {
-	if on {
-		return "accent"
-	}
-	return ""
-}
-func pinLabel(on bool) string {
-	if on {
-		return "Pinned"
-	}
-	return "Pin"
-}
-func stickyLayerLabel(on bool) string {
-	if on {
-		return "Always on top"
-	}
-	return "Window note"
-}
-func favoriteLabel(on bool) string {
-	if on {
-		return "★  Favorited"
-	}
-	return "☆  Favorite"
-}
-func sortLabel(byName bool) string {
-	if byName {
-		return "Name ↑"
-	}
-	return "Recent ↓"
-}
-
-func text(id, value, size string, subtle bool) *v1.Node {
-	n := &v1.Node{Kind: v1.KindText, ID: id, Text: value, Size: size}
-	if subtle {
-		n.Tone = v1.ToneSubtle
-	}
-	return n
-}
-
-func button(id, value, name, fill string) *v1.Node {
-	return &v1.Node{Kind: v1.KindButton, ID: id, Text: value, Name: name, Role: "button", Events: []v1.EventKind{v1.EventActivate}, Fill: fill, Height: 36, Padding: 8}
-}
-
-func input(id, key, placeholder, value string, height int, multiline bool) *v1.Node {
-	return &v1.Node{Kind: v1.KindTextInput, ID: id, Key: key, Text: value, Placeholder: placeholder, Name: placeholder, Role: "textbox", Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}, Height: height, Multiline: multiline}
-}
-
-func column(id string, height, padding, gap int, children ...*v1.Node) *v1.Node {
-	return &v1.Node{Kind: v1.KindColumn, ID: id, Height: height, Padding: padding, Gap: gap, Children: children}
-}
-
-func notice(id, value string, errorState bool) *v1.Node {
-	tone := v1.ToneSubtle
-	fill := FillSoft
-	if errorState {
-		tone, fill = v1.ToneError, "error-container"
-	}
-	return &v1.Node{Kind: v1.KindColumn, ID: id, Fill: fill, Radius: 12, Padding: 14, Children: []*v1.Node{{Kind: v1.KindText, Text: value, Tone: tone}}}
-}
-
-func relativeTime(t time.Time) string {
+func relativeTime(t, now time.Time) string {
 	if t.IsZero() {
 		return "Just now"
 	}
-	d := time.Since(t)
+	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
 		return "Just now"
@@ -327,11 +308,56 @@ func relativeTime(t time.Time) string {
 	}
 }
 
-func filepathExt(name string) string {
-	for i := len(name) - 1; i >= 0; i-- {
-		if name[i] == '.' {
-			return name[i:]
+// StickyTree is a sticky note's content: the body first, then the paper
+// colours and, only when a save failed or the file changed elsewhere, that
+// state on its own line. Sharing the colours' row let the text squeeze the
+// dots out, and the shell refuses a row that does not fit. The shell adds the
+// title bar, pin, close and resize grip, paints the fill as the paper, and
+// stretches the body to the window.
+func StickyTree(doc Document, color string) *v1.Node {
+	token := Token(doc.Name)
+	dots := make([]*v1.Node, 0, len(stickyColors))
+	for _, c := range stickyColors {
+		dot := &v1.Node{Kind: v1.KindButton, ID: "color:" + token + ":" + c.id, Fill: stickyFill(c.id), Shape: "circle",
+			Width: 20, Height: 20, Name: c.label + " paper", Tooltip: c.label + " paper", Role: "button", Events: []v1.EventKind{v1.EventActivate},
+			// An ink ring keeps each dot visible on paper of its own colour.
+			Stroke: 1, StrokeFill: "outline"}
+		if c.id == color {
+			dot.Icon, dot.Name, dot.Stroke = "check", c.label+" paper (selected)", 2
 		}
+		dots = append(dots, dot)
+	}
+	children := []*v1.Node{
+		// 40 is a floor; the shell grows the body to fill the window.
+		{Kind: v1.KindTextInput, ID: "sticky-body:" + token, Key: "sticky-body:" + token, Name: "Sticky note text", Role: "textbox",
+			Events: []v1.EventKind{v1.EventChange}, Text: doc.Body, Height: 40, Multiline: true, Padding: 8},
+		{Kind: v1.KindRow, Width: len(stickyColors)*20 + (len(stickyColors)-1)*6, Height: 20, Gap: 6, Children: dots},
+	}
+	if status := stickyStatus(doc); status != "" {
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: status, Tone: v1.ToneError, Size: "caption"})
+	}
+	return &v1.Node{Kind: v1.KindColumn, ID: "sticky:" + token, Key: "sticky:" + token, Fill: stickyFill(color), Padding: 10, Gap: 8, Children: children}
+}
+
+var stickyColors = []struct{ id, label string }{{"sun", "Sunshine"}, {"mint", "Mint"}, {"sky", "Sky"}, {"rose", "Rose"}, {"lilac", "Lilac"}}
+
+func stickyFill(color string) string {
+	for _, c := range stickyColors {
+		if c.id == color {
+			return "note-" + c.id
+		}
+	}
+	return "note-sun"
+}
+
+// stickyStatus is the state a sticky must show: one that lasts until the
+// user acts. Saving is not one; autosave lands within a second.
+func stickyStatus(d Document) string {
+	switch {
+	case d.Error != "":
+		return d.Error
+	case d.Conflict != "":
+		return "Changed elsewhere · resolve in Notes"
 	}
 	return ""
 }

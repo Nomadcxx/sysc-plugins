@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,39 @@ type Store struct {
 	Dir, Ext  string
 	favorites map[string]bool
 	now       func() time.Time
+	// cache holds what List derived from each note, keyed by name and valid
+	// while the file's size and modification time are unchanged, so an open
+	// panel does not re-read every body on each refresh.
+	cache map[string]listEntry
+	// bodyReads counts note bodies List actually read, for tests.
+	bodyReads int
+}
+
+type listEntry struct {
+	size    int64
+	mod     time.Time
+	title   string
+	preview string
+	lower   string
+	words   int
+}
+
+var captureName = regexp.MustCompile(`^note-\d{4}-\d{2}-\d{2}-\d{6}(-\d{2}| \d+)?$`)
+
+// displayTitle is how the library names a note. A generated capture name says
+// nothing, so it shows the note's first line without heading marks; any other
+// file shows its own name.
+func displayTitle(name, body string) string {
+	stem := strings.TrimSuffix(name, filepath.Ext(name))
+	if !captureName.MatchString(stem) {
+		return stem
+	}
+	for _, line := range strings.Split(body, "\n") {
+		if t := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#")); t != "" {
+			return t
+		}
+	}
+	return stem
 }
 
 type Summary struct {
@@ -34,6 +68,7 @@ type Summary struct {
 	Preview  string
 	Modified time.Time
 	Favorite bool
+	Words    int
 }
 
 func Open(dir, ext string) (*Store, error) {
@@ -65,7 +100,7 @@ func Open(dir, ext string) (*Store, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return nil, errors.New("notes: configured folder must be a real directory")
 	}
-	s := &Store{Dir: abs, Ext: ext, favorites: map[string]bool{}, now: time.Now}
+	s := &Store{Dir: abs, Ext: ext, favorites: map[string]bool{}, now: time.Now, cache: map[string]listEntry{}}
 	if err := s.loadFavorites(); err != nil {
 		return nil, err
 	}
@@ -207,6 +242,7 @@ func (s *Store) List(query string, byName bool) ([]Summary, error) {
 	}
 	needle := strings.ToLower(strings.TrimSpace(query))
 	out := make([]Summary, 0, len(entries))
+	seen := make(map[string]bool, len(entries))
 	for _, entry := range entries {
 		name := entry.Name()
 		if strings.HasPrefix(name, ".") || !strings.HasSuffix(strings.ToLower(name), "."+s.Ext) {
@@ -223,28 +259,28 @@ func (s *Store) List(query string, byName bool) ([]Summary, error) {
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		f, err := os.Open(path)
-		if err != nil {
-			return nil, fmt.Errorf("notes: read %s: %w", name, err)
+		seen[name] = true
+		entry, ok := s.cache[name]
+		if !ok || entry.size != info.Size() || !entry.mod.Equal(info.ModTime()) {
+			body, err := readListBody(name, path)
+			if err != nil {
+				return nil, err
+			}
+			s.bodyReads++
+			title := displayTitle(name, body)
+			entry = listEntry{size: info.Size(), mod: info.ModTime(), title: title, preview: excerpt(body, 150),
+				lower: strings.ToLower(title + "\n" + body), words: len(strings.Fields(body))}
+			s.cache[name] = entry
 		}
-		b, readErr := io.ReadAll(io.LimitReader(f, maxNoteBytes+1))
-		closeErr := f.Close()
-		if readErr != nil {
-			return nil, fmt.Errorf("notes: read %s: %w", name, readErr)
-		}
-		if closeErr != nil {
-			return nil, fmt.Errorf("notes: close %s: %w", name, closeErr)
-		}
-		if len(b) > maxNoteBytes {
-			return nil, fmt.Errorf("notes: %s exceeds %d bytes", name, maxNoteBytes)
-		}
-		body := string(b)
-		title := strings.TrimSuffix(name, filepath.Ext(name))
-		preview := excerpt(body, 150)
-		if needle != "" && !strings.Contains(strings.ToLower(title+"\n"+body), needle) {
+		if needle != "" && !strings.Contains(entry.lower, needle) {
 			continue
 		}
-		out = append(out, Summary{Name: name, Title: title, Preview: preview, Modified: info.ModTime(), Favorite: s.favorites[name]})
+		out = append(out, Summary{Name: name, Title: entry.title, Preview: entry.preview, Modified: info.ModTime(), Favorite: s.favorites[name], Words: entry.words})
+	}
+	for name := range s.cache {
+		if !seen[name] {
+			delete(s.cache, name)
+		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Favorite != out[j].Favorite {
@@ -256,6 +292,67 @@ func (s *Store) List(query string, byName bool) ([]Summary, error) {
 		return out[i].Modified.After(out[j].Modified)
 	})
 	return out, nil
+}
+
+func readListBody(name, path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("notes: read %s: %w", name, err)
+	}
+	b, readErr := io.ReadAll(io.LimitReader(f, maxNoteBytes+1))
+	closeErr := f.Close()
+	if readErr != nil {
+		return "", fmt.Errorf("notes: read %s: %w", name, readErr)
+	}
+	if closeErr != nil {
+		return "", fmt.Errorf("notes: close %s: %w", name, closeErr)
+	}
+	if len(b) > maxNoteBytes {
+		return "", fmt.Errorf("notes: %s exceeds %d bytes", name, maxNoteBytes)
+	}
+	return string(b), nil
+}
+
+// CreateTitled creates a note named after title, the way Obsidian names a new
+// note: unsafe characters become spaces, a collision gains " 2", " 3", and a
+// title with nothing usable left falls back to a dated capture name. It
+// returns the created file's name.
+func (s *Store) CreateTitled(title, body string) (string, error) {
+	base := strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`/\:*?"<>|`, r) || r < 0x20 {
+			return ' '
+		}
+		return r
+	}, title)
+	base = strings.Trim(strings.Join(strings.Fields(base), " "), ". ")
+	if len(base) > 80 {
+		cut := 80
+		for cut > 0 && !utf8Boundary(base, cut) {
+			cut--
+		}
+		base = strings.Trim(base[:cut], ". ")
+	}
+	if base == "" {
+		now := s.now
+		if now == nil {
+			now = time.Now
+		}
+		base = "note-" + now().Format("2006-01-02-150405")
+	}
+	for n := 1; n < 1000; n++ {
+		name := base + "." + s.Ext
+		if n > 1 {
+			name = fmt.Sprintf("%s %d.%s", base, n, s.Ext)
+		}
+		err := s.Create(name, body)
+		if err == nil {
+			return name, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return "", err
+		}
+	}
+	return "", errors.New("notes: could not choose a unique note name")
 }
 
 func (s *Store) Rename(oldName, newName string) error {
