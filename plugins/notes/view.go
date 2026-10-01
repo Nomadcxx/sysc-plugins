@@ -308,69 +308,54 @@ func relativeTime(t, now time.Time) string {
 	}
 }
 
-func StickyTree(doc Document, color string, pinned bool) *v1.Node {
-	colors := []struct{ id, label string }{{"sun", "Sunshine"}, {"mint", "Mint"}, {"sky", "Sky"}, {"rose", "Rose"}, {"lilac", "Lilac"}}
-	buttons := make([]*v1.Node, 0, len(colors))
+// StickyTree is a sticky note's content: the body first, then the paper
+// colours and, only when it is not saved, the save state. The shell adds the
+// title bar, pin, close and resize grip, paints the fill as the paper, and
+// stretches the body to the window.
+func StickyTree(doc Document, color string) *v1.Node {
 	token := Token(doc.Name)
-	for _, c := range colors {
-		fill := stickyFill(c.id)
-		label := c.label + " note color"
-		mark := "●"
+	dots := make([]*v1.Node, 0, len(stickyColors))
+	for _, c := range stickyColors {
+		dot := &v1.Node{Kind: v1.KindButton, ID: "color:" + token + ":" + c.id, Fill: stickyFill(c.id), Shape: "circle",
+			Width: 20, Height: 20, Name: c.label + " paper", Role: "button", Events: []v1.EventKind{v1.EventActivate},
+			// An ink ring keeps each dot visible on paper of its own colour.
+			Stroke: 1, StrokeFill: "outline"}
 		if c.id == color {
-			fill = "accent"
-			label += " (selected)"
-			mark = "✓"
+			dot.Icon, dot.Name, dot.Stroke = "check", c.label+" paper (selected)", 2
 		}
-		buttons = append(buttons, &v1.Node{Kind: v1.KindButton, ID: "color:" + token + ":" + c.id, Text: mark, Fill: fill, Width: 34, Height: 34, Name: label, Role: "button", Events: []v1.EventKind{v1.EventActivate}})
+		dots = append(dots, dot)
 	}
-	return &v1.Node{Kind: v1.KindColumn, ID: "sticky:" + token, Key: "sticky:" + token, Padding: 14, Gap: 10, Fill: stickyFill(color), Radius: 16, Children: []*v1.Node{
-		{Kind: v1.KindRow, Height: 38, Gap: 4, Children: buttons},
-		&v1.Node{Kind: v1.KindTextInput, ID: "sticky-body:" + token, Key: "sticky-body:" + token, Name: "Sticky note Markdown body", Role: "textbox", Events: []v1.EventKind{v1.EventChange}, Text: doc.Body, Height: 230, Multiline: true},
-		{Kind: v1.KindRow, Height: 28, Gap: 8, Children: []*v1.Node{
-			{Kind: v1.KindText, ID: "sticky-layer:" + token, Text: stickyLayerLabel(pinned), Size: "caption", Tone: v1.ToneSubtle},
-			{Kind: v1.KindText, ID: "sticky-status:" + token, Text: stickyStatus(doc), Tone: stickyTone(doc), Size: "caption"},
-		}},
+	footer := []*v1.Node{{Kind: v1.KindRow, Width: len(stickyColors)*20 + (len(stickyColors)-1)*6, Height: 20, Gap: 6, Children: dots}}
+	if status, tone := stickyStatus(doc); status != "" {
+		footer = append(footer, &v1.Node{Kind: v1.KindText, Text: status, Tone: tone, Size: "caption"})
+	}
+	return &v1.Node{Kind: v1.KindColumn, ID: "sticky:" + token, Key: "sticky:" + token, Fill: stickyFill(color), Padding: 10, Gap: 8, Children: []*v1.Node{
+		// 40 is a floor; the shell grows the body to fill the window.
+		{Kind: v1.KindTextInput, ID: "sticky-body:" + token, Key: "sticky-body:" + token, Name: "Sticky note text", Role: "textbox",
+			Events: []v1.EventKind{v1.EventChange}, Text: doc.Body, Height: 40, Multiline: true, Padding: 8},
+		{Kind: v1.KindRow, Height: 24, Gap: 8, PinEnd: len(footer) == 2, Children: footer},
 	}}
 }
 
+var stickyColors = []struct{ id, label string }{{"sun", "Sunshine"}, {"mint", "Mint"}, {"sky", "Sky"}, {"rose", "Rose"}, {"lilac", "Lilac"}}
+
 func stickyFill(color string) string {
-	switch color {
-	case "mint":
-		return "note-mint"
-	case "sky":
-		return "note-sky"
-	case "rose":
-		return "note-rose"
-	case "lilac":
-		return "note-lilac"
-	default:
-		return "note-sun"
+	for _, c := range stickyColors {
+		if c.id == color {
+			return "note-" + c.id
+		}
 	}
+	return "note-sun"
 }
 
-func stickyStatus(d Document) string {
-	if d.Error != "" {
-		return d.Error
+func stickyStatus(d Document) (string, v1.Tone) {
+	switch {
+	case d.Error != "":
+		return d.Error, v1.ToneError
+	case d.Conflict != "":
+		return "Changed elsewhere · yours kept", v1.ToneError
+	case d.Dirty:
+		return "Saving…", v1.ToneSubtle
 	}
-	if d.Conflict != "" {
-		return "Changed outside Notes · local text kept"
-	}
-	if d.Dirty {
-		return "Saving…"
-	}
-	return "Saved · Markdown"
-}
-
-func stickyTone(d Document) v1.Tone {
-	if d.Error != "" || d.Conflict != "" {
-		return v1.ToneError
-	}
-	return v1.ToneSubtle
-}
-
-func stickyLayerLabel(on bool) string {
-	if on {
-		return "Always on top"
-	}
-	return "Window note"
+	return "", v1.ToneSubtle
 }

@@ -192,3 +192,58 @@ func TestPanelRowsLeaveRoomForRealText(t *testing.T) {
 		rowsLeaveRoomForRealText(t, name, PanelTree(snap, true))
 	}
 }
+
+// The shell frames a sticky with a 44px title bar and a 16px grip at default
+// density; at its 200x180 minimum the content gets what is left.
+const stickyMinW, stickyMinContentH = 200, 180 - 44 - 16
+
+func TestStickyFitsAndIsBodyFirst(t *testing.T) {
+	doc := Document{Name: "Weekly review.md", Body: strings.Repeat("line\n", 80)}
+	for _, c := range []string{"sun", "mint", "sky", "rose", "lilac"} {
+		tree := StickyTree(doc, c)
+		for _, f := range shelllint.Tree(tree, v1.ViewFloating, stickyMinW, stickyMinContentH) {
+			t.Errorf("%s: %s", c, f)
+		}
+		if tree.Children[0].Kind != v1.KindTextInput || tree.Fill != "note-"+c {
+			t.Errorf("%s: body must come first on note paper", c)
+		}
+		rowsLeaveRoomForRealText(t, c, tree)
+	}
+}
+
+func TestStickyShowsSelectedColourWithACheck(t *testing.T) {
+	tree := StickyTree(Document{Name: "a.md"}, "mint")
+	dot := findByID(tree, "color:"+Token("a.md")+":mint")
+	if dot.Icon != "check" || dot.Fill != "note-mint" {
+		t.Fatalf("selected dot = %+v", dot)
+	}
+	if other := findByID(tree, "color:"+Token("a.md")+":sun"); other.Icon != "" || other.Fill != "note-sun" {
+		t.Fatalf("unselected dot = %+v", other)
+	}
+}
+
+func TestStickyStatusOnlyWhenNotSaved(t *testing.T) {
+	if findText(StickyTree(Document{Name: "a.md"}, "sun"), "Saved") != nil {
+		t.Error("a saved sticky must not print its save state")
+	}
+	if findText(StickyTree(Document{Name: "a.md", Dirty: true}, "sun"), "Saving…") == nil {
+		t.Error("a dirty sticky must say Saving…")
+	}
+	if n := findText(StickyTree(Document{Name: "a.md", Error: "Save failed: disk full"}, "sun"), "Save failed: disk full"); n == nil || n.Tone != v1.ToneError {
+		t.Error("a failed save must show in the error tone")
+	}
+}
+
+func TestStickyDotsAreRingedSoTheyShowOnTheirOwnPaper(t *testing.T) {
+	tree := StickyTree(Document{Name: "a.md"}, "sun")
+	for _, c := range stickyColors {
+		dot := findByID(tree, "color:"+Token("a.md")+":"+c.id)
+		want := 1
+		if c.id == "sun" {
+			want = 2
+		}
+		if dot.Stroke != want || dot.StrokeFill != "outline" {
+			t.Errorf("%s dot stroke %d %q, want %d outline", c.id, dot.Stroke, dot.StrokeFill, want)
+		}
+	}
+}
