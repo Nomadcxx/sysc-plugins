@@ -1,5 +1,6 @@
 PLUGINS := \
 	sysc-plugin-screen-recorder:screen-recorder \
+	sysc-plugin-screenshot:screenshot \
 	sysc-plugin-notes:notes \
 	sysc-plugin-timer:timer \
 	sysc-plugin-world-clock:world-clock \

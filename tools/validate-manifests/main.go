@@ -76,6 +76,7 @@ var allowedCapabilities = map[string]bool{
 	"clipboard-read":    true,
 	"clipboard-write":   true,
 	"open-url":          true,
+	"screenshot":        true,
 }
 
 var allowedSettingTypes = map[string]bool{
@@ -193,22 +194,24 @@ func validate(path string, seenIDs map[string]string) error {
 // requiredCap maps a hostcall constant to the capability the host demands
 // for it. Add one row per new gated call, mirroring the host's switch.
 var requiredCap = map[string]string{
-	"CallStateGet":          "state",
-	"CallStateSet":          "state",
-	"CallStateList":         "state",
-	"CallPanelOpen":         "panels",
-	"CallPanelClose":        "panels",
-	"CallPanelResize":       "panels",
-	"CallViewFocus":         "panels",
-	"CallSurfaceOpen":       "floating_surfaces",
-	"CallSurfaceClose":      "floating_surfaces",
-	"CallSurfacePin":        "floating_surfaces",
-	"CallNotify":            "notifications",
-	"CallWallpaperSnapshot": "wallpaper",
-	"CallWallpaperMaskSet":  "wallpaper",
-	"CallClipboardRead":     "clipboard-read",
-	"CallClipboardWrite":    "clipboard-write",
-	"CallOpenURL":           "open-url",
+	"CallStateGet":            "state",
+	"CallStateSet":            "state",
+	"CallStateList":           "state",
+	"CallPanelOpen":           "panels",
+	"CallPanelClose":          "panels",
+	"CallPanelResize":         "panels",
+	"CallViewFocus":           "panels",
+	"CallSurfaceOpen":         "floating_surfaces",
+	"CallSurfaceClose":        "floating_surfaces",
+	"CallSurfacePin":          "floating_surfaces",
+	"CallNotify":              "notifications",
+	"CallWallpaperSnapshot":   "wallpaper",
+	"CallWallpaperMaskSet":    "wallpaper",
+	"CallClipboardRead":       "clipboard-read",
+	"CallClipboardWrite":      "clipboard-write",
+	"CallOpenURL":             "open-url",
+	"CallScreenshotStart":     "screenshot",
+	"CallScreenshotDirectory": "screenshot",
 }
 
 // validateHostcallCaps scans the plugin's Go sources under

@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "org.sysc.screenshot",
+  "name": "Screenshot",
+  "description": "Takes a region, window or screen screenshot from a bar button, using the shell's own capture engine.",
+  "version": "1.0.0",
+  "protocol": {"major": 1, "minor": 10},
+  "exec": "bin/sysc-plugin-screenshot",
+  "capabilities": ["panels", "screenshot"],
+  "requires": {"commands": []},
+  "services": [{"id": "screenshot"}],
+  "widgets": [{"id": "bar", "settings": []}],
+  "panels": [{"id": "panel", "width": 360, "height": 260, "placement": "attached"}],
+  "settings": []
+}
