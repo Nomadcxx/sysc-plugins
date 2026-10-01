@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,11 @@ import (
 const (
 	pinnedStateKey = "sticky-pinned"
 	colorStateBase = "sticky-color."
+	// A new sticky opens at stickyOrigin and each further one on the same
+	// output steps down and right, wrapping after stickyCascade.
+	stickyOriginX, stickyOriginY = 56, 92
+	stickyStep, stickyCascade    = 28, 8
+	stickyWidth, stickyHeight    = 300, 320
 )
 
 type view struct {
@@ -37,6 +43,37 @@ type pinnedSurface struct {
 	Output string `json:"output"`
 }
 
+// publisher remembers the last tree sent to each view, so the 1s tick only
+// sends a view whose content changed.
+type publisher map[string][sha256.Size]byte
+
+func (p publisher) changed(id string, tree *v1.Node) bool {
+	b, err := json.Marshal(tree)
+	if err != nil {
+		return true
+	}
+	sum := sha256.Sum256(b)
+	if prev, ok := p[id]; ok && prev == sum {
+		return false
+	}
+	p[id] = sum
+	return true
+}
+
+func (p publisher) forget(id string) { delete(p, id) }
+
+// cascade is where the next sticky on output opens.
+func cascade(views map[string]view, output string) (x, y int) {
+	n := 0
+	for _, v := range views {
+		if v.kind == v1.ViewFloating && v.output == output {
+			n++
+		}
+	}
+	step := (n % stickyCascade) * stickyStep
+	return stickyOriginX + step, stickyOriginY + step
+}
+
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {
 		os.Exit(1)
@@ -45,7 +82,7 @@ func main() {
 
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
-	hello, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.0.0"}))
+	hello, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.1.0"}))
 	if err != nil {
 		return err
 	}
@@ -58,6 +95,7 @@ func run(in *os.File, out *os.File) error {
 		return sess
 	}
 	views := map[string]view{}
+	pub := publisher{}
 	var pins []pinnedSurface
 	pinsLoaded := false
 	ctx, cancel := context.WithCancel(context.Background())
@@ -96,36 +134,43 @@ func run(in *os.File, out *os.File) error {
 		if sess == nil {
 			return
 		}
-		managerOpen := false
-		for _, v := range views {
-			if v.kind == v1.ViewPanel {
-				managerOpen = true
-				break
-			}
-		}
 		var snap notes.Snapshot
-		if managerOpen {
-			snap = sess.Snap()
+		haveSnap := false
+		library := func() notes.Snapshot {
+			if !haveSnap {
+				snap, haveSnap = sess.Snap(), true
+			}
+			return snap
 		}
 		for id, v := range views {
-			v.rev++
-			views[id] = v
 			var tree *v1.Node
 			switch v.kind {
 			case v1.ViewBar:
 				tree = notes.BarTree()
 			case v1.ViewTooltip:
-				tree = notes.TooltipTree()
+				s := library()
+				var last time.Time
+				for _, n := range s.Notes {
+					if n.Modified.After(last) {
+						last = n.Modified
+					}
+				}
+				tree = notes.TooltipTree(len(s.Notes), last, s.Now)
 			case v1.ViewFloating:
 				doc, err := sess.Document(v.name)
 				if err != nil {
-					sess.ReportError("Could not open sticky note: " + err.Error())
+					sess.Notify("Could not open sticky note: " + err.Error())
 					continue
 				}
-				tree = notes.StickyTree(doc, v.color, v.pinned)
+				tree = notes.StickyTree(doc, v.color)
 			default:
-				tree = notes.PanelTree(snap, canReadClipboard)
+				tree = notes.PanelTree(library(), canReadClipboard)
 			}
+			if !pub.changed(id, tree) {
+				continue
+			}
+			v.rev++
+			views[id] = v
 			_ = c.Snapshot(id, v.rev, tree)
 		}
 	}
@@ -144,9 +189,6 @@ func run(in *os.File, out *os.File) error {
 			return errors.New("notes: output identity is unavailable for a sticky note")
 		}
 		s := ensure()
-		if s == nil {
-			return errors.New("notes: configured folder is unavailable")
-		}
 		if _, err := s.Document(name); err != nil {
 			return err
 		}
@@ -158,9 +200,10 @@ func run(in *os.File, out *os.File) error {
 			return err
 		}
 		color = validColor(color)
+		x, y := cascade(views, output)
 		params := v1.SurfaceOpenParams{
 			Key: "note:" + notes.Token(name), Title: strings.TrimSuffix(name, filepath.Ext(name)),
-			Output: output, Generation: generation, X: 56, Y: 92, Width: 360, Height: 440,
+			Output: output, Generation: generation, X: x, Y: y, Width: stickyWidth, Height: stickyHeight,
 		}
 		var result v1.SurfaceResult
 		if err := call(ctx, c, v1.CallSurfaceOpen, params, &result); err != nil {
@@ -171,10 +214,30 @@ func run(in *os.File, out *os.File) error {
 		}
 		pinned := isPinned(pins, name, output)
 		views[result.ViewID] = view{kind: v1.ViewFloating, name: name, color: color, pinned: pinned, output: output, generation: generation}
-		if err := call(ctx, c, v1.CallSurfacePin, v1.SurfacePinParams{View: result.ViewID, Pinned: pinned}, nil); err != nil {
-			return err
+		return call(ctx, c, v1.CallSurfacePin, v1.SurfacePinParams{View: result.ViewID, Pinned: pinned}, nil)
+	}
+
+	// afterRename carries a renamed note's sticky colour and pins to its new
+	// name and reopens its stickies so their title bars follow.
+	afterRename := func(oldName, newName string) {
+		if err := migrateNoteState(ctx, c, oldName, newName, &pins, loadPins); err != nil {
+			sess.Notify("Could not move sticky settings to the new name: " + err.Error())
+			return
 		}
-		return nil
+		for id, v := range views {
+			if v.kind != v1.ViewFloating || v.name != oldName {
+				continue
+			}
+			if err := call(ctx, c, v1.CallSurfaceClose, v1.SurfaceCloseParams{View: id}, nil); err != nil {
+				sess.Notify(err.Error())
+				continue
+			}
+			delete(views, id)
+			pub.forget(id)
+			if err := openSticky(newName, v.output, v.generation); err != nil {
+				sess.Notify(err.Error())
+			}
+		}
 	}
 
 	restorePins := func(output string, generation uint32) {
@@ -182,9 +245,7 @@ func run(in *os.File, out *os.File) error {
 			return
 		}
 		if err := loadPins(); err != nil {
-			if s := ensure(); s != nil {
-				s.ReportError("Could not restore sticky notes: " + err.Error())
-			}
+			ensure().Notify("Could not restore sticky notes: " + err.Error())
 			return
 		}
 		for _, pin := range pins {
@@ -192,9 +253,7 @@ func run(in *os.File, out *os.File) error {
 				continue
 			}
 			if err := openSticky(pin.Name, output, generation); err != nil {
-				if s := ensure(); s != nil {
-					s.ReportError("Could not restore " + pin.Name + ": " + err.Error())
-				}
+				ensure().Notify("Could not restore " + pin.Name + ": " + err.Error())
 			}
 		}
 	}
@@ -223,7 +282,7 @@ func run(in *os.File, out *os.File) error {
 				v := view{kind: m.View, output: m.Output, generation: m.Generation}
 				if m.View == v1.ViewFloating {
 					if err := loadPins(); err != nil {
-						sess.ReportError("Could not load sticky note state: " + err.Error())
+						sess.Notify("Could not load sticky note state: " + err.Error())
 					} else {
 						for _, pin := range pins {
 							if "note:"+notes.Token(pin.Name) == m.Entry {
@@ -241,7 +300,7 @@ func run(in *os.File, out *os.File) error {
 						}
 					}
 					if v.name == "" {
-						sess.ReportError("Could not identify a restored sticky note")
+						sess.Notify("Could not identify a restored sticky note")
 						continue
 					}
 					if v.color == "" {
@@ -251,6 +310,7 @@ func run(in *os.File, out *os.File) error {
 					}
 				}
 				views[m.ViewID] = v
+				pub.forget(m.ViewID)
 				snapshot()
 				if m.View != v1.ViewFloating {
 					restorePins(m.Output, m.Generation)
@@ -264,26 +324,29 @@ func run(in *os.File, out *os.File) error {
 						}
 					} else if v.kind == v1.ViewPanel {
 						if err := sess.Close(); err != nil {
-							sess.ReportError("Save failed while closing Notes: " + err.Error())
+							sess.Notify("Save failed while closing Notes: " + err.Error())
 						}
 					}
 				}
 				delete(views, m.ViewID)
+				pub.forget(m.ViewID)
 				snapshot()
 			case *v1.ViewResync:
 				if v, ok := views[m.ViewID]; ok {
 					v.rev = 0
 					views[m.ViewID] = v
 				}
+				pub.forget(m.ViewID)
 				snapshot()
 			case *v1.InputEvent:
-				if ensure() == nil {
-					continue
-				}
+				ensure()
 				if v, ok := views[m.ViewID]; ok && v.kind == v1.ViewFloating {
 					handleSticky(ctx, c, sess, m, v, views, &pins, loadPins)
 				} else {
 					handlePanel(ctx, c, sess, m, openSticky, views, &pins, loadPins)
+				}
+				if from, to, ok := sess.TakeRename(); ok {
+					afterRename(from, to)
 				}
 				snapshot()
 			case *v1.SettingsChanged:
@@ -297,39 +360,55 @@ func run(in *os.File, out *os.File) error {
 func handlePanel(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.InputEvent, openSticky func(string, string, uint32) error, views map[string]view, pins *[]pinnedSurface, loadPins func() error) {
 	fail := func(err error) {
 		if err != nil {
-			sess.ReportError(err.Error())
+			sess.Notify(err.Error())
 		}
 	}
+	failName := func(_ string, err error) { fail(err) }
+	sess.ClearNotice()
 	snap := sess.Snap()
+	sel := snap.Selected
 	switch {
 	case m.Node == "open":
 		_, err := c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
 		fail(err)
+	case m.Node == "omnibox" && m.Event == v1.EventSubmit:
+		failName(sess.SubmitQuery())
+	case m.Node == "omnibox":
+		sess.Search(m.Text)
 	case m.Node == "new":
-		fail(sess.Create())
-	case m.Node == "capture":
-		sess.SetCaptureText(m.Text)
-	case m.Node == "capture-save":
-		if strings.TrimSpace(snap.CaptureText) != "" {
-			fail(sess.Capture(snap.CaptureText))
-		}
+		failName(sess.CreateFromQuery())
 	case m.Node == "clipboard-import":
 		var result v1.ClipboardReadResult
 		if err := call(ctx, c, v1.CallClipboardRead, v1.ClipboardReadParams{}, &result); err != nil {
 			fail(err)
-		} else if result.Text == "" {
-			sess.ReportError("The clipboard has no plain text")
+		} else if strings.TrimSpace(result.Text) == "" {
+			sess.Notify("The clipboard has no plain text")
 		} else {
-			sess.SetCaptureText(result.Text)
+			failName(sess.CreateWithBody(result.Text))
 		}
 	case m.Node == "launcher-capture":
 		if strings.TrimSpace(m.Text) != "" {
-			fail(sess.Capture(m.Text))
+			failName(sess.CreateWithBody(m.Text))
 		}
 	case m.Node == "scratch":
 		fail(sess.OpenScratch())
-	case m.Node == "back":
-		fail(sess.Back())
+	case m.Node == "notice-dismiss":
+		sess.DismissNotice()
+	case m.Node == "sort":
+		sess.ToggleSort()
+	case m.Node == "title" && m.Event == v1.EventSubmit:
+		sess.SetTitleDraft(m.Text)
+		fail(sess.CommitTitle())
+	case m.Node == "title":
+		sess.SetTitleDraft(m.Text)
+	case m.Node == "body":
+		fail(sess.Type(m.Text))
+	case m.Node == "favorite" && sel != "":
+		fail(sess.SetFavorite(sel, !snap.Favorite))
+	case m.Node == "sticky" && sel != "":
+		fail(openSticky(sel, m.Output, m.Generation))
+	case m.Node == "delete" && sel != "":
+		sess.ProposeDelete(sel)
 	case m.Node == "cancel":
 		sess.CancelPending()
 	case m.Node == "confirm-delete":
@@ -342,59 +421,9 @@ func handlePanel(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.I
 		fail(sess.Reload())
 	case m.Node == "keep":
 		fail(sess.KeepLocal())
-	case m.Node == "body":
-		fail(sess.Type(m.Text))
-	case m.Node == "title" && m.Event == v1.EventSubmit:
-		old := sess.Current()
-		fail(renameTitle(sess, m.Text))
-		newName := sess.Current()
-		if old != newName {
-			stateErr := migrateNoteState(ctx, c, old, newName, pins, loadPins)
-			fail(stateErr)
-			for id, v := range views {
-				if v.kind == v1.ViewFloating && v.name == old {
-					v.name = newName
-					views[id] = v
-					if stateErr != nil {
-						continue
-					}
-					if err := call(ctx, c, v1.CallSurfaceClose, v1.SurfaceCloseParams{View: id}, nil); err != nil {
-						fail(err)
-						continue
-					}
-					delete(views, id)
-					fail(openSticky(newName, v.output, v.generation))
-				}
-			}
-		}
-	case m.Node == "search":
-		sess.Search(m.Text)
-	case m.Node == "sort":
-		sess.ToggleSort()
-	case m.Node == "favorite-current":
-		fail(sess.SetFavorite(snap.Current, !snap.Pinned))
-	case m.Node == "sticky-current":
-		fail(openSticky(snap.Current, m.Output, m.Generation))
-	case m.Node == "delete-current":
-		sess.ProposeDelete(snap.Current)
 	case strings.HasPrefix(m.Node, "open:"):
 		if name := findNoteName(snap.Notes, strings.TrimPrefix(m.Node, "open:")); name != "" {
-			fail(sess.Open(name))
-		}
-	case strings.HasPrefix(m.Node, "sticky:"):
-		if name := findNoteName(snap.Notes, strings.TrimPrefix(m.Node, "sticky:")); name != "" {
-			fail(openSticky(name, m.Output, m.Generation))
-		}
-	case strings.HasPrefix(m.Node, "fav:"):
-		if name := findNoteName(snap.Notes, strings.TrimPrefix(m.Node, "fav:")); name != "" {
-			fav := false
-			for _, item := range snap.Notes {
-				if item.Name == name {
-					fav = !item.Favorite
-					break
-				}
-			}
-			fail(sess.SetFavorite(name, fav))
+			fail(sess.Select(name))
 		}
 	}
 }
@@ -624,30 +653,14 @@ func applySettings(sess *notes.Session, values map[string]any) *notes.Session {
 		if sess == nil {
 			sess = notes.NewSession(nil, time.Now)
 		}
-		sess.ReportError("Could not open notes folder: " + err.Error())
+		sess.ReportFolderError("Could not open notes folder: " + err.Error())
 		return sess
 	}
 	if sess == nil {
 		return notes.NewSession(st, time.Now)
 	}
 	if err := sess.SetStore(st); err != nil {
-		sess.ReportError("Could not change notes folder: " + err.Error())
+		sess.ReportFolderError("Could not change notes folder: " + err.Error())
 	}
 	return sess
-}
-
-func renameTitle(sess *notes.Session, title string) error {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return errors.New("notes: title cannot be empty")
-	}
-	cur := sess.Current()
-	suffix := ".md"
-	if dot := strings.LastIndex(cur, "."); dot >= 0 {
-		suffix = cur[dot:]
-	}
-	if !strings.HasSuffix(strings.ToLower(title), strings.ToLower(suffix)) {
-		title += suffix
-	}
-	return sess.Rename(title)
 }
