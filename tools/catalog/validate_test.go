@@ -263,3 +263,23 @@ func rewriteCatalogAssetURL(t *testing.T, root, url, sha256Hex string) {
 `, url, sha256Hex)
 	writeFile(t, path, doc)
 }
+
+// A manifest bumped past its catalog row describes an unreleased version: the
+// row still names what shipped, and the release workflow rewrites it from
+// the tag and checks it with -fetch. Until then the two may differ.
+func TestValidateCatalogAllowsAnUnreleasedManifestBump(t *testing.T) {
+	root := buildValidatingRepo(t)
+	writeFile(t, filepath.Join(root, "plugins", "timer", "manifest.json"), `{
+		"schema": 1, "id": "org.sysc.timer", "name": "Pomodoro Timer",
+		"description": "A rewritten test plugin.", "version": "1.1.0",
+		"exec": "bin/sysc-plugin-timer", "protocol": {"major": 1, "minor": 11},
+		"capabilities": ["panels"], "requires": {"commands": []}
+	}`)
+	var out bytes.Buffer
+	if err := validateCatalog(root, false, false, &out); err != nil {
+		t.Fatalf("validateCatalog: %v (output: %s)", err, out.String())
+	}
+	if !strings.Contains(out.String(), "org.sysc.timer") || !strings.Contains(out.String(), "1.1.0") {
+		t.Fatalf("expected the row to be reported as awaiting release 1.1.0, got: %s", out.String())
+	}
+}
