@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Draws empty-notes.png from the shell's sticky-note paper palette.
+"""Draws plugins/notes/assets/empty-notes.png from the shell's sticky-note
+paper palette.
 
-Run from this directory. The PNG is committed so builds stay offline; rerun
-this only when the art changes.
+It lives outside the plugin directory so the release archive, which ships
+that directory, carries only the PNG. The PNG is committed so builds stay
+offline; rerun this only when the art changes.
 """
+from pathlib import Path
+
 from PIL import Image, ImageDraw, ImageFilter
+
+OUT = Path(__file__).resolve().parents[2] / "plugins" / "notes" / "assets" / "empty-notes.png"
 
 S = 4  # supersample, then downscale for smooth edges
 W, H = 400 * S, 280 * S
@@ -36,4 +42,4 @@ def note(color, angle, cx, cy, lines=False):
 canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
 for color, angle, dx, lines in (("sky", 8, -70, False), ("mint", -5, 60, False), ("sun", 0, 0, True)):
     canvas = Image.alpha_composite(canvas, note(color, angle, W // 2 + dx * S, H // 2, lines))
-canvas.resize((W // S, H // S), Image.LANCZOS).save("empty-notes.png", optimize=True)
+canvas.resize((W // S, H // S), Image.LANCZOS).save(OUT, optimize=True)
