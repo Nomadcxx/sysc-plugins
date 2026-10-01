@@ -85,10 +85,12 @@ func isScratch(name string) bool { return strings.HasPrefix(name, "scratchpad.")
 
 func libraryRows(s Snapshot) []*v1.Node {
 	scratchPreview := "Always here"
+	scratchMatched := false
 	var pinned, rest []Summary
 	for _, n := range s.Notes {
 		switch {
 		case isScratch(n.Name):
+			scratchMatched = true
 			if n.Preview != "" {
 				scratchPreview = n.Preview
 			}
@@ -123,12 +125,22 @@ func libraryRows(s Snapshot) []*v1.Node {
 	rows = append(rows, sectionHeader("notes-heading", fmt.Sprintf("Notes · %d", len(rest)), textButton("sort", sort, "Change note order", "")))
 	add(rest)
 	switch {
+	case total == 0 && strings.TrimSpace(s.Query) != "" && scratchMatched:
+		// SubmitQuery opens the top match, and the Scratchpad is the only one.
+		rows = append(rows, caption("empty-library", "Only the Scratchpad matches · Enter opens it", v1.ToneSubtle))
 	case total == 0 && strings.TrimSpace(s.Query) != "":
 		rows = append(rows, caption("empty-library", "No matches · Enter creates “"+strings.TrimSpace(s.Query)+"”", v1.ToneSubtle))
 	case total == 0:
 		rows = append(rows, caption("empty-library", "No notes yet. Type above and press Enter.", v1.ToneSubtle))
 	case shown < total:
 		rows = append(rows, caption("library-more", fmt.Sprintf("Showing %d of %d · search to narrow", shown, total), v1.ToneSubtle))
+	}
+	if s.Skipped > 0 {
+		files := "1 file"
+		if s.Skipped > 1 {
+			files = fmt.Sprintf("%d files", s.Skipped)
+		}
+		rows = append(rows, caption("library-skipped", files+" not shown: a link, too large, or unreadable", v1.ToneSubtle))
 	}
 	return rows
 }
@@ -189,14 +201,28 @@ func editorPane(s Snapshot) *v1.Node {
 	if s.Favorite {
 		favName, favFill = "Unfavourite", "accent"
 	}
+	titleW := rightW - 3*ctl - 3*8
+	title := &v1.Node{Kind: v1.KindTextInput, ID: "title", Key: "title:" + token, Name: "Note title", Role: "textbox", Text: s.Title,
+		Width: titleW, Height: 44, Padding: 12, Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}}
+	if isScratch(s.Selected) {
+		// The Scratchpad's file name is fixed; a field would invite a rename
+		// that never happens. Text ignores Width, so a sized column holds it.
+		title = &v1.Node{Kind: v1.KindColumn, Width: titleW, Padding: 12, Children: []*v1.Node{
+			{Kind: v1.KindText, ID: "title", Text: s.Title, Bold: true, Size: "label"}}}
+	}
 	children := []*v1.Node{{Kind: v1.KindRow, Height: 44, Gap: 8, Children: []*v1.Node{
-		{Kind: v1.KindTextInput, ID: "title", Key: "title:" + token, Name: "Note title", Role: "textbox", Text: s.Title,
-			Width: rightW - 3*ctl - 3*8, Height: 44, Padding: 12, Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},
+		title,
 		iconButton("favorite", "star", favName, favFill),
 		iconButton("sticky", "sticky_note_2", "Open as sticky note", ""),
 		iconButton("delete", "delete", "Delete note", ""),
 	}}}
 	banners := 0
+	if s.Missing {
+		children = append(children, banner("missing", "Moved or deleted outside Notes.", true, rightW,
+			textButton("restore", "Save here", "Write your text back to this note's file", ""),
+			textButton("discard", "Discard", "Close the note and drop its text", "")))
+		banners++
+	}
 	if s.Conflict {
 		children = append(children, banner("conflict", "Changed in another app.", false, rightW,
 			textButton("reload", "Reload file", "Discard your text and reload the file", ""),
@@ -212,8 +238,10 @@ func editorPane(s Snapshot) *v1.Node {
 	bodyH := innerH - 44 - footerH - rightGap*(2+banners) - bannerH*banners
 	children = append(children, &v1.Node{Kind: v1.KindTextInput, ID: "body", Key: "editor-body:" + token, Name: "Note text", Role: "textbox",
 		Events: []v1.EventKind{v1.EventChange}, Text: s.Body, Height: bodyH, Multiline: true, Padding: 12})
-	status, tone := "Saved", v1.ToneSubtle
+	status, tone := "Saved "+s.Modified.Local().Format("15:04"), v1.ToneSubtle
 	switch {
+	case s.Missing:
+		status, tone = "Not saved", v1.ToneError
 	case s.SaveError != "":
 		status, tone = s.SaveError, v1.ToneError
 	case s.Dirty:
@@ -354,6 +382,8 @@ func stickyFill(color string) string {
 // user acts. Saving is not one; autosave lands within a second.
 func stickyStatus(d Document) string {
 	switch {
+	case d.Missing:
+		return "Moved or deleted · resolve in Notes"
 	case d.Error != "":
 		return d.Error
 	case d.Conflict != "":

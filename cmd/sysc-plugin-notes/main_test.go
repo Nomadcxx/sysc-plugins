@@ -67,14 +67,14 @@ func newSessionForTest(t *testing.T) (*notes.Session, string) {
 func TestCascadeStepsAndWraps(t *testing.T) {
 	views := map[string]view{}
 	for i := 0; i < 9; i++ {
-		x, y := cascade(views, "DP-1")
+		x, y, slot := cascade(views, "DP-1")
 		step := (i % 8) * 28
 		if x != 56+step || y != 92+step {
 			t.Fatalf("sticky %d at %d,%d", i, x, y)
 		}
-		views[string(rune('a'+i))] = view{kind: v1.ViewFloating, output: "DP-1"}
+		views[string(rune('a'+i))] = view{kind: v1.ViewFloating, output: "DP-1", slot: slot, hasSlot: true}
 	}
-	if x, _ := cascade(views, "HDMI-A-1"); x != 56 {
+	if x, _, _ := cascade(views, "HDMI-A-1"); x != 56 {
 		t.Fatal("cascade is per output")
 	}
 }
@@ -154,5 +154,97 @@ func TestRetargetStickiesFollowsARename(t *testing.T) {
 	retargetStickies(views, "a.md", "alpha.md")
 	if views["s1"].name != "alpha.md" || views["s2"].name != "b.md" {
 		t.Fatalf("views = %+v", views)
+	}
+}
+
+// stateHost answers state.get and state.set from a map, and every other call
+// with a bare ok.
+func stateHost(t *testing.T) *v1.Client {
+	t.Helper()
+	toPlugin, hostOut := io.Pipe()
+	hostIn, fromPlugin := io.Pipe()
+	c := v1.NewClient(toPlugin, fromPlugin)
+	store := map[string]json.RawMessage{}
+	go func() {
+		dec := json.NewDecoder(hostIn)
+		enc := json.NewEncoder(hostOut)
+		for {
+			var call v1.HostCall
+			if err := dec.Decode(&call); err != nil {
+				return
+			}
+			reply := map[string]any{"type": v1.TypeHostReply, "id": call.ID, "ok": true}
+			switch call.Call {
+			case v1.CallStateGet:
+				var p v1.StateGetParams
+				_ = json.Unmarshal(call.Params, &p)
+				v, ok := store[p.Key]
+				reply["result"] = v1.StateGetResult{Found: ok, Value: v}
+			case v1.CallStateSet:
+				var p v1.StateSetParams
+				_ = json.Unmarshal(call.Params, &p)
+				if string(p.Value) == "null" || len(p.Value) == 0 {
+					delete(store, p.Key)
+				} else {
+					store[p.Key] = p.Value
+				}
+			}
+			_ = enc.Encode(reply)
+		}
+	}()
+	go func() {
+		for {
+			if _, err := c.Recv(); err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() { hostOut.Close(); fromPlugin.Close() })
+	return c
+}
+
+// The shell keeps a sticky's position and size under its surface key, so a
+// renamed note's sticky must reopen under the key it already had.
+func TestRenameKeepsTheStickySurfaceKey(t *testing.T) {
+	ctx := context.Background()
+	c := stateHost(t)
+	var pins []pinnedSurface
+	loadPins := func() error { return nil }
+	before, err := stickyKey(ctx, c, "a.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateNoteState(ctx, c, "a.md", "alpha.md", &pins, loadPins); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateNoteState(ctx, c, "alpha.md", "omega.md", &pins, loadPins); err != nil {
+		t.Fatal(err)
+	}
+	after, err := stickyKey(ctx, c, "omega.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("key after two renames = %q, want the original %q", after, before)
+	}
+	// A new note under the old name must not share the renamed sticky's
+	// geometry.
+	if fresh, _ := stickyKey(ctx, c, "a.md"); fresh == before {
+		t.Fatalf("a new a.md reuses the renamed note's key %q", fresh)
+	}
+}
+
+// Closing a sticky frees its place: the next one goes there instead of onto
+// a sticky that is still open.
+func TestCascadeReusesTheFreedSlot(t *testing.T) {
+	views := map[string]view{}
+	for _, id := range []string{"a", "b", "c"} {
+		_, _, slot := cascade(views, "DP-1")
+		views[id] = view{kind: v1.ViewFloating, output: "DP-1", slot: slot, hasSlot: true}
+	}
+	delete(views, "b")
+	x, y, slot := cascade(views, "DP-1")
+	if slot != 1 || x != 56+28 || y != 92+28 {
+		t.Fatalf("next sticky at slot %d (%d,%d), want slot 1 where b was", slot, x, y)
 	}
 }

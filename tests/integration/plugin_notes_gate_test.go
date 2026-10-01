@@ -225,7 +225,7 @@ func startNotes(t *testing.T) *notesHost {
 	}()
 	if err := h.send(&v1.HostHello{
 		Supported:    []v1.Version{{Major: 1, Minor: 11}},
-		Plugin:       v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.1.0"},
+		Plugin:       v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.2.0"},
 		Capabilities: []string{"notifications", "panels", "settings", "state", "clipboard-read"},
 		Limits:       v1.DefaultLimits,
 	}); err != nil {
@@ -321,4 +321,37 @@ func (h *notesHost) waitNode(ok func(*v1.Node) bool) *v1.Node {
 	}
 	h.t.Fatalf("tree never matched\n%s", dumpTree(h.lastRoot()))
 	return nil
+}
+
+func TestPluginNotesGateSavesOnCtrlSAndRestoresAMovedNote(t *testing.T) {
+	h := startNotes(t)
+	h.openPanel()
+	h.change("omnibox", "Draft")
+	h.submit("omnibox", "Draft")
+	h.waitNode(func(n *v1.Node) bool { return nodeText(n, "title") == "Draft" })
+	path := filepath.Join(h.notes, "Draft.md")
+	waitFile(t, path, "Draft\n")
+
+	// Ctrl+S beats the autosave delay.
+	h.change("body", "saved by hand")
+	h.event("save", v1.EventShortcut, "")
+	deadline := time.Now().Add(400 * time.Millisecond)
+	for {
+		if b, _ := os.ReadFile(path); string(b) == "saved by hand" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Ctrl+S did not save before the autosave delay")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	h.change("body", "unsaved words")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	h.waitNode(func(n *v1.Node) bool { return findID(n, "restore") != nil && nodeText(n, "body") == "unsaved words" })
+	h.click("restore")
+	waitFile(t, path, "unsaved words")
+	h.waitNode(func(n *v1.Node) bool { return findID(n, "restore") == nil })
 }

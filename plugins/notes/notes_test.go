@@ -290,3 +290,136 @@ func TestCloseCommitsAPendingTitle(t *testing.T) {
 		t.Fatalf("closing the panel must commit the typed title: %v", err)
 	}
 }
+
+// Rename and create clean a title the same way, and neither keeps characters
+// that break a path or an Obsidian link.
+func TestRenameAndCreateCleanTitlesAlike(t *testing.T) {
+	s := newTestSession(t)
+	name, err := s.CreateWithBody("a [b] #c ^d|e: f/g\nbody")
+	if err != nil || name != "a b c d e f g.md" {
+		t.Fatalf("create = %q %v", name, err)
+	}
+	s.SetTitleDraft("x:y [z]")
+	must(t, s.CommitTitle())
+	if got := s.Selected(); got != "x y z.md" {
+		t.Fatalf("rename = %q, want x y z.md", got)
+	}
+}
+
+// The Scratchpad is a fixed place, not a note to rename: its title reads as
+// Scratchpad and a stray draft never moves the file.
+func TestScratchpadKeepsItsName(t *testing.T) {
+	s := newTestSession(t)
+	must(t, s.OpenScratch())
+	if got := s.Snap().Title; got != ScratchpadTitle {
+		t.Fatalf("title = %q, want %q", got, ScratchpadTitle)
+	}
+	s.SetTitleDraft("Ideas")
+	must(t, s.CommitTitle())
+	if got := s.Selected(); got != "scratchpad.md" {
+		t.Fatalf("scratchpad renamed to %q", got)
+	}
+}
+
+// New with an empty search makes a note to type into; leaving it untouched
+// must not leave an empty file behind.
+func TestAnUntouchedBlankNoteIsDiscardedOnLeave(t *testing.T) {
+	s := newTestSession(t)
+	mustCreateNote(t, s, "kept.md", "x")
+	blank, err := s.CreateFromQuery()
+	must(t, err)
+	must(t, s.Select("kept.md"))
+	if _, _, err := s.store.Read(blank); !os.IsNotExist(err) {
+		t.Fatalf("blank note survived leaving it: %v", err)
+	}
+
+	typed, err := s.CreateFromQuery()
+	must(t, err)
+	must(t, s.Type("something"))
+	must(t, s.Select("kept.md"))
+	if body, _, err := s.store.Read(typed); err != nil || body != "something" {
+		t.Fatalf("a typed note must stay: %q %v", body, err)
+	}
+
+	held, err := s.CreateFromQuery()
+	must(t, err)
+	s.Keep(held)
+	must(t, s.Close())
+	if _, _, err := s.store.Read(held); err != nil {
+		t.Fatalf("a note kept open elsewhere was discarded: %v", err)
+	}
+}
+
+// One file the library cannot show is skipped and counted, not a reason to
+// show nothing.
+func TestOneBadFileDoesNotBlankTheLibrary(t *testing.T) {
+	s := newTestSession(t)
+	mustCreateNote(t, s, "good.md", "fine")
+	must(t, os.WriteFile(filepath.Join(s.store.Dir, "huge.md"), make([]byte, maxNoteBytes+1), 0o600))
+	must(t, os.Symlink(filepath.Join(s.store.Dir, "good.md"), filepath.Join(s.store.Dir, "link.md")))
+	snap := s.Snap()
+	if snap.ScanError != "" || len(snap.Notes) != 1 || snap.Notes[0].Name != "good.md" {
+		t.Fatalf("library = %+v, scan error %q", snap.Notes, snap.ScanError)
+	}
+	if snap.Skipped != 2 {
+		t.Fatalf("skipped = %d, want 2", snap.Skipped)
+	}
+}
+
+// The bar tooltip counts notes in the folder: not the panel's search, and
+// not the Scratchpad.
+func TestTooltipStatsIgnoreSearchAndScratchpad(t *testing.T) {
+	s := newTestSession(t)
+	mustCreateNote(t, s, "a.md", "alpha")
+	mustCreateNote(t, s, "b.md", "beta")
+	must(t, s.OpenScratch())
+	s.Search("alpha")
+	if count, _ := s.Stats(); count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+}
+
+// A note moved or deleted elsewhere while it has unsaved text keeps the text
+// and offers to save it back or let it go.
+func TestAMovedNoteCanBeSavedBackOrDiscarded(t *testing.T) {
+	s, clock := testSession(t)
+	mustCreateNote(t, s, "a.md", "old")
+	must(t, s.Select("a.md"))
+	must(t, s.Type("unsaved words"))
+	must(t, os.Remove(filepath.Join(s.store.Dir, "a.md")))
+	*clock = clock.Add(time.Second)
+	s.Tick()
+	snap := s.Snap()
+	if !snap.Missing || snap.Body != "unsaved words" {
+		t.Fatalf("missing=%v body=%q, want the text kept and the loss flagged", snap.Missing, snap.Body)
+	}
+	must(t, s.Restore())
+	if body, _, err := s.store.Read("a.md"); err != nil || body != "unsaved words" {
+		t.Fatalf("restored file = %q %v", body, err)
+	}
+	if snap := s.Snap(); snap.Missing || snap.Dirty || snap.SaveError != "" {
+		t.Fatalf("after restore: %+v", snap)
+	}
+
+	must(t, os.Remove(filepath.Join(s.store.Dir, "a.md")))
+	s.Tick()
+	must(t, s.Discard())
+	if snap := s.Snap(); snap.Selected != "" {
+		t.Fatalf("discard left %q open", snap.Selected)
+	}
+}
+
+// Ctrl+S saves at once rather than at the next autosave tick.
+func TestSaveNowWritesImmediately(t *testing.T) {
+	s := newTestSession(t)
+	mustCreateNote(t, s, "a.md", "")
+	must(t, s.Select("a.md"))
+	must(t, s.Type("right now"))
+	must(t, s.SaveNow())
+	if body, _, err := s.store.Read("a.md"); err != nil || body != "right now" {
+		t.Fatalf("file = %q %v", body, err)
+	}
+	if s.Snap().Dirty {
+		t.Fatal("still dirty after SaveNow")
+	}
+}

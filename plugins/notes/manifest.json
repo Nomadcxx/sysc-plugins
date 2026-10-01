@@ -3,14 +3,16 @@
   "id": "org.sysc.notes",
   "name": "Notes",
   "description": "Markdown notes and pastel sticky notes for your Obsidian folder, with one box to search or start a note.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "protocol": {"major": 1, "minor": 11},
   "exec": "bin/sysc-plugin-notes",
   "capabilities": ["notifications", "panels", "settings", "state", "floating_surfaces", "clipboard-read"],
   "requires": {"commands": []},
   "services": [{"id": "notes"}],
   "widgets": [{"id": "bar", "settings": []}],
-  "panels": [{"id": "panel", "width": 760, "height": 540, "placement": "attached"}],
+  "panels": [{"id": "panel", "width": 760, "height": 540, "placement": "attached", "shortcuts": [
+    { "key": "s", "modifiers": ["ctrl"], "node": "save" }
+  ]}],
   "settings": [
     {"key": "notes_dir", "type": "folder", "label": "Notes directory", "default": "~/Documents/Notes"},
     {"key": "extension", "type": "string", "label": "Extension", "default": "md"}

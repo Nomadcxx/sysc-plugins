@@ -2,6 +2,7 @@ package notes
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -289,4 +290,69 @@ func TestButtonsCarryHoverText(t *testing.T) {
 		check(name, PanelTree(s, true))
 	}
 	check("sticky", StickyTree(Document{Name: "Weekly review.md"}, "sun"))
+}
+
+func TestLibrarySaysWhenFilesAreSkipped(t *testing.T) {
+	root := PanelTree(Snapshot{Notes: []Summary{{Name: "a.md", Title: "a"}}, Skipped: 2, Now: viewNow}, false)
+	if n := findByID(root, "library-skipped"); n == nil || !strings.Contains(n.Text, "2 files") {
+		t.Fatalf("skipped caption = %+v", n)
+	}
+}
+
+// When the search matches only the Scratchpad, Enter opens it; the caption
+// must not promise to create a note.
+func TestScratchpadOnlyMatchDoesNotPromiseCreate(t *testing.T) {
+	root := PanelTree(Snapshot{Query: "loose", Notes: []Summary{{Name: "scratchpad.md", Title: "scratchpad", Preview: "loose ends"}}, Now: viewNow}, false)
+	if findText(root, "No matches · Enter creates “loose”") != nil {
+		t.Fatal("caption promises a create while Enter opens the Scratchpad")
+	}
+	if n := findByID(root, "empty-library"); n == nil || !strings.Contains(n.Text, "Scratchpad") {
+		t.Fatalf("caption = %+v, want it to say Enter opens the Scratchpad", n)
+	}
+}
+
+// The Scratchpad's name is fixed, so its title is a label, not a field.
+func TestScratchpadTitleIsNotEditable(t *testing.T) {
+	root := PanelTree(Snapshot{Selected: "scratchpad.md", Title: ScratchpadTitle, Now: viewNow}, false)
+	if n := findByID(root, "title"); n == nil || n.Kind != v1.KindText || n.Text != ScratchpadTitle {
+		t.Fatalf("scratchpad title = %+v, want a %q label", n, ScratchpadTitle)
+	}
+	for _, f := range shelllint.Tree(root, v1.ViewPanel, PanelWidth, PanelHeight) {
+		t.Error(f)
+	}
+}
+
+func TestMissingNoteOffersSaveHereAndDiscard(t *testing.T) {
+	snap := panelFixtures()["selected"]
+	snap.Missing, snap.Dirty, snap.SaveError = true, true, "Moved or deleted outside Notes"
+	root := PanelTree(snap, true)
+	if findByID(root, "restore") == nil || findByID(root, "discard") == nil {
+		t.Fatal("a missing note must offer Save here and Discard")
+	}
+	for _, f := range shelllint.Tree(root, v1.ViewPanel, PanelWidth, PanelHeight) {
+		t.Error(f)
+	}
+	sticky := StickyTree(Document{Name: "a.md", Missing: true, Error: "Moved or deleted outside Notes"}, "sun")
+	if findText(sticky, "Moved or deleted · resolve in Notes") == nil {
+		t.Fatal("a missing sticky must point at the panel")
+	}
+}
+
+// "Saved" alone gave no sense of when; the footer names the time.
+func TestFooterSaysWhenItSaved(t *testing.T) {
+	snap := panelFixtures()["selected"]
+	want := "Saved " + snap.Modified.Local().Format("15:04")
+	if n := findByID(PanelTree(snap, false), "save-state"); n == nil || n.Text != want {
+		t.Fatalf("save state = %+v, want %q", n, want)
+	}
+}
+
+func TestManifestSavesOnCtrlS(t *testing.T) {
+	raw, err := os.ReadFile("manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"key": "s"`) || !strings.Contains(string(raw), `"node": "save"`) {
+		t.Fatal("manifest does not bind Ctrl+S to save")
+	}
 }
