@@ -199,11 +199,27 @@ const stickyMinW, stickyMinContentH = 200, 180 - 44 - 16
 
 func TestStickyFitsAndIsBodyFirst(t *testing.T) {
 	doc := Document{Name: "Weekly review.md", Body: strings.Repeat("line\n", 80)}
+	// Every save state at the smallest sticky: a state whose footer does not
+	// fit is refused, and the shell keeps showing the previous paper.
+	states := map[string]Document{"clean": doc}
+	for name, mutate := range map[string]func(*Document){
+		"dirty":    func(d *Document) { d.Dirty = true },
+		"failed":   func(d *Document) { d.Error = "Save failed: " + strings.Repeat("permission denied ", 6) },
+		"conflict": func(d *Document) { d.Dirty, d.Conflict = true, "theirs" },
+	} {
+		d := doc
+		mutate(&d)
+		states[name] = d
+	}
+	for state, d := range states {
+		for _, c := range []string{"sun", "mint", "sky", "rose", "lilac"} {
+			for _, f := range shelllint.Tree(StickyTree(d, c), v1.ViewFloating, stickyMinW, stickyMinContentH) {
+				t.Errorf("%s %s: %s", state, c, f)
+			}
+		}
+	}
 	for _, c := range []string{"sun", "mint", "sky", "rose", "lilac"} {
 		tree := StickyTree(doc, c)
-		for _, f := range shelllint.Tree(tree, v1.ViewFloating, stickyMinW, stickyMinContentH) {
-			t.Errorf("%s: %s", c, f)
-		}
 		if tree.Children[0].Kind != v1.KindTextInput || tree.Fill != "note-"+c {
 			t.Errorf("%s: body must come first on note paper", c)
 		}
@@ -226,8 +242,10 @@ func TestStickyStatusOnlyWhenNotSaved(t *testing.T) {
 	if findText(StickyTree(Document{Name: "a.md"}, "sun"), "Saved") != nil {
 		t.Error("a saved sticky must not print its save state")
 	}
-	if findText(StickyTree(Document{Name: "a.md", Dirty: true}, "sun"), "Saving…") == nil {
-		t.Error("a dirty sticky must say Saving…")
+	// Autosave lands within a second; a status line that came and went with
+	// every pause would resize the writing area under the caret.
+	if findText(StickyTree(Document{Name: "a.md", Dirty: true}, "sun"), "Saving…") != nil {
+		t.Error("a dirty sticky must not flash Saving…")
 	}
 	if n := findText(StickyTree(Document{Name: "a.md", Error: "Save failed: disk full"}, "sun"), "Save failed: disk full"); n == nil || n.Tone != v1.ToneError {
 		t.Error("a failed save must show in the error tone")

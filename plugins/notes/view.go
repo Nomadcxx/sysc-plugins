@@ -309,7 +309,9 @@ func relativeTime(t, now time.Time) string {
 }
 
 // StickyTree is a sticky note's content: the body first, then the paper
-// colours and, only when it is not saved, the save state. The shell adds the
+// colours and, only when a save failed or the file changed elsewhere, that
+// state on its own line. Sharing the colours' row let the text squeeze the
+// dots out, and the shell refuses a row that does not fit. The shell adds the
 // title bar, pin, close and resize grip, paints the fill as the paper, and
 // stretches the body to the window.
 func StickyTree(doc Document, color string) *v1.Node {
@@ -325,16 +327,16 @@ func StickyTree(doc Document, color string) *v1.Node {
 		}
 		dots = append(dots, dot)
 	}
-	footer := []*v1.Node{{Kind: v1.KindRow, Width: len(stickyColors)*20 + (len(stickyColors)-1)*6, Height: 20, Gap: 6, Children: dots}}
-	if status, tone := stickyStatus(doc); status != "" {
-		footer = append(footer, &v1.Node{Kind: v1.KindText, Text: status, Tone: tone, Size: "caption"})
-	}
-	return &v1.Node{Kind: v1.KindColumn, ID: "sticky:" + token, Key: "sticky:" + token, Fill: stickyFill(color), Padding: 10, Gap: 8, Children: []*v1.Node{
+	children := []*v1.Node{
 		// 40 is a floor; the shell grows the body to fill the window.
 		{Kind: v1.KindTextInput, ID: "sticky-body:" + token, Key: "sticky-body:" + token, Name: "Sticky note text", Role: "textbox",
 			Events: []v1.EventKind{v1.EventChange}, Text: doc.Body, Height: 40, Multiline: true, Padding: 8},
-		{Kind: v1.KindRow, Height: 24, Gap: 8, PinEnd: len(footer) == 2, Children: footer},
-	}}
+		{Kind: v1.KindRow, Width: len(stickyColors)*20 + (len(stickyColors)-1)*6, Height: 20, Gap: 6, Children: dots},
+	}
+	if status := stickyStatus(doc); status != "" {
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: status, Tone: v1.ToneError, Size: "caption"})
+	}
+	return &v1.Node{Kind: v1.KindColumn, ID: "sticky:" + token, Key: "sticky:" + token, Fill: stickyFill(color), Padding: 10, Gap: 8, Children: children}
 }
 
 var stickyColors = []struct{ id, label string }{{"sun", "Sunshine"}, {"mint", "Mint"}, {"sky", "Sky"}, {"rose", "Rose"}, {"lilac", "Lilac"}}
@@ -348,14 +350,14 @@ func stickyFill(color string) string {
 	return "note-sun"
 }
 
-func stickyStatus(d Document) (string, v1.Tone) {
+// stickyStatus is the state a sticky must show: one that lasts until the
+// user acts. Saving is not one; autosave lands within a second.
+func stickyStatus(d Document) string {
 	switch {
 	case d.Error != "":
-		return d.Error, v1.ToneError
+		return d.Error
 	case d.Conflict != "":
-		return "Changed elsewhere · resolve in Notes", v1.ToneError
-	case d.Dirty:
-		return "Saving…", v1.ToneSubtle
+		return "Changed elsewhere · resolve in Notes"
 	}
-	return "", v1.ToneSubtle
+	return ""
 }
