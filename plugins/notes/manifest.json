@@ -3,7 +3,7 @@
   "id": "org.sysc.notes",
   "name": "Notes",
   "description": "Markdown notes and pastel sticky notes for your Obsidian folder, with one box to search or start a note.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "protocol": {"major": 1, "minor": 8},
   "exec": "bin/sysc-plugin-notes",
   "capabilities": ["notifications", "panels", "settings", "state", "floating_surfaces", "clipboard-read"],
