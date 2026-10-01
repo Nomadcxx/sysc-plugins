@@ -254,3 +254,21 @@ func TestConflictedStickySaysWhereToResolveIt(t *testing.T) {
 		t.Fatal("a conflicted sticky must point at the panel, where Reload and Keep mine live")
 	}
 }
+
+// A button whose label is only a glyph, or whose name says more than its
+// label, needs hover text: the accessible name is not shown anywhere else.
+func TestButtonsCarryHoverText(t *testing.T) {
+	var check func(state string, n *v1.Node)
+	check = func(state string, n *v1.Node) {
+		if n.Kind == v1.KindButton && n.ID != "scratch" && !strings.HasPrefix(n.ID, "open:") && n.Name != n.Text && n.Tooltip == "" {
+			t.Errorf("%s: button %q (%q) has no tooltip", state, n.ID, n.Name)
+		}
+		for _, c := range n.Children {
+			check(state, c)
+		}
+	}
+	for name, s := range panelFixtures() {
+		check(name, PanelTree(s, true))
+	}
+	check("sticky", StickyTree(Document{Name: "Weekly review.md"}, "sun"))
+}

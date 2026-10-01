@@ -232,12 +232,12 @@ func editorPane(s Snapshot) *v1.Node {
 }
 
 func iconButton(id, icon, name, fill string) *v1.Node {
-	return &v1.Node{Kind: v1.KindButton, ID: id, Icon: icon, Name: name, Role: "button", Fill: fill, Shape: "circle",
+	return &v1.Node{Kind: v1.KindButton, ID: id, Icon: icon, Name: name, Tooltip: name, Role: "button", Fill: fill, Shape: "circle",
 		Width: ctl, Height: ctl, Events: []v1.EventKind{v1.EventActivate}}
 }
 
 func textButton(id, text, name, fill string) *v1.Node {
-	return &v1.Node{Kind: v1.KindButton, ID: id, Text: text, Name: name, Role: "button", Fill: fill,
+	return &v1.Node{Kind: v1.KindButton, ID: id, Text: text, Name: name, Tooltip: name, Role: "button", Fill: fill,
 		Width: textButtonWidth(text), Height: 28, Padding: 6, Events: []v1.EventKind{v1.EventActivate}}
 }
 
@@ -317,7 +317,7 @@ func StickyTree(doc Document, color string) *v1.Node {
 	dots := make([]*v1.Node, 0, len(stickyColors))
 	for _, c := range stickyColors {
 		dot := &v1.Node{Kind: v1.KindButton, ID: "color:" + token + ":" + c.id, Fill: stickyFill(c.id), Shape: "circle",
-			Width: 20, Height: 20, Name: c.label + " paper", Role: "button", Events: []v1.EventKind{v1.EventActivate},
+			Width: 20, Height: 20, Name: c.label + " paper", Tooltip: c.label + " paper", Role: "button", Events: []v1.EventKind{v1.EventActivate},
 			// An ink ring keeps each dot visible on paper of its own colour.
 			Stroke: 1, StrokeFill: "outline"}
 		if c.id == color {
