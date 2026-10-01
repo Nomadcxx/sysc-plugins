@@ -44,7 +44,7 @@ type listEntry struct {
 	words   int
 }
 
-var captureName = regexp.MustCompile(`^note-\d{4}-\d{2}-\d{2}-\d{6}(-\d{2})?$`)
+var captureName = regexp.MustCompile(`^note-\d{4}-\d{2}-\d{2}-\d{6}(-\d{2}| \d+)?$`)
 
 // displayTitle is how the library names a note. A generated capture name says
 // nothing, so it shows the note's first line without heading marks; any other

@@ -29,10 +29,10 @@ func TooltipTree() *v1.Node {
 }
 
 func PanelTree(s Snapshot, clipboardImport bool) *v1.Node {
-	if s.Editing {
+	if s.Selected != "" {
 		return editorTree(s)
 	}
-	capture := input("capture", "capture", "Capture a thought…", s.CaptureText, 52, true)
+	capture := input("capture", "capture", "Capture a thought…", "", 52, true)
 	captureChildren := []*v1.Node{capture}
 	if clipboardImport {
 		captureChildren = append(captureChildren, button("clipboard-import", "Paste", "Import plain text from the system clipboard", ""))
@@ -57,8 +57,8 @@ func PanelTree(s Snapshot, clipboardImport bool) *v1.Node {
 			button("sort", sortLabel(s.SortByName), "Change note ordering", ""),
 		}},
 	}
-	if s.LibraryError != "" {
-		children = append(children, notice("library-error", s.LibraryError, true))
+	if s.ScanError != "" {
+		children = append(children, notice("library-error", s.ScanError, true))
 	} else if len(s.Notes) == 0 {
 		copy := "Create your first note or capture a thought above."
 		if s.Query != "" {
@@ -141,17 +141,17 @@ func editorTree(s Snapshot) *v1.Node {
 			button("back", "←  Library", "Back to Notes library", ""),
 			text("editor-heading", "Note", "title", false),
 		}},
-		input("title", "title:"+Token(s.Current), "Note title", s.Title, 52, false),
+		input("title", "title:"+Token(s.Selected), "Note title", s.Title, 52, false),
 		{Kind: v1.KindRow, Height: 42, Gap: 8, Children: []*v1.Node{
-			button("favorite-current", favoriteLabel(s.Pinned), "Toggle favorite", ""),
+			button("favorite-current", favoriteLabel(s.Favorite), "Toggle favorite", ""),
 			button("sticky-current", "Open sticky", "Open this note as a sticky note", "soft"),
 			button("delete-current", "Delete", "Delete this note", ""),
 		}},
-		&v1.Node{Kind: v1.KindTextInput, ID: "body", Key: "editor-body:" + Token(s.Current), Name: "Markdown note body", Role: "textbox", Events: []v1.EventKind{v1.EventChange}, Text: s.Body, Height: 470, Multiline: true},
+		&v1.Node{Kind: v1.KindTextInput, ID: "body", Key: "editor-body:" + Token(s.Selected), Name: "Markdown note body", Role: "textbox", Events: []v1.EventKind{v1.EventChange}, Text: s.Body, Height: 470, Multiline: true},
 		{Kind: v1.KindText, ID: "save-state", Text: status, Tone: statusTone, Size: "caption"},
 	}
-	if s.LibraryError != "" {
-		children = append(children, notice("library-error", s.LibraryError, true))
+	if s.ScanError != "" {
+		children = append(children, notice("library-error", s.ScanError, true))
 	}
 	if s.Conflict {
 		children = append(children, notice("conflict", "This note changed in another app. Choose which copy to keep.", true),

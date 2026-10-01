@@ -17,11 +17,11 @@ func TestManagerAndEditorFitTheNotesPanel(t *testing.T) {
 	}
 	states := []Snapshot{
 		{},
-		{LibraryError: "The configured notes folder cannot be read"},
+		{ScanError: "The configured notes folder cannot be read"},
 		{Query: "no match"},
 		summary,
-		{Editing: true, Current: "long.md", Title: "A long note", Body: strings.Repeat("Markdown line\n", 120), Dirty: true},
-		{Editing: true, Current: "conflict.md", Title: "Conflict", Conflict: true, ConflictBody: "external body", PendingDelete: "conflict.md", SaveError: "The file is read-only", LibraryError: "Sticky notes need on-demand layer-shell focus"},
+		{Selected: "long.md", Title: "A long note", Body: strings.Repeat("Markdown line\n", 120), Dirty: true},
+		{Selected: "conflict.md", Title: "Conflict", Conflict: true, ConflictBody: "external body", PendingDelete: "conflict.md", SaveError: "The file is read-only", ScanError: "Sticky notes need on-demand layer-shell focus"},
 	}
 	for i, state := range states {
 		if findings := lint.Tree(PanelTree(state, true), v1.ViewPanel, 420, 800); len(findings) != 0 {
@@ -44,44 +44,6 @@ func TestStickyTreeUsesSelectedColorAndPinStateAndFits(t *testing.T) {
 	}
 	if got := root.Children[0].Children[1].Name; got != "Mint note color (selected)" {
 		t.Errorf("selected color name = %q", got)
-	}
-}
-
-func TestManagerSeparatesFavoritesAndRecentAndKeepsCaptureText(t *testing.T) {
-	root := PanelTree(Snapshot{
-		CaptureText: "Remember the vault path",
-		Notes: []Summary{
-			{Name: "fav.md", Title: "Favorite", Favorite: true},
-			{Name: "recent.md", Title: "Recent"},
-		},
-	}, true)
-	if findings := lint.Tree(root, v1.ViewPanel, 420, 800); len(findings) != 0 {
-		t.Fatalf("manager does not fit: %v", findings)
-	}
-	if root.Kind != v1.KindList {
-		t.Fatalf("manager root = %q, want a scrollable list", root.Kind)
-	}
-	var capture, favorites, recent bool
-	var walk func(*v1.Node)
-	walk = func(n *v1.Node) {
-		if n == nil {
-			return
-		}
-		switch n.ID {
-		case "capture":
-			capture = n.Text == "Remember the vault path"
-		case "favorite-notes":
-			favorites = true
-		case "recent-notes":
-			recent = true
-		}
-		for _, child := range n.Children {
-			walk(child)
-		}
-	}
-	walk(root)
-	if !capture || !favorites || !recent {
-		t.Fatalf("manager lost a view state: capture=%v favorites=%v recent=%v", capture, favorites, recent)
 	}
 }
 

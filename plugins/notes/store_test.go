@@ -128,27 +128,34 @@ func TestFailedFavoriteWriteRollsBackMemoryState(t *testing.T) {
 	}
 }
 
-func TestCaptureNamesDoNotOverwriteWithinOneSecond(t *testing.T) {
+func TestBlankCreatesDoNotOverwriteWithinOneSecond(t *testing.T) {
 	s, err := Open(t.TempDir(), "md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := func() time.Time { return time.Date(2026, 9, 24, 12, 34, 56, 0, time.UTC) }
+	s.now = now
 	sess := NewSession(s, now)
-	if err := sess.Capture("one"); err != nil {
+	first, err := sess.CreateFromQuery()
+	if err != nil {
 		t.Fatal(err)
 	}
-	first := sess.Snap().Current
-	if err := sess.Capture("two"); err != nil {
+	if err := sess.Type("one"); err != nil {
 		t.Fatal(err)
 	}
-	second := sess.Snap().Current
-	if first == second || first != "note-2026-09-24-123456.md" || second != "note-2026-09-24-123456-02.md" {
-		t.Fatalf("capture names = %q and %q", first, second)
+	second, err := sess.CreateFromQuery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || first != "note-2026-09-24-123456.md" || second != "note-2026-09-24-123456 2.md" {
+		t.Fatalf("blank note names = %q and %q", first, second)
 	}
 	body, _, err := s.Read(first)
 	if err != nil || body != "one" {
 		t.Fatalf("first note = %q, %v", body, err)
+	}
+	if got := displayTitle(second, "Second idea"); got != "Second idea" {
+		t.Fatalf("a numbered capture name must still show its first line, got %q", got)
 	}
 }
 
@@ -162,7 +169,7 @@ func TestSessionConflictKeepLocalAndCleanExternalReload(t *testing.T) {
 	}
 	nowAt := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 	sess := NewSession(s, func() time.Time { return nowAt })
-	if err := sess.Open("plan.md"); err != nil {
+	if err := sess.Select("plan.md"); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Type("local version"); err != nil {
@@ -203,7 +210,7 @@ func TestFailedFlushRetainsBufferAndBlocksNavigation(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess := NewSession(s, time.Now)
-	if err := sess.Open("note.md"); err != nil {
+	if err := sess.Select("note.md"); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Type("local text that must survive"); err != nil {
@@ -219,11 +226,11 @@ func TestFailedFlushRetainsBufferAndBlocksNavigation(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(dir, "note.md")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Back(); err == nil {
-		t.Fatal("back discarded a buffer after save failed")
+	if err := sess.Select(""); err == nil {
+		t.Fatal("leaving the note discarded a buffer after save failed")
 	}
 	got := sess.Snap()
-	if got.Current != "note.md" || got.Body != "local text that must survive" || !got.Dirty || got.SaveError == "" {
+	if got.Selected != "note.md" || got.Body != "local text that must survive" || !got.Dirty || got.SaveError == "" {
 		t.Fatalf("buffer not retained: %+v", got)
 	}
 	if body, err := os.ReadFile(outside); err != nil || string(body) != "untouched" {
@@ -240,13 +247,14 @@ func TestRenameAndConfirmedDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess := NewSession(s, time.Now)
-	if err := sess.Open("draft.md"); err != nil {
+	if err := sess.Select("draft.md"); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Rename("Roadmap"); err != nil {
+	sess.SetTitleDraft("Roadmap")
+	if err := sess.CommitTitle(); err != nil {
 		t.Fatal(err)
 	}
-	if got := sess.Snap(); got.Current != "Roadmap.md" || got.Title != "Roadmap" {
+	if got := sess.Snap(); got.Selected != "Roadmap.md" || got.Title != "Roadmap" {
 		t.Fatalf("renamed state = %+v", got)
 	}
 	sess.ProposeDelete("Roadmap.md")
