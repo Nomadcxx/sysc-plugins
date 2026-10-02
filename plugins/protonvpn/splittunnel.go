@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // ReadSplitTunnel reads features.split_tunneling out of the ProtonVPN
@@ -53,7 +54,43 @@ func WriteSplitTunnel(path string, enabled bool, apps []string) error {
 	if err := enc.Encode(root); err != nil {
 		return fmt.Errorf("protonvpn: %s: %w", path, err)
 	}
-	return os.WriteFile(path, out.Bytes(), 0o600)
+	return writeAtomic(path, out.Bytes())
+}
+
+// writeAtomic replaces path by renaming a complete temp file in the same
+// directory. os.WriteFile truncates the live ProtonVPN settings first, so a
+// crash or a concurrent reader can observe a partial document.
+func writeAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".protonvpn-tmp-")
+	if err != nil {
+		return fmt.Errorf("protonvpn: %s: %w", path, err)
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("protonvpn: %s: %w", path, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("protonvpn: %s: %w", path, err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("protonvpn: %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("protonvpn: %s: %w", path, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("protonvpn: %s: %w", path, err)
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 // decodeSettings reads and parses the settings file, failing loudly on an

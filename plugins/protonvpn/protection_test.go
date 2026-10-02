@@ -2,6 +2,7 @@ package protonvpn
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -111,6 +112,68 @@ func TestSplitTunnelPreservesUnknownKeys(t *testing.T) {
 	other, ok := doc["other"].(map[string]any)
 	if !ok || other["keep"] != true {
 		t.Fatalf("unknown keys lost: %v", doc["other"])
+	}
+}
+
+func TestWriteSplitTunnelReplacesFileAtomically(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	before := `{"features":{"split_tunneling":{"enabled":false,"apps":[]},"killswitch":"on"},"other":{"keep":true}}`
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A reader that already opened the live file must keep seeing the
+	// previous complete document. os.WriteFile truncates that inode.
+	held, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if err := WriteSplitTunnel(path, true, []string{"/usr/bin/firefox"}); err != nil {
+		t.Fatal(err)
+	}
+	old, err := io.ReadAll(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(old) != before {
+		t.Fatalf("live file was truncated in place; pre-opened reader saw %q", old)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(data) {
+		t.Fatalf("settings.json is not complete JSON: %q", data)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "settings.json" {
+		t.Fatalf("dir entries = %v, want only settings.json", entries)
+	}
+	enabled, apps, err := ReadSplitTunnel(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !enabled || len(apps) != 1 || apps[0] != "/usr/bin/firefox" {
+		t.Fatalf("enabled=%v apps=%v", enabled, apps)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	features, _ := doc["features"].(map[string]any)
+	if features["killswitch"] != "on" {
+		t.Fatalf("killswitch lost: %v", features)
 	}
 }
 
