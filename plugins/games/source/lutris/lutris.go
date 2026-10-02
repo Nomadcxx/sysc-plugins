@@ -110,7 +110,7 @@ func (s *Source) List(ctx context.Context) ([]source.Game, error) {
 // gameConfig maps the pga.db configpath stem to its games/<stem>.yml file,
 // which is the real per-game config Lutris edits. "" when the file is gone.
 func (s *Source) gameConfig(stem string) string {
-	if stem == "" {
+	if !filepath.IsLocal(stem) {
 		return ""
 	}
 	p := filepath.Join(s.lutrisRoot, "games", stem+".yml")
@@ -146,6 +146,9 @@ func parseEpoch(v any) time.Time {
 }
 
 func (s *Source) cover(slug string) string {
+	if !filepath.IsLocal(slug) {
+		return ""
+	}
 	for _, ext := range []string{".jpg", ".png"} {
 		p := filepath.Join(s.lutrisRoot, "coverart", slug+ext)
 		if _, err := os.Stat(p); err == nil {

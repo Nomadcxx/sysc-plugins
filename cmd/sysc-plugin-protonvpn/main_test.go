@@ -59,10 +59,6 @@ type harness struct {
 }
 
 func start(t *testing.T) *harness {
-	return startWithSettings(t, `{"features":{"split_tunneling":{"enabled":false,"apps":[]}}}`)
-}
-
-func startWithSettings(t *testing.T, settings string) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "protonvpn")
@@ -85,13 +81,7 @@ func startWithSettings(t *testing.T, settings string) *harness {
 			}
 			return "", os.ErrNotExist
 		},
-		serversPath:  filepath.Join(dir, "missing-serverlist.json"),
-		settingsPath: filepath.Join(dir, "settings.json"),
-	}
-	// Split tunneling persists into a recognised settings.json;
-	// WriteSplitTunnel refuses to clobber a missing or malformed file.
-	if err := os.WriteFile(env.settingsPath, []byte(settings), 0o644); err != nil {
-		t.Fatal(err)
+		serversPath: filepath.Join(dir, "missing-serverlist.json"),
 	}
 
 	in, host := io.Pipe()
@@ -294,9 +284,11 @@ func TestTabSwitchPersists(t *testing.T) {
 		})
 	})
 	_ = set
-	prot := h.snapshotUntil(func(n *v1.Node) bool { return find(n, "st") != nil })
+	prot := h.snapshotUntil(func(n *v1.Node) bool {
+		return contains(n, "Manage split tunneling in the Proton VPN app")
+	})
 	if !contains(prot.Root, "Split tunneling") {
-		t.Fatal("protection tab not rendered after switch")
+		t.Fatal("split-tunnel GUI handoff not rendered after tab switch")
 	}
 }
 
@@ -381,71 +373,4 @@ func TestNotifyOnConnect(t *testing.T) {
 		})
 	})
 	_ = notify
-}
-
-func TestSplitTunnelEnableNotifies(t *testing.T) {
-	h := start(t)
-	p := h.openPanel()
-	h.input("p", p, "tab:protection", v1.EventActivate, "", "")
-	prot := h.snapshotUntil(func(n *v1.Node) bool { return find(n, "st") != nil })
-	h.input("p", prot, "st", v1.EventActivate, "", "")
-	h.awaitCall("st notify", func(c v1.HostCall) bool {
-		var params v1.NotifyParams
-		return callParamsIs(c, v1.CallNotify, func(raw json.RawMessage) bool {
-			return json.Unmarshal(raw, &params) == nil &&
-				params.Summary == "Split tunneling enabled. Remember to restart affected apps."
-		})
-	})
-	b, err := os.ReadFile(h.env.settingsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(b), `"enabled":true`) && !strings.Contains(string(b), `"enabled": true`) {
-		t.Fatalf("settings.json not enabled: %s", b)
-	}
-}
-
-func TestSplitTunnelStateRestored(t *testing.T) {
-	h := startWithSettings(t, `{"features":{"split_tunneling":{"enabled":true,"apps":["/usr/bin/firefox"]}}}`)
-	p := h.openPanel()
-	h.input("p", p, "tab:protection", v1.EventActivate, "", "")
-	prot := h.snapshotUntil(func(n *v1.Node) bool { return find(n, "st") != nil })
-	if st := find(prot.Root, "st"); st == nil || st.Text != "On" {
-		t.Fatal("split tunnel toggle not restored to On")
-	}
-	if !contains(prot.Root, "/usr/bin/firefox") {
-		t.Fatal("restored app list not rendered")
-	}
-}
-
-func TestSplitTunnelToggleRevertsOnWriteError(t *testing.T) {
-	h := start(t)
-	p := h.openPanel()
-	h.input("p", p, "tab:protection", v1.EventActivate, "", "")
-	prot := h.snapshotUntil(func(n *v1.Node) bool { return find(n, "st") != nil })
-	if err := os.WriteFile(h.env.settingsPath, []byte("not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	h.input("p", prot, "st", v1.EventActivate, "", "")
-	h.snapshotUntil(func(n *v1.Node) bool {
-		st := find(n, "st")
-		return st != nil && st.Text == "Off" && hasTextContaining(n, "protonvpn:")
-	})
-}
-
-// hasTextContaining reports whether any node's text contains sub (contains
-// above is exact-match).
-func hasTextContaining(root *v1.Node, sub string) bool {
-	if root == nil {
-		return false
-	}
-	if strings.Contains(root.Text, sub) {
-		return true
-	}
-	for _, c := range root.Children {
-		if hasTextContaining(c, sub) {
-			return true
-		}
-	}
-	return false
 }

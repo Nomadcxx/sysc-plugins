@@ -1,10 +1,14 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,11 +38,66 @@ func newFixtureRepo(t *testing.T, dir, id, name, version string) string {
 	return root
 }
 
-// writeDistArchive drops a fake release archive into dist, with content
+// writeDistArchive drops a small release archive into dist, with content
 // controlling its sha256 so tests can tell releases apart.
 func writeDistArchive(t *testing.T, dist, id, version, arch, content string) {
 	t.Helper()
-	writeFile(t, filepath.Join(dist, fmt.Sprintf("%s-%s-linux-%s.tar.gz", id, version, arch)), content)
+	writeDistArchiveWithManifest(t, dist, id, version, arch, archiveManifest(id, version), content)
+}
+
+func archiveManifest(id, version string) pluginManifest {
+	dir := strings.TrimPrefix(id, "org.sysc.")
+	name := dir
+	if id == "org.sysc.timer" {
+		name = "Pomodoro Timer"
+	}
+	m := pluginManifest{
+		Schema: 1, ID: id, Name: name, Description: "A test plugin.",
+		Version: version, Exec: "bin/sysc-plugin-" + dir,
+		Capabilities: []string{"panels"},
+	}
+	m.Protocol.Major, m.Protocol.Minor = 1, 2
+	m.Requires.Commands = []string{}
+	return m
+}
+
+func writeDistArchiveWithManifest(t *testing.T, dist, id, archiveVersion, arch string, manifest pluginManifest, content string) {
+	t.Helper()
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(dist, fmt.Sprintf("%s-%s-linux-%s.tar.gz", id, archiveVersion, arch))
+	if err := os.MkdirAll(filepath.Dir(archive), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	for _, entry := range []struct {
+		name string
+		data []byte
+	}{
+		{name: id + "/manifest.json", data: manifestData},
+		{name: id + "/payload", data: []byte(content)},
+	} {
+		if err := tw.WriteHeader(&tar.Header{Name: entry.name, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(entry.data))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(entry.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func readCatalogFile(t *testing.T, path string) catalog.Catalog {
@@ -96,34 +155,58 @@ func TestUpdateCreatesFirstRow(t *testing.T) {
 
 // withReadmeServer points readmeBaseURL at a server that serves body for the
 // tag-pinned README path, and returns the base URL.
-func withReadmeServer(t *testing.T, body []byte) string {
+func withReadmeServer(t *testing.T, status int, body []byte) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
 		_, _ = w.Write(body)
 	}))
 	t.Cleanup(srv.Close)
-	old := readmeBaseURL
-	readmeBaseURL = srv.URL
-	t.Cleanup(func() { readmeBaseURL = old })
+	old := taggedFileBaseURL
+	taggedFileBaseURL = srv.URL
+	t.Cleanup(func() { taggedFileBaseURL = old })
 	return srv.URL
 }
+
+func withTaggedContentServer(t *testing.T, manifest []byte) {
+	t.Helper()
+	oldURL, oldTransport := taggedFileBaseURL, catalogHTTPClient.Transport
+	taggedFileBaseURL = "https://catalog-test.invalid"
+	catalogHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "catalog-test.invalid" {
+			return http.DefaultTransport.RoundTrip(r)
+		}
+		status, body := http.StatusNotFound, []byte(nil)
+		if strings.HasSuffix(r.URL.Path, "/manifest.json") {
+			status, body = http.StatusOK, manifest
+		}
+		return &http.Response{
+			StatusCode: status, Status: http.StatusText(status),
+			Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(body)), Request: r,
+		}, nil
+	})
+	t.Cleanup(func() {
+		taggedFileBaseURL, catalogHTTPClient.Transport = oldURL, oldTransport
+	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestUpdatePinsReadmeWhenPresent(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		readme   bool
+		status   int
 		wantRead bool
 	}{
-		{name: "without README"},
-		{name: "with README", readme: true, wantRead: true},
+		{name: "tag without README", status: http.StatusNotFound},
+		{name: "README missing from working tree but present in tag", status: http.StatusOK, wantRead: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
 			const body = "# Timer\n\nA simple timer.\n"
-			base := withReadmeServer(t, []byte(body))
-			if tc.readme {
-				writeFile(t, filepath.Join(root, "plugins", "timer", "README.md"), body)
-			}
+			base := withReadmeServer(t, tc.status, []byte(body))
 			dist := t.TempDir()
 			writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
 			if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
@@ -167,7 +250,7 @@ func TestUpdatePinsReadmeWhenPresent(t *testing.T) {
 func TestUpdatePinsReadmeFromTagNotWorkingTree(t *testing.T) {
 	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
 	const tagged = "# Timer\n\nTagged bytes.\n"
-	base := withReadmeServer(t, []byte(tagged))
+	base := withReadmeServer(t, http.StatusOK, []byte(tagged))
 	writeFile(t, filepath.Join(root, "plugins", "timer", "README.md"), "# Timer\n\nWorking tree bytes, edited after the tag.\n")
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
@@ -186,6 +269,114 @@ func TestUpdatePinsReadmeFromTagNotWorkingTree(t *testing.T) {
 	}
 	if e.Readme.URL != base+"/Nomadcxx/sysc-plugins/timer-v1.0.0/plugins/timer/README.md" {
 		t.Fatalf("readme URL = %q", e.Readme.URL)
+	}
+}
+
+func TestUpdateUsesTaggedArchiveManifest(t *testing.T) {
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Working Tree Name", "1.0.0")
+	working := archiveManifest("org.sysc.timer", "1.0.0")
+	working.Name = "Edited on main"
+	working.Description = "Main description"
+	working.Protocol.Minor = 99
+	working.Capabilities = []string{"main-only"}
+	working.Requires.Commands = []string{"main-only"}
+	workingData, err := json.Marshal(working)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "plugins", "timer", "manifest.json"), string(workingData))
+
+	tagged := archiveManifest("org.sysc.timer", "1.0.0")
+	tagged.Name = "Tagged Name"
+	tagged.Description = "Description from the release tag"
+	tagged.Capabilities = []string{"panels", "state"}
+	tagged.Requires.Commands = []string{"moonbit"}
+	dist := t.TempDir()
+	writeDistArchiveWithManifest(t, dist, tagged.ID, tagged.Version, "amd64", tagged, "v1")
+	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+		t.Fatalf("updateCatalog: %v", err)
+	}
+
+	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), tagged.ID)
+	if e.Name != tagged.Name || e.Description != tagged.Description {
+		t.Fatalf("listing fields = %q / %q, want tagged %q / %q", e.Name, e.Description, tagged.Name, tagged.Description)
+	}
+	if e.Release.Protocol.Major != tagged.Protocol.Major || e.Release.Protocol.Minor != tagged.Protocol.Minor ||
+		strings.Join(e.Release.Capabilities, ",") != strings.Join(tagged.Capabilities, ",") ||
+		strings.Join(e.Release.Requires.Commands, ",") != strings.Join(tagged.Requires.Commands, ",") {
+		t.Fatalf("release manifest fields = %+v, want tagged manifest %+v", e.Release, tagged)
+	}
+}
+
+func TestUpdateRejectsArchiveWithWrongExec(t *testing.T) {
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "valid archive")
+
+	wrongExec := archiveManifest("org.sysc.timer", "1.0.0")
+	wrongExec.Exec = "bin/sysc-plugin-other"
+	writeDistArchiveWithManifest(t, dist, wrongExec.ID, wrongExec.Version, "arm64", wrongExec, "wrong exec")
+
+	err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), "manifest exec") {
+		t.Fatalf("expected wrong-Exec archive to fail, got %v", err)
+	}
+}
+
+func TestUpdateThenValidateUsesTaggedManifest(t *testing.T) {
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Working Tree Name", "1.0.0")
+	tagged := archiveManifest("org.sysc.timer", "1.0.0")
+	tagged.Name = "Tagged Name"
+	tagged.Description = "Description from the release tag"
+	tagged.Protocol.Minor = 7
+	tagged.Capabilities = []string{"panels", "state"}
+	tagged.Requires.Commands = []string{"moonbit"}
+	taggedBytes, err := json.Marshal(tagged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withTaggedContentServer(t, taggedBytes)
+
+	dist := t.TempDir()
+	writeDistArchiveWithManifest(t, dist, tagged.ID, tagged.Version, "amd64", tagged, "v1")
+	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+		t.Fatalf("updateCatalog: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := validateCatalog(root, false, false, &out); err != nil {
+		t.Fatalf("validateCatalog after update: %v (output: %s)", err, out.String())
+	}
+	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), tagged.ID)
+	if e.Name != tagged.Name || e.Description != tagged.Description || e.Protocol.Minor != tagged.Protocol.Minor {
+		t.Fatalf("catalog row = %+v, want tagged manifest fields %+v", e, tagged)
+	}
+}
+
+func TestCatalogHTTPRequestsHaveTimeout(t *testing.T) {
+	oldTimeout := catalogHTTPClient.Timeout
+	catalogHTTPClient.Timeout = 20 * time.Millisecond
+	t.Cleanup(func() { catalogHTTPClient.Timeout = oldTimeout })
+
+	const body = "tagged README bytes"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(100 * time.Millisecond):
+			_, _ = w.Write([]byte(body))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	oldBase := taggedFileBaseURL
+	taggedFileBaseURL = srv.URL
+	t.Cleanup(func() { taggedFileBaseURL = oldBase })
+
+	if _, err := readPluginReadme("timer", "timer-v1.0.0"); err == nil {
+		t.Fatal("README fetch should time out")
+	}
+	sum := sha256.Sum256([]byte(body))
+	if err := checkFetchable(srv.URL, hex.EncodeToString(sum[:]), int64(len(body)), int64(len(body))); err == nil {
+		t.Fatal("catalog validation fetch should time out")
 	}
 }
 
@@ -297,7 +488,7 @@ func TestUpdateSameVersionReplacesRatherThanDuplicates(t *testing.T) {
 func TestUpdateRefusesTagVersionMismatch(t *testing.T) {
 	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
 	dist := t.TempDir()
-	writeDistArchive(t, dist, "org.sysc.timer", "9.9.9", "amd64", "v1")
+	writeDistArchiveWithManifest(t, dist, "org.sysc.timer", "9.9.9", "amd64", archiveManifest("org.sysc.timer", "1.0.0"), "v1")
 	err := updateCatalog(root, "timer-v9.9.9", dist, time.Now().UTC())
 	if err == nil {
 		t.Fatal("expected an error when the tag version disagrees with the manifest")

@@ -1,9 +1,6 @@
 package protonvpn
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	lint "github.com/Nomadcxx/sysc-shell/plugin/lint"
@@ -61,90 +58,30 @@ func TestProtectionCopyHiddenWithoutTool(t *testing.T) {
 	}
 }
 
-func TestProtectionSplitTunnelBlockedByKillSwitch(t *testing.T) {
+func TestProtectionSplitTunnelManagedInProtonApp(t *testing.T) {
 	root := ProtectionTree(ProtectionState{Snap: Snapshot{Config: Config{KillSwitch: "standard"}}})
-	if st := findNode(t, root, "st"); !st.Disabled {
-		t.Fatal("split tunnel editable under kill switch")
-	}
-	assertTextContains(t, root, "Disable kill switch to use split tunneling")
-}
-
-func TestProtectionAppRowsAndSuggestions(t *testing.T) {
-	root := ProtectionTree(ProtectionState{
-		SplitTunnel: true,
-		Apps:        []string{"/usr/bin/chromium"},
-		Candidates:  []App{{"/usr/bin/firefox", "Firefox"}, {"/usr/bin/chromium", "Chromium"}},
-		AppQuery:    "fire",
-	})
-	assertTextContains(t, root, "Chromium")
-	findNode(t, root, "del-app:/usr/bin/chromium")
-	findNode(t, root, "app-suggest:/usr/bin/firefox")
-	if lookupNode(root, "app-suggest:/usr/bin/chromium") != nil {
-		t.Fatal("already-added app suggested")
-	}
-}
-
-func TestSplitTunnelPreservesUnknownKeys(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "settings.json")
-	before := `{"features":{"split_tunneling":{"enabled":false,"apps":[]}},"other":{"keep":true}}`
-	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteSplitTunnel(path, true, []string{"/usr/bin/firefox"}); err != nil {
-		t.Fatal(err)
-	}
-	enabled, apps, err := ReadSplitTunnel(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !enabled || len(apps) != 1 || apps[0] != "/usr/bin/firefox" {
-		t.Fatalf("enabled=%v apps=%v", enabled, apps)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc map[string]any
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatal(err)
-	}
-	other, ok := doc["other"].(map[string]any)
-	if !ok || other["keep"] != true {
-		t.Fatalf("unknown keys lost: %v", doc["other"])
-	}
-}
-
-func TestSplitTunnelMalformedFileFailsLoud(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "settings.json")
-	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteSplitTunnel(path, true, nil); err == nil {
-		t.Fatal("malformed settings.json silently rewritten")
+	assertTextContains(t, root, "Manage split tunneling in the Proton VPN app")
+	for _, id := range []string{"st", "app-query"} {
+		if lookupNode(root, id) != nil {
+			t.Fatalf("plugin still exposes split-tunnel editor control %q", id)
+		}
 	}
 }
 
 func TestProtectionLint(t *testing.T) {
 	for _, ks := range []string{"off", "standard"} {
 		for _, pf := range []bool{false, true} {
-			for _, st := range []bool{false, true} {
-				root := ProtectionTree(ProtectionState{
-					Snap:        Snapshot{Config: Config{KillSwitch: ks, PortForwarding: pf}},
-					SplitTunnel: st,
-				})
-				if findings := lint.Tree(root, v1.ViewPanel, 460, 404); len(findings) > 0 {
-					t.Fatalf("ks %s pf %v st %v: %v", ks, pf, st, findings)
-				}
+			root := ProtectionTree(ProtectionState{
+				Snap: Snapshot{Config: Config{KillSwitch: ks, PortForwarding: pf}},
+			})
+			if findings := lint.Tree(root, v1.ViewPanel, 460, 404); len(findings) > 0 {
+				t.Fatalf("ks %s pf %v: %v", ks, pf, findings)
 			}
 		}
 	}
-	// The richest state: connected with a forwarded port, the copy control,
-	// and a populated split tunneling editor.
+	// The richest state: connected with a forwarded port and the copy control.
 	root := ProtectionTree(ProtectionState{
 		Snap:        Snapshot{Phase: PhaseConnected, Config: Config{KillSwitch: "off", PortForwarding: true}},
-		SplitTunnel: true,
-		Apps:        []string{"/usr/bin/chromium"},
-		Candidates:  []App{{"/usr/bin/firefox", "Firefox"}, {"/usr/bin/chromium", "Chromium"}},
 		Port:        51820,
 		HasCopyTool: true,
 	})

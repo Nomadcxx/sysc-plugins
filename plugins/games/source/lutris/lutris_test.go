@@ -254,3 +254,15 @@ func TestConfigPathResolution(t *testing.T) {
 		}
 	}
 }
+
+func TestAssetPathsRejectEscapingDatabaseValues(t *testing.T) {
+	src := &Source{lutrisRoot: t.TempDir()}
+	for _, name := range []string{"../outside", "../../.ssh/id_rsa", "/etc/passwd"} {
+		if got := src.cover(name); got != "" {
+			t.Errorf("cover(%q) = %q, want empty", name, got)
+		}
+		if got := src.gameConfig(name); got != "" {
+			t.Errorf("gameConfig(%q) = %q, want empty", name, got)
+		}
+	}
+}

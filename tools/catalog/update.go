@@ -1,6 +1,9 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -67,7 +71,11 @@ func updateCatalog(repoRoot, tag, dist string, now time.Time) error {
 	}
 	pluginDir, tagVersion := m[1], m[2]
 
-	manifest, err := readManifest(filepath.Join(repoRoot, "plugins", pluginDir))
+	identity, err := readManifest(filepath.Join(repoRoot, "plugins", pluginDir))
+	if err != nil {
+		return fmt.Errorf("update: %w", err)
+	}
+	manifest, err := readTaggedManifest(dist, pluginDir, tagVersion, identity.ID)
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
 	}
@@ -80,7 +88,7 @@ func updateCatalog(repoRoot, tag, dist string, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
 	}
-	readme, err := readPluginReadme(repoRoot, pluginDir, tag)
+	readme, err := readPluginReadme(pluginDir, tag)
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
 	}
@@ -187,23 +195,18 @@ func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.
 	return e
 }
 
-// readmeBaseURL is the raw host README URLs are pinned to. Tests point it at
-// an httptest server.
-var readmeBaseURL = "https://raw.githubusercontent.com"
+// taggedFileBaseURL is the raw host for content pinned to release tags. Tests
+// replace it with an in-memory transport.
+var taggedFileBaseURL = "https://raw.githubusercontent.com"
+
+var catalogHTTPClient = &http.Client{Timeout: 45 * time.Second}
 
 // readPluginReadme returns a tag-pinned URL and hash for the plugin README,
-// when the tagged tree includes one. The hash is computed from the bytes the
-// URL serves, so the two can never disagree; the working tree only decides
-// whether the plugin ships a README at all.
-func readPluginReadme(repoRoot, pluginDir, tag string) (*catalog.Screenshot, error) {
-	if _, err := os.Stat(filepath.Join(repoRoot, "plugins", pluginDir, "README.md")); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	url := fmt.Sprintf("%s/Nomadcxx/sysc-plugins/%s/plugins/%s/README.md", readmeBaseURL, tag, pluginDir)
-	resp, err := http.Get(url)
+// when the tagged tree includes one. The hash and presence both come from
+// the tagged URL, so the catalog describes what shipped.
+func readPluginReadme(pluginDir, tag string) (*catalog.Screenshot, error) {
+	url := fmt.Sprintf("%s/Nomadcxx/sysc-plugins/%s/plugins/%s/README.md", taggedFileBaseURL, tag, pluginDir)
+	resp, err := catalogHTTPClient.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("readme: %w", err)
 	}
@@ -223,6 +226,124 @@ func readPluginReadme(repoRoot, pluginDir, tag string) (*catalog.Screenshot, err
 	}
 	sum := sha256.Sum256(data)
 	return &catalog.Screenshot{URL: url, SHA256: hex.EncodeToString(sum[:])}, nil
+}
+
+// readTaggedManifestURL fetches the manifest from the published release tag.
+func readTaggedManifestURL(pluginDir, version, id string) (pluginManifest, error) {
+	tag := pluginDir + "-v" + version
+	url := fmt.Sprintf("%s/Nomadcxx/sysc-plugins/%s/plugins/%s/manifest.json", taggedFileBaseURL, tag, pluginDir)
+	resp, err := catalogHTTPClient.Get(url)
+	if err != nil {
+		return pluginManifest{}, fmt.Errorf("manifest %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return pluginManifest{}, fmt.Errorf("manifest %s: status %s", url, resp.Status)
+	}
+	const maxManifestBytes = 1 << 20
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestBytes+1))
+	if err != nil {
+		return pluginManifest{}, fmt.Errorf("manifest %s: %w", url, err)
+	}
+	if int64(len(data)) > maxManifestBytes {
+		return pluginManifest{}, fmt.Errorf("manifest %s is larger than %d bytes", url, maxManifestBytes)
+	}
+	m, err := decodeManifest(data, url)
+	if err != nil {
+		return pluginManifest{}, err
+	}
+	if m.ID != id || m.Version != version || m.Exec != path.Join("bin", "sysc-plugin-"+pluginDir) {
+		return pluginManifest{}, fmt.Errorf("manifest %s does not match plugin %q at version %q", url, id, version)
+	}
+	return m, nil
+}
+
+// readTaggedManifest reads the manifest embedded in every release archive for
+// this plugin. All architectures for one tag must carry identical manifest bytes.
+func readTaggedManifest(dist, pluginDir, tagVersion, id string) (pluginManifest, error) {
+	pattern := filepath.Join(dist, fmt.Sprintf("%s-%s-linux-*.tar.gz", id, tagVersion))
+	archives, err := filepath.Glob(pattern)
+	if err != nil {
+		return pluginManifest{}, err
+	}
+	if len(archives) == 0 {
+		return pluginManifest{}, fmt.Errorf("no archives matching %s", filepath.Base(pattern))
+	}
+	sort.Strings(archives)
+	wantExec := path.Join("bin", "sysc-plugin-"+pluginDir)
+	var tagged pluginManifest
+	var taggedBytes []byte
+	for _, archive := range archives {
+		manifest, data, err := readArchiveManifest(archive)
+		if err != nil {
+			return pluginManifest{}, fmt.Errorf("%s: %w", archive, err)
+		}
+		if manifest.ID != id {
+			return pluginManifest{}, fmt.Errorf("%s manifest id %q, want %q", archive, manifest.ID, id)
+		}
+		if manifest.Version != tagVersion {
+			return pluginManifest{}, fmt.Errorf("tag %q names version %q, but archive manifest has %q",
+				pluginDir+"-v"+tagVersion, tagVersion, manifest.Version)
+		}
+		if manifest.Exec != wantExec {
+			return pluginManifest{}, fmt.Errorf("%s manifest exec %q, want %q", archive, manifest.Exec, wantExec)
+		}
+		if taggedBytes != nil && !bytes.Equal(data, taggedBytes) {
+			return pluginManifest{}, fmt.Errorf("%s archives contain different manifests", pluginDir+"-v"+tagVersion)
+		}
+		tagged, taggedBytes = manifest, data
+	}
+	if taggedBytes == nil {
+		return pluginManifest{}, fmt.Errorf("no release archive manifest for plugin %q", pluginDir)
+	}
+	return tagged, nil
+}
+
+func readArchiveManifest(archive string) (pluginManifest, []byte, error) {
+	f, err := os.Open(archive)
+	if err != nil {
+		return pluginManifest{}, nil, err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return pluginManifest{}, nil, err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return pluginManifest{}, nil, err
+		}
+		name := path.Clean(hdr.Name)
+		if hdr.Typeflag != tar.TypeReg || path.Dir(name) == "." || path.Base(name) != "manifest.json" {
+			continue
+		}
+		const maxManifestBytes = 1 << 20
+		if hdr.Size < 0 || hdr.Size > maxManifestBytes {
+			return pluginManifest{}, nil, fmt.Errorf("manifest.json has invalid size %d", hdr.Size)
+		}
+		data, err := io.ReadAll(io.LimitReader(tr, maxManifestBytes+1))
+		if err != nil {
+			return pluginManifest{}, nil, err
+		}
+		if len(data) > maxManifestBytes {
+			return pluginManifest{}, nil, fmt.Errorf("manifest.json exceeds %d bytes", maxManifestBytes)
+		}
+		var manifest pluginManifest
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			return pluginManifest{}, nil, fmt.Errorf("parse manifest.json: %w", err)
+		}
+		if manifest.ID == "" || manifest.Version == "" || manifest.Exec == "" || path.Dir(name) != manifest.ID {
+			return pluginManifest{}, nil, fmt.Errorf("manifest.json has missing fields or does not match archive root %q", path.Dir(name))
+		}
+		return manifest, data, nil
+	}
+	return pluginManifest{}, nil, fmt.Errorf("archive has no top-level manifest.json")
 }
 
 // checkMetaCategories fails when catalog-meta.json names a category outside

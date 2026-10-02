@@ -186,6 +186,20 @@ func TestPackagePluginRefusesMissingCmd(t *testing.T) {
 	}
 }
 
+func TestCollectEntriesRejectsSymlink(t *testing.T) {
+	pluginRoot := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("SECRET_OUTSIDE_CONTENT"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(pluginRoot, "leak.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collectEntries(pluginRoot, "org.sysc.demo"); err == nil {
+		t.Fatal("collectEntries accepted a symlink that points outside the plugin tree")
+	}
+}
+
 func TestPackagePluginRefusesExecMismatch(t *testing.T) {
 	repoRoot := t.TempDir()
 	writeFile(t, filepath.Join(repoRoot, "plugins", "odd", "manifest.json"), `{

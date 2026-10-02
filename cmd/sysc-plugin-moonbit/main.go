@@ -129,6 +129,9 @@ func (s *session) streamOp(op *moonbit.Op) {
 		s.async <- func() {
 			if s.op == op {
 				s.op = nil
+				if s.state.StreamEnded() {
+					s.refreshStatus()
+				}
 			}
 		}
 	}()

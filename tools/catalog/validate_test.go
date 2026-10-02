@@ -21,12 +21,26 @@ import (
 func buildValidatingRepo(t *testing.T) string {
 	t.Helper()
 	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	manifest, err := os.ReadFile(filepath.Join(root, "plugins", "timer", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	withTaggedContentServer(t, manifest)
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
 	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
 		t.Fatalf("seed updateCatalog: %v", err)
 	}
 	return root
+}
+
+func withRepoTaggedManifest(t *testing.T, root, dir string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "plugins", dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	withTaggedContentServer(t, data)
 }
 
 func TestValidateCatalogHappyPath(t *testing.T) {
@@ -40,16 +54,18 @@ func TestValidateCatalogHappyPath(t *testing.T) {
 	}
 }
 
-func TestValidateCatalogCatchesManifestDisagreement(t *testing.T) {
+func TestValidateCatalogCatchesTaggedManifestDisagreement(t *testing.T) {
 	root := buildValidatingRepo(t)
 	// Change the manifest's name after the catalog row was built, so they
 	// disagree the way a hand-edited manifest could.
-	writeFile(t, filepath.Join(root, "plugins", "timer", "manifest.json"), `{
+	changedManifest := `{
 		"schema": 1, "id": "org.sysc.timer", "name": "Renamed Timer",
 		"description": "A test plugin.", "version": "1.0.0",
 		"exec": "bin/sysc-plugin-timer", "protocol": {"major": 1, "minor": 2},
 		"capabilities": ["panels"], "requires": {"commands": []}
-	}`)
+	}`
+	withTaggedContentServer(t, []byte(changedManifest))
+	writeFile(t, filepath.Join(root, "plugins", "timer", "manifest.json"), changedManifest)
 	var out bytes.Buffer
 	err := validateCatalog(root, false, false, &out)
 	if err == nil {
@@ -57,6 +73,46 @@ func TestValidateCatalogCatchesManifestDisagreement(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "FAIL org.sysc.timer") || !strings.Contains(out.String(), "name:") {
 		t.Fatalf("expected a name mismatch failure, got: %s", out.String())
+	}
+}
+
+func TestValidateCatalogCatchesCoordinatedManifestAndCatalogEdits(t *testing.T) {
+	root := buildValidatingRepo(t)
+	const changedName = "Coordinated Name"
+	changedManifest := `{
+		"schema": 1, "id": "org.sysc.timer", "name": "Coordinated Name",
+		"description": "A test plugin.", "version": "1.0.0",
+		"exec": "bin/sysc-plugin-timer", "protocol": {"major": 1, "minor": 2},
+		"capabilities": ["panels"], "requires": {"commands": []}
+	}`
+	writeFile(t, filepath.Join(root, "plugins", "timer", "manifest.json"), changedManifest)
+
+	catalogPath := filepath.Join(root, "catalog.json")
+	data, err := os.ReadFile(catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	plugins := doc["plugins"].([]any)
+	plugins[0].(map[string]any)["name"] = changedName
+	data, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalogPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	err = validateCatalog(root, false, false, &out)
+	if err == nil {
+		t.Fatalf("expected validation to reject coordinated unpublished edits, output: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "tagged release manifest") || !strings.Contains(out.String(), changedName) {
+		t.Fatalf("expected a tagged name mismatch, got: %s", out.String())
 	}
 }
 
@@ -101,6 +157,7 @@ func TestValidateCommunityRequiresScreenshot(t *testing.T) {
 
 func TestValidateCommunityPassesWithScreenshot(t *testing.T) {
 	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	withRepoTaggedManifest(t, root, "timer")
 	writeFile(t, filepath.Join(root, catalogMetaFile), `{
 		"org.sysc.timer": {"category": "productivity", "author": "Nomadcxx",
 			"screenshot": {"url": "https://example.com/timer.png",
@@ -127,6 +184,7 @@ func TestValidateFetchCatchesSHAMismatch(t *testing.T) {
 	defer srv.Close()
 
 	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	withRepoTaggedManifest(t, root, "timer")
 	dist := t.TempDir()
 	// Seed a normal release so its manifest/catalog-meta agree, then hand
 	// -edit the catalog row's asset URL and sha to point at the httptest
@@ -160,6 +218,7 @@ func TestValidateFetchPassesOnMatch(t *testing.T) {
 	defer srv.Close()
 
 	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	withRepoTaggedManifest(t, root, "timer")
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
 	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {

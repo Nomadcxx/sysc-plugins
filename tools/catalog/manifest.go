@@ -36,12 +36,16 @@ func readManifest(pluginDir string) (pluginManifest, error) {
 	if err != nil {
 		return pluginManifest{}, err
 	}
+	return decodeManifest(data, path)
+}
+
+func decodeManifest(data []byte, source string) (pluginManifest, error) {
 	var m pluginManifest
 	if err := json.Unmarshal(data, &m); err != nil {
-		return pluginManifest{}, fmt.Errorf("parse %s: %w", path, err)
+		return pluginManifest{}, fmt.Errorf("parse %s: %w", source, err)
 	}
 	if m.ID == "" || m.Version == "" || m.Exec == "" {
-		return pluginManifest{}, fmt.Errorf("%s: missing id, version or exec", path)
+		return pluginManifest{}, fmt.Errorf("%s: missing id, version or exec", source)
 	}
 	return m, nil
 }

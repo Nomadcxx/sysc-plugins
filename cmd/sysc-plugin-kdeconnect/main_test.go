@@ -63,7 +63,7 @@ func TestOpenOnlyRespondsToActivation(t *testing.T) {
 		defer cancel()
 		done := make(chan struct{})
 		go func() {
-			handleInput(ctx, c, nil, &v1.InputEvent{Node: "open", Event: event}, nil, kdeconnect.Snapshot{}, new(bool))
+			handleInput(ctx, c, nil, &v1.InputEvent{Node: "open", Event: event}, nil, kdeconnect.Snapshot{}, new(bool), nil)
 			close(done)
 		}()
 		select {
@@ -106,14 +106,14 @@ func TestDeviceSwitcherActivationTogglesPanelState(t *testing.T) {
 	ui := uiState{}
 	busy := false
 	msg := &v1.InputEvent{Node: "device-switcher", Event: v1.EventActivate}
-	if !handleInput(context.Background(), nil, nil, msg, &ui, kdeconnect.Snapshot{}, &busy) || !ui.switcherOpen {
+	if !handleInput(context.Background(), nil, nil, msg, &ui, kdeconnect.Snapshot{}, &busy, nil) || !ui.switcherOpen {
 		t.Fatal("activating the device switcher did not open it")
 	}
-	if !handleInput(context.Background(), nil, nil, msg, &ui, kdeconnect.Snapshot{}, &busy) || ui.switcherOpen {
+	if !handleInput(context.Background(), nil, nil, msg, &ui, kdeconnect.Snapshot{}, &busy, nil) || ui.switcherOpen {
 		t.Fatal("activating the device switcher did not close it")
 	}
 	msg.Event = v1.EventPointer
-	if handleInput(context.Background(), nil, nil, msg, &ui, kdeconnect.Snapshot{}, &busy) || ui.switcherOpen {
+	if handleInput(context.Background(), nil, nil, msg, &ui, kdeconnect.Snapshot{}, &busy, nil) || ui.switcherOpen {
 		t.Fatal("pointer input changed the device switcher")
 	}
 }
@@ -190,5 +190,44 @@ func TestActionNodesCoverEveryActionButton(t *testing.T) {
 	}
 	if _, ok := actionNodes["sms"]; ok {
 		t.Fatal("sms must stay a composer toggle")
+	}
+}
+
+func TestRecentImageStagingRunsOffCaller(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	results := make(chan recentImageResult, 1)
+	returned := make(chan struct{})
+	go func() {
+		startRecentImageAction(context.Background(), results, recentImageResult{}, func(kdeconnect.RecentImage) (string, error) {
+			close(started)
+			<-release
+			return "/tmp/staged.png", nil
+		})
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("recent image staging blocked its caller")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("staging worker did not start")
+	}
+	select {
+	case <-results:
+		t.Fatal("staging result arrived before the worker completed")
+	default:
+	}
+	close(release)
+	select {
+	case result := <-results:
+		if result.path != "/tmp/staged.png" || result.err != nil {
+			t.Fatalf("staging result = {path: %q, err: %v}", result.path, result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("staging worker did not report its result")
 	}
 }

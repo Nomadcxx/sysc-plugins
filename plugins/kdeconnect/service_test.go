@@ -1,18 +1,22 @@
 package kdeconnect
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"golang.org/x/sys/unix"
 )
 
 // fakeObject scripts one object's replies. Every method the service calls
@@ -985,6 +989,78 @@ func TestThumbnailRejectsMissingSource(t *testing.T) {
 	}
 }
 
+func TestThumbnailRejectsExcessiveDimensionsBeforeDecode(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	src := filepath.Join(mount, "oversized.png")
+	// DecodeConfig only needs the PNG signature and IHDR. Omitting IDAT makes
+	// this a cheap fixture: the implementation must reject dimensions before
+	// attempting a full decode.
+	data := make([]byte, 33)
+	copy(data, []byte{137, 80, 78, 71, 13, 10, 26, 10})
+	binary.BigEndian.PutUint32(data[8:12], 13)
+	copy(data[12:16], "IHDR")
+	binary.BigEndian.PutUint32(data[16:20], 5000)
+	binary.BigEndian.PutUint32(data[20:24], 4000)
+	data[24] = 8 // bit depth
+	data[25] = 0 // grayscale, so an accidental full decode stays small
+	binary.BigEndian.PutUint32(data[29:33], crc32.ChecksumIEEE(data[12:29]))
+	if err := os.WriteFile(src, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := thumbnail(src, t.TempDir(), mount)
+	if err == nil || !strings.Contains(err.Error(), "pixel thumbnail limit") {
+		t.Fatalf("thumbnail error = %v, want pixel-limit rejection before decoding", err)
+	}
+}
+
+func TestThumbnailRejectsOversizedSource(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	src := filepath.Join(mount, "oversized.png")
+	f, err := os.Create(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(recentImageMaxSourceBytes + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = thumbnail(src, t.TempDir(), mount)
+	if err == nil || !strings.Contains(err.Error(), "thumbnail source limit") {
+		t.Fatalf("thumbnail error = %v, want byte-limit rejection", err)
+	}
+}
+
+func TestStageRecentImageRejectsOversizedSource(t *testing.T) {
+	mount := t.TempDir()
+	src := filepath.Join(mount, "oversized.png")
+	f, err := os.Create(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(recentImageMaxSourceBytes + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	savedCache := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = savedCache })
+
+	_, err = StageRecentImage(RecentImage{Source: src, Mount: mount})
+	if err == nil || !strings.Contains(err.Error(), "thumbnail source limit") {
+		t.Fatalf("stage error = %v, want byte-limit rejection", err)
+	}
+}
+
 func TestThumbnailSizeKeepsADegenerateAspectVisible(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1078,6 +1154,9 @@ func TestRefreshRecentImagesWiresTheMount(t *testing.T) {
 	img := st.recentImages[0]
 	if img.Source != filepath.Join(root, "photo.png") {
 		t.Fatalf("source = %q, want the scanned mount path", img.Source)
+	}
+	if img.Mount != mount {
+		t.Fatalf("mount = %q, want %q", img.Mount, mount)
 	}
 	if img.Thumb == "" || filepath.Dir(img.Thumb) != cache {
 		t.Fatalf("thumb = %q, want a cached path under %q", img.Thumb, cache)
@@ -1173,5 +1252,202 @@ func TestThumbnailRejectsSymlinkOutsideMount(t *testing.T) {
 	}
 	if _, err := thumbnail(inside, cache, mount); err != nil {
 		t.Fatalf("file inside mount rejected: %v", err)
+	}
+}
+
+func TestStageRecentImageRejectsOutOfMountSymlinkRetarget(t *testing.T) {
+	mount := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.png")
+	src := filepath.Join(mount, "photo.png")
+	if err := os.WriteFile(src, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	img := RecentImage{Source: src, Mount: mount}
+	savedCache := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = savedCache })
+	if _, err := StageRecentImage(img); err != nil {
+		t.Fatalf("staged regular image: %v", err)
+	}
+	if err := os.Remove(src); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, src); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := StageRecentImage(img); err == nil {
+		t.Fatalf("staged symlink outside the mount as %q", got)
+	}
+}
+
+func TestRecentImageConsumerPathSurvivesMountRetarget(t *testing.T) {
+	mount := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.png")
+	src := filepath.Join(mount, "photo.png")
+	if err := os.WriteFile(src, []byte("inside mount"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("outside mount"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	savedCache := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = savedCache })
+
+	consumerPath, err := StageRecentImage(RecentImage{Source: src, Mount: mount})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumerPath == src || filepath.Ext(consumerPath) != ".png" {
+		t.Fatalf("consumer path = %q, want a staged PNG copy", consumerPath)
+	}
+	if err := os.Remove(src); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, src); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(consumerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "inside mount" {
+		t.Fatalf("consumer path reopened retargeted mount entry: %q", data)
+	}
+	info, err := os.Stat(consumerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("staged image permissions = %o, want private", info.Mode().Perm())
+	}
+}
+
+func TestRecentImageActionsUseDistinctStagedCopies(t *testing.T) {
+	mount := t.TempDir()
+	src := filepath.Join(mount, "photo.png")
+	if err := os.WriteFile(src, []byte("first image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	savedCache := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = savedCache })
+	img := RecentImage{Source: src, Mount: mount}
+	first, err := StageRecentImage(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("second image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := StageRecentImage(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("concurrent action path was reused: %q", first)
+	}
+	for path, want := range map[string]string{first: "first image", second: "second image"} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("staged %q = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestStageRecentImageExpiresOldCopies(t *testing.T) {
+	mount := t.TempDir()
+	src := filepath.Join(mount, "photo.png")
+	if err := os.WriteFile(src, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	savedCache := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = savedCache })
+	img := RecentImage{Source: src, Mount: mount}
+	oldPath, err := StageRecentImage(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-25 * time.Hour)
+	if err := os.Chtimes(filepath.Dir(oldPath), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StageRecentImage(img); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("staged image older than one day was retained: stat err=%v", err)
+	}
+}
+
+func TestOpenThumbnailSourceRejectsSymlinkSwap(t *testing.T) {
+	mount := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.png")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(mount, "photo.png")
+	if err := os.WriteFile(src, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(src); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, src); err != nil {
+		t.Fatal(err)
+	}
+
+	if file, err := openThumbnailSource(mount, resolved); err == nil {
+		file.Close()
+		t.Fatal("openThumbnailSource followed a symlink installed after path resolution")
+	}
+}
+
+func TestStageRecentImageRejectsFIFOWithoutBlocking(t *testing.T) {
+	mount := t.TempDir()
+	src := filepath.Join(mount, "photo.png")
+	if err := unix.Mkfifo(src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	savedCache := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = savedCache })
+
+	staged := make(chan error, 1)
+	go func() {
+		_, err := StageRecentImage(RecentImage{Source: src, Mount: mount})
+		staged <- err
+	}()
+	select {
+	case err := <-staged:
+		if err == nil {
+			t.Fatal("staged a FIFO as a recent image")
+		}
+	case <-time.After(100 * time.Millisecond):
+		// Release a blocking open so a broken implementation cannot leak a
+		// goroutine after the expected timeout failure.
+		writer, err := os.OpenFile(src, os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = writer.Close()
+		select {
+		case <-staged:
+		case <-time.After(time.Second):
+			t.Fatal("stager did not finish after the test FIFO was released")
+		}
+		t.Fatal("staging a FIFO blocked in open instead of rejecting it")
 	}
 }
