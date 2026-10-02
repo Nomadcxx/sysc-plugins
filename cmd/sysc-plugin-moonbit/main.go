@@ -156,7 +156,7 @@ func (s *session) startScan(mode string) {
 	s.state.StartScan()
 	op, err := s.runner.Scan(mode, nil)
 	if err != nil {
-		s.state.Phase, s.state.Err = moonbit.PhaseError, "moonbit daemon unreachable: "+err.Error()
+		s.state.Phase, s.state.Err = moonbit.PhaseError, moonbit.UnreachableMessage
 		return
 	}
 	s.streamOp(op)
@@ -174,9 +174,9 @@ func (s *session) startClean() {
 		return
 	}
 	s.state.StartClean()
-	op, err := s.runner.Clean(true, cats)
+	op, err := s.runner.Clean(true, cats, s.state.ScannedAt)
 	if err != nil {
-		s.state.Phase, s.state.Err = moonbit.PhaseError, "moonbit daemon unreachable: "+err.Error()
+		s.state.Phase, s.state.Err = moonbit.PhaseError, moonbit.UnreachableMessage
 		return
 	}
 	s.streamOp(op)

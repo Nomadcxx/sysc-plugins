@@ -52,7 +52,7 @@ func TestPluginMoonbitGateScanReviewClean(t *testing.T) {
 	})
 	close(stub.scanHold)
 	h.wait("the review list", func() bool {
-		return strings.Contains(treeText(h.root("panel-1")), "choose what to clean") &&
+		return strings.Contains(treeText(h.root("panel-1")), "Choose what to clean") &&
 			findNode(h.root("panel-1"), "toggle:Journal Logs") != nil
 	})
 
@@ -97,6 +97,9 @@ func TestPluginMoonbitGateScanReviewClean(t *testing.T) {
 			if len(req.Categories) != 1 || req.Categories[0] != "Pacman Cache" {
 				t.Errorf("clean categories = %v, want [Pacman Cache]", req.Categories)
 			}
+			if req.ScannedAt != gateScannedAt {
+				t.Errorf("clean scanned_at = %q, want the reviewed scan's %q", req.ScannedAt, gateScannedAt)
+			}
 		}
 	}
 	if !sawScan {
@@ -123,11 +126,11 @@ func TestPluginMoonbitGateDegradedWithoutDaemon(t *testing.T) {
 	h.openPanel("panel-1")
 
 	h.wait("the idle degraded hint", func() bool {
-		return strings.Contains(treeText(h.root("panel-1")), "Start the daemon with --socket")
+		return strings.Contains(treeText(h.root("panel-1")), "Daemon not connected")
 	})
 	h.click("panel-1", "scan_quick", v1.EventActivate, "")
 	h.wait("the unreachable error", func() bool {
-		return strings.Contains(treeText(h.root("panel-1")), "moonbit daemon unreachable")
+		return strings.Contains(treeText(h.root("panel-1")), "daemon isn't reachable")
 	})
 }
 
@@ -191,7 +194,7 @@ func TestPluginMoonbitGateConfirmCleanNeedsTheConfirmScreen(t *testing.T) {
 	})
 	h.click("panel-1", "scan_quick", v1.EventActivate, "")
 	h.wait("the review list", func() bool {
-		return strings.Contains(treeText(h.root("panel-1")), "choose what to clean")
+		return strings.Contains(treeText(h.root("panel-1")), "Choose what to clean")
 	})
 	h.click("panel-1", "to_confirm", v1.EventActivate, "")
 	h.wait("the confirm screen", func() bool {
@@ -227,12 +230,16 @@ func TestPluginMoonbitGateConfirmCleanNeedsTheConfirmScreen(t *testing.T) {
 	}
 }
 
+// gateScannedAt stamps the stub's scan; the clean must send it back.
+const gateScannedAt = "2026-10-02T12:30:54.078412521Z"
+
 // moonbitReq is the daemon's line protocol header, as the plugin sends it.
 type moonbitReq struct {
 	Cmd        string   `json:"cmd"`
 	Mode       string   `json:"mode"`
 	Force      bool     `json:"force"`
 	Categories []string `json:"categories"`
+	ScannedAt  string   `json:"scanned_at"`
 }
 
 // moonbitStub answers one request per connection like the real daemon. The
@@ -351,7 +358,7 @@ func (s *moonbitStub) handle(conn net.Conn) {
 			{"t": "category", "name": "Journal Logs", "i": 2, "total": 2},
 			{"t": "scan", "files": 510, "bytes": 911166458, "dir": "/var/log/journal"},
 			{"t": "category_done", "name": "Journal Logs", "files": 12, "bytes": 128849018, "duration_ms": 80},
-			{"t": "done", "files": 510, "bytes": 911166458, "categories": 2, "duration_ms": 1280},
+			{"t": "done", "files": 510, "bytes": 911166458, "categories": 2, "duration_ms": 1280, "scanned_at": gateScannedAt},
 		})
 	case "clean":
 		if !writeEvents(conn, []map[string]any{
@@ -427,7 +434,7 @@ func launchMoonbitGate(t *testing.T, sockPath string) *moonbitHost {
 	}
 
 	cmd := exec.Command(bin)
-	cmd.Env = append(os.Environ(), "MOONBIT_PANEL_SOCKET="+sockPath)
+	cmd.Env = append(os.Environ(), "SYSC_MOONBIT_SOCKET="+sockPath)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)

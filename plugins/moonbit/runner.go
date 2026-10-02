@@ -10,11 +10,12 @@ import (
 )
 
 // DefaultSocket is where the moonbit daemon listens when its unit passes
-// --socket. MOONBIT_PANEL_SOCKET overrides it (tests, custom units).
+// --socket. SYSC_MOONBIT_SOCKET overrides it (tests, custom units); the shell
+// forwards only SYSC_* variables to plugins.
 const DefaultSocket = "/run/moonbit/panel.sock"
 
 func SocketPath() string {
-	if p := os.Getenv("MOONBIT_PANEL_SOCKET"); p != "" {
+	if p := os.Getenv("SYSC_MOONBIT_SOCKET"); p != "" {
 		return p
 	}
 	return DefaultSocket
@@ -69,6 +70,7 @@ type request struct {
 	Mode       string   `json:"mode,omitempty"`
 	Force      bool     `json:"force,omitempty"`
 	Categories []string `json:"categories,omitempty"`
+	ScannedAt  string   `json:"scanned_at,omitempty"`
 }
 
 func (r Runner) start(req request) (*Op, error) {
@@ -110,9 +112,11 @@ func (r Runner) Scan(mode string, cats []string) (*Op, error) {
 	return r.start(request{Cmd: "scan", Mode: mode, Categories: cats})
 }
 
-// Clean starts a clean stream; force=false only ever dry-runs.
-func (r Runner) Clean(force bool, cats []string) (*Op, error) {
-	return r.start(request{Cmd: "clean", Force: force, Categories: cats})
+// Clean starts a clean stream; force=false only ever dry-runs. scannedAt,
+// from the reviewed scan's done event, makes the daemon refuse a cache a
+// later scan replaced; empty skips that check (daemons before 1.6).
+func (r Runner) Clean(force bool, cats []string, scannedAt string) (*Op, error) {
+	return r.start(request{Cmd: "clean", Force: force, Categories: cats, ScannedAt: scannedAt})
 }
 
 // Status performs one synchronous status round-trip. The connection is

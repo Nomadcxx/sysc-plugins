@@ -1,6 +1,9 @@
 package moonbit
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Phase mirrors the moonbit TUI screens: welcome(idle), scan progress,
 // results/select(review), confirm, clean progress, complete.
@@ -35,6 +38,11 @@ type State struct {
 	ScanBytes uint64
 	ScanCats  []CategoryStat
 	ScanErrs  []string
+	// ScanSkipped names categories the daemon cannot clean, such as home
+	// caches its unit mounts read-only.
+	ScanSkipped []string
+	// ScannedAt stamps the scan under review, sent back with the clean.
+	ScannedAt string
 
 	// Review selection over the finished scan's categories.
 	Review   []CategoryStat
@@ -70,12 +78,16 @@ func (s *State) Fold(ev Event) bool {
 		s.ScanFiles, s.ScanBytes, s.ScanDir = ev.Files, ev.Bytes, ev.Dir
 		return true
 	case "category_done":
-		s.ScanCats = append(s.ScanCats, CategoryStat{Name: ev.Name, Files: ev.Files, Bytes: ev.Bytes})
+		s.ScanCats = append(s.ScanCats, CategoryStat{Name: ev.Name, Files: ev.Files, Bytes: ev.Bytes, Truncate: ev.Truncate})
 		return true
 	case "category_error":
 		s.ScanErrs = append(s.ScanErrs, ev.Name+": "+ev.Msg)
 		return true
+	case "category_skipped":
+		s.ScanSkipped = append(s.ScanSkipped, ev.Name)
+		return true
 	case "done":
+		s.ScannedAt = ev.ScannedAt
 		s.Review = nil
 		for _, c := range s.ScanCats {
 			if c.Files > 0 {
@@ -105,7 +117,7 @@ func (s *State) Fold(ev Event) bool {
 		s.Phase, s.Err = PhaseIdle, ""
 		return true
 	case "error":
-		s.Err = ev.Msg
+		s.Err = daemonMessage(ev.Msg)
 		s.Phase = PhaseError
 		return true
 	}
@@ -117,7 +129,7 @@ func (s *State) StartScan() {
 	s.Phase, s.Err = PhaseScanning, ""
 	s.ScanCat, s.ScanIdx, s.ScanTotal = "", 0, 0
 	s.ScanFiles, s.ScanBytes, s.ScanDir = 0, 0, ""
-	s.ScanCats, s.ScanErrs = nil, nil
+	s.ScanCats, s.ScanErrs, s.ScanSkipped, s.ScannedAt = nil, nil, nil, ""
 }
 
 // StartClean is the confirm-side flip; clean_begin later refines the totals.
@@ -136,10 +148,25 @@ func (s *State) StreamEnded() bool {
 	s.Phase, s.Err = PhaseError, "operation stream ended unexpectedly"
 	s.ScanCat, s.ScanDir = "", ""
 	s.ScanIdx, s.ScanTotal, s.ScanFiles, s.ScanBytes = 0, 0, 0, 0
-	s.ScanCats, s.ScanErrs = nil, nil
+	s.ScanCats, s.ScanErrs, s.ScanSkipped = nil, nil, nil
 	s.CleanTotal, s.CleanDone, s.CleanFreed, s.CleanFile = 0, 0, 0, ""
 	s.CleanDry = false
 	return true
+}
+
+// UnreachableMessage is what the panel says when the daemon socket cannot be
+// dialled: what to do about it, not the raw dial error.
+const UnreachableMessage = "Moonbit's daemon isn't reachable. Install moonbit 1.6 or newer and enable moonbit-daemon.service."
+
+// daemonMessage turns the daemon's error strings into panel copy.
+func daemonMessage(msg string) string {
+	switch {
+	case strings.Contains(msg, "another operation in progress"):
+		return "Moonbit is busy with a scheduled scan or clean. Try again in a moment."
+	case strings.Contains(msg, "replaced by a newer"):
+		return "A scheduled scan replaced the results you reviewed. Scan again before cleaning."
+	}
+	return msg
 }
 
 // SelectedStats are the review rows the user kept checked.
@@ -161,6 +188,17 @@ func (s *State) selectedFiles() int {
 	return n
 }
 
+// truncatedFiles counts the selected files cleaned by truncation.
+func (s *State) truncatedFiles() int {
+	var n int
+	for _, c := range s.SelectedStats() {
+		if c.Truncate {
+			n += c.Files
+		}
+	}
+	return n
+}
+
 func (s *State) selectedBytes() uint64 {
 	var b uint64
 	for _, c := range s.SelectedStats() {
@@ -169,13 +207,15 @@ func (s *State) selectedBytes() uint64 {
 	return b
 }
 
-// ScanValue is the progress fraction: finished categories over total, capped
-// below one so completion only reads as full on the done event.
+// ScanValue is the progress fraction: settled categories (done, failed or
+// skipped) over total, capped below one so completion only reads as full on
+// the done event.
 func (s *State) ScanValue() float64 {
-	if s.ScanTotal <= 0 || len(s.ScanCats) == 0 {
+	settled := len(s.ScanCats) + len(s.ScanErrs) + len(s.ScanSkipped)
+	if s.ScanTotal <= 0 || settled == 0 {
 		return 0
 	}
-	v := float64(len(s.ScanCats)) / float64(s.ScanTotal)
+	v := float64(settled) / float64(s.ScanTotal)
 	if v > 0.99 {
 		v = 0.99
 	}

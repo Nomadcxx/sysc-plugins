@@ -201,7 +201,7 @@ func TestLongEventLineIsDelivered(t *testing.T) {
 	sock, _, _ := stubDaemon(t, func(request) []Event {
 		return []Event{{T: "clean_done", Deleted: 3, Errors: errs}}
 	}, false)
-	op, err := Runner{Path: sock}.Clean(true, []string{"Pacman Cache"})
+	op, err := Runner{Path: sock}.Clean(true, []string{"Pacman Cache"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

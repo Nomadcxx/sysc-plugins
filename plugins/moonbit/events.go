@@ -27,13 +27,20 @@ type Event struct {
 	Daemon     bool            `json:"daemon,omitempty"`
 	LastScan   string          `json:"last_scan,omitempty"`
 	LastClean  string          `json:"last_clean,omitempty"`
+	// ScannedAt stamps a scan's done event (moonbit 1.6+); a clean sends it
+	// back so the daemon refuses a cache a later scan replaced.
+	ScannedAt string `json:"scanned_at,omitempty"`
+	// Truncate marks a category_done whose files are truncated in place
+	// rather than deleted (moonbit 1.6+).
+	Truncate bool `json:"truncate,omitempty"`
 }
 
 // CategoryStat is moonbit's per-category rollup.
 type CategoryStat struct {
-	Name  string `json:"name"`
-	Files int    `json:"files"`
-	Bytes uint64 `json:"bytes"`
+	Name     string `json:"name"`
+	Files    int    `json:"files"`
+	Bytes    uint64 `json:"bytes"`
+	Truncate bool   `json:"truncate,omitempty"`
 }
 
 // CacheInfo is the status event's view of the daemon's session cache.

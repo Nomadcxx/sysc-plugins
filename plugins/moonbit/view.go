@@ -2,19 +2,23 @@ package moonbit
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-// Layout budget for the 758x450 panel (manifest-declared). The root carries
-// the inset; the host measures the wordmark rows at its mono text role.
+// Layout for the 758x450 panel (manifest-declared). The root carries the
+// inset; the host measures the wordmark rows at its mono text role. Depth
+// comes from stacked surfaces, as in the shell's system monitor: a summary
+// card, a category card holding a sunken well, then the action bar and a
+// footer line outside the cards.
 const (
-	panelInset     = 12
-	bodyHeight     = 248
-	bodyListHeight = 240
+	panelInset = 12
+	cardPad    = 12
+	wellHeight = 172
+	controlH   = 36
 )
 
 // wordmark is moonbit's TUI mark (ascii.txt), drawn as accent text because a
@@ -106,183 +110,320 @@ func cacheOf(s *State) *CacheInfo {
 }
 
 // Panel renders the phase the TUI would be on, with the wordmark header in
-// every state — the same identity the terminal shows.
+// every state, the same identity the terminal shows.
 func Panel(s *State) *v1.Node {
 	header := &v1.Node{Kind: v1.KindColumn}
 	for _, row := range wordmark {
 		header.Children = append(header.Children, &v1.Node{Kind: v1.KindText, Text: row, Size: "mono", Tone: v1.ToneAccent, Bold: true, CenterX: true})
 	}
-	body := []*v1.Node{header}
-	if s.Phase == PhaseError {
-		body = append(body, errText(s.Err))
+	return &v1.Node{
+		Kind:    v1.KindColumn,
+		Padding: panelInset,
+		Gap:     10,
+		Children: []*v1.Node{
+			header,
+			summaryCard(s),
+			categoryCard(s),
+			actionBar(s),
+			footer(s),
+		},
 	}
+}
+
+// summaryCard is the hero: one figure and one caption per phase, with the
+// scan and clean progress bars living here.
+func summaryCard(s *State) *v1.Node {
+	var hero, caption string
+	heroTone := v1.ToneNormal
+	var extra *v1.Node
 	switch s.Phase {
 	case PhaseScanning:
-		body = append(body, scanBody(s)...)
+		hero = "Scanning"
+		if s.ScanCat != "" {
+			hero += " · " + s.ScanCat
+		}
+		caption = fmt.Sprintf("%d of %d categories · %s files · %s", s.ScanIdx, s.ScanTotal, count(s.ScanFiles), humanBytes(s.ScanBytes))
+		extra = &v1.Node{Kind: v1.KindProgress, Key: "scan-prog", Value: s.ScanValue(), Animate: true, Name: "Scan progress", Role: "progressbar"}
 	case PhaseReview:
-		body = append(body, reviewBody(s)...)
+		n := len(s.SelectedStats())
+		if len(s.Review) == 0 {
+			hero, caption = "Nothing to clean", "This scan found no files Moonbit can remove."
+			break
+		}
+		hero = humanBytes(s.selectedBytes()) + " selected"
+		caption = fmt.Sprintf("%s files in %d of %s", count(s.selectedFiles()), n, plural(len(s.Review), "category", "categories"))
 	case PhaseConfirm:
-		body = append(body, confirmBody(s)...)
+		hero, heroTone = "Clean the selected categories?", v1.ToneError
+		caption = confirmCaption(s)
 	case PhaseCleaning:
-		body = append(body, cleanBody(s)...)
+		hero = "Cleaning"
+		caption = fmt.Sprintf("%s of %s files · %s freed", count(s.CleanDone), count(s.CleanTotal), humanBytes(s.CleanFreed))
+		extra = &v1.Node{Kind: v1.KindProgress, Key: "clean-prog", Value: s.CleanValue(), Animate: true, Name: "Clean progress", Role: "progressbar"}
 	case PhaseDone:
-		body = append(body, doneBody(s)...)
+		hero = "Freed " + humanBytes(s.Freed)
+		caption = plural(s.Deleted, "file", "files") + " cleaned"
 	default:
-		body = append(body, idleBody(s)...)
+		hero, caption = idleSummary(s)
 	}
-	return &v1.Node{
-		Kind:     v1.KindColumn,
-		Padding:  panelInset,
-		Gap:      8,
-		Children: body,
+	children := []*v1.Node{
+		{Kind: v1.KindText, Text: hero, Size: "title", Bold: true, Tone: heroTone},
+		{Kind: v1.KindText, Text: caption, Tone: v1.ToneSubtle},
 	}
+	if extra != nil {
+		children = append(children, extra)
+	}
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: cardPad, Gap: 4, Children: children}
 }
 
-func idleBody(s *State) []*v1.Node {
-	c := cacheOf(s)
-	head := subtle("No scan yet — run a scan to see what moonbit would reclaim.")
-	if c != nil {
-		head = &v1.Node{Kind: v1.KindText, Bold: true,
-			Text: fmt.Sprintf("%s cleanable in %d files", humanBytes(c.Bytes), c.Files)}
+func idleSummary(s *State) (string, string) {
+	if s.Status == nil {
+		return "Daemon not connected", "Moonbit's daemon does the scanning and cleaning as root."
 	}
-	rows := []*v1.Node{head}
+	c := cacheOf(s)
+	if c == nil || c.Files == 0 {
+		return "No scan yet", "Run a scan to see what Moonbit would reclaim."
+	}
+	caption := fmt.Sprintf("cleanable in %s files · %s", count(c.Files), plural(len(c.Categories), "category", "categories"))
+	if t := shortTime(c.ScannedAt); t != "" {
+		caption += " · scanned " + t
+	}
+	return humanBytes(c.Bytes), caption
+}
+
+func confirmCaption(s *State) string {
+	n, trunc := s.selectedFiles(), s.truncatedFiles()
+	what := plural(n, "file", "files") + " deleted"
+	if trunc > 0 {
+		what = fmt.Sprintf("%s deleted, %s emptied in place", count(n-trunc), plural(trunc, "file", "files"))
+	}
+	return fmt.Sprintf("%s: %s. This runs as root and can't be undone.", humanBytes(s.selectedBytes()), what)
+}
+
+// categoryCard holds a column-label strip and a sunken well listing the
+// phase's categories. Its rim follows the phase, as the TUI's frame does.
+func categoryCard(s *State) *v1.Node {
+	title, rows := categoryRows(s)
+	columns := "Files · Size"
+	if s.Phase == PhaseDone && len(s.CleanErrs) > 0 {
+		columns = "" // the well lists failed paths, not categories
+	}
+	strip := &v1.Node{Kind: v1.KindRow, PinEnd: true, Children: []*v1.Node{
+		{Kind: v1.KindText, Text: title, Size: "label", Tone: v1.ToneSubtle},
+		{Kind: v1.KindText, Text: columns, Size: "label", Tone: v1.ToneSubtle},
+	}}
+	well := &v1.Node{Kind: v1.KindList, Fill: "container", Shape: "medium", Padding: 8, Gap: 2, Height: wellHeight, Events: []v1.EventKind{v1.EventScroll}, Children: rows}
+	card := &v1.Node{Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: cardPad, Gap: 6, Children: []*v1.Node{strip, well}}
+	switch s.Phase {
+	case PhaseScanning, PhaseReview:
+		card.Stroke, card.StrokeFill = 1, "accent"
+	case PhaseConfirm, PhaseCleaning:
+		card.Stroke, card.StrokeFill = 1, "error"
+	}
+	return card
+}
+
+func categoryRows(s *State) (string, []*v1.Node) {
+	switch s.Phase {
+	case PhaseScanning:
+		return "Scanned so far", statRows(s.ScanCats, "Results appear here as each category finishes.")
+	case PhaseReview:
+		if len(s.Review) == 0 {
+			return "Choose what to clean", []*v1.Node{note("No cleanable files found in this scan.")}
+		}
+		var rows []*v1.Node
+		for _, c := range s.Review {
+			rows = append(rows, toggleRow(c, s.Selected[c.Name]))
+		}
+		return "Choose what to clean", rows
+	case PhaseConfirm, PhaseCleaning:
+		return "To clean", statRows(s.SelectedStats(), "")
+	case PhaseDone:
+		if len(s.CleanErrs) == 0 {
+			return "Cleaned", statRows(s.SelectedStats(), "")
+		}
+		var rows []*v1.Node
+		for i, e := range s.CleanErrs {
+			if i == 50 {
+				rows = append(rows, note(fmt.Sprintf("and %s more", count(len(s.CleanErrs)-50))))
+				break
+			}
+			rows = append(rows, &v1.Node{Kind: v1.KindText, Text: e, Tone: v1.ToneSubtle})
+		}
+		return "Could not clean", rows
+	}
 	var cats []CategoryStat
-	if c != nil {
+	if c := cacheOf(s); c != nil {
 		cats = c.Categories
 	}
-	list := &v1.Node{Kind: v1.KindList, Height: bodyListHeight, Gap: 2}
-	for _, cat := range cats {
-		list.Children = append(list.Children, statRow(cat))
-	}
-	if len(cats) > 0 {
-		rows = append(rows, list)
-	} else if c == nil && s.Status == nil {
-		rows = append(rows, subtle("Start the daemon with --socket to connect it."))
-	}
-	rows = append(rows, buttonRow(
-		action("scan_quick", "Quick Scan", "accent"),
-		action("scan_deep", "Deep Scan", "soft"),
-	))
-	return rows
+	return "Last scan", statRows(cats, "Nothing scanned yet.")
 }
 
-func scanBody(s *State) []*v1.Node {
-	head := &v1.Node{Kind: v1.KindRow, PinEnd: true, Children: []*v1.Node{
-		{Kind: v1.KindText, Bold: true, Text: fmt.Sprintf("Scanning (%d/%d) %s", s.ScanIdx, s.ScanTotal, s.ScanCat)},
-		{Kind: v1.KindText, Text: humanBytes(s.ScanBytes), Tone: v1.ToneSubtle},
-	}}
-	prog := &v1.Node{Kind: v1.KindProgress, Key: "scan-prog", Value: s.ScanValue(), Animate: true, Name: "Scan progress", Role: "progressbar"}
-	detail := subtle(fmt.Sprintf("%d files so far%s", s.ScanFiles, dirSuffix(s.ScanDir)))
-	return []*v1.Node{head, prog, detail, buttonRow(action("cancel", "Cancel", "soft"))}
-}
-
-func dirSuffix(dir string) string {
-	if dir == "" {
-		return ""
+func statRows(cats []CategoryStat, empty string) []*v1.Node {
+	if len(cats) == 0 && empty != "" {
+		return []*v1.Node{note(empty)}
 	}
-	return " · " + filepath.Base(dir)
-}
-
-func reviewBody(s *State) []*v1.Node {
-	rows := []*v1.Node{{Kind: v1.KindText, Bold: true, Text: "Review — choose what to clean"}}
-	if len(s.Review) == 0 {
-		rows = append(rows, subtle("No cleanable files found in this scan."))
-		if len(s.ScanErrs) > 0 {
-			rows = append(rows, subtle(fmt.Sprintf("%d categories could not be scanned", len(s.ScanErrs))))
-		}
-		return append(rows, buttonRow(
-			action("scan_quick", "Quick Scan", "accent"),
-			action("scan_deep", "Deep Scan", "soft"),
-			action("back", "Back", "soft"),
-		))
+	var rows []*v1.Node
+	for _, c := range cats {
+		rows = append(rows, statRow(c))
 	}
-	list := &v1.Node{Kind: v1.KindList, Height: bodyListHeight, Gap: 2, Events: []v1.EventKind{v1.EventScroll}}
-	for _, cat := range s.Review {
-		on := s.Selected[cat.Name]
-		btn := &v1.Node{
-			Kind: v1.KindButton, ID: "toggle:" + cat.Name,
-			Name: cat.Name, Role: "button", Events: []v1.EventKind{v1.EventActivate},
-			Fill:     map[bool]string{true: "accent", false: "soft"}[on],
-			Children: []*v1.Node{{Kind: v1.KindText, Text: cat.Name, Bold: on}},
-		}
-		if on {
-			btn.Children = append([]*v1.Node{{Kind: v1.KindIcon, Icon: "check"}}, btn.Children...)
-		}
-		list.Children = append(list.Children, &v1.Node{Kind: v1.KindRow, PinEnd: true, Children: []*v1.Node{
-			btn,
-			{Kind: v1.KindText, Text: fmt.Sprintf("%d · %s", cat.Files, humanBytes(cat.Bytes)), Tone: v1.ToneSubtle},
-		}})
-	}
-	buttons := []*v1.Node{action("select_all", "Toggle All", "soft")}
-	if n := len(s.SelectedStats()); n > 0 {
-		buttons = append(buttons, action("to_confirm", fmt.Sprintf("Clean %d Selected", n), "accent"))
-	}
-	buttons = append(buttons, action("back", "Back", "soft"))
-	rows = append(rows, list, buttonRow(buttons...))
-	return rows
-}
-
-func confirmBody(s *State) []*v1.Node {
-	n, b := s.selectedFiles(), s.selectedBytes()
-	rows := []*v1.Node{
-		{Kind: v1.KindText, Bold: true, Text: "Clean the selected categories?"},
-		text(fmt.Sprintf("%s across %d files in %d categories will be deleted.", humanBytes(b), n, len(s.SelectedStats()))),
-		subtle("Deleting runs through the root daemon and cannot be undone."),
-	}
-	if len(s.ScanErrs) > 0 {
-		rows = append(rows, subtle(fmt.Sprintf("%d category errors during the scan", len(s.ScanErrs))))
-	}
-	rows = append(rows, buttonRow(
-		action("cancel_op", "Cancel", "soft"),
-		action("confirm_clean", "Clean Now", "error"),
-	))
-	return rows
-}
-
-func cleanBody(s *State) []*v1.Node {
-	head := &v1.Node{Kind: v1.KindRow, PinEnd: true, Children: []*v1.Node{
-		{Kind: v1.KindText, Bold: true, Text: fmt.Sprintf("Cleaning (%d/%d)", s.CleanDone, s.CleanTotal)},
-		{Kind: v1.KindText, Text: humanBytes(s.CleanFreed), Tone: v1.ToneSubtle},
-	}}
-	prog := &v1.Node{Kind: v1.KindProgress, Key: "clean-prog", Value: s.CleanValue(), Animate: true, Name: "Clean progress", Role: "progressbar"}
-	file := s.CleanFile
-	if len(file) > 60 {
-		file = "…" + file[len(file)-59:]
-	}
-	return []*v1.Node{head, prog, subtle(file), buttonRow(action("cancel", "Cancel", "soft"))}
-}
-
-func doneBody(s *State) []*v1.Node {
-	rows := []*v1.Node{
-		{Kind: v1.KindText, Bold: true, Text: "Freed " + humanBytes(s.Freed)},
-		text(fmt.Sprintf("%d files deleted", s.Deleted)),
-	}
-	if len(s.CleanErrs) > 0 {
-		rows = append(rows, errText(fmt.Sprintf("%d files could not be deleted", len(s.CleanErrs))))
-	}
-	rows = append(rows, buttonRow(action("back", "Back", "accent")))
 	return rows
 }
 
 func statRow(c CategoryStat) *v1.Node {
+	name := c.Name
+	if c.Truncate {
+		name += " (emptied in place)"
+	}
 	return &v1.Node{Kind: v1.KindRow, PinEnd: true, Children: []*v1.Node{
-		{Kind: v1.KindText, Text: c.Name},
-		{Kind: v1.KindText, Text: fmt.Sprintf("%d · %s", c.Files, humanBytes(c.Bytes)), Tone: v1.ToneSubtle},
+		{Kind: v1.KindText, Text: name},
+		figures(c),
 	}}
 }
 
-func buttonRow(btns ...*v1.Node) *v1.Node {
-	return &v1.Node{Kind: v1.KindRow, Gap: 8, Children: btns}
+// toggleRow is one review checkbox: a check when selected, a plus when not,
+// so the state reads without relying on fill alone.
+func toggleRow(c CategoryStat, on bool) *v1.Node {
+	icon, fill, verb := "add", "chip", "Select "
+	if on {
+		icon, fill, verb = "check", "accent", "Deselect "
+	}
+	btn := &v1.Node{
+		Kind: v1.KindButton, ID: "toggle:" + c.Name, Name: verb + c.Name, Role: "button",
+		Events: []v1.EventKind{v1.EventActivate}, Fill: fill, Shape: "small", Height: 28,
+		Width: 52 + 8*utf8.RuneCountInString(c.Name),
+		Children: []*v1.Node{
+			{Kind: v1.KindIcon, Icon: icon},
+			{Kind: v1.KindText, Text: c.Name, Bold: on},
+		},
+	}
+	return &v1.Node{Kind: v1.KindRow, PinEnd: true, Children: []*v1.Node{btn, figures(c)}}
 }
 
-func action(id, label, fill string) *v1.Node {
-	return &v1.Node{
+// figures is a row's files and size, held clear of the well's scrollbar.
+func figures(c CategoryStat) *v1.Node {
+	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{
+		{Kind: v1.KindText, Text: fmt.Sprintf("%s · %s", count(c.Files), humanBytes(c.Bytes)), Tone: v1.ToneSubtle, Tabular: true},
+		{Kind: v1.KindColumn, Width: 14},
+	}}
+}
+
+// actionBar keeps secondary actions left and the primary right, the same
+// slots in every phase.
+func actionBar(s *State) *v1.Node {
+	var left, right []*v1.Node
+	switch s.Phase {
+	case PhaseScanning, PhaseCleaning:
+		right = []*v1.Node{action("cancel", "Cancel", "chip", "")}
+	case PhaseReview:
+		left = []*v1.Node{action("back", "Back", "chip", "chevron_left")}
+		if len(s.Review) == 0 {
+			right = scanActions()
+			break
+		}
+		all := len(s.SelectedStats()) == len(s.Review)
+		left = append(left, action("select_all", map[bool]string{true: "Select None", false: "Select All"}[all], "chip", ""))
+		n := len(s.SelectedStats())
+		clean := action("to_confirm", fmt.Sprintf("Clean %d Selected", n), "accent", "delete")
+		if n == 0 {
+			clean.Text, clean.Name, clean.Disabled = "Clean Selected", "Select a category to clean", true
+		}
+		right = []*v1.Node{clean}
+	case PhaseConfirm:
+		left = []*v1.Node{action("cancel_op", "Back", "chip", "chevron_left")}
+		right = []*v1.Node{action("confirm_clean", "Clean Now", "error", "delete")}
+	case PhaseDone:
+		right = []*v1.Node{action("back", "Done", "accent", "check")}
+	default:
+		right = scanActions()
+	}
+	return &v1.Node{Kind: v1.KindRow, PinEnd: true, Children: []*v1.Node{
+		{Kind: v1.KindRow, Gap: 8, Children: left},
+		{Kind: v1.KindRow, Gap: 8, Children: right},
+	}}
+}
+
+func scanActions() []*v1.Node {
+	return []*v1.Node{
+		action("scan_deep", "Deep Scan", "chip", "search"),
+		action("scan_quick", "Quick Scan", "accent", "bolt"),
+	}
+}
+
+// footer is the line outside the cards: an error when there is one,
+// otherwise what the scan could not reach and when Moonbit last cleaned.
+func footer(s *State) *v1.Node {
+	if s.Err != "" {
+		return errText(s.Err)
+	}
+	var parts []string
+	if n := len(s.ScanSkipped); n > 0 {
+		parts = append(parts, plural(n, "category", "categories")+" skipped: read-only to the daemon")
+	}
+	if n := len(s.ScanErrs); n > 0 {
+		parts = append(parts, plural(n, "category", "categories")+" could not be scanned")
+	}
+	if s.Phase == PhaseDone && len(s.CleanErrs) > 0 {
+		parts = append(parts, plural(len(s.CleanErrs), "file", "files")+" could not be cleaned")
+	}
+	if len(parts) == 0 && s.Status != nil {
+		if t := shortTime(s.Status.LastClean); t != "" {
+			parts = append(parts, "Last clean "+t)
+		} else {
+			parts = append(parts, "Daemon connected")
+		}
+	}
+	return subtle(strings.Join(parts, " · "))
+}
+
+// action is a padded, fixed-height button; the width is set from the label
+// so text never meets the pill edge.
+func action(id, label, fill, icon string) *v1.Node {
+	w := 32 + 9*utf8.RuneCountInString(label)
+	n := &v1.Node{
 		Kind: v1.KindButton, ID: id, Name: label, Role: "button",
 		Events: []v1.EventKind{v1.EventActivate},
-		Fill:   fill, Text: label,
+		Fill:   fill, Text: label, Height: controlH, Width: w,
 	}
+	if icon != "" {
+		n.Icon, n.Width = icon, w+24
+	}
+	return n
+}
+
+func note(t string) *v1.Node {
+	return &v1.Node{Kind: v1.KindText, Text: t, Tone: v1.ToneSubtle, CenterX: true}
 }
 
 func text(t string) *v1.Node    { return &v1.Node{Kind: v1.KindText, Text: t} }
 func subtle(t string) *v1.Node  { return &v1.Node{Kind: v1.KindText, Text: t, Tone: v1.ToneSubtle} }
 func errText(t string) *v1.Node { return &v1.Node{Kind: v1.KindText, Text: t, Tone: v1.ToneError} }
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return count(n) + " " + many
+}
+
+// count groups thousands: 12,297.
+func count(n int) string {
+	s := fmt.Sprint(n)
+	for i := len(s) - 3; i > 0 && s[i-1] != '-'; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
+}
+
+// shortTime renders a daemon RFC 3339 stamp as local "15:04", or
+// "2 Jan 15:04" when it is not today.
+func shortTime(stamp string) string {
+	t, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil || t.IsZero() {
+		return ""
+	}
+	t, now := t.Local(), time.Now()
+	if t.Year() == now.Year() && t.YearDay() == now.YearDay() {
+		return t.Format("15:04")
+	}
+	return t.Format("2 Jan 15:04")
+}

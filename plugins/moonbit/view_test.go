@@ -1,6 +1,7 @@
 package moonbit
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -141,37 +142,90 @@ func TestDoneUsesOnlyCurrentCleanableCategories(t *testing.T) {
 	})
 }
 
+func findID(n *v1.Node, id string) *v1.Node {
+	if n == nil {
+		return nil
+	}
+	if n.ID == id {
+		return n
+	}
+	for _, c := range n.Children {
+		if f := findID(c, id); f != nil {
+			return f
+		}
+	}
+	return nil
+}
+
 func TestEmptyReviewOffersScanActionsWithoutClean(t *testing.T) {
-	nodes := reviewBody(&State{Phase: PhaseReview})
-	if len(nodes) != 3 || nodes[1].Text != "No cleanable files found in this scan." {
-		t.Fatalf("missing empty scan state: %+v", nodes)
-	}
-	ids := map[string]bool{}
-	for _, button := range nodes[2].Children {
-		ids[button.ID] = true
-	}
+	p := Panel(&State{Phase: PhaseReview, Status: &Event{T: "status"}})
 	for _, id := range []string{"scan_quick", "scan_deep", "back"} {
-		if !ids[id] {
+		if findID(p, id) == nil {
 			t.Errorf("empty review missing %s action", id)
 		}
 	}
-	if ids["to_confirm"] {
+	if findID(p, "to_confirm") != nil {
 		t.Fatal("empty review must not offer a clean action")
 	}
 }
 
-func TestReviewOmitsCleanActionWhenNothingIsSelected(t *testing.T) {
+// With nothing selected the clean action stays in its slot, disabled, so the
+// bar does not jump and the reason is announced.
+func TestReviewDisablesCleanWhenNothingIsSelected(t *testing.T) {
 	s := states()[PhaseReview]
 	for name := range s.Selected {
 		s.Selected[name] = false
 	}
-	nodes := reviewBody(s)
-	ids := map[string]bool{}
-	for _, button := range nodes[len(nodes)-1].Children {
-		ids[button.ID] = true
+	clean := findID(Panel(s), "to_confirm")
+	if clean == nil || !clean.Disabled {
+		t.Fatalf("clean action = %+v, want present and disabled", clean)
 	}
-	if ids["to_confirm"] {
-		t.Fatal("review must not offer a clean action with zero selected categories")
+}
+
+func TestConfirmSaysWhatIsEmptiedRatherThanDeleted(t *testing.T) {
+	s := &State{Phase: PhaseConfirm, Selected: map[string]bool{"Pacman Cache": true, "System Logs": true},
+		Review: []CategoryStat{
+			{Name: "Pacman Cache", Files: 10, Bytes: 1000},
+			{Name: "System Logs", Files: 3, Bytes: 30, Truncate: true},
+		}}
+	got := confirmCaption(s)
+	if !strings.Contains(got, "10 deleted, 3 files emptied in place") {
+		t.Fatalf("confirm caption = %q, want the delete and truncate split", got)
+	}
+}
+
+func TestPluralAndCount(t *testing.T) {
+	for _, tc := range []struct{ got, want string }{
+		{plural(1, "category", "categories"), "1 category"},
+		{plural(2, "category", "categories"), "2 categories"},
+		{count(12297), "12,297"},
+		{count(999), "999"},
+		{count(1000000), "1,000,000"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("got %q, want %q", tc.got, tc.want)
+		}
+	}
+}
+
+func TestScanValueCountsFailedAndSkippedCategories(t *testing.T) {
+	s := &State{ScanTotal: 4, ScanCats: []CategoryStat{{Name: "a"}}, ScanErrs: []string{"b: x"}, ScanSkipped: []string{"c"}}
+	if v := s.ScanValue(); v != 0.75 {
+		t.Fatalf("scan value = %v, want 0.75 with three of four categories settled", v)
+	}
+}
+
+func TestDoneRecordsTheScanStampForTheClean(t *testing.T) {
+	s := &State{}
+	s.StartScan()
+	s.Fold(Event{T: "category_done", Name: "Logs", Files: 2, Truncate: true})
+	s.Fold(Event{T: "done", ScannedAt: "2026-10-02T12:30:54.078412521Z"})
+	if s.ScannedAt != "2026-10-02T12:30:54.078412521Z" || !s.Review[0].Truncate {
+		t.Fatalf("state after done = %+v", s)
+	}
+	s.StartScan()
+	if s.ScannedAt != "" {
+		t.Fatal("a new scan must drop the old stamp")
 	}
 }
 
