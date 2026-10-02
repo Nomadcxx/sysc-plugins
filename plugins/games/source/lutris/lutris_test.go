@@ -254,3 +254,52 @@ func TestConfigPathResolution(t *testing.T) {
 		}
 	}
 }
+
+func TestAssetPathsRejectEscapingDatabaseValues(t *testing.T) {
+	src := &Source{lutrisRoot: t.TempDir()}
+	for _, name := range []string{"../outside", "../../.ssh/id_rsa", "/etc/passwd"} {
+		if got := src.cover(name); got != "" {
+			t.Errorf("cover(%q) = %q, want empty", name, got)
+		}
+		if got := src.gameConfig(name); got != "" {
+			t.Errorf("gameConfig(%q) = %q, want empty", name, got)
+		}
+	}
+}
+
+func TestCoverAndConfigStayUnderLutrisRoot(t *testing.T) {
+	root := t.TempDir()
+	lutrisRoot := filepath.Join(root, "lutris")
+	outsideCover := filepath.Join(root, ".ssh", "id_rsa.jpg")
+	outsideConfig := filepath.Join(root, ".config", "foo.yml")
+	absDir := t.TempDir()
+	absConfig := filepath.Join(absDir, "evil.yml")
+	for _, p := range []string{outsideCover, outsideConfig, absConfig} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dbPath := makePGA(t, func(db *sql.DB) {
+		_, err := db.Exec(`INSERT INTO games (name, slug, configpath, installed) VALUES
+			('Escaped', '../../.ssh/id_rsa', '../../.config/foo', 1),
+			('Absolute', 'okslug', ?, 1)`, absConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	src, err := New(Options{DBPath: dbPath, LutrisRoot: lutrisRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range mustList(t, src) {
+		switch g.Name {
+		case "Escaped", "Absolute":
+			if g.CoverPath != "" || g.ConfigPath != "" {
+				t.Fatalf("%s escaped lutris root: cover=%q config=%q", g.Name, g.CoverPath, g.ConfigPath)
+			}
+		}
+	}
+}
