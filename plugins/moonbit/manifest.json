@@ -4,7 +4,7 @@
   "name": "Moonbit",
   "description": "Moonbit system cleaner from the bar: scan, review, and reclaim disk space.",
   "version": "1.0.0",
-  "protocol": { "major": 1, "minor": 8 },
+  "protocol": { "major": 1, "minor": 14 },
   "exec": "bin/sysc-plugin-moonbit",
   "capabilities": ["panels", "state"],
   "requires": { "commands": ["moonbit"] },

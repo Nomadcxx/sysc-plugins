@@ -33,11 +33,11 @@ func TestPluginMoonbitGateScanReviewClean(t *testing.T) {
 	h.openPanel("panel-1")
 
 	// Idle: the status round-trip lands as a cache summary in the panel and a
-	// size label beside the house icon in the bar.
+	// size label beside the Moonbit mark in the bar.
 	h.wait("the idle cache summary", func() bool {
 		return strings.Contains(treeText(h.root("panel-1")), "cleanable in") &&
 			strings.Contains(treeText(h.root("bar-1")), "MiB") &&
-			hasIcon(h.root("bar-1"), "home")
+			hasIcon(h.root("bar-1"), "moonbit")
 	})
 
 	// Scan: the stub holds the stream open mid-scan so the live progress state
@@ -362,7 +362,7 @@ func launchMoonbitGate(t *testing.T, sockPath string) *moonbitHost {
 		}
 	}()
 	if err := h.send(&v1.HostHello{
-		Supported:    []v1.Version{{Major: 1, Minor: 8}},
+		Supported:    []v1.Version{{Major: 1, Minor: 14}},
 		Plugin:       v1.Identity{ID: "org.sysc.moonbit", Name: "Moonbit", Version: "1.0.0"},
 		Capabilities: []string{"panels", "state"},
 		Limits:       v1.DefaultLimits,

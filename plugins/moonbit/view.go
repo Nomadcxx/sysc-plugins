@@ -38,8 +38,8 @@ func padRows(rows ...string) []string {
 	return rows
 }
 
-// Bar is the fixed bar pill: the catalogue house mark and a state word or
-// figure. Node count never changes with phase, so the bar does not jitter.
+// Bar is the fixed bar pill: the theme-accent Moonbit mark and a state word
+// or figure. Node count never changes with phase, so the bar does not jitter.
 func Bar(s *State) *v1.Node {
 	label, tone := barLabel(s)
 	btn := &v1.Node{
@@ -49,7 +49,7 @@ func Bar(s *State) *v1.Node {
 		Role:   "button",
 		Events: []v1.EventKind{v1.EventActivate, v1.EventPointer},
 		Children: []*v1.Node{
-			{Kind: v1.KindIcon, Icon: "home", Tone: tone},
+			{Kind: v1.KindIcon, Icon: "moonbit", Tone: v1.ToneAccent},
 		},
 	}
 	if label != "" {

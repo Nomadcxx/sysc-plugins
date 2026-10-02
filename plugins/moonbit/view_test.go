@@ -174,3 +174,10 @@ func TestReviewOmitsCleanActionWhenNothingIsSelected(t *testing.T) {
 		t.Fatal("review must not offer a clean action with zero selected categories")
 	}
 }
+
+func TestBarUsesThemeTintedMoonbitMark(t *testing.T) {
+	icon := Bar(&State{}).Children[0].Children[0]
+	if icon.Kind != v1.KindIcon || icon.Icon != "moonbit" || icon.Tone != v1.ToneAccent {
+		t.Fatalf("bar icon = %+v, want the theme-accent Moonbit mark", icon)
+	}
+}
