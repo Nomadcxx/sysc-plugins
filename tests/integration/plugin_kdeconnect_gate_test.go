@@ -82,7 +82,7 @@ func kdeconnectPanelLegal(n *v1.Node) bool {
 		return true
 	case strings.Contains(text, "No devices"):
 		return true
-	case findID(n, "ring") != nil:
+	case findID(n, "ring") != nil, findID(n, "pair") != nil:
 		return true
 	}
 	return false
