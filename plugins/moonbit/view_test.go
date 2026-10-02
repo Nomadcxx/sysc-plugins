@@ -1,27 +1,11 @@
 package moonbit
 
 import (
-	"bytes"
-	"image"
-	"image/png"
-	"os"
-	"path/filepath"
 	"testing"
+	"unicode/utf8"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
-
-func writeWordmark(t *testing.T, dir string) {
-	t.Helper()
-	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "wordmark.png"), buf.Bytes(), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
 
 // states builds one State per phase by folding the same event contract the
 // daemon emits, so the tests exercise the real Fold paths.
@@ -73,12 +57,6 @@ func states() map[Phase]*State {
 }
 
 func TestViewsValidate(t *testing.T) {
-	dir := t.TempDir()
-	writeWordmark(t, dir)
-	old := wordmarkAssetDir
-	wordmarkAssetDir = dir
-	defer func() { wordmarkAssetDir = old }()
-
 	for phase, s := range states() {
 		if err := v1.Validate(Bar(s), v1.ViewBar); err != nil {
 			t.Errorf("phase %d bar: %v", phase, err)
@@ -88,6 +66,24 @@ func TestViewsValidate(t *testing.T) {
 		}
 		if err := v1.Validate(Panel(s), v1.ViewPanel); err != nil {
 			t.Errorf("phase %d panel: %v", phase, err)
+		}
+	}
+}
+
+// Each wordmark row is centred on its own, so the rows must share one width
+// or every row shifts against the one above and the strokes stop meeting.
+func TestPanelWordmarkRowsShareOneWidth(t *testing.T) {
+	header := Panel(states()[PhaseIdle]).Children[0]
+	if header.Kind != v1.KindColumn || len(header.Children) != 3 {
+		t.Fatalf("wordmark header = %+v, want a column of three rows", header)
+	}
+	want := utf8.RuneCountInString(header.Children[0].Text)
+	for i, row := range header.Children {
+		if n := utf8.RuneCountInString(row.Text); n != want {
+			t.Errorf("row %d is %d cells wide, want %d", i, n, want)
+		}
+		if row.Kind != v1.KindText || row.Size != "mono" || row.Tone != v1.ToneAccent || !row.CenterX {
+			t.Errorf("row %d = %+v, want centred mono accent text", i, row)
 		}
 	}
 }

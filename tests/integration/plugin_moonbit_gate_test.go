@@ -285,12 +285,6 @@ func launchMoonbitGate(t *testing.T, sockPath string) *moonbitHost {
 	if err := os.WriteFile(filepath.Join(pluginDir, "manifest.json"), manifest, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// The wordmark header is part of the panel's height budget; copy the real
-	// asset so the declared image box is exercised exactly as installed.
-	if err := copyFile(filepath.Join(root, "plugins/moonbit/assets/wordmark.png"),
-		filepath.Join(pluginDir, "assets", "wordmark.png")); err != nil {
-		t.Fatal(err)
-	}
 	build := exec.Command("go", "build", "-o", bin, "./cmd/sysc-plugin-moonbit")
 	build.Dir = root
 	if out, err := build.CombinedOutput(); err != nil {
@@ -429,15 +423,4 @@ func (h *moonbitHost) wait(what string, ok func() bool) {
 
 func hasIcon(n *v1.Node, icon string) bool {
 	return walkFind(n, func(x *v1.Node) bool { return x.Icon == icon }) != nil
-}
-
-func copyFile(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	b, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, b, 0o644)
 }

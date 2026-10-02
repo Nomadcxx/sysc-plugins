@@ -2,45 +2,40 @@ package moonbit
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
+	"strings"
+	"unicode/utf8"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 // Layout budget for the 758x450 panel (manifest-declared). The root carries
-// the inset, everything below fits inside contentH:
-//
-//	450 - 2*panelInset        = 426
-//	wordmark 78 + gap 8       = 86
-//	headline 20 + gap 8       = 28
-//	body (list/progress)      = 248
-//	footer row 32             =  32
+// the inset; the host measures the wordmark rows at its mono text role.
 const (
 	panelInset     = 12
-	wordmarkW      = 480
-	wordmarkH      = 78
 	bodyHeight     = 248
 	bodyListHeight = 240
 )
 
-// wordmarkAssetDir overrides the artwork lookup in tests.
-var wordmarkAssetDir string
+// wordmark is moonbit's TUI mark (ascii.txt), drawn as accent text because a
+// plugin image cannot take the theme colour. The art is cut for a
+// left-aligned terminal, so its rows differ in length; each row is padded to
+// the widest so centring moves them together and the strokes still meet.
+var wordmark = padRows(
+	`█▀▄▀█ ▄▀▀▀▄ ▄▀▀▀▄ █▄  █ █▀▀▀▄ ▀▀█▀▀ ▀▀█▀▀    ▄▀    ▄▀`,
+	`█   █ █   █ █   █ █ ▀▄█ █▀▀▀▄   █     █    ▄▀    ▄▀`,
+	`▀   ▀  ▀▀▀   ▀▀▀  ▀   ▀ ▀▀▀▀  ▀▀▀▀▀   ▀   ▀     ▀`,
+)
 
-func wordmarkAsset() string {
-	dir := wordmarkAssetDir
-	if dir == "" {
-		exe, err := os.Executable()
-		if err != nil {
-			return ""
-		}
-		dir = filepath.Join(filepath.Dir(exe), "..", "assets")
+func padRows(rows ...string) []string {
+	w := 0
+	for _, r := range rows {
+		w = max(w, utf8.RuneCountInString(r))
 	}
-	p := filepath.Join(dir, "wordmark.png")
-	if _, err := os.Stat(p); err != nil {
-		return ""
+	for i, r := range rows {
+		rows[i] = r + strings.Repeat(" ", w-utf8.RuneCountInString(r))
 	}
-	return p
+	return rows
 }
 
 // Bar is the fixed bar pill: the catalogue house mark and a state word or
@@ -113,10 +108,11 @@ func cacheOf(s *State) *CacheInfo {
 // Panel renders the phase the TUI would be on, with the wordmark header in
 // every state — the same identity the terminal shows.
 func Panel(s *State) *v1.Node {
-	var body []*v1.Node
-	if p := wordmarkAsset(); p != "" {
-		body = append(body, &v1.Node{Kind: v1.KindImage, Path: p, ImageW: wordmarkW, ImageH: wordmarkH, CenterX: false})
+	header := &v1.Node{Kind: v1.KindColumn}
+	for _, row := range wordmark {
+		header.Children = append(header.Children, &v1.Node{Kind: v1.KindText, Text: row, Size: "mono", Tone: v1.ToneAccent, Bold: true, CenterX: true})
 	}
+	body := []*v1.Node{header}
 	if s.Phase == PhaseError {
 		body = append(body, errText(s.Err))
 	}

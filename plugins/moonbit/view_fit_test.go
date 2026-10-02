@@ -36,12 +36,6 @@ func panelSize(t *testing.T) (int, int) {
 // own rules, at the sizes the manifest and bar declare. The budget consts in
 // view.go are only checked here.
 func TestViewsFitTheirHostSlots(t *testing.T) {
-	dir := t.TempDir()
-	writeWordmark(t, dir)
-	old := wordmarkAssetDir
-	wordmarkAssetDir = dir
-	defer func() { wordmarkAssetDir = old }()
-
 	panelW, panelH := panelSize(t)
 	for _, phase := range []Phase{PhaseIdle, PhaseScanning, PhaseReview, PhaseConfirm, PhaseCleaning, PhaseDone, PhaseError} {
 		s := states()[phase]
