@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 var validArch = map[string]bool{"amd64": true, "arm64": true}
@@ -216,17 +218,31 @@ func writeArchive(archivePath, pluginRoot string, m pluginManifest, binPath stri
 		if mode == 0 {
 			mode = 0o644
 		}
-		info, err := os.Stat(e.source)
+		source, err := os.OpenFile(e.source, os.O_RDONLY|unix.O_NOFOLLOW, 0)
 		if err != nil {
+			return 0, "", fmt.Errorf("open %s without following symlinks: %w", e.source, err)
+		}
+		info, err := source.Stat()
+		if err != nil {
+			_ = source.Close()
 			return 0, "", err
+		}
+		if !info.Mode().IsRegular() {
+			_ = source.Close()
+			return 0, "", fmt.Errorf("%s is not a regular file", e.source)
 		}
 		hdr.Typeflag = tar.TypeReg
 		hdr.Mode = mode
 		hdr.Size = info.Size()
 		if err := tw.WriteHeader(hdr); err != nil {
+			_ = source.Close()
 			return 0, "", err
 		}
-		if err := copyFile(tw, e.source); err != nil {
+		if err := copyFile(tw, source); err != nil {
+			_ = source.Close()
+			return 0, "", err
+		}
+		if err := source.Close(); err != nil {
 			return 0, "", err
 		}
 	}
@@ -246,13 +262,8 @@ func writeArchive(archivePath, pluginRoot string, m pluginManifest, binPath stri
 	return info.Size(), hex.EncodeToString(sum.Sum(nil)), nil
 }
 
-func copyFile(w io.Writer, source string) error {
-	rf, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer rf.Close()
-	_, err = io.Copy(w, rf)
+func copyFile(w io.Writer, source io.Reader) error {
+	_, err := io.Copy(w, source)
 	return err
 }
 
@@ -274,9 +285,16 @@ func collectEntries(pluginRoot, archiveRoot string) (map[string]tarEntry, error)
 		if rel == "." {
 			return nil
 		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("package: refusing symlink %s", p)
+		}
 		name := d.Name()
 		archivePath := path.Join(archiveRoot, filepath.ToSlash(rel))
-		if d.IsDir() {
+		if info.IsDir() {
 			if name == "testdata" || name == "bin" {
 				return filepath.SkipDir
 			}
@@ -285,6 +303,9 @@ func collectEntries(pluginRoot, archiveRoot string) (map[string]tarEntry, error)
 		}
 		if filepath.Ext(name) == ".go" {
 			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("package: refusing non-regular file %s", p)
 		}
 		entries[archivePath] = tarEntry{archivePath: archivePath, source: p}
 		return nil
