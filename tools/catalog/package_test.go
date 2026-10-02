@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // repoRootForTest returns the sysc-plugins checkout root. Package tests run
@@ -183,6 +184,49 @@ func TestPackagePluginRefusesMissingCmd(t *testing.T) {
 	_, err := packagePlugin(repoRoot, "ghost", "amd64", t.TempDir())
 	if err == nil {
 		t.Fatal("expected an error when cmd/sysc-plugin-ghost does not exist")
+	}
+}
+
+func TestCollectEntriesRejectsSymlink(t *testing.T) {
+	pluginRoot := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("SECRET_OUTSIDE_CONTENT"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(pluginRoot, "leak.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collectEntries(pluginRoot, "org.sysc.demo"); err == nil {
+		t.Fatal("collectEntries accepted a symlink that points outside the plugin tree")
+	}
+}
+
+func TestWriteArchiveRefusesSymlinkBinary(t *testing.T) {
+	pluginRoot := t.TempDir()
+	writeFile(t, filepath.Join(pluginRoot, "manifest.json"), `{
+		"schema": 1, "id": "org.sysc.demo", "name": "Demo", "version": "1.0.0",
+		"exec": "bin/sysc-plugin-demo"
+	}`)
+	const secret = "HOST-SECRET-BYTES-not-for-archive"
+	outside := filepath.Join(t.TempDir(), "secret.bin")
+	if err := os.WriteFile(outside, []byte(secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "sysc-plugin-demo")
+	if err := os.Symlink(outside, bin); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "demo.tar.gz")
+	m := pluginManifest{ID: "org.sysc.demo", Exec: "bin/sysc-plugin-demo"}
+	if _, _, err := writeArchive(out, pluginRoot, m, bin, time.Time{}); err == nil {
+		t.Fatal("writeArchive followed a symlink binary")
+	}
+	data, err := os.ReadFile(out)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secret) {
+		t.Fatal("archive contains the symlink target bytes")
 	}
 }
 
