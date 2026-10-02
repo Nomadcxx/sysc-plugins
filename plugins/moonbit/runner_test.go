@@ -129,3 +129,26 @@ func TestFoldCancelFromDaemon(t *testing.T) {
 		t.Fatal("cancelled must fold to idle")
 	}
 }
+
+func TestStreamEndedRecoversActiveOperation(t *testing.T) {
+	for _, phase := range []Phase{PhaseScanning, PhaseCleaning} {
+		s := &State{
+			Phase:      phase,
+			ScanCat:    "cache",
+			ScanDir:    "/tmp/cache",
+			ScanTotal:  3,
+			ScanFiles:  8,
+			ScanBytes:  512,
+			CleanTotal: 8,
+			CleanDone:  4,
+			CleanFile:  "/tmp/cache/item",
+		}
+		if !s.StreamEnded() || s.Phase != PhaseError || s.Err == "" {
+			t.Fatalf("phase %d did not recover to an error state: %+v", phase, s)
+		}
+		if s.ScanCat != "" || s.ScanDir != "" || s.ScanTotal != 0 || s.ScanFiles != 0 || s.ScanBytes != 0 ||
+			s.CleanTotal != 0 || s.CleanDone != 0 || s.CleanFile != "" {
+			t.Fatalf("phase %d retained stale progress: %+v", phase, s)
+		}
+	}
+}

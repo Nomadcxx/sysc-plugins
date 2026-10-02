@@ -41,6 +41,12 @@
     "license": "MIT",
     "homepage": "https://github.com/Nomadcxx/sysc-plugins"
   },
+  "org.sysc.moonbit": {
+    "category": "system",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
   "org.sysc.notes": {
     "category": "productivity",
     "author": "Nomadcxx",

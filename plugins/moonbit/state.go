@@ -124,6 +124,22 @@ func (s *State) StartClean() {
 	s.CleanTotal, s.CleanDone, s.CleanFreed, s.CleanFile = 0, 0, 0, ""
 }
 
+// StreamEnded recovers an active operation whose stream closed without a
+// terminal event. The error phase renders the idle actions so the user can
+// start again after a daemon disconnect.
+func (s *State) StreamEnded() bool {
+	if s.Phase != PhaseScanning && s.Phase != PhaseCleaning {
+		return false
+	}
+	s.Phase, s.Err = PhaseError, "operation stream ended unexpectedly"
+	s.ScanCat, s.ScanDir = "", ""
+	s.ScanIdx, s.ScanTotal, s.ScanFiles, s.ScanBytes = 0, 0, 0, 0
+	s.ScanCats, s.ScanErrs = nil, nil
+	s.CleanTotal, s.CleanDone, s.CleanFreed, s.CleanFile = 0, 0, 0, ""
+	s.CleanDry = false
+	return true
+}
+
 // SelectedStats are the review rows the user kept checked.
 func (s *State) SelectedStats() []CategoryStat {
 	var out []CategoryStat
