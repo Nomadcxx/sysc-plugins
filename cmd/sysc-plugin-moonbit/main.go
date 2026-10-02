@@ -46,7 +46,7 @@ type session struct {
 
 func runPlugin(in io.Reader, out io.Writer) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.moonbit", Name: "Moonbit", Version: "1.0.0"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.moonbit", Name: "Moonbit", Version: "1.1.0"})); err != nil {
 		return err
 	}
 	s := &session{client: c, views: map[string]view{}, async: make(chan func(), 16)}
