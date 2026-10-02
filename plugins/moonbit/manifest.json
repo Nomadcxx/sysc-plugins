@@ -3,7 +3,7 @@
   "id": "org.sysc.moonbit",
   "name": "Moonbit",
   "description": "Moonbit system cleaner from the bar: scan, review, and reclaim disk space.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "protocol": { "major": 1, "minor": 14 },
   "exec": "bin/sysc-plugin-moonbit",
   "capabilities": ["panels", "state"],
