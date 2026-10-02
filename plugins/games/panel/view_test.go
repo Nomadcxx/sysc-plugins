@@ -1,8 +1,10 @@
 package panel
 
 import (
-	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
+	"strconv"
 	"testing"
+
+	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
 	"time"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -55,10 +57,9 @@ func TestTreeValidates(t *testing.T) {
 	if err := v1.Validate(BuildTree(s), v1.ViewPanel); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
-	s.Actions = true
 	s.Running = map[string]time.Time{"1": now.Add(-time.Hour)}
 	if err := v1.Validate(BuildTree(s), v1.ViewPanel); err != nil {
-		t.Fatalf("validate actions: %v", err)
+		t.Fatalf("validate running: %v", err)
 	}
 }
 
@@ -120,18 +121,20 @@ func TestSortModes(t *testing.T) {
 	}
 }
 
-func TestCardsTwoPerRow(t *testing.T) {
+func TestCardsFivePerRow(t *testing.T) {
+	s := baseState()
+	for i := 4; i <= 7; i++ {
+		id := strconv.Itoa(i)
+		s.All = append(s.All, source.Game{ID: id, Name: "Game " + id, Installed: true})
+	}
+	rows := find(t, BuildTree(s), "game-list").Children
+	if len(rows) != 2 || len(rows[0].Children) != cardsPerRow || len(rows[1].Children) != 2 {
+		t.Fatalf("7 games -> rows of 5 and 2, got %d rows", len(rows))
+	}
 	root := BuildTree(baseState())
 	list := find(t, root, "game-list")
 	if list == nil || list.Kind != v1.KindList {
 		t.Fatal("no list")
-	}
-	rows := list.Children
-	if len(rows) != 2 {
-		t.Fatalf("3 games -> 2 rows, got %d", len(rows))
-	}
-	if len(rows[0].Children) != 2 || len(rows[1].Children) != 1 {
-		t.Fatal("card pairing wrong")
 	}
 	card := find(t, root, "card-1")
 	if card == nil || card.Kind != v1.KindButton {
@@ -147,41 +150,64 @@ func TestDetailLaunchAndActions(t *testing.T) {
 	s.Selected = "1"
 	root := BuildTree(s)
 	launch := find(t, root, "launch-1")
-	if launch == nil || launch.Disabled {
-		t.Fatal("launch button missing or disabled")
+	if launch == nil || launch.Disabled || launch.Fill != "accent" {
+		t.Fatalf("launch should be the enabled accent action: %+v", launch)
+	}
+	for _, id := range []string{"config-1", "folder-1", "favtoggle-1", "hidetoggle-1", "remove-1"} {
+		if find(t, root, id) == nil {
+			t.Fatalf("action %s missing: actions are always visible", id)
+		}
 	}
 	s.Running = map[string]time.Time{"1": now.Add(-2 * time.Hour)}
 	root = BuildTree(s)
-	launch = find(t, root, "launch-1")
-	if launch == nil || !launch.Disabled || launch.Text != "Playing" {
-		t.Fatalf("running launch should be disabled 'Playing': %+v", launch)
+	if find(t, root, "launch-1") != nil || find(t, root, "stop-1") == nil {
+		t.Fatal("a running game's primary action is Stop")
 	}
-	if find(t, root, "stop-1") != nil {
-		t.Fatal("stop button should not show before More")
-	}
-	s.Actions = true
-	root = BuildTree(s)
-	if find(t, root, "stop-1") == nil || find(t, root, "detail-back") == nil {
-		t.Fatal("action column missing stop/back")
-	}
-	if find(t, root, "favtoggle-1") == nil || find(t, root, "hidetoggle-1") == nil ||
-		find(t, root, "remove-1") == nil || find(t, root, "config-1") == nil ||
-		find(t, root, "folder-1") == nil {
-		t.Fatal("action column missing buttons")
+	s = baseState()
+	s.Selected = "3" // not installed
+	if l := find(t, BuildTree(s), "launch-3"); l == nil || !l.Disabled {
+		t.Fatalf("an uninstalled game cannot launch: %+v", l)
 	}
 }
 
-func TestGraphAbsentWithoutSessions(t *testing.T) {
+func TestFmtLastPlayed(t *testing.T) {
+	for _, tc := range []struct {
+		ago  time.Duration
+		want string
+	}{
+		{30 * time.Minute, "played just now"},
+		{5 * time.Hour, "played 5h ago"},
+		{3 * 24 * time.Hour, "played 3d ago"},
+		{95 * 24 * time.Hour, "played 3mo ago"},
+		{536 * 24 * time.Hour, "played 1y ago"},
+	} {
+		if got := fmtLastPlayed(now.Add(-tc.ago), now); got != tc.want {
+			t.Errorf("%v ago = %q, want %q", tc.ago, got, tc.want)
+		}
+	}
+	if got := fmtLastPlayed(time.Time{}, now); got != "never launched" {
+		t.Errorf("zero time = %q", got)
+	}
+}
+
+func TestEllipsisKeepsRunesWhole(t *testing.T) {
+	if got := ellipsis("Pokémon Légendes Arceus", 9); got != "Pokémon …" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// An absent graph paints nothing, which read as a blank gap in the detail
+// pane; without sessions the pane says so in words instead.
+func TestGraphOnlyWithSessions(t *testing.T) {
 	s := baseState()
 	s.Selected = "1"
 	root := BuildTree(s)
-	g := find(t, root, "session-graph")
-	if g == nil || !g.Absent || len(g.Values) != 0 {
-		t.Fatalf("want absent graph, got %+v", g)
+	if find(t, root, "session-graph") != nil || find(t, root, "session-empty") == nil {
+		t.Fatal("no sessions: want the session-empty line and no graph")
 	}
 	s.Sessions = store.Log{"1": {{Start: now.Add(-3 * time.Hour), End: now.Add(-2 * time.Hour)}}}
 	root = BuildTree(s)
-	g = find(t, root, "session-graph")
+	g := find(t, root, "session-graph")
 	if g == nil || g.Absent || len(g.Values) == 0 {
 		t.Fatalf("want values graph, got %+v", g)
 	}
@@ -225,7 +251,7 @@ func TestFavoriteStarOnCard(t *testing.T) {
 	s.Prefs.Favorites = map[string]bool{"1": true}
 	root := BuildTree(s)
 	var stars []*v1.Node
-	collect(t, root, func(n *v1.Node) bool { return n.Kind == v1.KindText && n.Text == "\u2605" }, &stars)
+	collect(t, root, func(n *v1.Node) bool { return n.Kind == v1.KindIcon && n.Icon == "star" }, &stars)
 	if len(stars) != 1 {
 		t.Fatalf("one star expected, got %d", len(stars))
 	}
@@ -233,13 +259,13 @@ func TestFavoriteStarOnCard(t *testing.T) {
 
 func TestPanelFits(t *testing.T) {
 	s := baseState()
-	if f := shelllint.Tree(BuildTree(s), v1.ViewPanel, 720, 560); len(f) != 0 {
-		t.Fatalf("library view does not fit 720x560: %v", f)
+	if f := shelllint.Tree(BuildTree(s), v1.ViewPanel, 1200, 800); len(f) != 0 {
+		t.Fatalf("library view does not fit 1200x800: %v", f)
 	}
 	s.Selected = baseState().All[0].ID
-	s.Actions = true
-	if f := shelllint.Tree(BuildTree(s), v1.ViewPanel, 720, 560); len(f) != 0 {
-		t.Fatalf("action view does not fit 720x560: %v", f)
+	s.Running = map[string]time.Time{s.Selected: now.Add(-time.Hour)}
+	if f := shelllint.Tree(BuildTree(s), v1.ViewPanel, 1200, 800); len(f) != 0 {
+		t.Fatalf("detail view does not fit 1200x800: %v", f)
 	}
 }
 
@@ -248,26 +274,30 @@ func TestPanelFits(t *testing.T) {
 // pane), and a button card in a row measures zero tall unless sized. Both
 // made the live shell refuse every revision of this panel.
 func TestPanelGeometry(t *testing.T) {
-	for _, actions := range []bool{false, true} {
-		s := baseState()
-		s.Selected, s.Actions = "1", actions
-		root := BuildTree(s)
-		list, detail := find(t, root, "game-list"), find(t, root, "detail")
-		if list.Width <= 0 || list.Height <= 0 {
-			t.Fatalf("game-list must be sized, got %dx%d", list.Width, list.Height)
-		}
-		if got := list.Width + 12 + detail.Width; got != 720-2*12 {
-			t.Fatalf("list+gap+detail = %d, want the 696 content width", got)
-		}
-		if detail.Height != list.Height {
-			t.Fatalf("detail height %d != list height %d", detail.Height, list.Height)
-		}
-		var cards []*v1.Node
-		collect(t, root, func(n *v1.Node) bool { return n.Kind == v1.KindButton && n.Shape == "card" }, &cards)
-		for _, c := range cards {
-			if c.Height <= 0 {
-				t.Fatalf("card %s has no height; a row lays it out zero tall", c.ID)
-			}
+	s := baseState()
+	s.Selected = "1"
+	root := BuildTree(s)
+	list, detail := find(t, root, "game-list"), find(t, root, "detail")
+	if list.Width <= 0 || list.Height <= 0 {
+		t.Fatalf("game-list must be sized, got %dx%d", list.Width, list.Height)
+	}
+	if got := list.Width + gap + detail.Width; got != 1200-2*pad {
+		t.Fatalf("list+gap+detail = %d, want the %d content width", got, 1200-2*pad)
+	}
+	if got := headerH + gap + list.Height; got != 800-2*pad {
+		t.Fatalf("header+gap+body = %d, want the %d content height", got, 800-2*pad)
+	}
+	if detail.Height != list.Height {
+		t.Fatalf("detail height %d != list height %d", detail.Height, list.Height)
+	}
+	if row := cardsPerRow*cardWidth + (cardsPerRow-1)*cardGap; row > list.Width {
+		t.Fatalf("a card row is %d wide, list is %d", row, list.Width)
+	}
+	var cards []*v1.Node
+	collect(t, root, func(n *v1.Node) bool { return n.Kind == v1.KindButton && n.Shape == "card" }, &cards)
+	for _, c := range cards {
+		if c.Height <= 0 {
+			t.Fatalf("card %s has no height; a row lays it out zero tall", c.ID)
 		}
 	}
 }

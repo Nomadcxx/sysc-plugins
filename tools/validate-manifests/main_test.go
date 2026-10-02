@@ -30,24 +30,32 @@ func TestUnknownCapabilityIsRejected(t *testing.T) {
 }
 
 // The validator must reject what the shell rejects at discovery or dispatch:
-// panel shortcuts below protocol minor 8, and gated hostcalls whose
-// capability the manifest does not grant.
+// panel shortcuts below protocol minor 8, a placement it does not know or
+// center placement below minor 12, and gated hostcalls whose capability the
+// manifest does not grant.
 func TestHostRulesMirrored(t *testing.T) {
 	cases := []struct {
-		name    string
-		calls   string // hostcall token to plant in the fake plugin source
-		minor   int
-		caps    string // JSON capability list
-		wantErr string
+		name      string
+		calls     string // hostcall token to plant in the fake plugin source
+		minor     int
+		caps      string // JSON capability list
+		wantErr   string
+		placement string // defaults to "attached"
 	}{
-		{"shortcuts_need_minor8", "", 7, `["panels"]`, "shortcuts require protocol minor 8"},
-		{"hostcall_needs_capability", "CallSurfaceOpen", 8, `["panels"]`, `capability "floating_surfaces" is not granted`},
-		{"granted_and_new_enough", "CallSurfaceOpen", 8, `["panels", "floating_surfaces"]`, ""},
-		{"screenshot_needs_capability", "CallScreenshotStart", 10, `["panels"]`, `capability "screenshot" is not granted`},
-		{"screenshot_directory_needs_capability", "CallScreenshotDirectory", 10, `["panels"]`, `capability "screenshot" is not granted`},
-		{"screenshot_granted", "CallScreenshotStart", 10, `["panels", "screenshot"]`, ""},
+		{"shortcuts_need_minor8", "", 7, `["panels"]`, "shortcuts require protocol minor 8", ""},
+		{"hostcall_needs_capability", "CallSurfaceOpen", 8, `["panels"]`, `capability "floating_surfaces" is not granted`, ""},
+		{"granted_and_new_enough", "CallSurfaceOpen", 8, `["panels", "floating_surfaces"]`, "", ""},
+		{"screenshot_needs_capability", "CallScreenshotStart", 10, `["panels"]`, `capability "screenshot" is not granted`, ""},
+		{"screenshot_directory_needs_capability", "CallScreenshotDirectory", 10, `["panels"]`, `capability "screenshot" is not granted`, ""},
+		{"screenshot_granted", "CallScreenshotStart", 10, `["panels", "screenshot"]`, "", ""},
+		{"center_needs_minor12", "", 11, `["panels"]`, "center placement requires protocol minor 12", "center"},
+		{"center_at_minor12", "", 12, `["panels"]`, "", "center"},
+		{"unknown_placement", "", 12, `["panels"]`, `placement "floating" is not one the shell supports`, "floating"},
 	}
 	for _, tc := range cases {
+		if tc.placement == "" {
+			tc.placement = "attached"
+		}
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			dir := filepath.Join(root, "plugins", "x")
@@ -64,7 +72,7 @@ func TestHostRulesMirrored(t *testing.T) {
 			}
 			mani := `{"schema":1,"id":"org.sysc.x","name":"X","description":"d","version":"1.0.0",` +
 				`"protocol":{"major":1,"minor":` + strconv.Itoa(tc.minor) + `},` +
-				`"exec":"bin/x","capabilities":` + tc.caps + `,"panels":[{"id":"p","width":100,"height":100,` +
+				`"exec":"bin/x","capabilities":` + tc.caps + `,"panels":[{"id":"p","width":100,"height":100,"placement":"` + tc.placement + `",` +
 				`"shortcuts":[{"key":"g","node":"v"}]}]}`
 			path := filepath.Join(dir, "manifest.json")
 			if err := os.WriteFile(path, []byte(mani), 0o644); err != nil {

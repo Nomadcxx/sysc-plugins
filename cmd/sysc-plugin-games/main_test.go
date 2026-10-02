@@ -252,9 +252,10 @@ func TestPanelFlowAndPrefsPersist(t *testing.T) {
 		return s.ViewID == "p" && find(s.Root, "card-2") != nil
 	})
 	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:card-1", Event: v1.EventActivate})
+	// Hades is running in the fixture, so its primary action is Stop.
 	line = h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "p" && find(s.Root, "launch-1") != nil
+		return s.ViewID == "p" && find(s.Root, "stop-1") != nil
 	})
 	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:favtoggle-2", Event: v1.EventActivate})
 	// favtoggle must round-trip through state.set with the favorites map.

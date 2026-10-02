@@ -89,7 +89,6 @@ type session struct {
 	loaded    bool
 	query     string
 	selected  string
-	actions   bool
 	poll      *time.Ticker
 	pollC     <-chan time.Time
 	pollEvery time.Duration
@@ -113,7 +112,7 @@ func runCommand(ctx context.Context, name string, args ...string) error {
 
 func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.games", Name: "Games", Version: "0.1.1"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.games", Name: "Games", Version: "0.2.0"})); err != nil {
 		return err
 	}
 	cacheDir := ""
@@ -415,7 +414,7 @@ func (s *session) panelState() panel.State {
 	}
 	return panel.State{
 		Now: s.env.now(), All: s.games, Prefs: s.prefs, Query: s.query,
-		Selected: s.selected, Actions: s.actions, Running: s.running,
+		Selected: s.selected, Running: s.running,
 		Failed: s.failed, Sessions: s.sessions, HideUnavailable: s.settings.hideUnavailable,
 		CacheDir: s.cacheDir, LibraryMissing: s.missing,
 	}
