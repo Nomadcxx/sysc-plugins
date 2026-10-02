@@ -31,9 +31,9 @@ func runValidate(args []string) error {
 // validateCatalog checks catalog.json the way the release workflow's
 // `catalog update` step does, and the way CI does without -fetch: every row
 // must decode and validate against the shared schema, have a
-// catalog-meta.json entry, and agree with its plugins/<dir>/manifest.json on
-// name, description, protocol, capabilities and requires for the top-level
-// release. -community additionally requires a screenshot. -fetch downloads
+// catalog-meta.json entry, and agree with the immutable release-tag manifest
+// on name, description, protocol, capabilities and requires. -community
+// additionally requires a screenshot. -fetch downloads
 // every asset, screenshot, and README named by the catalog and checks size
 // and sha256, the release workflow's job before it opens the catalog PR.
 func validateCatalog(repoRoot string, community, fetch bool, w io.Writer) error {
@@ -67,14 +67,9 @@ func validateCatalog(repoRoot string, community, fetch bool, w io.Writer) error 
 	}
 
 	for _, e := range cat.Entries {
-		pending, err := validateEntry(repoRoot, e, metaAll, dirsByID, community)
-		if err != nil {
+		if err := validateEntry(e, metaAll, dirsByID, community); err != nil {
 			fmt.Fprintf(w, "FAIL %s: %v\n", e.ID, err)
 			failures++
-			continue
-		}
-		if pending != "" {
-			fmt.Fprintf(w, "ok   %s (manifest %s awaits release; row is %s)\n", e.ID, pending, e.Release.Version)
 			continue
 		}
 		fmt.Fprintf(w, "ok   %s\n", e.ID)
@@ -96,29 +91,33 @@ func validateCatalog(repoRoot string, community, fetch bool, w io.Writer) error 
 }
 
 // validateEntry checks one decoded, already-schema-valid catalog row against
-// catalog-meta.json and its plugin's manifest. A manifest whose version is not
-// the row's describes an unreleased version: the row still names what
-// shipped, and the release workflow rewrites and fetch-checks it from the tag.
-// That version is returned and the manifest fields are not compared.
-func validateEntry(repoRoot string, e catalog.Entry, metaAll map[string]catalogMeta, dirsByID map[string]string, community bool) (pending string, err error) {
+// catalog-meta.json and its published release-tag manifest.
+func validateEntry(e catalog.Entry, metaAll map[string]catalogMeta, dirsByID map[string]string, community bool) error {
 	if _, ok := metaAll[e.ID]; !ok {
-		return "", fmt.Errorf("no %s entry for %q", catalogMetaFile, e.ID)
+		return fmt.Errorf("no %s entry for %q", catalogMetaFile, e.ID)
 	}
 	dir, ok := dirsByID[e.ID]
 	if !ok {
-		return "", fmt.Errorf("no plugins/<dir> declares id %q", e.ID)
+		return fmt.Errorf("no plugins/<dir> declares id %q", e.ID)
 	}
-	m, err := readManifest(filepath.Join(repoRoot, "plugins", dir))
+	// The working tree can contain edits made after the release. Always check
+	// the immutable tag so coordinated edits to the checkout and catalog cannot
+	// make unpublished metadata appear valid.
+	tagged, err := readTaggedManifestURL(dir, e.Release.Version, e.ID)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("cannot check tagged release manifest: %w", err)
 	}
-	if community && e.Screenshot == nil {
-		return "", fmt.Errorf("no screenshot; required for the community catalog")
-	}
-	if m.Version != e.Release.Version {
-		return m.Version, nil
+	if mismatches := manifestMismatches(tagged, e); len(mismatches) > 0 {
+		return fmt.Errorf("tagged release manifest: %s", strings.Join(mismatches, "; "))
 	}
 
+	if community && e.Screenshot == nil {
+		return fmt.Errorf("no screenshot; required for the community catalog")
+	}
+	return nil
+}
+
+func manifestMismatches(m pluginManifest, e catalog.Entry) []string {
 	var mismatches []string
 	if m.Name != e.Name {
 		mismatches = append(mismatches, fmt.Sprintf("name: manifest %q, catalog %q", m.Name, e.Name))
@@ -136,10 +135,7 @@ func validateEntry(repoRoot string, e catalog.Entry, metaAll map[string]catalogM
 	if !catalog.SameSet(m.Requires.Commands, e.Requires.Commands) {
 		mismatches = append(mismatches, fmt.Sprintf("requires.commands: manifest %v, catalog %v", m.Requires.Commands, e.Requires.Commands))
 	}
-	if len(mismatches) > 0 {
-		return "", fmt.Errorf("%s", strings.Join(mismatches, "; "))
-	}
-	return "", nil
+	return mismatches
 }
 
 // fetchEntry downloads every asset and screenshot a row names, across its
@@ -171,7 +167,7 @@ func fetchEntry(e catalog.Entry) []error {
 // and compares its size (when wantSize is positive) and sha256 against what
 // the catalog declares.
 func checkFetchable(url, wantSHA string, wantSize, maxBytes int64) error {
-	resp, err := http.Get(url)
+	resp, err := catalogHTTPClient.Get(url)
 	if err != nil {
 		return fmt.Errorf("fetch: %w", err)
 	}

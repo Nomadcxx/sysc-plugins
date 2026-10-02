@@ -72,11 +72,10 @@ go run ./tools/catalog validate
 
 This confirms `catalog.json` decodes cleanly, every row has a
 `catalog-meta.json` entry, and every row's `name`, `description`, `protocol`,
-`capabilities` and `requires` agree with its plugin's `manifest.json`. A
-manifest whose `version` is ahead of its row is an unreleased bump: it is
-reported as awaiting release and not compared, because the row still
-describes what shipped until the release workflow rewrites it. It does not
-download anything.
+`capabilities` and `requires` agree with `manifest.json` on that release
+tag. The working tree is not the source of those fields: it may have moved
+on after the tag. This step fetches the tagged manifests; it does not
+download assets.
 
 `go run ./tools/catalog validate -fetch` additionally downloads every asset
 and screenshot the catalog names and checks its size and sha256 — the same
