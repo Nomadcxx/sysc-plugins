@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -50,9 +49,7 @@ func New(o Options) (*Source, error) {
 		o.ProcRoot = "/proc"
 	}
 	if o.Run == nil {
-		o.Run = func(ctx context.Context, name string, args ...string) error {
-			return exec.CommandContext(ctx, name, args...).Run()
-		}
+		o.Run = source.Detach
 	}
 	if o.StopFn == nil {
 		o.StopFn = running.Stop

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -21,7 +20,7 @@ import (
 )
 
 func main() {
-	env := environment{now: time.Now, run: runCommand, callTimeout: 5 * time.Second, fetchGrid: defaultFetchGrid}
+	env := environment{now: time.Now, run: source.Detach, callTimeout: 5 * time.Second, fetchGrid: defaultFetchGrid}
 	if err := runPlugin(os.Stdin, os.Stdout, env); err != nil {
 		os.Exit(1)
 	}
@@ -104,10 +103,6 @@ type coverJob struct {
 
 type coverDone struct {
 	gameID, path string
-}
-
-func runCommand(ctx context.Context, name string, args ...string) error {
-	return exec.CommandContext(ctx, name, args...).Run()
 }
 
 func runPlugin(in io.Reader, out io.Writer, env environment) error {
