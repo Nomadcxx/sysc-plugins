@@ -182,10 +182,11 @@ func (s *State) StartClean() {
 }
 
 // StreamEnded recovers an active operation whose stream closed without a
-// terminal event. The error phase renders the idle actions so the user can
-// start again after a daemon disconnect.
+// terminal event. Scanning, cleaning, and a Docker or schedule run
+// (PhaseWorking) all land on the error phase, which renders the idle
+// actions so the user can start again after a daemon disconnect.
 func (s *State) StreamEnded() bool {
-	if s.Phase != PhaseScanning && s.Phase != PhaseCleaning {
+	if s.Phase != PhaseScanning && s.Phase != PhaseCleaning && s.Phase != PhaseWorking {
 		return false
 	}
 	s.Phase, s.Err = PhaseError, "operation stream ended unexpectedly"
@@ -194,6 +195,7 @@ func (s *State) StreamEnded() bool {
 	s.ScanCats, s.ScanErrs, s.ScanSkipped = nil, nil, nil
 	s.CleanTotal, s.CleanDone, s.CleanFreed, s.CleanFile = 0, 0, 0, ""
 	s.CleanDry = false
+	s.Working = ""
 	return true
 }
 
