@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
@@ -27,6 +28,14 @@ type uiState struct {
 	composer     kdeconnect.Composer
 	drafts       kdeconnect.Drafts
 	switcherOpen bool
+}
+
+type recentImageResult struct {
+	open     bool
+	deviceID string
+	image    kdeconnect.RecentImage
+	path     string
+	err      error
 }
 
 func run(in *os.File, out *os.File) error {
@@ -52,6 +61,7 @@ func run(in *os.File, out *os.File) error {
 	// The reader must run before any host call: a Call blocks until its
 	// reply is decoded, so without the reader it would deadlock here.
 	incoming := make(chan v1.Message, 8)
+	recentImageResults := make(chan recentImageResult, 8)
 	var lastAvailable *bool
 	busy := false
 	go func() {
@@ -142,7 +152,7 @@ func run(in *os.File, out *os.File) error {
 				publish(nil)
 			case *v1.InputEvent:
 				prev := ui.composer
-				if handleInput(ctx, c, svc, m, &ui, snap, &busy) {
+				if handleInput(ctx, c, svc, m, &ui, snap, &busy, recentImageResults) {
 					publish(nil)
 				}
 				if node, ok := composerFocus(prev, ui.composer); ok {
@@ -157,6 +167,8 @@ func run(in *os.File, out *os.File) error {
 			}
 		case e := <-svc.Events():
 			notify(ctx, c, e)
+		case result := <-recentImageResults:
+			finishRecentImageAction(ctx, c, svc, result)
 		}
 	}
 }
@@ -191,7 +203,7 @@ var actionNodes = map[string]kdeconnect.ActionKind{
 // handleInput routes one input event. It reports whether the panel tree
 // changed and needs a republish — toggles, sends, and composer typing (the
 // send gating moves with the draft) do.
-func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *v1.InputEvent, ui *uiState, snap kdeconnect.Snapshot, busy *bool) bool {
+func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *v1.InputEvent, ui *uiState, snap kdeconnect.Snapshot, busy *bool, recentImageResults chan<- recentImageResult) bool {
 	device := snap.SelectedID
 	switch {
 	case m.Node == "open":
@@ -291,17 +303,14 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 		ui.composer = kdeconnect.ComposerNone
 		return true
 	case strings.HasPrefix(m.Node, "recent-open-"):
-		// Opening runs plugin-side, as the reference shell's recent images
-		// do: xdg-open the file on the mount, no daemon round trip.
+		// Stage the image outside the input loop: mounted reads can be slow.
 		if img := recentImage(snap, strings.TrimPrefix(m.Node, "recent-open-")); img != nil {
-			_ = exec.Command("xdg-open", img.Source).Start()
+			startRecentImageAction(ctx, recentImageResults, recentImageResult{open: true, deviceID: device, image: *img}, kdeconnect.StageRecentImage)
 		}
 		return true
 	case strings.HasPrefix(m.Node, "recent-share-"):
-		// The file-share action already rides shareUrl with a file:// URI
-		// (see performAction), the DMS recent-images share path.
 		if img := recentImage(snap, strings.TrimPrefix(m.Node, "recent-share-")); img != nil {
-			svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareFile, DeviceID: device, Arg: img.Source})
+			startRecentImageAction(ctx, recentImageResults, recentImageResult{deviceID: device, image: *img}, kdeconnect.StageRecentImage)
 		}
 		return true
 	default:
@@ -311,6 +320,51 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 		}
 	}
 	return false
+}
+
+func startRecentImageAction(ctx context.Context, results chan<- recentImageResult, result recentImageResult, stage func(kdeconnect.RecentImage) (string, error)) {
+	go func() {
+		result.path, result.err = stage(result.image)
+		if ctx.Err() != nil {
+			if result.path != "" {
+				_ = os.RemoveAll(filepath.Dir(result.path))
+			}
+			return
+		}
+		select {
+		case results <- result:
+		case <-ctx.Done():
+			if result.path != "" {
+				_ = os.RemoveAll(filepath.Dir(result.path))
+			}
+		}
+	}()
+}
+
+func finishRecentImageAction(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, result recentImageResult) {
+	if result.err != nil {
+		notifyRecentImageFailure(ctx, c, result, result.err)
+		return
+	}
+	if result.open {
+		if err := exec.Command("xdg-open", result.path).Start(); err != nil {
+			notifyRecentImageFailure(ctx, c, result, err)
+		}
+		return
+	}
+	svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareFile, DeviceID: result.deviceID, Arg: result.path})
+}
+
+func notifyRecentImageFailure(ctx context.Context, c *v1.Client, result recentImageResult, err error) {
+	operation := "open"
+	if !result.open {
+		operation = "share"
+	}
+	notify(ctx, c, kdeconnect.Event{
+		Message: "Failed to " + operation + " recent image",
+		Detail:  filepath.Base(result.image.Source),
+		Err:     err,
+	})
 }
 
 // recentImage resolves a grid entry by its wire ID; an ID the current

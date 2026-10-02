@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"io"
 	// The scan selects .png sources; register the PNG decoder for image.Decode.
 	_ "image/png"
-	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -25,6 +25,7 @@ import (
 )
 
 const recentImageMaxLongEdge = 512
+const recentImageStageTTL = 24 * time.Hour
 
 // recentImageThumbDir lives under os.UserCacheDir()/sysc-plugins/kdeconnect/
 // so per-thumb filenames stay short (sysc-shell's icons.FileResolver rejects
@@ -100,10 +101,12 @@ type Snapshot struct {
 
 // RecentImage is one entry in the recent-images grid. ID is the wire key
 // the view and the action routing share, Source is the absolute path on
-// the SFTP mount, Thumb the cached local thumbnail the host decodes.
+// the SFTP mount, Mount the root captured by the scan, and Thumb the cached
+// local thumbnail the host decodes.
 type RecentImage struct {
 	ID     string
 	Source string
+	Mount  string
 	Thumb  string
 }
 
@@ -1018,6 +1021,90 @@ func resolveUnderMount(src, mount string) (string, string, error) {
 	return resolved, cleanedMount, nil
 }
 
+// StageRecentImage copies a recent image through a handle opened beneath its
+// scanned SFTP mount. Consumers use this private copy so they never reopen a
+// device-controlled path after validation.
+// ponytail: staged action copies live for 24 hours; pruning on the next stage
+// covers cases where the process exits before the timer runs.
+func StageRecentImage(img RecentImage) (string, error) {
+	if img.Source == "" || img.Mount == "" {
+		return "", errors.New("kdeconnect: recent image needs a source and mount")
+	}
+	ext := strings.ToLower(filepath.Ext(img.Source))
+	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
+		return "", fmt.Errorf("kdeconnect: unsupported recent image extension %q", ext)
+	}
+	resolved, cleanedMount, err := resolveUnderMount(img.Source, img.Mount)
+	if err != nil {
+		return "", err
+	}
+	file, err := openThumbnailSource(cleanedMount, resolved)
+	if err != nil {
+		return "", fmt.Errorf("kdeconnect: open %s: %w", img.Source, err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("kdeconnect: stat %s: %w", img.Source, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("kdeconnect: %s is not a regular file", img.Source)
+	}
+	stageRoot := filepath.Join(recentImageThumbDir, "sources")
+	if err := os.MkdirAll(stageRoot, 0o700); err != nil {
+		return "", fmt.Errorf("kdeconnect: mkdir %s: %w", stageRoot, err)
+	}
+	rootInfo, err := os.Lstat(stageRoot)
+	if err != nil {
+		return "", fmt.Errorf("kdeconnect: stat %s: %w", stageRoot, err)
+	}
+	if !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("kdeconnect: staging path %s is not a directory", stageRoot)
+	}
+	if err := os.Chmod(stageRoot, 0o700); err != nil {
+		return "", fmt.Errorf("kdeconnect: protect %s: %w", stageRoot, err)
+	}
+	pruneStagedRecentImages(stageRoot, time.Now())
+	stageDir, err := os.MkdirTemp(stageRoot, "recent-image-*")
+	if err != nil {
+		return "", fmt.Errorf("kdeconnect: create staging directory: %w", err)
+	}
+	dest := filepath.Join(stageDir, filepath.Base(img.Source))
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		_ = os.RemoveAll(stageDir)
+		return "", fmt.Errorf("kdeconnect: create staged image: %w", err)
+	}
+	if _, err := io.Copy(out, file); err != nil {
+		_ = out.Close()
+		_ = os.RemoveAll(stageDir)
+		return "", fmt.Errorf("kdeconnect: copy %s: %w", img.Source, err)
+	}
+	if err := out.Close(); err != nil {
+		_ = os.RemoveAll(stageDir)
+		return "", fmt.Errorf("kdeconnect: close staged image: %w", err)
+	}
+	time.AfterFunc(recentImageStageTTL, func() { _ = os.RemoveAll(stageDir) })
+	return dest, nil
+}
+
+func pruneStagedRecentImages(stageRoot string, now time.Time) {
+	entries, err := os.ReadDir(stageRoot)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "recent-image-") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || now.Sub(info.ModTime()) <= recentImageStageTTL {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(stageRoot, entry.Name()))
+	}
+}
+
 func thumbnail(src, cacheDir, mount string) (string, error) {
 	if src == "" {
 		return "", errors.New("kdeconnect: thumbnail needs a source path")
@@ -1198,7 +1285,7 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 		if err != nil {
 			continue // an unreadable or undecodable file drops out of the grid
 		}
-		images = append(images, RecentImage{ID: recentImageID(p), Source: p, Thumb: thumb})
+		images = append(images, RecentImage{ID: recentImageID(p), Source: p, Mount: mount, Thumb: thumb})
 	}
 	st.recentImages = images
 }
