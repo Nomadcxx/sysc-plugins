@@ -1,4 +1,6 @@
-# sysc-plugins
+<p align="center">
+  <img src="assets/header.png" width="920" alt="sysc-plugins" />
+</p>
 
 The official plugins for [sysc-shell](https://github.com/Nomadcxx/sysc-shell). Each one is a small Go
 program the shell starts and talks to over a pipe, so a plugin that crashes takes nothing else down with
@@ -21,10 +23,11 @@ it.
 | **Pomodoro Timer** | Work and break sessions in the bar | |
 | **ProtonVPN** | Quick connect, server picker, split tunnel and protection status | `protonvpn` |
 | **Screen Recorder** | Record the screen or a window, with optional audio and a replay buffer | `gpu-screen-recorder` |
+| **Screenshot** | Region, window or screen capture from a bar button, using the shell's own capture engine | |
 | **Wallpaper Depth** | Depth masks for image wallpapers, so scenery can sit in front of the shell's centred clock | `python3` |
 | **World Clock** | Labelled clocks for other cities in the bar and panel | |
 
-Phone Connect is still a skeleton. AI Usage, Faith and Games are first releases.
+Moonbit is source-only until it has a catalog release. The rest install from the plugin manager.
 
 ## Installation
 
@@ -39,9 +42,7 @@ catalog:
 sysc-shell ipc panel.toggle '{"panel":"plugin"}'
 ```
 
-Only Pomodoro Timer has a release so far. The rest install from source.
-
-### Build from Source
+### From source
 
 **Requires:** Go 1.26.4+ and `make`.
 
