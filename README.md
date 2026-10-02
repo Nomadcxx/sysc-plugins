@@ -21,10 +21,11 @@ it.
 | **Pomodoro Timer** | Work and break sessions in the bar | |
 | **ProtonVPN** | Quick connect, server picker, split tunnel and protection status | `protonvpn` |
 | **Screen Recorder** | Record the screen or a window, with optional audio and a replay buffer | `gpu-screen-recorder` |
+| **Screenshot** | Region, window or screen capture from a bar button, using the shell's own capture engine | |
 | **Wallpaper Depth** | Depth masks for image wallpapers, so scenery can sit in front of the shell's centred clock | `python3` |
 | **World Clock** | Labelled clocks for other cities in the bar and panel | |
 
-Phone Connect is still a skeleton. AI Usage, Faith and Games are first releases.
+Moonbit is source-only until it has a catalog release.
 
 ## Installation
 
@@ -39,7 +40,8 @@ catalog:
 sysc-shell ipc panel.toggle '{"panel":"plugin"}'
 ```
 
-Only Pomodoro Timer has a release so far. The rest install from source.
+Everything in the table except Moonbit is in the catalog and installs from the
+plugin manager. Moonbit still builds from source.
 
 ### Build from Source
 
