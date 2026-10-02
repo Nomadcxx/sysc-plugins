@@ -59,6 +59,7 @@ type State struct {
 	Query           string
 	Selected        string
 	Running         map[string]time.Time
+	Launching       map[string]bool // asked to start, not seen running yet
 	Failed          map[string]bool // launch never showed up
 	Sessions        store.Log
 	HideUnavailable bool
@@ -224,6 +225,12 @@ func cardTitle(s State, g source.Game) *v1.Node {
 
 func cardCaption(s State, g source.Game) *v1.Node {
 	switch {
+	case s.Launching[g.ID]:
+		r := &v1.Node{Kind: v1.KindRow, Gap: 6}
+		r.Children = append(r.Children,
+			&v1.Node{Kind: v1.KindSpinner, Key: "launching-card-" + g.ID, Width: 14},
+			&v1.Node{Kind: v1.KindText, Text: "Launching…", Size: "caption", Tone: v1.ToneAccent})
+		return r
 	case s.Failed[g.ID]:
 		return &v1.Node{Kind: v1.KindText, Text: "Launch failed", Size: "caption", Tone: v1.ToneError}
 	case !g.Installed:
@@ -290,6 +297,17 @@ func primaryButton(s State, g source.Game) *v1.Node {
 		return &v1.Node{Kind: v1.KindButton, ID: "stop-" + g.ID, Text: "Stop", Icon: "stop",
 			Fill: "error-container", Height: launchH, Events: []v1.EventKind{v1.EventActivate},
 			Name: "stop " + g.Name, Role: "button"}
+	}
+	if s.Launching[g.ID] {
+		// The spinner sits beside a disabled button: Lutris may take tens
+		// of seconds, and a second press must not queue a second launch.
+		r := &v1.Node{Kind: v1.KindRow, Gap: 12}
+		r.Children = append(r.Children,
+			&v1.Node{Kind: v1.KindButton, ID: "launch-" + g.ID, Text: "Launching…",
+				Fill: "accent", Width: detailWidth - 2*16 - 12 - 28, Height: launchH, Disabled: true,
+				Events: []v1.EventKind{v1.EventActivate}, Name: g.Name + " is starting", Role: "button"},
+			&v1.Node{Kind: v1.KindSpinner, Key: "launching-detail-" + g.ID, Width: 28})
+		return r
 	}
 	return &v1.Node{Kind: v1.KindButton, ID: "launch-" + g.ID, Text: "Launch", Icon: "play_arrow",
 		Fill: "accent", Height: launchH, Disabled: !g.Installed, Events: []v1.EventKind{v1.EventActivate},

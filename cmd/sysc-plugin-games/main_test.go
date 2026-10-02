@@ -559,3 +559,42 @@ func TestCardClickSelectsWithoutLaunching(t *testing.T) {
 		t.Fatal("second click on the selected card must launch")
 	}
 }
+
+// Launching repaints the panel at once with the spinner and a disabled
+// "Launching…" button, so the wait reads as work in progress.
+func TestLaunchShowsTheSpinnerUntilTheGameIsSeen(t *testing.T) {
+	h := start(t)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
+	line := h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "card-2") != nil
+	})
+	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:card-2")
+	line = h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "launch-2") != nil
+	})
+	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:launch-2")
+	line = h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		b := find(s.Root, "launch-2")
+		return s.ViewID == "p" && b != nil && b.Disabled && b.Text == "Launching…"
+	})
+	var spinners int
+	var walk func(*v1.Node)
+	walk = func(n *v1.Node) {
+		if n == nil {
+			return
+		}
+		if n.Kind == v1.KindSpinner {
+			spinners++
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(snapshotOf(line).Root)
+	if spinners != 2 {
+		t.Fatalf("launching panel has %d spinners, want the card's and the detail's", spinners)
+	}
+}

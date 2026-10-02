@@ -301,3 +301,34 @@ func TestPanelGeometry(t *testing.T) {
 		}
 	}
 }
+
+// While Lutris starts a game the card and the detail pane say so with a
+// spinner the host turns, and Launch cannot be pressed again.
+func TestLaunchingShowsASpinner(t *testing.T) {
+	s := baseState()
+	s.Selected = "1"
+	s.Launching = map[string]bool{"1": true}
+	root := BuildTree(s)
+	if err := v1.Validate(root, v1.ViewPanel); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	var spinners []*v1.Node
+	collect(t, root, func(n *v1.Node) bool { return n.Kind == v1.KindSpinner }, &spinners)
+	if len(spinners) != 2 || spinners[0].Key == spinners[1].Key {
+		t.Fatalf("want a card and a detail spinner with distinct keys, got %d", len(spinners))
+	}
+	launch := find(t, root, "launch-1")
+	if launch == nil || !launch.Disabled || launch.Text != "Launching…" {
+		t.Fatalf("launch button while launching = %+v", launch)
+	}
+	if f := shelllint.Tree(root, v1.ViewPanel, 1200, 800); len(f) != 0 {
+		t.Fatalf("launching view does not fit: %v", f)
+	}
+	s.Launching = nil
+	root = BuildTree(s)
+	spinners = nil
+	collect(t, root, func(n *v1.Node) bool { return n.Kind == v1.KindSpinner }, &spinners)
+	if len(spinners) != 0 {
+		t.Fatal("no spinner once the game is up")
+	}
+}

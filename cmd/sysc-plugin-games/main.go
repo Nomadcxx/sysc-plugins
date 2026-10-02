@@ -269,6 +269,7 @@ func (s *session) scan(ctx context.Context) {
 	for _, ev := range s.machine.Observe(set, s.env.now()) {
 		switch ev.Kind {
 		case panel.EventStarted:
+			delete(s.failed, ev.GameID) // a slow start that outlived the timeout
 			s.sessions.Start(ev.GameID, ev.At)
 			s.save(ctx, "sessions", s.sessions)
 		case panel.EventStopped:
@@ -407,9 +408,15 @@ func (s *session) panelState() panel.State {
 	if s.selected != "" {
 		s.enqueueCover(s.selected)
 	}
+	launching := map[string]bool{}
+	for _, id := range s.ids() {
+		if s.machine.Phase(id) == panel.PhaseLaunching {
+			launching[id] = true
+		}
+	}
 	return panel.State{
 		Now: s.env.now(), All: s.games, Prefs: s.prefs, Query: s.query,
-		Selected: s.selected, Running: s.running,
+		Selected: s.selected, Running: s.running, Launching: launching,
 		Failed: s.failed, Sessions: s.sessions, HideUnavailable: s.settings.hideUnavailable,
 		CacheDir: s.cacheDir, LibraryMissing: s.missing,
 	}

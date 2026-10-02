@@ -74,3 +74,27 @@ func TestAdoptExternalRunning(t *testing.T) {
 		t.Fatalf("adopted stop missed: %+v", evs)
 	}
 }
+
+// A slow start can outlast the timeout: the game shows up after the card said
+// it failed. It is running then, and its session starts when it was asked for.
+func TestLateAppearanceAfterFailureStarts(t *testing.T) {
+	now := mkt()
+	m := NewMachine()
+	m.Request("7", now)
+	m.Observe(map[string]bool{}, now.Add(LaunchTimeout+time.Second))
+	evs := m.Observe(map[string]bool{"7": true}, now.Add(LaunchTimeout+5*time.Second))
+	if len(evs) != 1 || evs[0].Kind != EventStarted || !evs[0].At.Equal(now) {
+		t.Fatalf("want one started event at the request, got %+v", evs)
+	}
+	if m.Phase("7") != PhaseRunning {
+		t.Fatalf("phase = %v, want running", m.Phase("7"))
+	}
+}
+
+// Lutris may spend tens of seconds on a runtime or Proton before the game's
+// process exists; the timeout must leave room for that.
+func TestLaunchTimeoutAllowsASlowRunner(t *testing.T) {
+	if LaunchTimeout < 45*time.Second {
+		t.Fatalf("LaunchTimeout = %v; a Proton prefix start needs at least 45s", LaunchTimeout)
+	}
+}

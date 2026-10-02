@@ -23,6 +23,8 @@ type Options struct {
 	ProcRoot   string // default /proc; injectable for tests
 	Run        func(ctx context.Context, name string, args ...string) error
 	StopFn     func(pid int, grace time.Duration) error
+	// StopWrapperFn stops a game through its lutris-wrapper.
+	StopWrapperFn func(pid int, grace time.Duration) error
 }
 
 type Source struct {
@@ -31,6 +33,7 @@ type Source struct {
 	procRoot   string
 	run        func(ctx context.Context, name string, args ...string) error
 	stop       func(pid int, grace time.Duration) error
+	stopWrap   func(pid int, grace time.Duration) error
 }
 
 func New(o Options) (*Source, error) {
@@ -54,6 +57,9 @@ func New(o Options) (*Source, error) {
 	if o.StopFn == nil {
 		o.StopFn = running.Stop
 	}
+	if o.StopWrapperFn == nil {
+		o.StopWrapperFn = running.StopWrapper
+	}
 	// Read-only so a running Lutris is never blocked, busy_timeout so a
 	// concurrent write fails fast instead of hanging the panel.
 	db, err := sql.Open("sqlite", "file:"+o.DBPath+"?mode=ro&_pragma=busy_timeout(1000)")
@@ -64,7 +70,7 @@ func New(o Options) (*Source, error) {
 		db.Close()
 		return nil, fmt.Errorf("open lutris library: %w", err)
 	}
-	return &Source{db: db, lutrisRoot: o.LutrisRoot, procRoot: o.ProcRoot, run: o.Run, stop: o.StopFn}, nil
+	return &Source{db: db, lutrisRoot: o.LutrisRoot, procRoot: o.ProcRoot, run: o.Run, stop: o.StopFn, stopWrap: o.StopWrapperFn}, nil
 }
 
 func (s *Source) Name() string { return "lutris" }
@@ -161,8 +167,15 @@ func (s *Source) Launch(ctx context.Context, g source.Game) error {
 }
 
 // Stop needs the live pid, which only the scan knows; Lookup by ID re-lists
-// (20-game library, one query — cheaper than caching a whole index).
+// (20-game library, one query — cheaper than caching a whole index). A game
+// Lutris is running stops through its wrapper, the way Lutris stops it; the
+// directory match is for a game started outside Lutris.
 func (s *Source) Stop(ctx context.Context, g source.Game) error {
+	if wrappers, err := running.ScanWrappers([]string{g.Name}, s.procRoot); err == nil {
+		if m, ok := wrappers[g.Name]; ok {
+			return s.stopWrap(m.PID, 5*time.Second)
+		}
+	}
 	if g.Directory == "" {
 		g.Directory = s.directory(ctx, g.ID)
 	}
@@ -195,12 +208,21 @@ func (s *Source) Running(ctx context.Context) (map[string]time.Time, error) {
 		return nil, err
 	}
 	byDir := map[string]string{}
-	var dirs []string
+	byName := map[string]string{}
+	var dirs, names []string
 	for _, g := range games {
 		if g.Directory != "" {
 			byDir[g.Directory] = g.ID
 			dirs = append(dirs, g.Directory)
 		}
+		byName[g.Name] = g.ID
+		names = append(names, g.Name)
+	}
+	// Lutris's wrapper is the signal for any game Lutris started; the
+	// directory match covers one started some other way.
+	wrappers, err := running.ScanWrappers(names, s.procRoot)
+	if err != nil {
+		return nil, err
 	}
 	matches, err := running.Scan(dirs, s.procRoot)
 	if err != nil {
@@ -209,6 +231,9 @@ func (s *Source) Running(ctx context.Context) (map[string]time.Time, error) {
 	out := map[string]time.Time{}
 	for dir, m := range matches {
 		out[byDir[dir]] = m.Start
+	}
+	for name, m := range wrappers {
+		out[byName[name]] = m.Start
 	}
 	return out, nil
 }
