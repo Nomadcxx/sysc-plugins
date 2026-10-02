@@ -263,6 +263,32 @@ func (h *miniDockerGateHost) click(viewID, node string) {
 	}
 }
 
+// clickUntilCall re-sends an activate click until the plugin emits the expected
+// host call.
+//
+// The plugin drops events carrying a superseded revision, so a click that races
+// a refresh tick is discarded without any host-visible effect. The expected
+// host call then never arrives, so simply waiting longer for it only turns a
+// fast failure into a slow one. Re-sending with the revision the host currently
+// sees is the same remedy clickUntil applies when a view refresh races an
+// input. See issue #64.
+func (h *miniDockerGateHost) clickUntilCall(viewID, node string, kind v1.CallKind) miniDockerCall {
+	h.t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		h.click(viewID, node)
+		select {
+		case call := <-h.calls:
+			if call.kind == kind {
+				return call
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	h.t.Fatalf("click %q never produced host call %s", node, kind)
+	return miniDockerCall{}
+}
+
 // clickUntil retries a click until the panel tree matches. The plugin drops
 // events carrying a superseded revision, so a click racing a refresh tick must
 // be re-sent with the revision the host currently sees.
@@ -357,22 +383,6 @@ func (h *miniDockerGateHost) waitSnapshot(viewID string, match func(miniDockerSn
 	}
 }
 
-func (h *miniDockerGateHost) waitCall(kind v1.CallKind) miniDockerCall {
-	h.t.Helper()
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
-	for {
-		select {
-		case call := <-h.calls:
-			if call.kind == kind {
-				return call
-			}
-		case <-timer.C:
-			h.t.Fatalf("timed out waiting for host call %s", kind)
-		}
-	}
-}
-
 func (h *miniDockerGateHost) stop() error {
 	h.stopOnce.Do(func() {
 		if err := h.send(&v1.HostShutdown{Type: v1.TypeHostShutdown}); err != nil {
@@ -405,8 +415,7 @@ func TestPluginMiniDockerGate(t *testing.T) {
 	})
 	h.open("tip-1", v1.ViewTooltip, "bar", viewSlot{v1.ViewTooltip, lint.TooltipWidth, lint.TooltipHeight}, "placement-1", "DP-1", 7)
 	h.waitView("tip-1", func(root *v1.Node) bool { return strings.Contains(treeText(root), "1 container running") })
-	h.click("bar-1", "open")
-	call := h.waitCall(v1.CallPanelOpen)
+	call := h.clickUntilCall("bar-1", "open", v1.CallPanelOpen)
 	if call.params.Entry != "panel" || call.params.Instance != "placement-1" || call.params.Output != "DP-1" || call.params.Generation != 7 {
 		t.Fatalf("panel.open params = %+v", call.params)
 	}
