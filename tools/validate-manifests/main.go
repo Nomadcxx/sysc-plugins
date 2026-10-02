@@ -182,6 +182,16 @@ func validate(path string, seenIDs map[string]string) error {
 		if len(p.Shortcuts) > 0 && m.Protocol.Minor < 8 {
 			return fmt.Errorf("panels[%d]: shortcuts require protocol minor 8", i)
 		}
+		// Same file: a panel is "attached" or, from minor 12, "center".
+		switch p.Placement {
+		case "attached":
+		case "center":
+			if m.Protocol.Minor < 12 {
+				return fmt.Errorf("panels[%d]: center placement requires protocol minor 12", i)
+			}
+		default:
+			return fmt.Errorf("panels[%d]: placement %q is not one the shell supports", i, p.Placement)
+		}
 	}
 	// The host rejects each capability-gated hostcall at dispatch time
 	// (sysc-shell internal/plugin/hostcall.go); catch it here instead.

@@ -14,9 +14,10 @@ const (
 )
 
 // LaunchTimeout bounds how long a launched game may stay invisible before the
-// card reports failure. ponytail: fixed ceiling; make configurable if a slow
-// proton prefix ever trips it.
-const LaunchTimeout = 15 * time.Second
+// card reports failure. Lutris can spend tens of seconds preparing a runtime
+// or a Proton prefix before the game's process exists, and 15s reported
+// working launches as failed. A game that shows up later still starts.
+const LaunchTimeout = 60 * time.Second
 
 // Machine tracks per-game launch state. It is pure: the caller feeds it
 // observations (Requested, Seen) with explicit timestamps and applies the
@@ -59,11 +60,11 @@ func (m *Machine) Observe(running map[string]bool, now time.Time) []LaunchEvent 
 	var out []LaunchEvent
 	for id, ph := range m.phases {
 		switch ph {
-		case PhaseLaunching:
+		case PhaseLaunching, PhaseFailed:
 			if running[id] {
 				m.phases[id] = PhaseRunning
 				out = append(out, LaunchEvent{GameID: id, Kind: EventStarted, At: m.t0[id]})
-			} else if now.Sub(m.t0[id]) > LaunchTimeout {
+			} else if ph == PhaseLaunching && now.Sub(m.t0[id]) > LaunchTimeout {
 				m.phases[id] = PhaseFailed
 				out = append(out, LaunchEvent{GameID: id, Kind: EventFailed, At: m.t0[id]})
 			}

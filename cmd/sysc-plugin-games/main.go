@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -21,7 +20,7 @@ import (
 )
 
 func main() {
-	env := environment{now: time.Now, run: runCommand, callTimeout: 5 * time.Second, fetchGrid: defaultFetchGrid}
+	env := environment{now: time.Now, run: source.Detach, callTimeout: 5 * time.Second, fetchGrid: defaultFetchGrid}
 	if err := runPlugin(os.Stdin, os.Stdout, env); err != nil {
 		os.Exit(1)
 	}
@@ -89,7 +88,6 @@ type session struct {
 	loaded    bool
 	query     string
 	selected  string
-	actions   bool
 	poll      *time.Ticker
 	pollC     <-chan time.Time
 	pollEvery time.Duration
@@ -107,13 +105,9 @@ type coverDone struct {
 	gameID, path string
 }
 
-func runCommand(ctx context.Context, name string, args ...string) error {
-	return exec.CommandContext(ctx, name, args...).Run()
-}
-
 func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.games", Name: "Games", Version: "0.1.1"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.games", Name: "Games", Version: "0.2.0"})); err != nil {
 		return err
 	}
 	cacheDir := ""
@@ -275,6 +269,7 @@ func (s *session) scan(ctx context.Context) {
 	for _, ev := range s.machine.Observe(set, s.env.now()) {
 		switch ev.Kind {
 		case panel.EventStarted:
+			delete(s.failed, ev.GameID) // a slow start that outlived the timeout
 			s.sessions.Start(ev.GameID, ev.At)
 			s.save(ctx, "sessions", s.sessions)
 		case panel.EventStopped:
@@ -413,9 +408,15 @@ func (s *session) panelState() panel.State {
 	if s.selected != "" {
 		s.enqueueCover(s.selected)
 	}
+	launching := map[string]bool{}
+	for _, id := range s.ids() {
+		if s.machine.Phase(id) == panel.PhaseLaunching {
+			launching[id] = true
+		}
+	}
 	return panel.State{
 		Now: s.env.now(), All: s.games, Prefs: s.prefs, Query: s.query,
-		Selected: s.selected, Actions: s.actions, Running: s.running,
+		Selected: s.selected, Running: s.running, Launching: launching,
 		Failed: s.failed, Sessions: s.sessions, HideUnavailable: s.settings.hideUnavailable,
 		CacheDir: s.cacheDir, LibraryMissing: s.missing,
 	}

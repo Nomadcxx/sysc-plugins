@@ -303,3 +303,46 @@ func TestCoverAndConfigStayUnderLutrisRoot(t *testing.T) {
 		}
 	}
 }
+
+// A Steam game or a Wine prefix has no argv naming its directory; Lutris's
+// wrapper, titled with the game's name, is what shows it running, and
+// stopping it goes through the wrapper rather than a process group.
+func TestWrapperDetectsAndStopsADirectorylessGame(t *testing.T) {
+	procRoot := t.TempDir()
+	pidDir := filepath.Join(procRoot, "77")
+	if err := os.Mkdir(pidDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pidDir, "cmdline"), []byte("lutris-wrapper: Never Played\x00"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	var groupStops, wrapperStops []int
+	src, err := New(Options{
+		DBPath:        makePGA(t, nil),
+		ProcRoot:      procRoot,
+		StopFn:        func(pid int, _ time.Duration) error { groupStops = append(groupStops, pid); return nil },
+		StopWrapperFn: func(pid int, _ time.Duration) error { wrapperStops = append(wrapperStops, pid); return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := src.Running(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var np source.Game
+	for _, g := range mustList(t, src) {
+		if g.Name == "Never Played" {
+			np = g
+		}
+	}
+	if _, ok := running[np.ID]; !ok || len(running) != 1 {
+		t.Fatalf("running = %v, want only Never Played (%s)", running, np.ID)
+	}
+	if err := src.Stop(context.Background(), np); err != nil {
+		t.Fatal(err)
+	}
+	if len(wrapperStops) != 1 || wrapperStops[0] != 77 || len(groupStops) != 0 {
+		t.Fatalf("wrapper stops %v, group stops %v; want the wrapper, 77", wrapperStops, groupStops)
+	}
+}

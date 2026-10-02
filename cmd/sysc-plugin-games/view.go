@@ -51,6 +51,13 @@ func (s *session) snapshotAll() {
 }
 
 func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
+	// One left click on a node declaring activate and pointer arrives twice:
+	// a primary pointer event on press, then activate on release. Acting on
+	// both toggled the panel open and shut and made one click launch a game,
+	// so the press is ignored and only activate acts on a left click.
+	if m.Event == v1.EventPointer && m.Button == v1.ButtonPrimary {
+		return
+	}
 	node := m.Node[strings.Index(m.Node, ":")+1:] // host prefixes "<viewID>:"
 	switch {
 	case node == "bar":
@@ -75,9 +82,9 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	case strings.HasPrefix(node, "card-"):
 		id := strings.TrimPrefix(node, "card-")
 		switch {
-		case m.Event == v1.EventPointer && m.Button == v1.ButtonSecondary:
-			s.selected, s.actions = id, true
-		case s.selected == id && !s.actions:
+		case m.Event == v1.EventPointer:
+			s.selected = id // a right-click selects; it never launches
+		case s.selected == id:
 			s.doLaunch(ctx, id) // Enter/re-click on the selected card launches
 		default:
 			s.selected = id
@@ -94,7 +101,7 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 		}
 		s.closeSwitcherIfIdle(ctx)
 	case strings.HasPrefix(node, "sw-open-"):
-		s.selected, s.actions = strings.TrimPrefix(node, "sw-open-"), false
+		s.selected = strings.TrimPrefix(node, "sw-open-")
 		_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
 	case strings.HasPrefix(node, "favtoggle-"):
 		id := strings.TrimPrefix(node, "favtoggle-")
@@ -122,10 +129,6 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 			Summary: "Uninstall in Lutris",
 			Body:    "Lutris has no uninstall API — right-click the game there",
 		})
-	case strings.HasPrefix(node, "more-"):
-		s.actions = true
-	case node == "detail-back":
-		s.actions = false
 	}
 }
 
