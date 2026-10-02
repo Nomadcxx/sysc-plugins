@@ -129,3 +129,30 @@ func TestFoldCancelFromDaemon(t *testing.T) {
 		t.Fatal("cancelled must fold to idle")
 	}
 }
+
+func TestLostConnectionResetsScanAndClean(t *testing.T) {
+	scan := &State{}
+	scan.StartScan()
+	scan.ScanCat, scan.ScanIdx, scan.ScanTotal = "apt", 1, 4
+	if !scan.LostConnection() || scan.Phase != PhaseError || scan.Err != "moonbit connection lost" {
+		t.Fatalf("scan end: phase=%v err=%q", scan.Phase, scan.Err)
+	}
+	if scan.ScanCat != "" || scan.ScanIdx != 0 || scan.ScanTotal != 0 {
+		t.Fatalf("scan progress left set: %+v", scan)
+	}
+
+	clean := &State{}
+	clean.StartClean()
+	clean.CleanTotal, clean.CleanDone, clean.CleanFile = 9, 3, "/tmp/x"
+	if !clean.LostConnection() || clean.Phase != PhaseError {
+		t.Fatalf("clean end: phase=%v err=%q", clean.Phase, clean.Err)
+	}
+	if clean.CleanTotal != 0 || clean.CleanDone != 0 || clean.CleanFile != "" {
+		t.Fatalf("clean progress left set: %+v", clean)
+	}
+
+	review := &State{Phase: PhaseReview}
+	if review.LostConnection() || review.Phase != PhaseReview {
+		t.Fatal("a finished review must survive a late stream close")
+	}
+}

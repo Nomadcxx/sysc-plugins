@@ -110,6 +110,26 @@ func (s *State) Fold(ev Event) bool {
 	return false
 }
 
+// LostConnection leaves a scan or clean whose stream ended without a
+// terminal event (done, clean_done, cancelled, error). The panel's only
+// control on those screens is Cancel, which cannot run once the op is
+// gone, so the phase has to move on its own. Other phases are left alone:
+// a review screen must survive the connection closing after "done".
+func (s *State) LostConnection() bool {
+	if s.Phase != PhaseScanning && s.Phase != PhaseCleaning {
+		return false
+	}
+	s.Phase = PhaseError
+	s.Err = "moonbit connection lost"
+	s.ScanCat, s.ScanDir = "", ""
+	s.ScanIdx, s.ScanTotal, s.ScanFiles = 0, 0, 0
+	s.ScanBytes = 0
+	s.CleanTotal, s.CleanDone = 0, 0
+	s.CleanFreed = 0
+	s.CleanFile = ""
+	return true
+}
+
 // StartScan marks the intent so the view flips before the first event lands.
 func (s *State) StartScan() {
 	s.Phase, s.Err = PhaseScanning, ""

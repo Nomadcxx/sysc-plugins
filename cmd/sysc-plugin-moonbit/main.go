@@ -127,8 +127,15 @@ func (s *session) streamOp(op *moonbit.Op) {
 			}
 		}
 		s.async <- func() {
-			if s.op == op {
-				s.op = nil
+			if s.op != op {
+				return
+			}
+			s.op = nil
+			// The stream can close without done/clean_done/cancelled/error
+			// (daemon crash, or Cancel when the daemon drops the socket).
+			// Leaving Scanning/Cleaning with no op makes Cancel a no-op.
+			if s.state.LostConnection() {
+				s.snapshotAll()
 			}
 		}
 	}()
@@ -183,7 +190,11 @@ func (s *session) handle(m *v1.InputEvent) {
 	case node == "cancel":
 		if s.op != nil {
 			s.op.Cancel()
+			break
 		}
+		// The stream already died and the phase was not reset. Cancel is
+		// the only control on the scan and clean screens.
+		s.state.LostConnection()
 	case node == "to_confirm":
 		if len(s.state.SelectedStats()) > 0 {
 			s.state.Phase = moonbit.PhaseConfirm
