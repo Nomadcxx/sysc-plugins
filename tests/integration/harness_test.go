@@ -27,6 +27,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv("SYSC_FAKE_RECORDER") == "1" {
 		os.Exit(runGateFakeRecorder())
 	}
+	if sock := os.Getenv("SYSC_FAKE_MOONBIT_PANEL"); sock != "" {
+		os.Exit(runGateFakeMoonbitPanel(sock))
+	}
 	os.Exit(m.Run())
 }
 

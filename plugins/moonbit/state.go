@@ -5,8 +5,9 @@ import (
 	"strings"
 )
 
-// Phase mirrors the moonbit TUI screens: welcome(idle), scan progress,
-// results/select(review), confirm, clean progress, complete.
+// Phase mirrors the moonbit TUI screens: welcome (idle), scan progress,
+// results and select (review), confirm, clean progress, complete, Docker
+// cleanup and Schedule, plus the password prompt every root run passes.
 type Phase int
 
 const (
@@ -17,17 +18,47 @@ const (
 	PhaseCleaning
 	PhaseDone
 	PhaseError
+	// PhaseAuth asks for the password before a run as root.
+	PhaseAuth
+	// PhaseDocker offers the TUI's two Docker cleanups.
+	PhaseDocker
+	// PhaseDockerConfirm confirms the chosen Docker cleanup.
+	PhaseDockerConfirm
+	// PhaseSchedule is the TUI's Schedule screen: daemon mode or timers.
+	PhaseSchedule
+	// PhaseWorking waits on a Docker cleanup or a schedule change.
+	PhaseWorking
 )
 
-// State is the plugin's whole view model: the last status reading plus the
-// folded stream of the operation currently on the wire. Only the event loop
-// writes it.
+// State is the plugin's whole view model: the last scan and schedule
+// readings plus the folded stream of the run on the wire. Only the event
+// loop writes it.
 type State struct {
 	Phase Phase
 	Err   string
 
-	// Status is the daemon's last status event; nil until the first reply.
-	Status *Event
+	// Cache is the last scan moonbit saved for this user; nil before any.
+	Cache *CacheInfo
+	// Schedule is systemd's view of daemon mode and the timers.
+	Schedule Schedule
+
+	// AuthFor names the pending root run on the password prompt; AuthErr
+	// says why the last attempt failed; Authorizing is set while sudo
+	// checks. AuthReseed clears the password field.
+	AuthFor     string
+	AuthErr     string
+	Authorizing bool
+	AuthReseed  uint64
+	// Back is where Cancel on the password prompt or a failed Docker or
+	// schedule run returns to.
+	Back Phase
+
+	// DockerOp is the Docker cleanup being confirmed or run.
+	DockerOp string
+	// Working says what a Docker or schedule run is doing.
+	Working string
+	// Notice reports the last Docker or schedule result on its screen.
+	Notice string
 
 	// Scan progress.
 	ScanCat   string
@@ -67,8 +98,16 @@ type State struct {
 // loop can skip publishing identical revisions during a throttled stream.
 func (s *State) Fold(ev Event) bool {
 	switch ev.T {
-	case "status":
-		s.Status = &ev
+	case "docker_done":
+		s.Phase, s.Err = PhaseDocker, ""
+		s.Notice = "Docker cleanup finished."
+		if ev.Reclaimed != "" {
+			s.Notice = "Docker freed " + ev.Reclaimed + "."
+		}
+		return true
+	case "schedule_done":
+		s.Phase, s.Err = PhaseSchedule, ""
+		s.Notice = scheduleNotice(ev.Target, ev.Action)
 		return true
 	case "category":
 		s.Phase = PhaseScanning
@@ -118,7 +157,11 @@ func (s *State) Fold(ev Event) bool {
 		return true
 	case "error":
 		s.Err = daemonMessage(ev.Msg)
-		s.Phase = PhaseError
+		if s.Phase == PhaseWorking {
+			s.Phase = s.Back // a Docker or schedule run fails back to its screen
+		} else {
+			s.Phase = PhaseError
+		}
 		return true
 	}
 	return false
@@ -154,15 +197,16 @@ func (s *State) StreamEnded() bool {
 	return true
 }
 
-// UnreachableMessage is what the panel says when the daemon socket cannot be
-// dialled: what to do about it, not the raw dial error.
-const UnreachableMessage = "Moonbit's daemon isn't reachable. Install moonbit 1.6 or newer and enable moonbit-daemon.service."
+func scheduleNotice(target, action string) string {
+	what := map[string]string{"daemon": "Daemon mode", "timers": "Scan and clean timers"}[target]
+	return fmt.Sprintf("%s %sd.", what, action)
+}
 
-// daemonMessage turns the daemon's error strings into panel copy.
+// daemonMessage turns moonbit's error strings into panel copy.
 func daemonMessage(msg string) string {
 	switch {
 	case strings.Contains(msg, "another operation in progress"):
-		return "Moonbit is busy with a scheduled scan or clean. Try again in a moment."
+		return "Moonbit is busy with another scan or clean. Try again in a moment."
 	case strings.Contains(msg, "replaced by a newer"):
 		return "A scheduled scan replaced the results you reviewed. Scan again before cleaning."
 	}

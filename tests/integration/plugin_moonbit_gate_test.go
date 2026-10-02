@@ -19,12 +19,12 @@ import (
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-// The Moonbit plugin is a pure UI over the moonbit daemon's panel socket: it
-// never runs moonbit itself. These gates build the real binary and drive it as
-// the host would, against a stub daemon speaking the same one-request-per-
-// connection JSON protocol. That is the headless stand-in for "render it in a
-// live shell": every snapshot is laid out with the host's own rules at the
-// declared slot, and the daemon-side effects (the forced clean narrowed to the
+// The Moonbit plugin drives `moonbit panel` through sudo, asking the user's
+// password for every root run, as starting the TUI with sudo does. These
+// gates build the real binary and drive it as the host would; a fake sudo
+// bridges each run onto a stub daemon speaking moonbit's one-request JSON
+// protocol. Every snapshot is laid out with the host's own rules at the
+// declared slot, and the root-side effects (the forced clean narrowed to the
 // checked category) are asserted from the requests the stub received.
 func TestPluginMoonbitGateScanReviewClean(t *testing.T) {
 	stub := newMoonbitStub(t)
@@ -45,6 +45,7 @@ func TestPluginMoonbitGateScanReviewClean(t *testing.T) {
 	// Scan: the stub holds the stream open mid-scan so the live progress state
 	// is observable before review, not just the terminal frame.
 	h.click("panel-1", "scan_quick", v1.EventActivate, "")
+	h.password("panel-1", "hunter2")
 	h.wait("live scan progress", func() bool {
 		prog := findNode(h.root("panel-1"), "scan-prog")
 		return prog != nil && prog.Value > 0 && prog.Value < 1 &&
@@ -69,6 +70,7 @@ func TestPluginMoonbitGateScanReviewClean(t *testing.T) {
 
 	// Clean: the same hold trick on the clean stream.
 	h.click("panel-1", "confirm_clean", v1.EventActivate, "")
+	h.password("panel-1", "hunter2")
 	h.wait("live clean progress", func() bool {
 		prog := findNode(h.root("panel-1"), "clean-prog")
 		return prog != nil && prog.Value > 0 && prog.Value < 1 &&
@@ -116,22 +118,77 @@ func TestPluginMoonbitGateScanReviewClean(t *testing.T) {
 	})
 }
 
-// With no socket the plugin degrades to an explanatory strip instead of
-// crashing, and a scan attempt surfaces the unreachable daemon as an error.
-func TestPluginMoonbitGateDegradedWithoutDaemon(t *testing.T) {
-	h := launchMoonbitGate(t, filepath.Join(t.TempDir(), "absent.sock"))
-
-	h.openBar("bar-1")
-	h.openTooltip("tip-1")
+// A wrong password keeps the prompt up with a reason, sends nothing to
+// moonbit, and a right one then runs the scan.
+func TestPluginMoonbitGateWrongPasswordAsksAgain(t *testing.T) {
+	stub := newMoonbitStub(t)
+	close(stub.scanHold)
+	h := launchMoonbitGate(t, stub.path())
 	h.openPanel("panel-1")
+	h.wait("the idle cache summary", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "cleanable in")
+	})
+	h.click("panel-1", "scan_deep", v1.EventActivate, "")
+	h.password("panel-1", "wrong")
+	h.wait("the rejection", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "wasn't accepted")
+	})
+	if n := len(stub.requests()); n != 0 {
+		t.Fatalf("a wrong password reached moonbit with %d requests", n)
+	}
+	h.password("panel-1", "hunter2")
+	h.wait("the review list", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "Choose what to clean")
+	})
+	if reqs := stub.requests(); len(reqs) != 1 || reqs[0].Cmd != "scan" || reqs[0].Mode != "deep" {
+		t.Fatalf("requests = %+v, want one deep scan", reqs)
+	}
+}
 
-	h.wait("the idle degraded hint", func() bool {
-		return strings.Contains(treeText(h.root("panel-1")), "Daemon not connected")
+// Docker cleanup and the schedule run as root through the same prompt, as
+// the TUI's Docker and Schedule screens do.
+func TestPluginMoonbitGateDockerAndSchedule(t *testing.T) {
+	stub := newMoonbitStub(t)
+	h := launchMoonbitGate(t, stub.path())
+	h.openPanel("panel-1")
+	h.wait("the idle footer", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "No automatic cleaning scheduled")
 	})
-	h.click("panel-1", "scan_quick", v1.EventActivate, "")
-	h.wait("the unreachable error", func() bool {
-		return strings.Contains(treeText(h.root("panel-1")), "daemon isn't reachable")
+
+	h.click("panel-1", "docker", v1.EventActivate, "")
+	h.click("panel-1", "docker:all", v1.EventActivate, "")
+	h.wait("the Docker confirm", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "Clean all unused Docker resources?")
 	})
+	h.click("panel-1", "docker_run", v1.EventActivate, "")
+	h.password("panel-1", "hunter2")
+	h.wait("the Docker result", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "Docker freed 1.2GB.")
+	})
+
+	h.click("panel-1", "back", v1.EventActivate, "")
+	h.click("panel-1", "schedule", v1.EventActivate, "")
+	h.wait("the schedule screen", func() bool {
+		return findNode(h.root("panel-1"), "sched:timers:enable") != nil
+	})
+	h.click("panel-1", "sched:timers:enable", v1.EventActivate, "")
+	h.password("panel-1", "hunter2")
+	h.wait("the schedule result", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "Scan and clean timers enabled.")
+	})
+
+	var sawDocker, sawSchedule bool
+	for _, req := range stub.requests() {
+		switch req.Cmd {
+		case "docker":
+			sawDocker = req.Op == "all"
+		case "schedule":
+			sawSchedule = req.Target == "timers" && req.Action == "enable"
+		}
+	}
+	if !sawDocker || !sawSchedule {
+		t.Fatalf("requests = %+v, want docker all and schedule timers enable", stub.requests())
+	}
 }
 
 // A deep scan clears absent-path categories in milliseconds. Publishing a
@@ -150,6 +207,7 @@ func TestPluginMoonbitGateCoalescesAScanBurst(t *testing.T) {
 
 	before := h.frameCount()
 	h.click("panel-1", "scan_quick", v1.EventActivate, "")
+	h.password("panel-1", "hunter2")
 	h.wait("the review list", func() bool {
 		return findNode(h.root("panel-1"), "toggle:Cache 40") != nil
 	})
@@ -170,6 +228,7 @@ func TestPluginMoonbitGateCancelReturnsToIdle(t *testing.T) {
 		return strings.Contains(treeText(h.root("panel-1")), "cleanable in")
 	})
 	h.click("panel-1", "scan_quick", v1.EventActivate, "")
+	h.password("panel-1", "hunter2")
 	h.wait("live scan progress", func() bool {
 		return findNode(h.root("panel-1"), "scan-prog") != nil
 	})
@@ -193,6 +252,7 @@ func TestPluginMoonbitGateConfirmCleanNeedsTheConfirmScreen(t *testing.T) {
 		return strings.Contains(treeText(h.root("panel-1")), "cleanable in")
 	})
 	h.click("panel-1", "scan_quick", v1.EventActivate, "")
+	h.password("panel-1", "hunter2")
 	h.wait("the review list", func() bool {
 		return strings.Contains(treeText(h.root("panel-1")), "Choose what to clean")
 	})
@@ -212,8 +272,13 @@ func TestPluginMoonbitGateConfirmCleanNeedsTheConfirmScreen(t *testing.T) {
 	h.clickAt("panel-1", "confirm_clean", confirmRev)
 	h.clickAt("panel-1", "confirm_clean", h.rev("panel-1"))
 
-	// A status round-trip after the events proves the plugin handled them.
+	// No password prompt opened for them, and a second scan after the
+	// events proves the plugin handled them.
+	if findNode(h.root("panel-1"), "password") != nil {
+		t.Fatal("a stale confirm_clean opened the password prompt")
+	}
 	h.click("panel-1", "scan_quick", v1.EventActivate, "")
+	h.password("panel-1", "hunter2")
 	h.wait("a second scan", func() bool {
 		n := 0
 		for _, req := range stub.requests() {
@@ -240,6 +305,9 @@ type moonbitReq struct {
 	Force      bool     `json:"force"`
 	Categories []string `json:"categories"`
 	ScannedAt  string   `json:"scanned_at"`
+	Op         string   `json:"op"`
+	Target     string   `json:"target"`
+	Action     string   `json:"action"`
 }
 
 // moonbitStub answers one request per connection like the real daemon. The
@@ -360,6 +428,10 @@ func (s *moonbitStub) handle(conn net.Conn) {
 			{"t": "category_done", "name": "Journal Logs", "files": 12, "bytes": 128849018, "duration_ms": 80},
 			{"t": "done", "files": 510, "bytes": 911166458, "categories": 2, "duration_ms": 1280, "scanned_at": gateScannedAt},
 		})
+	case "docker":
+		writeEvents(conn, []map[string]any{{"t": "docker_done", "op": req.Op, "reclaimed": "1.2GB"}})
+	case "schedule":
+		writeEvents(conn, []map[string]any{{"t": "schedule_done", "target": req.Target, "action": req.Action}})
 	case "clean":
 		if !writeEvents(conn, []map[string]any{
 			{"t": "clean_begin", "files": 510, "bytes": 911166458, "dry_run": false,
@@ -433,8 +505,32 @@ func launchMoonbitGate(t *testing.T, sockPath string) *moonbitHost {
 		t.Fatalf("manifest panels: %v", err)
 	}
 
+	// The plugin runs `sudo -S -k -p PROMPT moonbit panel`. A fake sudo on
+	// PATH prompts like sudo -S, takes "hunter2", and execs this test binary
+	// as a fake `moonbit panel` bridged onto the stub daemon. A fake
+	// systemctl reports no schedule, and the last scan comes from a fixture.
+	fakes := t.TempDir()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, filepath.Join(fakes, "sudo"), `#!/bin/sh
+prompt=""
+while [ $# -gt 0 ]; do case "$1" in -p) prompt="$2"; shift 2;; -S|-k) shift;; *) break;; esac; done
+printf '%s' "$prompt" >&2
+read -r pw
+if [ "$pw" != "hunter2" ]; then echo "Sorry, try again." >&2; printf '%s' "$prompt" >&2; read -r pw; exit 1; fi
+SYSC_FAKE_MOONBIT_PANEL='`+sockPath+`' exec '`+self+`'
+`)
+	writeScript(t, filepath.Join(fakes, "systemctl"), `#!/bin/sh
+case "$1" in is-enabled) echo disabled;; is-active) echo inactive;; esac
+`)
+	cache := filepath.Join(fakes, "scan_results.json")
+	if err := os.WriteFile(cache, []byte(gateLastScan), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(bin)
-	cmd.Env = append(os.Environ(), "SYSC_MOONBIT_SOCKET="+sockPath)
+	cmd.Env = append(os.Environ(), "PATH="+fakes+":"+os.Getenv("PATH"), "SYSC_MOONBIT_CACHE="+cache)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -500,7 +596,7 @@ func launchMoonbitGate(t *testing.T, sockPath string) *moonbitHost {
 		}
 	}()
 	if err := h.send(&v1.HostHello{
-		Supported:    []v1.Version{{Major: 1, Minor: 14}},
+		Supported:    []v1.Version{{Major: 1, Minor: 15}},
 		Plugin:       v1.Identity{ID: "org.sysc.moonbit", Name: "Moonbit", Version: "1.0.0"},
 		Capabilities: []string{"panels", "state"},
 		Limits:       v1.DefaultLimits,
@@ -587,4 +683,48 @@ func (h *moonbitHost) wait(what string, ok func() bool) {
 
 func hasIcon(n *v1.Node, icon string) bool {
 	return walkFind(n, func(x *v1.Node) bool { return x.Icon == icon }) != nil
+}
+
+// gateLastScan is the user's last scan as `sudo moonbit` leaves it.
+const gateLastScan = `{"scan_results":{"files":[
+	{"path":"/var/cache/pacman/pkg/a.pkg.tar.zst","size":782317440,"category_name":"Pacman Cache"},
+	{"path":"/var/log/journal/x.journal~","size":128849018,"category_name":"Journal Logs"}]},
+	"total_size":911166458,"total_files":510,"scanned_at":"2026-09-30T10:38:49+10:00"}`
+
+func writeScript(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runGateFakeMoonbitPanel stands in for `moonbit panel` once the fake sudo
+// accepts the password: it says ready, then bridges stdin and stdout onto the
+// stub daemon, half-closing on stdin EOF the way moonbit cancels.
+func runGateFakeMoonbitPanel(sock string) int {
+	if _, err := os.Stdout.WriteString(`{"t":"ready"}` + "\n"); err != nil {
+		return 1
+	}
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		return 1
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(os.Stdout, conn)
+		close(done)
+	}()
+	_, _ = io.Copy(conn, os.Stdin)
+	_ = conn.(*net.UnixConn).CloseWrite()
+	<-done
+	return 0
+}
+
+// password answers the panel's prompt as the user would.
+func (h *moonbitHost) password(view, pw string) {
+	h.t.Helper()
+	h.wait("the password prompt", func() bool {
+		return findNode(h.root(view), "password") != nil
+	})
+	h.send1(&v1.InputEvent{ViewID: view, Revision: h.rev(view), Node: "password", Event: v1.EventSubmit, Text: pw, Output: "DP-1"})
 }

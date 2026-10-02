@@ -2,6 +2,7 @@ package moonbit
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -74,9 +75,11 @@ func barLabel(s *State) (string, v1.Tone) {
 		return "done", v1.ToneNormal
 	case PhaseError:
 		return "!", v1.ToneError
+	case PhaseWorking:
+		return "…", v1.ToneAccent
 	}
-	if s.Status != nil && s.Status.Cache != nil && s.Status.Cache.Bytes > 0 {
-		return humanBytes(s.Status.Cache.Bytes), v1.ToneSubtle
+	if s.Cache != nil && s.Cache.Bytes > 0 {
+		return humanBytes(s.Cache.Bytes), v1.ToneSubtle
 	}
 	return "", v1.ToneSubtle
 }
@@ -102,12 +105,7 @@ func Tooltip(s *State) *v1.Node {
 	return &v1.Node{Kind: v1.KindColumn, Padding: 8, Gap: 4, Children: rows}
 }
 
-func cacheOf(s *State) *CacheInfo {
-	if s.Status == nil {
-		return nil
-	}
-	return s.Status.Cache
-}
+func cacheOf(s *State) *CacheInfo { return s.Cache }
 
 // Panel renders the phase the TUI would be on, with the wordmark header in
 // every state, the same identity the terminal shows.
@@ -123,7 +121,7 @@ func Panel(s *State) *v1.Node {
 		Children: []*v1.Node{
 			header,
 			summaryCard(s),
-			categoryCard(s),
+			bodyCard(s),
 			actionBar(s),
 			footer(s),
 		},
@@ -162,6 +160,20 @@ func summaryCard(s *State) *v1.Node {
 	case PhaseDone:
 		hero = "Freed " + humanBytes(s.Freed)
 		caption = plural(s.Deleted, "file", "files") + " cleaned"
+	case PhaseAuth:
+		hero = "Password required"
+		caption = "Moonbit runs " + s.AuthFor + " as root, the same as starting it with sudo."
+	case PhaseDocker:
+		hero, caption = "Docker cleanup", "Reclaim space Docker holds in images, containers, networks, volumes and build cache."
+	case PhaseDockerConfirm:
+		spec := dockerOps[s.DockerOp]
+		hero, heroTone = spec.confirm, v1.ToneError
+		caption = "Runs docker " + spec.verb + " as root. What it removes can't be recovered."
+	case PhaseSchedule:
+		hero, caption = "Schedule", "Daemon mode and the timers can't run together: enabling one stops the other."
+	case PhaseWorking:
+		hero, caption = s.Working, "This can take a while; the panel updates when it finishes."
+		extra = &v1.Node{Kind: v1.KindSpinner, Key: "working"}
 	default:
 		hero, caption = idleSummary(s)
 	}
@@ -176,9 +188,6 @@ func summaryCard(s *State) *v1.Node {
 }
 
 func idleSummary(s *State) (string, string) {
-	if s.Status == nil {
-		return "Daemon not connected", "Moonbit's daemon does the scanning and cleaning as root."
-	}
 	c := cacheOf(s)
 	if c == nil || c.Files == 0 {
 		return "No scan yet", "Run a scan to see what Moonbit would reclaim."
@@ -199,6 +208,130 @@ func confirmCaption(s *State) string {
 	return fmt.Sprintf("%s: %s. This runs as root and can't be undone.", humanBytes(s.selectedBytes()), what)
 }
 
+// bodyCard is the second card: the category well for scan and clean phases,
+// or the password prompt, the Docker choices, or the schedule.
+func bodyCard(s *State) *v1.Node {
+	switch s.Phase {
+	case PhaseAuth:
+		return authCard(s)
+	case PhaseDocker, PhaseDockerConfirm:
+		return dockerCard(s)
+	case PhaseSchedule:
+		return scheduleCard(s)
+	case PhaseWorking:
+		return card(&v1.Node{Kind: v1.KindColumn, Height: wellHeight + 24, Children: []*v1.Node{note("Working as root…")}})
+	}
+	return categoryCard(s)
+}
+
+func card(children ...*v1.Node) *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: cardPad, Gap: 8, Children: children}
+}
+
+// authCard is the password prompt every root run passes, as `sudo moonbit`
+// asks in a terminal. The field is masked and the plugin never echoes it.
+func authCard(s *State) *v1.Node {
+	field := &v1.Node{
+		Kind: v1.KindTextInput, ID: "password", Key: "password", Name: "Password for sudo", Role: "textbox",
+		Placeholder: "Password", Masked: true, SubmitOnEnter: true, Reseed: s.AuthReseed,
+		Width: 360, Height: 40, Padding: 12, Disabled: s.Authorizing,
+		Events: []v1.EventKind{v1.EventChange, v1.EventSubmit},
+	}
+	status := subtle("Your password goes to sudo only; it's asked for every run.")
+	switch {
+	case s.Authorizing:
+		status = subtle("Checking with sudo…")
+	case s.AuthErr != "":
+		status = errText(s.AuthErr)
+	}
+	c := card(
+		&v1.Node{Kind: v1.KindText, Text: "Password for " + userName(), Size: "label", Tone: v1.ToneSubtle},
+		field,
+		status,
+	)
+	c.Height = wellHeight + 30
+	c.Stroke, c.StrokeFill = 1, "accent"
+	return c
+}
+
+// dockerOps are the TUI's two Docker cleanups, keyed by moonbit's op names.
+var dockerOps = map[string]struct{ label, detail, confirm, verb string }{
+	"images": {"Clean Unused Images", "Removes every image no container uses.", "Clean unused Docker images?", "image prune"},
+	"all":    {"Clean All Unused Resources", "Removes unused images, stopped containers, networks, volumes and build cache.", "Clean all unused Docker resources?", "system prune"},
+}
+
+func dockerCard(s *State) *v1.Node {
+	var rows []*v1.Node
+	for _, op := range []string{"images", "all"} {
+		spec := dockerOps[op]
+		if s.Phase == PhaseDockerConfirm && op != s.DockerOp {
+			continue
+		}
+		rows = append(rows, &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: spec.label, Bold: true},
+			subtle(spec.detail),
+		}})
+	}
+	c := card(&v1.Node{Kind: v1.KindColumn, Fill: "surface", Shape: "medium", Padding: 12, Gap: 12, Height: wellHeight, Children: rows})
+	if s.Phase == PhaseDockerConfirm {
+		c.Stroke, c.StrokeFill = 1, "error"
+	}
+	return c
+}
+
+// scheduleCard shows daemon mode and the timers with their switches, as the
+// TUI's Schedule screen does.
+func scheduleCard(s *State) *v1.Node {
+	sc := s.Schedule
+	daemon := "Off"
+	if sc.DaemonEnabled {
+		daemon = "On"
+		if !sc.DaemonActive {
+			daemon = "On, not running"
+		}
+	}
+	timers := "Off"
+	if sc.TimersEnabled() {
+		timers = "On"
+		if !(sc.ScanTimer && sc.CleanTimer) {
+			timers = "Partly on"
+		}
+	}
+	rows := []*v1.Node{
+		scheduleRow("daemon", "Daemon mode", "Scans hourly and cleans daily in the background.", daemon, sc.DaemonEnabled),
+		scheduleRow("timers", "Scan and clean timers", "Quick scan daily at 2 AM; quick clean Sundays at 3 AM.", timers, sc.TimersEnabled()),
+	}
+	if !sc.Known {
+		rows = append(rows, errText("systemctl isn't available, so the schedule can't be read."))
+	} else if sc.DaemonEnabled && sc.TimersEnabled() {
+		rows = append(rows, errText("Daemon mode and the timers are both on; they can't run together."))
+	}
+	return card(&v1.Node{Kind: v1.KindColumn, Fill: "surface", Shape: "medium", Padding: 12, Gap: 12, Height: wellHeight, Children: rows})
+}
+
+func scheduleRow(target, title, detail, state string, on bool) *v1.Node {
+	verb, fill, icon := "Enable", "accent", "play_arrow"
+	if on {
+		verb, fill, icon = "Disable", "chip", "stop"
+	}
+	btn := action("sched:"+target+":"+strings.ToLower(verb), verb, fill, icon)
+	btn.Name = verb + " " + strings.ToLower(title)
+	return &v1.Node{Kind: v1.KindRow, PinEnd: true, Children: []*v1.Node{
+		{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: title + " · " + state, Bold: true},
+			subtle(detail),
+		}},
+		btn,
+	}}
+}
+
+func userName() string {
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	return "your account"
+}
+
 // categoryCard holds a column-label strip and a sunken well listing the
 // phase's categories. Its rim follows the phase, as the TUI's frame does.
 func categoryCard(s *State) *v1.Node {
@@ -211,7 +344,7 @@ func categoryCard(s *State) *v1.Node {
 		{Kind: v1.KindText, Text: title, Size: "label", Tone: v1.ToneSubtle},
 		{Kind: v1.KindText, Text: columns, Size: "label", Tone: v1.ToneSubtle},
 	}}
-	well := &v1.Node{Kind: v1.KindList, Fill: "container", Shape: "medium", Padding: 8, Gap: 2, Height: wellHeight, Events: []v1.EventKind{v1.EventScroll}, Children: rows}
+	well := &v1.Node{Kind: v1.KindList, Fill: "surface", Shape: "medium", Padding: 8, Gap: 2, Height: wellHeight, Events: []v1.EventKind{v1.EventScroll}, Children: rows}
 	card := &v1.Node{Kind: v1.KindColumn, Fill: "card", Shape: "card", Padding: cardPad, Gap: 6, Children: []*v1.Node{strip, well}}
 	switch s.Phase {
 	case PhaseScanning, PhaseReview:
@@ -333,8 +466,32 @@ func actionBar(s *State) *v1.Node {
 		right = []*v1.Node{action("confirm_clean", "Clean Now", "error", "delete")}
 	case PhaseDone:
 		right = []*v1.Node{action("back", "Done", "accent", "check")}
+	case PhaseAuth:
+		left = []*v1.Node{action("auth_cancel", "Cancel", "chip", "")}
+		run := action("auth_run", "Run as Root", "accent", "lock")
+		run.Disabled = s.Authorizing
+		right = []*v1.Node{run}
+	case PhaseDocker:
+		left = []*v1.Node{action("back", "Back", "chip", "chevron_left")}
+		right = []*v1.Node{
+			action("docker:images", "Unused Images", "chip", ""),
+			action("docker:all", "All Unused", "accent", "delete"),
+		}
+	case PhaseDockerConfirm:
+		left = []*v1.Node{action("docker", "Back", "chip", "chevron_left")}
+		right = []*v1.Node{action("docker_run", "Clean Now", "error", "delete")}
+	case PhaseSchedule:
+		left = []*v1.Node{action("back", "Back", "chip", "chevron_left")}
+	case PhaseWorking:
 	default:
+		left = []*v1.Node{
+			action("docker", "Docker", "chip", "dns"),
+			action("schedule", "Schedule", "chip", "schedule"),
+		}
 		right = scanActions()
+		if c := cacheOf(s); c != nil && c.Files > 0 {
+			right = append([]*v1.Node{action("review_last", "Review", "chip", "check")}, right...)
+		}
 	}
 	return &v1.Node{Kind: v1.KindRow, PinEnd: true, Children: []*v1.Node{
 		{Kind: v1.KindRow, Gap: 8, Children: left},
@@ -365,14 +522,27 @@ func footer(s *State) *v1.Node {
 	if s.Phase == PhaseDone && len(s.CleanErrs) > 0 {
 		parts = append(parts, plural(len(s.CleanErrs), "file", "files")+" could not be cleaned")
 	}
-	if len(parts) == 0 && s.Status != nil {
-		if t := shortTime(s.Status.LastClean); t != "" {
-			parts = append(parts, "Last clean "+t)
-		} else {
-			parts = append(parts, "Daemon connected")
-		}
+	if s.Notice != "" && (s.Phase == PhaseDocker || s.Phase == PhaseSchedule) {
+		parts = append(parts, s.Notice)
+	}
+	if len(parts) == 0 {
+		parts = append(parts, scheduleSummary(s.Schedule))
 	}
 	return subtle(strings.Join(parts, " · "))
+}
+
+func scheduleSummary(sc Schedule) string {
+	switch {
+	case !sc.Known:
+		return "Schedule unknown"
+	case sc.DaemonEnabled && sc.DaemonActive:
+		return "Daemon mode on: scans hourly, cleans daily"
+	case sc.DaemonEnabled:
+		return "Daemon mode on, but not running"
+	case sc.TimersEnabled():
+		return "Timers on: quick scan daily, quick clean weekly"
+	}
+	return "No automatic cleaning scheduled"
 }
 
 // action is a padded, fixed-height button; the width is set from the label

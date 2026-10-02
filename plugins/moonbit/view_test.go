@@ -1,6 +1,8 @@
 package moonbit
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -12,10 +14,9 @@ import (
 // daemon emits, so the tests exercise the real Fold paths.
 func states() map[Phase]*State {
 	out := map[Phase]*State{}
-	with := &State{}
-	with.Fold(Event{T: "status", Daemon: true, Cache: &CacheInfo{Files: 17772, Bytes: 4511971727,
+	with := &State{Cache: &CacheInfo{Files: 17772, Bytes: 4511971727,
 		Categories: []CategoryStat{{Name: "Pacman Cache", Files: 498, Bytes: 782317440},
-			{Name: "Journal Logs", Files: 12, Bytes: 128849018}}}})
+			{Name: "Journal Logs", Files: 12, Bytes: 128849018}}}}
 	out[PhaseIdle] = with
 
 	sc := &State{}
@@ -54,6 +55,12 @@ func states() map[Phase]*State {
 	er := &State{}
 	er.Fold(Event{T: "error", Msg: "moonbit daemon unreachable"})
 	out[PhaseError] = er
+	sched := Schedule{Known: true, DaemonEnabled: true, DaemonActive: true, ScanTimer: true}
+	out[PhaseAuth] = &State{Phase: PhaseAuth, AuthFor: "a deep scan", AuthErr: "Sorry, that password wasn't accepted. Try again.", Back: PhaseIdle}
+	out[PhaseDocker] = &State{Phase: PhaseDocker, Notice: "Docker freed 1.2GB."}
+	out[PhaseDockerConfirm] = &State{Phase: PhaseDockerConfirm, DockerOp: "all"}
+	out[PhaseSchedule] = &State{Phase: PhaseSchedule, Schedule: sched}
+	out[PhaseWorking] = &State{Phase: PhaseWorking, Working: "Cleaning Docker", Back: PhaseDocker}
 	return out
 }
 
@@ -119,10 +126,10 @@ func TestScanValueCeiling(t *testing.T) {
 }
 
 func TestDoneUsesOnlyCurrentCleanableCategories(t *testing.T) {
-	stale := &Event{Cache: &CacheInfo{Categories: []CategoryStat{{Name: "old cache", Files: 7, Bytes: 70}}}}
+	stale := &CacheInfo{Categories: []CategoryStat{{Name: "old cache", Files: 7, Bytes: 70}}}
 
 	t.Run("empty scan does not reuse stale cache", func(t *testing.T) {
-		s := &State{Status: stale}
+		s := &State{Cache: stale}
 		s.StartScan()
 		s.Fold(Event{T: "done"})
 		if len(s.Review) != 0 || len(s.SelectedStats()) != 0 {
@@ -131,7 +138,7 @@ func TestDoneUsesOnlyCurrentCleanableCategories(t *testing.T) {
 	})
 
 	t.Run("zero-file categories are omitted", func(t *testing.T) {
-		s := &State{Status: stale}
+		s := &State{Cache: stale}
 		s.StartScan()
 		s.Fold(Event{T: "category_done", Name: "empty", Files: 0})
 		s.Fold(Event{T: "category_done", Name: "fresh", Files: 2, Bytes: 200})
@@ -158,7 +165,7 @@ func findID(n *v1.Node, id string) *v1.Node {
 }
 
 func TestEmptyReviewOffersScanActionsWithoutClean(t *testing.T) {
-	p := Panel(&State{Phase: PhaseReview, Status: &Event{T: "status"}})
+	p := Panel(&State{Phase: PhaseReview})
 	for _, id := range []string{"scan_quick", "scan_deep", "back"} {
 		if findID(p, id) == nil {
 			t.Errorf("empty review missing %s action", id)
@@ -233,5 +240,40 @@ func TestBarUsesThemeTintedMoonbitMark(t *testing.T) {
 	icon := Bar(&State{}).Children[0].Children[0]
 	if icon.Kind != v1.KindIcon || icon.Icon != "moonbit" || icon.Tone != v1.ToneAccent {
 		t.Fatalf("bar icon = %+v, want the theme-accent Moonbit mark", icon)
+	}
+}
+
+func TestLastScanRollsUpTheUsersCache(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "scan_results.json")
+	if err := os.WriteFile(path, []byte(`{"scan_results":{"files":[
+		{"path":"/a","size":10,"category_name":"npm Cache"},
+		{"path":"/b","size":5,"category_name":"Pacman Cache"},
+		{"path":"/c","size":1,"category_name":"npm Cache"}]},
+		"total_size":16,"total_files":3,"scanned_at":"2026-10-02T12:30:54.078412521Z"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SYSC_MOONBIT_CACHE", path)
+	c, err := LastScan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Files != 3 || c.Bytes != 16 || c.ScannedAt != "2026-10-02T12:30:54.078412521Z" {
+		t.Fatalf("cache = %+v", c)
+	}
+	if len(c.Categories) != 2 || c.Categories[0] != (CategoryStat{Name: "npm Cache", Files: 2, Bytes: 11}) {
+		t.Fatalf("categories = %+v", c.Categories)
+	}
+
+	t.Setenv("SYSC_MOONBIT_CACHE", filepath.Join(t.TempDir(), "absent.json"))
+	if c, err := LastScan(); c != nil || err != nil {
+		t.Fatalf("missing cache = (%+v, %v), want no scan and no error", c, err)
+	}
+}
+
+// Every root run, whatever starts it, passes the password prompt first.
+func TestPasswordFieldIsMaskedAndClearable(t *testing.T) {
+	f := findID(Panel(&State{Phase: PhaseAuth, AuthReseed: 3}), "password")
+	if f == nil || !f.Masked || f.Text != "" || f.Reseed != 3 {
+		t.Fatalf("password field = %+v, want masked, empty, reseeded", f)
 	}
 }

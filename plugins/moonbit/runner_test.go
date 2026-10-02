@@ -1,124 +1,164 @@
 package moonbit
 
 import (
-	"bufio"
-	"encoding/json"
-	"fmt"
-	"net"
+	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
-// stubDaemon answers one request per connection like the real daemon. With
-// hang=false it closes after the canned events (what handlePanelConn does for
-// status); with hang=true it first reads to EOF, so a test can watch the
-// client-close cancel contract.
-func stubDaemon(t *testing.T, lines func(req request) []Event, hang bool) (string, chan request, chan struct{}) {
+// fakeSudo writes a stand-in for `sudo -S -k -p PROMPT moonbit panel`: it
+// prompts on stderr the way sudo -S does, re-prompts after a wrong password,
+// then plays moonbit: ready, read one request, answer per FAKE_MODE.
+func fakeSudo(t *testing.T, mode string) Runner {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "panel.sock")
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
+	dir := t.TempDir()
+	script := `#!/bin/bash
+prompt=""
+while [ $# -gt 0 ]; do case "$1" in -p) prompt="$2"; shift 2;; -S|-k) shift;; *) break;; esac; done
+case "$FAKE_MODE" in
+  refused) echo "nomadx is not in the sudoers file." >&2; exit 1;;
+  nopasswd) ;;
+  *)
+    printf '%s' "$prompt" >&2; read -r pw
+    if [ "$pw" != "hunter2" ]; then echo "Sorry, try again." >&2; printf '%s' "$prompt" >&2; read -r pw; exit 1; fi;;
+esac
+echo '{"t":"ready"}'
+read -r req
+echo "$req" > "$FAKE_DIR/request"
+case "$FAKE_MODE" in
+  cancel) echo '{"t":"category","name":"a","i":1,"total":9}'; cat >/dev/null; echo '{"t":"cancelled"}';;
+  long) printf '{"t":"clean_done","deleted":3,"errors":["%s"]}\n' "$(head -c 200000 /dev/zero | tr '\0' x)";;
+  *) echo '{"t":"category_done","name":"Pacman Cache","files":2,"bytes":20}'; echo '{"t":"done","scanned_at":"2026-10-02T12:30:54Z"}';;
+esac
+`
+	path := filepath.Join(dir, "sudo")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = ln.Close() })
-	reqs := make(chan request, 4)
-	closed := make(chan struct{}, 4)
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
+	t.Setenv("FAKE_MODE", mode)
+	t.Setenv("FAKE_DIR", dir)
+	return Runner{Sudo: path}
+}
+
+func drain(t *testing.T, op *Op) []Event {
+	t.Helper()
+	var evs []Event
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev, ok := <-op.Events:
+			if !ok {
+				return evs
 			}
-			go func() {
-				defer conn.Close()
-				sc := bufio.NewScanner(conn)
-				if !sc.Scan() {
-					return
-				}
-				var req request
-				if json.Unmarshal(sc.Bytes(), &req) != nil {
-					return
-				}
-				reqs <- req
-				for _, ev := range lines(req) {
-					b, _ := json.Marshal(ev)
-					if _, err := conn.Write(append(b, '\n')); err != nil {
-						return
-					}
-				}
-				if !hang {
-					return
-				}
-				for sc.Scan() {
-				}
-				closed <- struct{}{}
-			}()
+			evs = append(evs, ev)
+		case <-deadline:
+			t.Fatal("run never ended")
 		}
-	}()
-	return sock, reqs, closed
+	}
 }
 
-func TestStatusRoundTrip(t *testing.T) {
-	sock, _, _ := stubDaemon(t, func(request request) []Event {
-		return []Event{{T: "status", Daemon: true, Cache: &CacheInfo{
-			Files: 3, Bytes: 1024, Categories: []CategoryStat{{Name: "apt", Files: 3, Bytes: 1024}}}}}
-	}, false)
-	ev, err := Runner{Path: sock}.Status()
+func lastRequest(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(os.Getenv("FAKE_DIR"), "request"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ev.Cache == nil || len(ev.Cache.Categories) != 1 || ev.Cache.Categories[0].Name != "apt" {
-		t.Fatalf("bad status: %+v", ev)
-	}
+	return strings.TrimSpace(string(b))
 }
 
-func TestStatusErrorPropagates(t *testing.T) {
-	sock, _, _ := stubDaemon(t, func(request request) []Event {
-		return []Event{{T: "error", Msg: "another operation in progress"}}
-	}, false)
-	if _, err := (Runner{Path: sock}).Status(); err == nil {
-		t.Fatal("error event must surface as an error")
-	}
-}
-
-func TestDialFailure(t *testing.T) {
-	if _, err := (Runner{Path: filepath.Join(t.TempDir(), "absent.sock")}).Status(); err == nil {
-		t.Fatal("dial to missing socket must error")
-	}
-}
-
-func TestCancelClosesStream(t *testing.T) {
-	sock, reqs, closed := stubDaemon(t, func(request request) []Event {
-		return []Event{
-			{T: "category", Name: "a", I: 1, Total: 9},
-			{T: "scan", Files: 10},
-		}
-	}, true)
-	r := Runner{Path: sock}
-	op, err := r.Scan("deep", nil)
+func TestStartAnswersSudoAndSendsTheRequest(t *testing.T) {
+	r := fakeSudo(t, "scan")
+	pw := []byte("hunter2")
+	op, err := r.Start(pw, Request{Cmd: "scan", Mode: "deep"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req := <-reqs; req.Cmd != "scan" || req.Mode != "deep" {
-		t.Fatalf("bad request: %+v", req)
+	evs := drain(t, op)
+	if len(evs) != 2 || evs[1].T != "done" || evs[1].ScannedAt == "" {
+		t.Fatalf("events = %+v", evs)
+	}
+	if got := lastRequest(t); got != `{"cmd":"scan","mode":"deep"}` {
+		t.Fatalf("moonbit got %s", got)
+	}
+	if string(pw) != "\x00\x00\x00\x00\x00\x00\x00" {
+		t.Fatal("the password was not zeroed after use")
+	}
+}
+
+func TestStartReportsAWrongPassword(t *testing.T) {
+	r := fakeSudo(t, "scan")
+	if _, err := r.Start([]byte("nope"), Request{Cmd: "scan"}); !errors.Is(err, ErrWrongPassword) {
+		t.Fatalf("err = %v, want ErrWrongPassword", err)
+	}
+}
+
+// With NOPASSWD sudo never prompts; the password must not reach moonbit as
+// if it were the request.
+func TestStartWithoutAPromptNeverSendsThePassword(t *testing.T) {
+	r := fakeSudo(t, "nopasswd")
+	op, err := r.Start([]byte("hunter2"), Request{Cmd: "scan", Mode: "quick"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, op)
+	if got := lastRequest(t); got != `{"cmd":"scan","mode":"quick"}` {
+		t.Fatalf("moonbit's first line = %q, want the request", got)
+	}
+}
+
+func TestStartExplainsASudoRefusal(t *testing.T) {
+	r := fakeSudo(t, "refused")
+	_, err := r.Start([]byte("hunter2"), Request{Cmd: "scan"})
+	if err == nil || !strings.Contains(err.Error(), "may not run moonbit with sudo") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// Cancel ends the request side; moonbit's cancelled event still arrives.
+func TestCancelStillReadsMoonbitsCancelledEvent(t *testing.T) {
+	r := fakeSudo(t, "cancel")
+	op, err := r.Start([]byte("hunter2"), Request{Cmd: "scan"})
+	if err != nil {
+		t.Fatal(err)
 	}
 	<-op.Events // category
 	op.Cancel()
-	select {
-	case <-closed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("stub never saw the connection close")
+	evs := drain(t, op)
+	if len(evs) == 0 || evs[len(evs)-1].T != "cancelled" {
+		t.Fatalf("events after Cancel = %+v, want cancelled last", evs)
 	}
-	deadline := time.After(3 * time.Second)
-	for {
-		select {
-		case _, ok := <-op.Events:
-			if !ok {
-				return // channel closed after cancel: contract holds
-			}
-		case <-deadline:
-			t.Fatal("Events not closed after Cancel")
+}
+
+// clean_done lists every failed path; a line past bufio.Scanner's 64 KiB
+// default used to drop the terminal event.
+func TestLongEventLineIsDelivered(t *testing.T) {
+	r := fakeSudo(t, "long")
+	op, err := r.Start([]byte("hunter2"), Request{Cmd: "clean", Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := drain(t, op)
+	if len(evs) != 1 || evs[0].T != "clean_done" || len(evs[0].Errors[0]) != 200000 {
+		t.Fatalf("got %d events, want the one long clean_done", len(evs))
+	}
+}
+
+func TestRequestLabels(t *testing.T) {
+	for _, tc := range []struct {
+		req  Request
+		want string
+	}{
+		{Request{Cmd: "scan", Mode: "deep"}, "a deep scan"},
+		{Request{Cmd: "clean"}, "the clean"},
+		{Request{Cmd: "docker", Op: "all"}, "the Docker cleanup"},
+		{Request{Cmd: "schedule", Target: "timers", Action: "enable"}, "enabling the scan and clean timers"},
+		{Request{Cmd: "schedule", Target: "daemon", Action: "disable"}, "disabling daemon mode"},
+	} {
+		if got := RequestLabel(tc.req); got != tc.want {
+			t.Errorf("label(%+v) = %q, want %q", tc.req, got, tc.want)
 		}
 	}
 }
@@ -156,60 +196,3 @@ func TestStreamEndedRecoversActiveOperation(t *testing.T) {
 
 // The daemon cancels on EOF of its request reader and still writes its
 // terminal event, so Cancel must leave the read side open to receive it.
-func TestCancelStillReadsTheDaemonsCancelledEvent(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "panel.sock")
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		sc := bufio.NewScanner(conn)
-		sc.Scan() // request
-		_, _ = conn.Write([]byte(`{"t":"category","name":"a","i":1,"total":9}` + "\n"))
-		for sc.Scan() {
-		}
-		_, _ = conn.Write([]byte(`{"t":"cancelled"}` + "\n"))
-	}()
-	op, err := Runner{Path: sock}.Scan("quick", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	<-op.Events // category
-	op.Cancel()
-	var last string
-	for ev := range op.Events {
-		last = ev.T
-	}
-	if last != "cancelled" {
-		t.Fatalf("last event after Cancel = %q, want cancelled", last)
-	}
-}
-
-// clean_done carries every failed path; a long run makes one line far past
-// bufio.Scanner's 64 KiB default, which used to drop the terminal event.
-func TestLongEventLineIsDelivered(t *testing.T) {
-	errs := make([]string, 2000)
-	for i := range errs {
-		errs[i] = fmt.Sprintf("/var/cache/pacman/pkg/package-%04d.pkg.tar.zst: permission denied", i)
-	}
-	sock, _, _ := stubDaemon(t, func(request) []Event {
-		return []Event{{T: "clean_done", Deleted: 3, Errors: errs}}
-	}, false)
-	op, err := Runner{Path: sock}.Clean(true, []string{"Pacman Cache"}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got []Event
-	for ev := range op.Events {
-		got = append(got, ev)
-	}
-	if len(got) != 1 || got[0].T != "clean_done" || len(got[0].Errors) != len(errs) {
-		t.Fatalf("got %d events, want the one clean_done with %d errors", len(got), len(errs))
-	}
-}

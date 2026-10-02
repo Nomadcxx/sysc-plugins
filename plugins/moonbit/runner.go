@@ -2,145 +2,252 @@ package moonbit
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
-	"net"
-	"os"
+	"fmt"
+	"io"
+	"os/exec"
+	"strings"
+	"sync"
 	"time"
 )
 
-// DefaultSocket is where the moonbit daemon listens when its unit passes
-// --socket. SYSC_MOONBIT_SOCKET overrides it (tests, custom units); the shell
-// forwards only SYSC_* variables to plugins.
-const DefaultSocket = "/run/moonbit/panel.sock"
-
-func SocketPath() string {
-	if p := os.Getenv("SYSC_MOONBIT_SOCKET"); p != "" {
-		return p
-	}
-	return DefaultSocket
-}
-
-// Runner talks the daemon's one-request-per-connection protocol. Cancelling
-// an operation means ending the request side: moonbit watches the request
-// reader for EOF and aborts cooperatively, which is the only cancel that
-// works on a root process.
+// Runner drives `moonbit panel` through sudo, one request per run: the same
+// elevation as starting the TUI with sudo. sudo -k asks for the password every
+// time, and the run uses the user's own config and scan cache, reaching every
+// category the TUI reaches.
 type Runner struct {
-	Path string
+	// Sudo and Moonbit name the programs; empty means "sudo" from PATH and
+	// "moonbit", which sudo resolves on its own secure_path.
+	Sudo, Moonbit string
 }
 
-func (r Runner) path() string {
-	if r.Path != "" {
-		return r.Path
-	}
-	return SocketPath()
-}
-
-// Op is a live operation stream. Events closes when the daemon ends the
-// stream (terminal event or connection loss).
-type Op struct {
-	Events chan Event
-	conn   net.Conn
-}
-
-const (
-	// cancelGrace bounds the wait for the daemon's terminal event after
-	// Cancel, so a wedged daemon still ends the stream.
-	cancelGrace = 10 * time.Second
-	// statusTimeout bounds one status round-trip.
-	statusTimeout = 5 * time.Second
-	// maxEventLine fits clean_done, whose errors list is unbounded.
-	maxEventLine = 4 << 20
-)
-
-// Cancel half-closes the connection: the daemon sees EOF on its request
-// reader, aborts, and still writes cancelled (or its terminal event) on the
-// open read side, which the stream delivers before it closes.
-func (o *Op) Cancel() {
-	if uc, ok := o.conn.(*net.UnixConn); ok && uc.CloseWrite() == nil {
-		_ = o.conn.SetReadDeadline(time.Now().Add(cancelGrace))
-		return
-	}
-	_ = o.conn.Close()
-}
-
-// request is the daemon's line protocol header.
-type request struct {
+// Request is one panel command for `moonbit panel`.
+type Request struct {
 	Cmd        string   `json:"cmd"`
 	Mode       string   `json:"mode,omitempty"`
 	Force      bool     `json:"force,omitempty"`
 	Categories []string `json:"categories,omitempty"`
 	ScannedAt  string   `json:"scanned_at,omitempty"`
+	Op         string   `json:"op,omitempty"`
+	Target     string   `json:"target,omitempty"`
+	Action     string   `json:"action,omitempty"`
 }
 
-func (r Runner) start(req request) (*Op, error) {
-	conn, err := net.DialTimeout("unix", r.path(), 2*time.Second)
-	if err != nil {
-		return nil, err
+const (
+	// promptMarker is the -p prompt sudo prints when it wants the password.
+	// The runner answers the first; a second means the password was wrong.
+	promptMarker = "[moonbit-panel-password]"
+	// readyTimeout bounds sudo's check and moonbit's start.
+	readyTimeout = 20 * time.Second
+	// cancelGrace bounds the wait for moonbit's terminal event after Cancel.
+	cancelGrace = 10 * time.Second
+	// maxEventLine fits clean_done, whose errors list is unbounded.
+	maxEventLine = 4 << 20
+)
+
+// ErrWrongPassword means sudo asked again: the password was not accepted.
+var ErrWrongPassword = errors.New("wrong password")
+
+// Op is a live operation. Events closes when moonbit ends the run.
+type Op struct {
+	Events chan Event
+	stdin  io.WriteCloser
+	kill   func()
+	once   sync.Once
+}
+
+// Cancel ends the request side. moonbit cancels on EOF and still writes its
+// terminal event; a run still going after cancelGrace is killed.
+func (o *Op) Cancel() {
+	o.once.Do(func() {
+		_ = o.stdin.Close()
+		time.AfterFunc(cancelGrace, o.kill)
+	})
+}
+
+func (r Runner) sudo() string {
+	if r.Sudo != "" {
+		return r.Sudo
 	}
+	return "sudo"
+}
+
+func (r Runner) moonbit() string {
+	if r.Moonbit != "" {
+		return r.Moonbit
+	}
+	return "moonbit"
+}
+
+// Start runs one request as root. It returns once moonbit is listening and
+// has the request, or with ErrWrongPassword or sudo's own complaint. The
+// password is zeroed before Start returns.
+func (r Runner) Start(password []byte, req Request) (*Op, error) {
+	defer clear(password)
 	line, err := json.Marshal(req)
 	if err != nil {
-		_ = conn.Close()
 		return nil, err
 	}
-	if _, err := conn.Write(append(line, '\n')); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	op := &Op{conn: conn, Events: make(chan Event, 32)}
-	go func() {
-		defer close(op.Events)
-		defer conn.Close()
-		sc := bufio.NewScanner(conn)
-		sc.Buffer(make([]byte, 0, 64<<10), maxEventLine)
-		for sc.Scan() {
-			b := sc.Bytes()
-			if len(b) == 0 {
-				continue
-			}
-			var ev Event
-			if json.Unmarshal(b, &ev) == nil && ev.T != "" {
-				op.Events <- ev
-			}
-		}
-	}()
-	return op, nil
-}
-
-// Scan starts a scan stream; mode is "" (daemon config), "quick" or "deep".
-func (r Runner) Scan(mode string, cats []string) (*Op, error) {
-	return r.start(request{Cmd: "scan", Mode: mode, Categories: cats})
-}
-
-// Clean starts a clean stream; force=false only ever dry-runs. scannedAt,
-// from the reviewed scan's done event, makes the daemon refuse a cache a
-// later scan replaced; empty skips that check (daemons before 1.6).
-func (r Runner) Clean(force bool, cats []string, scannedAt string) (*Op, error) {
-	return r.start(request{Cmd: "clean", Force: force, Categories: cats, ScannedAt: scannedAt})
-}
-
-// Status performs one synchronous status round-trip. The connection is
-// always closed on return; the daemon ends non-stream commands itself, and a
-// lingering open read end would hold a daemon goroutine otherwise.
-func (r Runner) Status() (*Event, error) {
-	op, err := r.start(request{Cmd: "status"})
+	cmd := exec.Command(r.sudo(), "-S", "-k", "-p", promptMarker, r.moonbit(), "panel")
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
 	}
-	_ = op.conn.SetReadDeadline(time.Now().Add(statusTimeout))
-	defer op.conn.Close()
-	var last *Event
-	for ev := range op.Events {
-		e := ev
-		switch e.T {
-		case "status":
-			last = &e
-		case "error":
-			return nil, errors.New(e.Msg)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	kill := func() { _ = cmd.Process.Kill() }
+
+	prompts := make(chan struct{}, 4)
+	tail := &lastLine{}
+	go watchStderr(stderr, prompts, tail)
+
+	events := make(chan Event, 32)
+	ready := make(chan struct{})
+	go func() {
+		defer close(events)
+		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 0, 64<<10), maxEventLine)
+		started := false
+		for sc.Scan() {
+			var ev Event
+			if json.Unmarshal(sc.Bytes(), &ev) != nil || ev.T == "" {
+				continue
+			}
+			if !started {
+				if ev.T == "ready" {
+					started = true
+					close(ready)
+				}
+				continue
+			}
+			events <- ev
+		}
+		_ = cmd.Wait()
+	}()
+
+	asked := false
+	deadline := time.NewTimer(readyTimeout)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-prompts:
+			if asked {
+				kill()
+				return nil, ErrWrongPassword
+			}
+			asked = true
+			if _, err := stdin.Write(append(password, '\n')); err != nil {
+				kill()
+				return nil, err
+			}
+		case <-ready:
+			if _, err := stdin.Write(append(line, '\n')); err != nil {
+				kill()
+				return nil, err
+			}
+			return &Op{Events: events, stdin: stdin, kill: kill}, nil
+		case _, open := <-events:
+			if !open {
+				return nil, startError(tail.get())
+			}
+		case <-deadline.C:
+			kill()
+			return nil, errors.New("moonbit did not start in time")
 		}
 	}
-	if last == nil {
-		return nil, errors.New("moonbit: no status reply")
+}
+
+// startError turns sudo's or moonbit's last words into the reason a run
+// never started.
+func startError(msg string) error {
+	switch {
+	case msg == "":
+		return errors.New("moonbit exited before it started")
+	case strings.Contains(msg, "not in the sudoers"), strings.Contains(msg, "not allowed to execute"):
+		return errors.New("this account may not run moonbit with sudo")
+	case strings.Contains(msg, "command not found"), strings.Contains(msg, "unknown command"):
+		return errors.New("moonbit 1.7 or newer is needed for the panel")
 	}
-	return last, nil
+	return errors.New(msg)
+}
+
+// watchStderr signals each password prompt and keeps the last line sudo or
+// moonbit printed. The prompt has no newline, so it is matched in the byte
+// stream rather than per line.
+func watchStderr(r io.Reader, prompts chan<- struct{}, tail *lastLine) {
+	var pending []byte
+	buf := make([]byte, 4096)
+	for {
+		n, err := r.Read(buf)
+		pending = append(pending, buf[:n]...)
+		for {
+			i := bytes.Index(pending, []byte(promptMarker))
+			if i < 0 {
+				break
+			}
+			tail.add(pending[:i])
+			pending = pending[i+len(promptMarker):]
+			select {
+			case prompts <- struct{}{}:
+			default:
+			}
+		}
+		if j := bytes.LastIndexByte(pending, '\n'); j >= 0 {
+			tail.add(pending[:j])
+			pending = pending[j+1:]
+		}
+		if err != nil {
+			tail.add(pending)
+			return
+		}
+	}
+}
+
+// lastLine keeps the last non-empty stderr line, shared between goroutines.
+type lastLine struct {
+	mu   sync.Mutex
+	line string
+}
+
+func (l *lastLine) add(b []byte) {
+	for _, s := range strings.Split(string(b), "\n") {
+		if s = strings.TrimSpace(s); s != "" {
+			l.mu.Lock()
+			l.line = s
+			l.mu.Unlock()
+		}
+	}
+}
+
+func (l *lastLine) get() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.TrimPrefix(l.line, "Error: ")
+}
+
+// RequestLabel names a request for the password prompt.
+func RequestLabel(req Request) string {
+	switch req.Cmd {
+	case "scan":
+		return map[string]string{"quick": "a quick scan", "deep": "a deep scan"}[req.Mode]
+	case "clean":
+		return "the clean"
+	case "docker":
+		return map[string]string{"images": "the Docker image cleanup", "all": "the Docker cleanup"}[req.Op]
+	case "schedule":
+		what := map[string]string{"daemon": "daemon mode", "timers": "the scan and clean timers"}[req.Target]
+		return fmt.Sprintf("%s %s", strings.TrimSuffix(req.Action, "e")+"ing", what)
+	}
+	return req.Cmd
 }

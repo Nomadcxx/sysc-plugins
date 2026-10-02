@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -39,6 +40,11 @@ type session struct {
 	op     *moonbit.Op
 	views  map[string]view
 	async  chan func()
+
+	// pending is the root run waiting on the password prompt; password is
+	// the field's live value, zeroed once handed to sudo.
+	pending  *moonbit.Request
+	password []byte
 
 	lastFlush time.Time
 	flushAt   <-chan time.Time // armed while a coalesced flush is pending
@@ -101,21 +107,17 @@ func runPlugin(in io.Reader, out io.Writer) error {
 	}
 }
 
-// refreshStatus asks the daemon for its state without blocking the loop; the
-// reply lands back on the loop through async.
+// refreshStatus reads the last scan and the schedule off the loop; neither
+// needs root. The result lands back on the loop through async.
 func (s *session) refreshStatus() {
 	go func() {
-		st, err := s.runner.Status()
+		cache, err := moonbit.LastScan()
+		sched := moonbit.ReadSchedule()
 		s.async <- func() {
-			if err != nil {
-				// A dead socket is the idle-with-no-data case, not a fault:
-				// the panel explains it, the bar stays quiet.
-				if s.state.Phase == moonbit.PhaseIdle {
-					s.state.Status = nil
-				}
-				return
+			if err == nil {
+				s.state.Cache = cache
 			}
-			s.state.Fold(*st)
+			s.state.Schedule = sched
 		}
 	}()
 }
@@ -131,7 +133,7 @@ func (s *session) streamOp(op *moonbit.Op) {
 					return
 				}
 				s.state.Fold(e)
-				if e.T == "done" || e.T == "clean_done" || e.T == "cancelled" || e.T == "error" {
+				if e.T == "done" || e.T == "clean_done" || e.T == "cancelled" || e.T == "error" || e.T == "docker_done" || e.T == "schedule_done" {
 					s.op = nil
 					s.refreshStatus()
 				}
@@ -148,42 +150,85 @@ func (s *session) streamOp(op *moonbit.Op) {
 	}()
 }
 
-func (s *session) startScan(mode string) {
+// requestAuth puts a root run behind the password prompt, as `sudo moonbit`
+// asks before anything runs.
+func (s *session) requestAuth(req moonbit.Request) {
 	if s.op != nil {
 		return
 	}
-	s.state.Review, s.state.Selected = nil, nil
-	s.state.StartScan()
-	op, err := s.runner.Scan(mode, nil)
-	if err != nil {
-		s.state.Phase, s.state.Err = moonbit.PhaseError, moonbit.UnreachableMessage
-		return
+	s.pending = &req
+	s.state.Back = s.state.Phase
+	if s.state.Back == moonbit.PhaseAuth || s.state.Back == moonbit.PhaseError {
+		s.state.Back = moonbit.PhaseIdle
 	}
-	s.streamOp(op)
+	s.state.Phase, s.state.Err = moonbit.PhaseAuth, ""
+	s.state.AuthFor, s.state.AuthErr, s.state.Authorizing = moonbit.RequestLabel(req), "", false
 }
 
-func (s *session) startClean() {
-	if s.op != nil {
+// authorize hands the password to sudo off the loop and starts the pending
+// run once sudo accepts it.
+func (s *session) authorize() {
+	if s.pending == nil || s.state.Authorizing || s.op != nil {
 		return
 	}
+	req, pw := *s.pending, s.password
+	s.password = nil
+	s.state.Authorizing, s.state.AuthErr = true, ""
+	s.state.AuthReseed++ // clear the field
+	go func() {
+		op, err := s.runner.Start(pw, req)
+		s.async <- func() {
+			s.state.Authorizing = false
+			if err != nil {
+				if errors.Is(err, moonbit.ErrWrongPassword) {
+					s.state.AuthErr = "Sorry, that password wasn't accepted. Try again."
+					return
+				}
+				s.pending = nil
+				s.state.Phase, s.state.Err = moonbit.PhaseError, err.Error()
+				return
+			}
+			s.pending = nil
+			s.begin(req)
+			s.streamOp(op)
+		}
+	}()
+}
+
+// begin flips the view to the run's progress screen before its first event.
+func (s *session) begin(req moonbit.Request) {
+	switch req.Cmd {
+	case "scan":
+		s.state.Review, s.state.Selected = nil, nil
+		s.state.StartScan()
+	case "clean":
+		s.state.StartClean()
+	case "docker":
+		s.state.Phase, s.state.Back = moonbit.PhaseWorking, moonbit.PhaseDocker
+		s.state.Working = "Cleaning Docker"
+	case "schedule":
+		s.state.Phase, s.state.Back = moonbit.PhaseWorking, moonbit.PhaseSchedule
+		s.state.Working = map[string]string{"enable": "Enabling ", "disable": "Disabling "}[req.Action] +
+			map[string]string{"daemon": "daemon mode", "timers": "the timers"}[req.Target]
+	}
+}
+
+func (s *session) cleanRequest() *moonbit.Request {
 	var cats []string
 	for _, c := range s.state.SelectedStats() {
 		cats = append(cats, c.Name)
 	}
 	if len(cats) == 0 {
-		return
+		return nil
 	}
-	s.state.StartClean()
-	op, err := s.runner.Clean(true, cats, s.state.ScannedAt)
-	if err != nil {
-		s.state.Phase, s.state.Err = moonbit.PhaseError, moonbit.UnreachableMessage
-		return
-	}
-	s.streamOp(op)
+	return &moonbit.Request{Cmd: "clean", Force: true, Categories: cats, ScannedAt: s.state.ScannedAt}
 }
 
 func (s *session) handle(m *v1.InputEvent) {
 	node := m.Node
+	// current is true when the event comes from the tree the user is
+	// looking at; destructive actions only count then.
+	current := m.Revision == s.views[m.ViewID].rev
 	switch {
 	case node == "bar":
 		if m.Event == v1.EventActivate {
@@ -196,10 +241,32 @@ func (s *session) handle(m *v1.InputEvent) {
 				_, _ = s.client.Call(ctx, v1.CallPanelOpen, params)
 			}()
 		}
+	case node == "password":
+		if s.state.Phase != moonbit.PhaseAuth {
+			return
+		}
+		clear(s.password)
+		s.password = []byte(m.Text)
+		if m.Event == v1.EventSubmit {
+			s.authorize()
+		}
+	case node == "auth_run":
+		if s.state.Phase == moonbit.PhaseAuth {
+			s.authorize()
+		}
+	case node == "auth_cancel":
+		if s.state.Phase == moonbit.PhaseAuth && !s.state.Authorizing {
+			clear(s.password)
+			s.password, s.pending = nil, nil
+			s.state.AuthReseed++
+			s.state.Phase = s.state.Back
+		}
 	case node == "scan_quick":
-		s.startScan("quick")
+		s.requestAuth(moonbit.Request{Cmd: "scan", Mode: "quick"})
 	case node == "scan_deep":
-		s.startScan("deep")
+		s.requestAuth(moonbit.Request{Cmd: "scan", Mode: "deep"})
+	case node == "review_last":
+		s.reviewLast()
 	case node == "cancel":
 		if s.op != nil {
 			s.op.Cancel()
@@ -212,15 +279,36 @@ func (s *session) handle(m *v1.InputEvent) {
 		// The one destructive action only counts from the confirm screen the
 		// user is looking at: an event aimed at an older revision may come
 		// from a tree that showed another selection.
-		if s.state.Phase == moonbit.PhaseConfirm && m.Revision == s.views[m.ViewID].rev {
-			s.startClean()
+		if s.state.Phase == moonbit.PhaseConfirm && current {
+			if req := s.cleanRequest(); req != nil {
+				s.requestAuth(*req)
+			}
 		}
 	case node == "cancel_op":
 		s.state.Phase = moonbit.PhaseReview
 	case node == "back":
-		s.state.Phase = moonbit.PhaseIdle
+		s.state.Phase, s.state.Err, s.state.Notice = moonbit.PhaseIdle, "", ""
 		s.state.Review, s.state.Selected = nil, nil
 		s.refreshStatus()
+	case node == "docker":
+		s.state.Phase, s.state.Err, s.state.Notice = moonbit.PhaseDocker, "", ""
+	case strings.HasPrefix(node, "docker:"):
+		if s.state.Phase == moonbit.PhaseDocker {
+			s.state.DockerOp = strings.TrimPrefix(node, "docker:")
+			s.state.Phase = moonbit.PhaseDockerConfirm
+		}
+	case node == "docker_run":
+		if s.state.Phase == moonbit.PhaseDockerConfirm && current {
+			s.requestAuth(moonbit.Request{Cmd: "docker", Op: s.state.DockerOp})
+		}
+	case node == "schedule":
+		s.state.Phase, s.state.Err, s.state.Notice = moonbit.PhaseSchedule, "", ""
+		s.refreshStatus()
+	case strings.HasPrefix(node, "sched:"):
+		parts := strings.Split(node, ":") // sched:<target>:<action>
+		if s.state.Phase == moonbit.PhaseSchedule && len(parts) == 3 {
+			s.requestAuth(moonbit.Request{Cmd: "schedule", Target: parts[1], Action: parts[2]})
+		}
 	case node == "select_all":
 		all := true
 		for _, c := range s.state.Review {
@@ -238,6 +326,25 @@ func (s *session) handle(m *v1.InputEvent) {
 		}
 		s.state.Selected[name] = !s.state.Selected[name]
 	}
+}
+
+// reviewLast opens the review list on the last saved scan, the TUI's Review
+// Results. The clean is bound to that scan's stamp.
+func (s *session) reviewLast() {
+	c := s.state.Cache
+	if c == nil || c.Files == 0 {
+		return
+	}
+	s.state.Review, s.state.Selected = nil, map[string]bool{}
+	for _, cat := range c.Categories {
+		if cat.Files > 0 {
+			s.state.Review = append(s.state.Review, cat)
+			s.state.Selected[cat.Name] = true
+		}
+	}
+	s.state.ScannedAt = c.ScannedAt
+	s.state.ScanErrs, s.state.ScanSkipped = nil, nil
+	s.state.Phase, s.state.Err = moonbit.PhaseReview, ""
 }
 
 func (s *session) tree(kind v1.ViewKind) *v1.Node {

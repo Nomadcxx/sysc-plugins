@@ -37,7 +37,8 @@ func panelSize(t *testing.T) (int, int) {
 // view.go are only checked here.
 func TestViewsFitTheirHostSlots(t *testing.T) {
 	panelW, panelH := panelSize(t)
-	for _, phase := range []Phase{PhaseIdle, PhaseScanning, PhaseReview, PhaseConfirm, PhaseCleaning, PhaseDone, PhaseError} {
+	for _, phase := range []Phase{PhaseIdle, PhaseScanning, PhaseReview, PhaseConfirm, PhaseCleaning, PhaseDone, PhaseError,
+		PhaseAuth, PhaseDocker, PhaseDockerConfirm, PhaseSchedule, PhaseWorking} {
 		s := states()[phase]
 		for _, f := range lint.Tree(Bar(s), v1.ViewBar, lint.BarWidth, lint.BarHeight) {
 			t.Errorf("bar %v: %s", phase, f)
