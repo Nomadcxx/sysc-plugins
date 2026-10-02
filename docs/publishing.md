@@ -25,8 +25,11 @@ CI never pushes to `main` directly; a human merges that PR.
 ## What goes in an asset
 
 Each asset is `<id>-<version>-linux-<arch>.tar.gz` for `arch` in `amd64` and
-`arm64`, built with `CGO_ENABLED=0`. Inside is a single top-level directory
-named for the plugin's `id` (for example `org.sysc.timer/`), holding:
+`arm64`. Pure-Go plugins build with `CGO_ENABLED=0`. The `cgoPlugins` map in
+`tools/catalog/package.go` lists the exceptions. Today, `calendar` builds with
+`CGO_ENABLED=1` and needs `libecal2.0-dev` on a runner that matches the target
+architecture. Inside each asset is a single top-level directory named for the
+plugin's `id` (for example `org.sysc.timer/`), holding:
 
 - `manifest.json`, unchanged from the plugin's own;
 - everything else in the plugin's directory except `*.go` files,
