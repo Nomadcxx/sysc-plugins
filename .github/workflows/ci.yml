@@ -7,6 +7,11 @@ on:
       - '**/*.md'
       - 'docs/**'
       - 'LICENSE'
+      # Catalog-only PRs are opened by the release workflow with GITHUB_TOKEN.
+      # That token cannot start pull_request workflows, so GitHub records a
+      # failed empty run ("workflow file issue") for every catalog PR. Those
+      # PRs are already checked with `catalog validate -fetch` in release.yml.
+      - 'catalog.json'
 
 # Supersede in-flight runs for the same branch or PR so a burst of pushes does
 # not queue a full build each.

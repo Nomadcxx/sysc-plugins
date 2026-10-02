@@ -733,7 +733,7 @@ func TestRunRoutesTextInputAndRejectsStaleRevision(t *testing.T) {
 func TestRunPublishesChangedTreesPerViewAndForcesOpenAndResync(t *testing.T) {
 	h := startPluginHarness(t, &interactionCLI{})
 	h.host.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "first", View: v1.ViewBar, Entry: "bar"})
-	first := h.nextSnapshot(t, "first", func(s wireSnapshot) bool {
+	first := h.settledSnapshot(t, "first", func(s wireSnapshot) bool {
 		node := nodeByID(s.Root, "open")
 		return node != nil && node.Icon == "docker"
 	})
