@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -129,6 +131,102 @@ func TestPluginMoonbitGateDegradedWithoutDaemon(t *testing.T) {
 	})
 }
 
+// A deep scan clears absent-path categories in milliseconds. Publishing a
+// frame per event for every open view outruns the host's update budget (60/s,
+// burst 120), and the host ends the plugin. The burst must coalesce.
+func TestPluginMoonbitGateCoalescesAScanBurst(t *testing.T) {
+	stub := newMoonbitStub(t)
+	stub.burst = 40
+	h := launchMoonbitGate(t, stub.path())
+	h.openBar("bar-1")
+	h.openTooltip("tip-1")
+	h.openPanel("panel-1")
+	h.wait("the idle cache summary", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "cleanable in")
+	})
+
+	before := h.frameCount()
+	h.click("panel-1", "scan_quick", v1.EventActivate, "")
+	h.wait("the review list", func() bool {
+		return findNode(h.root("panel-1"), "toggle:Cache 40") != nil
+	})
+	time.Sleep(300 * time.Millisecond) // let a trailing frame land
+	// 40 categories are 121 events; a frame per event per view is 363.
+	if n := h.frameCount() - before; n > 30 {
+		t.Fatalf("a 40-category scan published %d frames, want it coalesced to at most 30", n)
+	}
+}
+
+// Cancel ends the request side only, so the daemon's cancelled event still
+// arrives and the panel returns to idle instead of reporting a broken stream.
+func TestPluginMoonbitGateCancelReturnsToIdle(t *testing.T) {
+	stub := newMoonbitStub(t)
+	h := launchMoonbitGate(t, stub.path())
+	h.openPanel("panel-1")
+	h.wait("the idle cache summary", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "cleanable in")
+	})
+	h.click("panel-1", "scan_quick", v1.EventActivate, "")
+	h.wait("live scan progress", func() bool {
+		return findNode(h.root("panel-1"), "scan-prog") != nil
+	})
+	h.click("panel-1", "cancel", v1.EventActivate, "")
+	h.wait("a return to idle", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "cleanable in")
+	})
+	if text := treeText(h.root("panel-1")); strings.Contains(text, "unexpectedly") {
+		t.Fatalf("a user cancel reads as a fault: %q", text)
+	}
+}
+
+// The forced clean only fires from the confirm screen the user is looking at:
+// not after Back, and not from an event aimed at an older revision.
+func TestPluginMoonbitGateConfirmCleanNeedsTheConfirmScreen(t *testing.T) {
+	stub := newMoonbitStub(t)
+	close(stub.scanHold)
+	h := launchMoonbitGate(t, stub.path())
+	h.openPanel("panel-1")
+	h.wait("the idle cache summary", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "cleanable in")
+	})
+	h.click("panel-1", "scan_quick", v1.EventActivate, "")
+	h.wait("the review list", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "choose what to clean")
+	})
+	h.click("panel-1", "to_confirm", v1.EventActivate, "")
+	h.wait("the confirm screen", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "Clean the selected categories")
+	})
+	confirmRev := h.rev("panel-1")
+
+	// Stale: one revision behind the confirm screen.
+	h.clickAt("panel-1", "confirm_clean", confirmRev-1)
+	// After Back, the confirm screen is gone.
+	h.click("panel-1", "back", v1.EventActivate, "")
+	h.wait("a return to idle", func() bool {
+		return strings.Contains(treeText(h.root("panel-1")), "cleanable in")
+	})
+	h.clickAt("panel-1", "confirm_clean", confirmRev)
+	h.clickAt("panel-1", "confirm_clean", h.rev("panel-1"))
+
+	// A status round-trip after the events proves the plugin handled them.
+	h.click("panel-1", "scan_quick", v1.EventActivate, "")
+	h.wait("a second scan", func() bool {
+		n := 0
+		for _, req := range stub.requests() {
+			if req.Cmd == "scan" {
+				n++
+			}
+		}
+		return n == 2
+	})
+	for _, req := range stub.requests() {
+		if req.Cmd == "clean" {
+			t.Fatalf("a confirm_clean outside the confirm screen sent %+v", req)
+		}
+	}
+}
+
 // moonbitReq is the daemon's line protocol header, as the plugin sends it.
 type moonbitReq struct {
 	Cmd        string   `json:"cmd"`
@@ -148,6 +246,9 @@ type moonbitStub struct {
 
 	scanHold  chan struct{}
 	cleanHold chan struct{}
+	// burst, when set, makes a scan stream that many categories back to
+	// back with no hold, the way a deep scan clears absent paths.
+	burst int
 }
 
 func newMoonbitStub(t *testing.T) *moonbitStub {
@@ -183,7 +284,8 @@ func (s *moonbitStub) serve() {
 
 func (s *moonbitStub) handle(conn net.Conn) {
 	defer conn.Close()
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	br := bufio.NewReader(conn)
+	line, err := br.ReadBytes('\n')
 	if err != nil {
 		return
 	}
@@ -212,6 +314,26 @@ func (s *moonbitStub) handle(conn net.Conn) {
 			},
 		}})
 	case "scan":
+		if s.burst > 0 {
+			var evs []map[string]any
+			for i := 1; i <= s.burst; i++ {
+				name := fmt.Sprintf("Cache %02d", i)
+				evs = append(evs,
+					map[string]any{"t": "category", "name": name, "i": i, "total": s.burst},
+					map[string]any{"t": "scan", "files": i, "bytes": i * 1000, "dir": "/var/cache/" + name},
+					map[string]any{"t": "category_done", "name": name, "files": i, "bytes": i * 1000, "duration_ms": 1},
+				)
+			}
+			writeEvents(conn, append(evs, map[string]any{"t": "done", "categories": s.burst}))
+			return
+		}
+		// Like the daemon, EOF on the request side cancels the scan, and the
+		// stream still ends with its terminal event.
+		eof := make(chan struct{})
+		go func() {
+			_, _ = io.Copy(io.Discard, br)
+			close(eof)
+		}()
 		if !writeEvents(conn, []map[string]any{
 			{"t": "category", "name": "Pacman Cache", "i": 1, "total": 2},
 			{"t": "scan", "files": 250, "bytes": 400000000, "dir": "/var/cache/pacman/pkg"},
@@ -219,7 +341,12 @@ func (s *moonbitStub) handle(conn net.Conn) {
 		}) {
 			return
 		}
-		<-s.scanHold
+		select {
+		case <-s.scanHold:
+		case <-eof:
+			writeEvents(conn, []map[string]any{{"t": "cancelled"}})
+			return
+		}
 		writeEvents(conn, []map[string]any{
 			{"t": "category", "name": "Journal Logs", "i": 2, "total": 2},
 			{"t": "scan", "files": 510, "bytes": 911166458, "dir": "/var/log/journal"},
@@ -264,6 +391,8 @@ type moonbitHost struct {
 	sendMu sync.Mutex
 	mu     sync.Mutex
 	roots  map[string]*v1.Node
+	revs   map[string]uint64
+	frames int // snapshots received, all views
 	slots  map[string]viewSlot
 	calls  []v1.CallKind
 
@@ -314,7 +443,7 @@ func launchMoonbitGate(t *testing.T, sockPath string) *moonbitHost {
 	}
 	h := &moonbitHost{
 		t: t, enc: v1.NewEncoder(stdin),
-		roots: map[string]*v1.Node{}, slots: map[string]viewSlot{},
+		roots: map[string]*v1.Node{}, revs: map[string]uint64{}, slots: map[string]viewSlot{},
 		panelW: m.Panels[0].Width, panelH: m.Panels[0].Height,
 	}
 	dec := v1.NewDecoder(stdout, v1.ToHost)
@@ -354,6 +483,8 @@ func launchMoonbitGate(t *testing.T, sockPath string) *moonbitHost {
 				h.mu.Lock()
 				slot, ok := h.slots[m.ViewID]
 				h.roots[m.ViewID] = m.Root
+				h.revs[m.ViewID] = m.Revision
+				h.frames++
 				h.mu.Unlock()
 				if ok {
 					checkFits(h.t, slot, m.Root)
@@ -396,11 +527,37 @@ func (h *moonbitHost) openTooltip(id string) {
 }
 func (h *moonbitHost) openPanel(id string) { h.open(id, v1.ViewPanel, "panel", h.panelW, h.panelH) }
 
+// click sends an event against the revision the host last rendered, as the
+// shell does.
 func (h *moonbitHost) click(view, node string, ev v1.EventKind, button v1.PointerButton) {
 	h.t.Helper()
-	if err := h.send(&v1.InputEvent{ViewID: view, Node: node, Event: ev, Button: button, Output: "DP-1"}); err != nil {
+	h.send1(&v1.InputEvent{ViewID: view, Revision: h.rev(view), Node: node, Event: ev, Button: button, Output: "DP-1"})
+}
+
+// clickAt activates a node against an explicit revision, to stand in for an
+// event that left an older tree.
+func (h *moonbitHost) clickAt(view, node string, rev uint64) {
+	h.t.Helper()
+	h.send1(&v1.InputEvent{ViewID: view, Revision: rev, Node: node, Event: v1.EventActivate, Output: "DP-1"})
+}
+
+func (h *moonbitHost) send1(m v1.Message) {
+	h.t.Helper()
+	if err := h.send(m); err != nil {
 		h.t.Fatal(err)
 	}
+}
+
+func (h *moonbitHost) rev(id string) uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.revs[id]
+}
+
+func (h *moonbitHost) frameCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.frames
 }
 
 func (h *moonbitHost) root(id string) *v1.Node {

@@ -21,7 +21,7 @@ func SocketPath() string {
 }
 
 // Runner talks the daemon's one-request-per-connection protocol. Cancelling
-// an operation means closing the connection: moonbit watches the request
+// an operation means ending the request side: moonbit watches the request
 // reader for EOF and aborts cooperatively, which is the only cancel that
 // works on a root process.
 type Runner struct {
@@ -42,8 +42,26 @@ type Op struct {
 	conn   net.Conn
 }
 
-// Cancel closes the connection; the daemon observes EOF and emits cancelled.
-func (o *Op) Cancel() { _ = o.conn.Close() }
+const (
+	// cancelGrace bounds the wait for the daemon's terminal event after
+	// Cancel, so a wedged daemon still ends the stream.
+	cancelGrace = 10 * time.Second
+	// statusTimeout bounds one status round-trip.
+	statusTimeout = 5 * time.Second
+	// maxEventLine fits clean_done, whose errors list is unbounded.
+	maxEventLine = 4 << 20
+)
+
+// Cancel half-closes the connection: the daemon sees EOF on its request
+// reader, aborts, and still writes cancelled (or its terminal event) on the
+// open read side, which the stream delivers before it closes.
+func (o *Op) Cancel() {
+	if uc, ok := o.conn.(*net.UnixConn); ok && uc.CloseWrite() == nil {
+		_ = o.conn.SetReadDeadline(time.Now().Add(cancelGrace))
+		return
+	}
+	_ = o.conn.Close()
+}
 
 // request is the daemon's line protocol header.
 type request struct {
@@ -72,6 +90,7 @@ func (r Runner) start(req request) (*Op, error) {
 		defer close(op.Events)
 		defer conn.Close()
 		sc := bufio.NewScanner(conn)
+		sc.Buffer(make([]byte, 0, 64<<10), maxEventLine)
 		for sc.Scan() {
 			b := sc.Bytes()
 			if len(b) == 0 {
@@ -104,7 +123,8 @@ func (r Runner) Status() (*Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer op.Cancel()
+	_ = op.conn.SetReadDeadline(time.Now().Add(statusTimeout))
+	defer op.conn.Close()
 	var last *Event
 	for ev := range op.Events {
 		e := ev

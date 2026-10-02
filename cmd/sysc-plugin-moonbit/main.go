@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
@@ -18,9 +20,16 @@ func main() {
 	}
 }
 
+// frameGap spaces stream-driven frames. A deep scan finishes absent-path
+// categories in milliseconds, and the host ends a plugin that outruns its
+// update budget (60/s), so daemon events coalesce to at most ten flushes a
+// second; input still flushes at once.
+const frameGap = 100 * time.Millisecond
+
 type view struct {
 	kind v1.ViewKind
 	rev  uint64
+	sent []byte // last tree sent, so an unchanged view is not resent
 }
 
 type session struct {
@@ -30,6 +39,9 @@ type session struct {
 	op     *moonbit.Op
 	views  map[string]view
 	async  chan func()
+
+	lastFlush time.Time
+	flushAt   <-chan time.Time // armed while a coalesced flush is pending
 }
 
 func runPlugin(in io.Reader, out io.Writer) error {
@@ -65,22 +77,24 @@ func runPlugin(in io.Reader, out io.Writer) error {
 				return nil
 			case *v1.ViewOpen:
 				s.views[m.ViewID] = view{kind: m.View}
-				s.snapshot(m.ViewID)
+				s.snapshot(m.ViewID, true)
 			case *v1.ViewClose:
 				delete(s.views, m.ViewID)
 			case *v1.ViewResync:
 				if v, ok := s.views[m.ViewID]; ok {
 					v.rev = 0
 					s.views[m.ViewID] = v
-					s.snapshot(m.ViewID)
+					s.snapshot(m.ViewID, true)
 				}
 			case *v1.InputEvent:
 				s.handle(m)
-				s.snapshotAll()
+				s.flush()
 			}
 		case f := <-s.async:
 			f()
-			s.snapshotAll()
+			s.schedule()
+		case <-s.flushAt:
+			s.flush()
 		case <-ticker.C:
 			s.refreshStatus()
 		}
@@ -116,13 +130,10 @@ func (s *session) streamOp(op *moonbit.Op) {
 				if e.T == "pong" {
 					return
 				}
-				changed := s.state.Fold(e)
+				s.state.Fold(e)
 				if e.T == "done" || e.T == "clean_done" || e.T == "cancelled" || e.T == "error" {
 					s.op = nil
 					s.refreshStatus()
-				}
-				if changed {
-					s.snapshotAll()
 				}
 			}
 		}
@@ -141,6 +152,7 @@ func (s *session) startScan(mode string) {
 	if s.op != nil {
 		return
 	}
+	s.state.Review, s.state.Selected = nil, nil
 	s.state.StartScan()
 	op, err := s.runner.Scan(mode, nil)
 	if err != nil {
@@ -175,9 +187,14 @@ func (s *session) handle(m *v1.InputEvent) {
 	switch {
 	case node == "bar":
 		if m.Event == v1.EventActivate {
-			_, _ = s.client.Call(context.Background(), v1.CallPanelOpen, v1.PanelParams{
-				Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID,
-			})
+			// Off the loop: the reply arrives through Recv, which blocks
+			// while the loop is not draining incoming.
+			params := v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID}
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_, _ = s.client.Call(ctx, v1.CallPanelOpen, params)
+			}()
 		}
 	case node == "scan_quick":
 		s.startScan("quick")
@@ -192,11 +209,17 @@ func (s *session) handle(m *v1.InputEvent) {
 			s.state.Phase = moonbit.PhaseConfirm
 		}
 	case node == "confirm_clean":
-		s.startClean()
+		// The one destructive action only counts from the confirm screen the
+		// user is looking at: an event aimed at an older revision may come
+		// from a tree that showed another selection.
+		if s.state.Phase == moonbit.PhaseConfirm && m.Revision == s.views[m.ViewID].rev {
+			s.startClean()
+		}
 	case node == "cancel_op":
 		s.state.Phase = moonbit.PhaseReview
 	case node == "back":
 		s.state.Phase = moonbit.PhaseIdle
+		s.state.Review, s.state.Selected = nil, nil
 		s.refreshStatus()
 	case node == "select_all":
 		all := true
@@ -227,15 +250,43 @@ func (s *session) tree(kind v1.ViewKind) *v1.Node {
 	return moonbit.Panel(&s.state)
 }
 
-func (s *session) snapshot(id string) {
+// snapshot sends a view's tree at a new revision, unless it matches what the
+// host already has and force is false.
+func (s *session) snapshot(id string, force bool) {
 	v := s.views[id]
+	tree := s.tree(v.kind)
+	b, err := json.Marshal(tree)
+	if err != nil {
+		return
+	}
+	if !force && bytes.Equal(b, v.sent) {
+		return
+	}
 	v.rev++
+	v.sent = b
 	s.views[id] = v
-	_ = s.client.Snapshot(id, v.rev, s.tree(v.kind))
+	_ = s.client.Snapshot(id, v.rev, tree)
 }
 
-func (s *session) snapshotAll() {
+// flush publishes every changed view now.
+func (s *session) flush() {
+	s.flushAt = nil
+	s.lastFlush = time.Now()
 	for id := range s.views {
-		s.snapshot(id)
+		s.snapshot(id, false)
 	}
+}
+
+// schedule flushes now if the last frame is at least frameGap old, otherwise
+// once that gap has passed; changes landing meanwhile share the frame.
+func (s *session) schedule() {
+	if s.flushAt != nil {
+		return
+	}
+	wait := frameGap - time.Since(s.lastFlush)
+	if wait <= 0 {
+		s.flush()
+		return
+	}
+	s.flushAt = time.After(wait)
 }

@@ -3,6 +3,7 @@ package moonbit
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"net"
 	"path/filepath"
 	"testing"
@@ -150,5 +151,65 @@ func TestStreamEndedRecoversActiveOperation(t *testing.T) {
 			s.CleanTotal != 0 || s.CleanDone != 0 || s.CleanFile != "" {
 			t.Fatalf("phase %d retained stale progress: %+v", phase, s)
 		}
+	}
+}
+
+// The daemon cancels on EOF of its request reader and still writes its
+// terminal event, so Cancel must leave the read side open to receive it.
+func TestCancelStillReadsTheDaemonsCancelledEvent(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "panel.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		sc := bufio.NewScanner(conn)
+		sc.Scan() // request
+		_, _ = conn.Write([]byte(`{"t":"category","name":"a","i":1,"total":9}` + "\n"))
+		for sc.Scan() {
+		}
+		_, _ = conn.Write([]byte(`{"t":"cancelled"}` + "\n"))
+	}()
+	op, err := Runner{Path: sock}.Scan("quick", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-op.Events // category
+	op.Cancel()
+	var last string
+	for ev := range op.Events {
+		last = ev.T
+	}
+	if last != "cancelled" {
+		t.Fatalf("last event after Cancel = %q, want cancelled", last)
+	}
+}
+
+// clean_done carries every failed path; a long run makes one line far past
+// bufio.Scanner's 64 KiB default, which used to drop the terminal event.
+func TestLongEventLineIsDelivered(t *testing.T) {
+	errs := make([]string, 2000)
+	for i := range errs {
+		errs[i] = fmt.Sprintf("/var/cache/pacman/pkg/package-%04d.pkg.tar.zst: permission denied", i)
+	}
+	sock, _, _ := stubDaemon(t, func(request) []Event {
+		return []Event{{T: "clean_done", Deleted: 3, Errors: errs}}
+	}, false)
+	op, err := Runner{Path: sock}.Clean(true, []string{"Pacman Cache"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []Event
+	for ev := range op.Events {
+		got = append(got, ev)
+	}
+	if len(got) != 1 || got[0].T != "clean_done" || len(got[0].Errors) != len(errs) {
+		t.Fatalf("got %d events, want the one clean_done with %d errors", len(got), len(errs))
 	}
 }
