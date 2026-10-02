@@ -9,6 +9,7 @@ import (
 	"image/jpeg"
 	// The scan selects .png sources; register the PNG decoder for image.Decode.
 	_ "image/png"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/image/draw"
+	"golang.org/x/sys/unix"
 )
 
 const recentImageMaxLongEdge = 512
@@ -1001,6 +1003,21 @@ func scanRecentImages(root, mountPoint string, max int, sub bool) ([]string, err
 // JPEG, and caches the result under cacheDir. The cache key hashes src
 // with its mtime so a touched file re-thumbnails and a stale entry never
 // serves.
+func resolveUnderMount(src, mount string) (string, string, error) {
+	resolved, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return "", "", fmt.Errorf("kdeconnect: resolve %s: %w", src, err)
+	}
+	cleanedMount, err := filepath.EvalSymlinks(filepath.Clean(mount))
+	if err != nil {
+		return "", "", fmt.Errorf("kdeconnect: resolve mount %s: %w", mount, err)
+	}
+	if resolved != cleanedMount && !strings.HasPrefix(resolved, cleanedMount+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("kdeconnect: %s resolves outside SFTP mount %s", src, cleanedMount)
+	}
+	return resolved, cleanedMount, nil
+}
+
 func thumbnail(src, cacheDir, mount string) (string, error) {
 	if src == "" {
 		return "", errors.New("kdeconnect: thumbnail needs a source path")
@@ -1008,18 +1025,16 @@ func thumbnail(src, cacheDir, mount string) (string, error) {
 	// find -P prints matching symlinks by name, so the bytes to read must
 	// be re-confirmed after resolution: a paired device cannot plant
 	// photo.jpg -> /home/<user>/... and have the panel open it (issue #21).
-	resolved, err := filepath.EvalSymlinks(src)
+	resolved, cleanedMount, err := resolveUnderMount(src, mount)
 	if err != nil {
-		return "", fmt.Errorf("kdeconnect: resolve %s: %w", src, err)
+		return "", err
 	}
-	cleanedMount, err := filepath.EvalSymlinks(filepath.Clean(mount))
+	file, err := openThumbnailSource(cleanedMount, resolved)
 	if err != nil {
-		return "", fmt.Errorf("kdeconnect: resolve mount %s: %w", mount, err)
+		return "", fmt.Errorf("kdeconnect: open %s: %w", src, err)
 	}
-	if resolved != cleanedMount && !strings.HasPrefix(resolved, cleanedMount+string(filepath.Separator)) {
-		return "", fmt.Errorf("kdeconnect: %s resolves outside SFTP mount %s", src, cleanedMount)
-	}
-	info, err := os.Stat(resolved)
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil {
 		return "", fmt.Errorf("kdeconnect: stat %s: %w", src, err)
 	}
@@ -1034,7 +1049,7 @@ func thumbnail(src, cacheDir, mount string) (string, error) {
 	if body, err := os.ReadFile(cached); err == nil && len(body) >= 4 && body[0] == 0xff && body[1] == 0xd8 {
 		return cached, nil
 	}
-	raw, err := os.ReadFile(resolved)
+	raw, err := io.ReadAll(file)
 	if err != nil {
 		return "", fmt.Errorf("kdeconnect: read %s: %w", src, err)
 	}
@@ -1063,6 +1078,43 @@ func thumbnail(src, cacheDir, mount string) (string, error) {
 		return "", fmt.Errorf("kdeconnect: rename %s: %w", cached, err)
 	}
 	return cached, nil
+}
+
+// openThumbnailSource walks from the already-resolved mount directory and
+// refuses symlinks in every component, so a changed file or parent cannot
+// redirect the read outside the SFTP mount after the earlier path check.
+func openThumbnailSource(mount, resolved string) (*os.File, error) {
+	rel, err := filepath.Rel(mount, resolved)
+	if err != nil || !filepath.IsLocal(rel) {
+		return nil, fmt.Errorf("path %s is outside mount %s", resolved, mount)
+	}
+	rootFD, err := unix.Open(mount, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(rootFD)
+
+	parts := strings.Split(rel, string(filepath.Separator))
+	fd := rootFD
+	for i, part := range parts {
+		flags := unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW
+		if i < len(parts)-1 {
+			flags |= unix.O_DIRECTORY
+		} else {
+			// The entry may have changed to a FIFO after the scan; opening it
+			// without O_NONBLOCK would hang before the regular-file check.
+			flags |= unix.O_NONBLOCK
+		}
+		nextFD, err := unix.Openat(fd, part, flags, 0)
+		if fd != rootFD {
+			_ = unix.Close(fd)
+		}
+		if err != nil {
+			return nil, err
+		}
+		fd = nextFD
+	}
+	return os.NewFile(uintptr(fd), resolved), nil
 }
 
 // thumbnailSize returns the destination size that fits the source inside

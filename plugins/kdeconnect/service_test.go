@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"golang.org/x/sys/unix"
 )
 
 // fakeObject scripts one object's replies. Every method the service calls
@@ -1173,5 +1174,64 @@ func TestThumbnailRejectsSymlinkOutsideMount(t *testing.T) {
 	}
 	if _, err := thumbnail(inside, cache, mount); err != nil {
 		t.Fatalf("file inside mount rejected: %v", err)
+	}
+}
+
+func TestOpenThumbnailSourceRejectsSymlinkSwap(t *testing.T) {
+	mount := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.png")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(mount, "photo.png")
+	if err := os.WriteFile(src, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(src); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, src); err != nil {
+		t.Fatal(err)
+	}
+
+	if file, err := openThumbnailSource(mount, resolved); err == nil {
+		file.Close()
+		t.Fatal("openThumbnailSource followed a symlink installed after path resolution")
+	}
+}
+
+func TestThumbnailRejectsFIFOWithoutBlocking(t *testing.T) {
+	mount := t.TempDir()
+	src := filepath.Join(mount, "photo.png")
+	if err := unix.Mkfifo(src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := thumbnail(src, t.TempDir(), mount)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("thumbnailed a FIFO")
+		}
+	case <-time.After(100 * time.Millisecond):
+		writer, err := os.OpenFile(src, os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = writer.Close()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("thumbnail did not finish after the FIFO was released")
+		}
+		t.Fatal("thumbnailing a FIFO blocked in open instead of rejecting it")
 	}
 }
