@@ -1080,6 +1080,9 @@ func TestRefreshRecentImagesWiresTheMount(t *testing.T) {
 	if img.Source != filepath.Join(root, "photo.png") {
 		t.Fatalf("source = %q, want the scanned mount path", img.Source)
 	}
+	if img.Mount != mount {
+		t.Fatalf("mount = %q, want %q", img.Mount, mount)
+	}
 	if img.Thumb == "" || filepath.Dir(img.Thumb) != cache {
 		t.Fatalf("thumb = %q, want a cached path under %q", img.Thumb, cache)
 	}
@@ -1177,6 +1180,139 @@ func TestThumbnailRejectsSymlinkOutsideMount(t *testing.T) {
 	}
 }
 
+func TestStageRecentImageRejectsOutOfMountSymlinkRetarget(t *testing.T) {
+	mount := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.png")
+	src := filepath.Join(mount, "photo.png")
+	if err := os.WriteFile(src, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	img := RecentImage{Source: src, Mount: mount}
+	savedCache := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = savedCache })
+	if _, err := StageRecentImage(img); err != nil {
+		t.Fatalf("staged regular image: %v", err)
+	}
+	if err := os.Remove(src); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, src); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := StageRecentImage(img); err == nil {
+		t.Fatalf("staged symlink outside the mount as %q", got)
+	}
+}
+
+func TestRecentImageConsumerPathSurvivesMountRetarget(t *testing.T) {
+	mount := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.png")
+	src := filepath.Join(mount, "photo.png")
+	if err := os.WriteFile(src, []byte("inside mount"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("outside mount"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	savedCache := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = savedCache })
+
+	consumerPath, err := StageRecentImage(RecentImage{Source: src, Mount: mount})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumerPath == src || filepath.Ext(consumerPath) != ".png" {
+		t.Fatalf("consumer path = %q, want a staged PNG copy", consumerPath)
+	}
+	if err := os.Remove(src); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, src); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(consumerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "inside mount" {
+		t.Fatalf("consumer path reopened retargeted mount entry: %q", data)
+	}
+	info, err := os.Stat(consumerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("staged image permissions = %o, want private", info.Mode().Perm())
+	}
+}
+
+func TestRecentImageActionsUseDistinctStagedCopies(t *testing.T) {
+	mount := t.TempDir()
+	src := filepath.Join(mount, "photo.png")
+	if err := os.WriteFile(src, []byte("first image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	savedCache := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = savedCache })
+	img := RecentImage{Source: src, Mount: mount}
+	first, err := StageRecentImage(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("second image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := StageRecentImage(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("concurrent action path was reused: %q", first)
+	}
+	for path, want := range map[string]string{first: "first image", second: "second image"} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("staged %q = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestStageRecentImageExpiresOldCopies(t *testing.T) {
+	mount := t.TempDir()
+	src := filepath.Join(mount, "photo.png")
+	if err := os.WriteFile(src, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	savedCache := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = savedCache })
+	img := RecentImage{Source: src, Mount: mount}
+	oldPath, err := StageRecentImage(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-25 * time.Hour)
+	if err := os.Chtimes(filepath.Dir(oldPath), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StageRecentImage(img); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("staged image older than one day was retained: stat err=%v", err)
+	}
+}
+
 func TestOpenThumbnailSourceRejectsSymlinkSwap(t *testing.T) {
 	mount := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.png")
@@ -1204,34 +1340,39 @@ func TestOpenThumbnailSourceRejectsSymlinkSwap(t *testing.T) {
 	}
 }
 
-func TestThumbnailRejectsFIFOWithoutBlocking(t *testing.T) {
+func TestStageRecentImageRejectsFIFOWithoutBlocking(t *testing.T) {
 	mount := t.TempDir()
 	src := filepath.Join(mount, "photo.png")
 	if err := unix.Mkfifo(src, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	savedCache := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = savedCache })
 
-	done := make(chan error, 1)
+	staged := make(chan error, 1)
 	go func() {
-		_, err := thumbnail(src, t.TempDir(), mount)
-		done <- err
+		_, err := StageRecentImage(RecentImage{Source: src, Mount: mount})
+		staged <- err
 	}()
 	select {
-	case err := <-done:
+	case err := <-staged:
 		if err == nil {
-			t.Fatal("thumbnailed a FIFO")
+			t.Fatal("staged a FIFO as a recent image")
 		}
 	case <-time.After(100 * time.Millisecond):
+		// Release a blocking open so a broken implementation cannot leak a
+		// goroutine after the expected timeout failure.
 		writer, err := os.OpenFile(src, os.O_WRONLY, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		_ = writer.Close()
 		select {
-		case <-done:
+		case <-staged:
 		case <-time.After(time.Second):
-			t.Fatal("thumbnail did not finish after the FIFO was released")
+			t.Fatal("stager did not finish after the test FIFO was released")
 		}
-		t.Fatal("thumbnailing a FIFO blocked in open instead of rejecting it")
+		t.Fatal("staging a FIFO blocked in open instead of rejecting it")
 	}
 }
