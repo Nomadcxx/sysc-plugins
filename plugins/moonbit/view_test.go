@@ -270,6 +270,28 @@ func TestLastScanRollsUpTheUsersCache(t *testing.T) {
 	}
 }
 
+// moonbit 1.7.1+ writes a small summary beside the cache; the panel reads it
+// in preference to a cache that can run past 100 MB.
+func TestLastScanPrefersTheSummary(t *testing.T) {
+	dir := t.TempDir()
+	cache := filepath.Join(dir, "scan_results.json")
+	if err := os.WriteFile(cache, []byte(`not json: must not be parsed`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scan_summary.json"), []byte(`{"total_size":16,"total_files":3,
+		"scanned_at":"2026-10-02T13:36:00Z","categories":[{"name":"npm Cache","files":2,"bytes":11}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SYSC_MOONBIT_CACHE", cache)
+	c, err := LastScan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Files != 3 || len(c.Categories) != 1 || c.Categories[0].Bytes != 11 || c.ScannedAt != "2026-10-02T13:36:00Z" {
+		t.Fatalf("summary = %+v", c)
+	}
+}
+
 // Every root run, whatever starts it, passes the password prompt first.
 func TestPasswordFieldIsMaskedAndClearable(t *testing.T) {
 	f := findID(Panel(&State{Phase: PhaseAuth, AuthReseed: 3}), "password")
