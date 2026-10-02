@@ -51,9 +51,7 @@ func TestPinEndRowsHonorTheTwoChildContract(t *testing.T) {
 		{Snap: snap, Tab: "connections", HasCLI: true, Traffic: true,
 			Conns: ConnectionsState{Countries: countries, Expanded: "US", Flags: true, Page: 1}},
 		{Snap: snap, Tab: "protection", HasCLI: true,
-			Prot: ProtectionState{Apps: []string{"/usr/bin/x11vnc", "/usr/bin/tigervnc"},
-				SplitTunnel: true, Port: 41772, HasCopyTool: true,
-				Candidates: []App{{Value: "/usr/bin/tigervnc", Label: "TigerVNC"}}}},
+			Prot: ProtectionState{Port: 41772, HasCopyTool: true}},
 		{Snap: snap, Tab: "account", HasCLI: true,
 			Acct: AccountState{SignedIn: true, Settings: map[string]string{"refresh_seconds": "60"}}},
 	}

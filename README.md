@@ -21,7 +21,7 @@ it.
 | **Notes** | Markdown notes and pastel sticky notes for an Obsidian folder, with one box to search or start a note | |
 | **Phone Connect** | A paired phone's battery, notifications and recent photos, over KDE Connect | `kdeconnect-cli` |
 | **Pomodoro Timer** | Work and break sessions in the bar | |
-| **ProtonVPN** | Quick connect, server picker, split tunnel and protection status | `protonvpn` |
+| **ProtonVPN** | Quick connect, server picker and protection status | `protonvpn` |
 | **Screen Recorder** | Record the screen or a window, with optional audio and a replay buffer | `gpu-screen-recorder` |
 | **Screenshot** | Region, window or screen capture from a bar button, using the shell's own capture engine | |
 | **Wallpaper Depth** | Depth masks for image wallpapers, so scenery can sit in front of the shell's centred clock | `python3` |

@@ -20,12 +20,11 @@ import (
 func main() {
 	home, _ := os.UserHomeDir()
 	env := environment{
-		now:          time.Now,
-		callTimeout:  5 * time.Second,
-		cliBin:       "protonvpn",
-		lookPath:     exec.LookPath,
-		serversPath:  filepath.Join(home, ".cache", "Proton", "VPN", "serverlist.json"),
-		settingsPath: filepath.Join(home, ".config", "Proton", "VPN", "settings.json"),
+		now:         time.Now,
+		callTimeout: 5 * time.Second,
+		cliBin:      "protonvpn",
+		lookPath:    exec.LookPath,
+		serversPath: filepath.Join(home, ".cache", "Proton", "VPN", "serverlist.json"),
 	}
 	if err := runPlugin(os.Stdin, os.Stdout, env); err != nil {
 		os.Exit(1)
@@ -36,11 +35,10 @@ type environment struct {
 	now func() time.Time
 	// callTimeout bounds every host call. Calls run on the loop, and a reply
 	// queued behind a burst of input would otherwise never be read.
-	callTimeout  time.Duration
-	cliBin       string
-	lookPath     func(string) (string, error)
-	serversPath  string
-	settingsPath string
+	callTimeout time.Duration
+	cliBin      string
+	lookPath    func(string) (string, error)
+	serversPath string
 }
 
 type settings struct {
@@ -103,17 +101,12 @@ type session struct {
 	async chan func()
 
 	countries   []protonvpn.Country
-	apps        []protonvpn.App
-	stEnabled   bool
-	stApps      []string
 	tab         string
 	expanded    string
 	page        int
 	query       string
-	appQuery    string
 	userDraft   string
 	queryReseed uint64
-	appReseed   uint64
 	userReseed  uint64
 	hasCLI      bool
 	hasCopyTool bool
@@ -146,7 +139,7 @@ var terminals = []struct {
 
 func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.protonvpn", Name: "ProtonVPN", Version: "1.0.0"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.protonvpn", Name: "ProtonVPN", Version: "1.0.1"})); err != nil {
 		return err
 	}
 	s := &session{
@@ -218,11 +211,7 @@ func (s *session) startup(ctx context.Context) {
 		s.hasCopyTool = s.probeCopyTool()
 	}
 	s.restoreTab(ctx)
-	if enabled, apps, err := protonvpn.ReadSplitTunnel(s.env.settingsPath); err == nil {
-		s.stEnabled, s.stApps = enabled, apps
-	}
 	s.loadServers()
-	s.scanApps()
 	if s.hasCLI {
 		s.pollStatus(ctx)
 		s.pollInfo(ctx)
@@ -276,26 +265,6 @@ func (s *session) loadServers() {
 	}
 	s.countries = protonvpn.FallbackCountries()
 	s.notice = "Server list unavailable"
-}
-
-func (s *session) scanApps() {
-	var dirs []string
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, ".local", "share", "applications"))
-	}
-	for _, d := range filepath.SplitList(os.Getenv("XDG_DATA_DIRS")) {
-		if d != "" {
-			dirs = append(dirs, filepath.Join(d, "applications"))
-		}
-	}
-	dirs = append(dirs, "/usr/share/applications")
-	var path []string
-	for _, d := range filepath.SplitList(os.Getenv("PATH")) {
-		if d != "" {
-			path = append(path, d)
-		}
-	}
-	s.apps = protonvpn.ScanApps(dirs, path)
 }
 
 // tick runs every second and does the periodic work: status, the transition
@@ -495,21 +464,6 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 		if port := s.machine.Snapshot().Port; port != 0 {
 			_, _ = s.call(ctx, v1.CallClipboardWrite, v1.ClipboardWriteParams{Text: strconv.Itoa(port)})
 		}
-	case node == "st":
-		s.toggleSplitTunnel(ctx)
-	case node == "app-query" && m.Event == v1.EventChange:
-		s.appQuery = m.Text
-	case strings.HasPrefix(node, "app-suggest:"):
-		s.editSplitApps(append(s.stApps, strings.TrimPrefix(node, "app-suggest:")))
-	case strings.HasPrefix(node, "del-app:"):
-		path := strings.TrimPrefix(node, "del-app:")
-		var keep []string
-		for _, a := range s.stApps {
-			if a != path {
-				keep = append(keep, a)
-			}
-		}
-		s.editSplitApps(keep)
 	case node == "signin-user" && m.Event == v1.EventChange:
 		s.userDraft = m.Text
 	case node == "signin":
@@ -523,7 +477,7 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 		s.notifyTransitions(ctx)
 	case strings.HasPrefix(node, "tab:"):
 		s.tab = strings.TrimPrefix(node, "tab:")
-		s.expanded, s.query, s.appQuery, s.page = "", "", "", 0
+		s.expanded, s.query, s.page = "", "", 0
 		s.persistTab(ctx)
 	}
 }
@@ -606,26 +560,6 @@ func (s *session) setConfig(ctx context.Context, key, value string) {
 	s.pollConfig(ctx)
 }
 
-func (s *session) toggleSplitTunnel(ctx context.Context) {
-	enabled := !s.stEnabled
-	if err := protonvpn.WriteSplitTunnel(s.env.settingsPath, enabled, s.stApps); err != nil {
-		s.fileErr = err.Error()
-		return
-	}
-	s.stEnabled = enabled
-	if enabled {
-		s.notify(ctx, "Split tunneling enabled. Remember to restart affected apps.")
-	}
-}
-
-func (s *session) editSplitApps(apps []string) {
-	if err := protonvpn.WriteSplitTunnel(s.env.settingsPath, s.stEnabled, apps); err != nil {
-		s.fileErr = err.Error()
-		return
-	}
-	s.stApps = apps
-}
-
 func (s *session) spawnSignIn() {
 	for _, t := range terminals {
 		bin, err := s.env.lookPath(t.bin)
@@ -655,32 +589,6 @@ func (s *session) signOut(ctx context.Context) {
 			s.pollInfo(context.Background())
 		}
 	}()
-}
-
-// candidates filters the scanned launchers for the split-tunnel picker:
-// label prefix match (case-insensitive), excluding the already-added ones.
-func (s *session) candidates(query string) []protonvpn.App {
-	var out []protonvpn.App
-	q := strings.ToLower(query)
-	for _, a := range s.apps {
-		if len(out) == 6 {
-			break
-		}
-		if !strings.Contains(strings.ToLower(a.Label), q) {
-			continue
-		}
-		added := false
-		for _, e := range s.stApps {
-			if e == a.Value {
-				added = true
-				break
-			}
-		}
-		if !added {
-			out = append(out, a)
-		}
-	}
-	return out
 }
 
 func (s *session) tree(kind v1.ViewKind) *v1.Node {
@@ -747,8 +655,6 @@ func (s *session) panelState() protonvpn.PanelState {
 		Traffic: s.settings.trafficMonitoring,
 		Conns:   s.connsState(),
 		Prot: protonvpn.ProtectionState{
-			SplitTunnel: s.stEnabled, Apps: s.stApps,
-			Candidates: s.candidates(s.appQuery), AppQuery: s.appQuery, AppReseed: s.appReseed,
 			Port: snap.Port, HasCopyTool: s.hasCopyTool, Err: s.fileErr,
 		},
 		Acct: protonvpn.AccountState{
