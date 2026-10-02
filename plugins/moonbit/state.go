@@ -76,9 +76,11 @@ func (s *State) Fold(ev Event) bool {
 		s.ScanErrs = append(s.ScanErrs, ev.Name+": "+ev.Msg)
 		return true
 	case "done":
-		s.Review = s.ScanCats
-		if len(s.Review) == 0 && s.Status != nil && s.Status.Cache != nil {
-			s.Review = s.Status.Cache.Categories
+		s.Review = nil
+		for _, c := range s.ScanCats {
+			if c.Files > 0 {
+				s.Review = append(s.Review, c)
+			}
 		}
 		s.Selected = map[string]bool{}
 		for _, c := range s.Review {

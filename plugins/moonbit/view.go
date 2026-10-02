@@ -185,6 +185,17 @@ func dirSuffix(dir string) string {
 
 func reviewBody(s *State) []*v1.Node {
 	rows := []*v1.Node{{Kind: v1.KindText, Bold: true, Text: "Review — choose what to clean"}}
+	if len(s.Review) == 0 {
+		rows = append(rows, subtle("No cleanable files found in this scan."))
+		if len(s.ScanErrs) > 0 {
+			rows = append(rows, subtle(fmt.Sprintf("%d categories could not be scanned", len(s.ScanErrs))))
+		}
+		return append(rows, buttonRow(
+			action("scan_quick", "Quick Scan", "accent"),
+			action("scan_deep", "Deep Scan", "soft"),
+			action("back", "Back", "soft"),
+		))
+	}
 	list := &v1.Node{Kind: v1.KindList, Height: bodyListHeight, Gap: 2, Events: []v1.EventKind{v1.EventScroll}}
 	for _, cat := range s.Review {
 		on := s.Selected[cat.Name]
@@ -202,12 +213,12 @@ func reviewBody(s *State) []*v1.Node {
 			{Kind: v1.KindText, Text: fmt.Sprintf("%d · %s", cat.Files, humanBytes(cat.Bytes)), Tone: v1.ToneSubtle},
 		}})
 	}
-	n := len(s.SelectedStats())
-	rows = append(rows, list, buttonRow(
-		action("select_all", "Toggle All", "soft"),
-		action("to_confirm", fmt.Sprintf("Clean %d Selected", n), "accent"),
-		action("back", "Back", "soft"),
-	))
+	buttons := []*v1.Node{action("select_all", "Toggle All", "soft")}
+	if n := len(s.SelectedStats()); n > 0 {
+		buttons = append(buttons, action("to_confirm", fmt.Sprintf("Clean %d Selected", n), "accent"))
+	}
+	buttons = append(buttons, action("back", "Back", "soft"))
+	rows = append(rows, list, buttonRow(buttons...))
 	return rows
 }
 

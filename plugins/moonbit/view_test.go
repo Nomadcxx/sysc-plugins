@@ -116,3 +116,61 @@ func TestScanValueCeiling(t *testing.T) {
 		t.Fatalf("scan value %v must be in (0, 0.99]", v)
 	}
 }
+
+func TestDoneUsesOnlyCurrentCleanableCategories(t *testing.T) {
+	stale := &Event{Cache: &CacheInfo{Categories: []CategoryStat{{Name: "old cache", Files: 7, Bytes: 70}}}}
+
+	t.Run("empty scan does not reuse stale cache", func(t *testing.T) {
+		s := &State{Status: stale}
+		s.StartScan()
+		s.Fold(Event{T: "done"})
+		if len(s.Review) != 0 || len(s.SelectedStats()) != 0 {
+			t.Fatalf("empty scan reused cached categories: review=%+v selected=%+v", s.Review, s.SelectedStats())
+		}
+	})
+
+	t.Run("zero-file categories are omitted", func(t *testing.T) {
+		s := &State{Status: stale}
+		s.StartScan()
+		s.Fold(Event{T: "category_done", Name: "empty", Files: 0})
+		s.Fold(Event{T: "category_done", Name: "fresh", Files: 2, Bytes: 200})
+		s.Fold(Event{T: "done"})
+		if len(s.Review) != 1 || s.Review[0].Name != "fresh" {
+			t.Fatalf("review must contain only cleanable results from this scan: %+v", s.Review)
+		}
+	})
+}
+
+func TestEmptyReviewOffersScanActionsWithoutClean(t *testing.T) {
+	nodes := reviewBody(&State{Phase: PhaseReview})
+	if len(nodes) != 3 || nodes[1].Text != "No cleanable files found in this scan." {
+		t.Fatalf("missing empty scan state: %+v", nodes)
+	}
+	ids := map[string]bool{}
+	for _, button := range nodes[2].Children {
+		ids[button.ID] = true
+	}
+	for _, id := range []string{"scan_quick", "scan_deep", "back"} {
+		if !ids[id] {
+			t.Errorf("empty review missing %s action", id)
+		}
+	}
+	if ids["to_confirm"] {
+		t.Fatal("empty review must not offer a clean action")
+	}
+}
+
+func TestReviewOmitsCleanActionWhenNothingIsSelected(t *testing.T) {
+	s := states()[PhaseReview]
+	for name := range s.Selected {
+		s.Selected[name] = false
+	}
+	nodes := reviewBody(s)
+	ids := map[string]bool{}
+	for _, button := range nodes[len(nodes)-1].Children {
+		ids[button.ID] = true
+	}
+	if ids["to_confirm"] {
+		t.Fatal("review must not offer a clean action with zero selected categories")
+	}
+}
