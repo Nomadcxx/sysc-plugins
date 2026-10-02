@@ -17,6 +17,20 @@ import (
 
 const maxCards = 60
 
+// Geometry for the 720x560 panel. The host lays rows out left to right and an
+// unsized list takes every remaining pixel, so the list carries its width and
+// the detail pane gets the rest: 696 content - 12 gap - 250 detail = 434. The
+// body is the 536 content height minus the 16px header and 12px gap; without
+// it the list falls back to the host's 240px default.
+const (
+	listWidth   = 434
+	detailWidth = 250
+	bodyHeight  = 508
+	// cardHeight is the card column's intrinsic height (6+100+4+16+6). A row
+	// measures a button around a column as zero tall unless it is sized.
+	cardHeight = 132
+)
+
 // Sections are the segmented-control modes, in display order.
 var Sections = []string{"library", "favorites", "playing", "hidden"}
 
@@ -89,7 +103,7 @@ func BuildTree(s State) *v1.Node {
 	hdr := &v1.Node{Kind: v1.KindRow, Gap: 8}
 	hdr.Children = append(hdr.Children, segmented(s.Prefs.View), searchInput(s.Query))
 
-	list := &v1.Node{Kind: v1.KindList, ID: "game-list", Key: "game-list"}
+	list := &v1.Node{Kind: v1.KindList, ID: "game-list", Key: "game-list", Width: listWidth, Height: bodyHeight}
 	games := Visible(s)
 	switch {
 	case s.LibraryMissing:
@@ -146,7 +160,7 @@ func card(s State, g source.Game) *v1.Node {
 	}
 	c := &v1.Node{
 		Kind: v1.KindButton, ID: "card-" + g.ID, Key: "card-" + g.ID,
-		Fill: fill, Shape: "card", Width: 188,
+		Fill: fill, Shape: "card", Width: 188, Height: cardHeight,
 		Events: []v1.EventKind{v1.EventActivate, v1.EventPointer},
 		Name:   "select " + g.Name, Role: "option", Tooltip: g.Name,
 	}
@@ -182,7 +196,7 @@ func cardTitle(s State, g source.Game) *v1.Node {
 
 func detail(s State, games []source.Game) *v1.Node {
 	d := &v1.Node{Kind: v1.KindColumn, ID: "detail", Key: "detail",
-		Gap: 8, Padding: 8, Width: 250, Fill: "container", Shape: "panel"}
+		Gap: 8, Padding: 8, Width: detailWidth, Height: bodyHeight, Fill: "container", Shape: "panel"}
 	var sel *source.Game
 	for i := range games {
 		if games[i].ID == s.Selected {
@@ -207,8 +221,13 @@ func detail(s State, games []source.Game) *v1.Node {
 	if g.Year != "" {
 		title += " (" + g.Year + ")"
 	}
+	// The action column replaces the cover: seven buttons and the art do not
+	// both fit in bodyHeight.
+	if !s.Actions {
+		d.Children = append(d.Children,
+			&v1.Node{Kind: v1.KindImage, Path: covers.Resolve(g, s.CacheDir), ImageW: 210, ImageH: 280, Radius: 6, Background: true})
+	}
 	d.Children = append(d.Children,
-		&v1.Node{Kind: v1.KindImage, Path: covers.Resolve(g, s.CacheDir), ImageW: 230, ImageH: 320, Radius: 6, Background: true},
 		&v1.Node{Kind: v1.KindText, Text: title, Size: "title", Bold: true},
 		subtle(strings.Join(badges(g), " · ")),
 		subtle(fmt.Sprintf("%s · %s", fmtPlaytime(g.PlaytimeSec), fmtLastPlayed(g.LastPlayed, s.Now))),
