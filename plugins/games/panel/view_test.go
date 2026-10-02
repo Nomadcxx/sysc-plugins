@@ -242,3 +242,32 @@ func TestPanelFits(t *testing.T) {
 		t.Fatalf("action view does not fit 720x560: %v", f)
 	}
 }
+
+// TestPanelGeometry pins the host layout rules shelllint does not model: an
+// unsized list in a row takes every remaining pixel (rejecting the detail
+// pane), and a button card in a row measures zero tall unless sized. Both
+// made the live shell refuse every revision of this panel.
+func TestPanelGeometry(t *testing.T) {
+	for _, actions := range []bool{false, true} {
+		s := baseState()
+		s.Selected, s.Actions = "1", actions
+		root := BuildTree(s)
+		list, detail := find(t, root, "game-list"), find(t, root, "detail")
+		if list.Width <= 0 || list.Height <= 0 {
+			t.Fatalf("game-list must be sized, got %dx%d", list.Width, list.Height)
+		}
+		if got := list.Width + 12 + detail.Width; got != 720-2*12 {
+			t.Fatalf("list+gap+detail = %d, want the 696 content width", got)
+		}
+		if detail.Height != list.Height {
+			t.Fatalf("detail height %d != list height %d", detail.Height, list.Height)
+		}
+		var cards []*v1.Node
+		collect(t, root, func(n *v1.Node) bool { return n.Kind == v1.KindButton && n.Shape == "card" }, &cards)
+		for _, c := range cards {
+			if c.Height <= 0 {
+				t.Fatalf("card %s has no height; a row lays it out zero tall", c.ID)
+			}
+		}
+	}
+}
