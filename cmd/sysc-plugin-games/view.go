@@ -51,6 +51,13 @@ func (s *session) snapshotAll() {
 }
 
 func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
+	// One left click on a node declaring activate and pointer arrives twice:
+	// a primary pointer event on press, then activate on release. Acting on
+	// both toggled the panel open and shut and made one click launch a game,
+	// so the press is ignored and only activate acts on a left click.
+	if m.Event == v1.EventPointer && m.Button == v1.ButtonPrimary {
+		return
+	}
 	node := m.Node[strings.Index(m.Node, ":")+1:] // host prefixes "<viewID>:"
 	switch {
 	case node == "bar":

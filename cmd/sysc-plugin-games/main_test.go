@@ -487,3 +487,75 @@ func TestCoverQueueIsAsyncAndCoalesced(t *testing.T) {
 		}
 	}
 }
+
+// clickLikeHost sends what the shell sends for one left click on a node that
+// declares both activate and pointer: a primary pointer event on press, then
+// activate on release (sysc-shell handlePluginBar).
+func (h *harness) clickLikeHost(viewID string, rev uint64, node string) {
+	h.t.Helper()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: viewID, Revision: rev, Node: node, Event: v1.EventPointer, Button: v1.ButtonPrimary})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: viewID, Revision: rev, Node: node, Event: v1.EventActivate})
+}
+
+// One left click on the pill must ask for the panel once. Asking twice
+// toggled it open and then shut, so it took several clicks to stay open.
+func TestBarClickOpensPanelOnce(t *testing.T) {
+	h := start(t)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "b", View: v1.ViewBar, Entry: "bar", Output: "DP-1"})
+	line := h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "b" && find(s.Root, "bar") != nil
+	})
+	h.clickLikeHost("b", snapshotOf(line).Revision, "bar:bar")
+	opens := 0
+	deadline := time.After(700 * time.Millisecond)
+	for {
+		select {
+		case l := <-h.lines:
+			if messageType(l) != v1.TypeHostCall {
+				continue
+			}
+			var call v1.HostCall
+			if json.Unmarshal(l, &call) == nil {
+				if call.Call == v1.CallPanelOpen {
+					opens++
+				}
+				h.replyTo(call.ID)
+			}
+		case <-deadline:
+			if opens != 1 {
+				t.Fatalf("one click sent %d panel.open calls, want 1", opens)
+			}
+			return
+		}
+	}
+}
+
+// One left click on a card selects it; only a second click launches.
+func TestCardClickSelectsWithoutLaunching(t *testing.T) {
+	h := start(t)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
+	line := h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "card-2") != nil
+	})
+	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:card-2")
+	line = h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "launch-2") != nil
+	})
+	select {
+	case got := <-h.ran:
+		t.Fatalf("first click launched: %v", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:card-2")
+	select {
+	case got := <-h.ran:
+		if len(got) < 2 || got[1] != "lutris:rungameid/2" {
+			t.Fatalf("launch exec = %v", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("second click on the selected card must launch")
+	}
+}
