@@ -25,6 +25,11 @@ import (
 )
 
 const recentImageMaxLongEdge = 512
+
+// ponytail: fixed limits bound paired-device image work; raise them only with
+// measured memory headroom and a matching regression test.
+const recentImageMaxSourceBytes = 32 << 20
+const recentImageMaxPixels = 16_000_000
 const recentImageStageTTL = 24 * time.Hour
 
 // recentImageThumbDir lives under os.UserCacheDir()/sysc-plugins/kdeconnect/
@@ -1050,6 +1055,9 @@ func StageRecentImage(img RecentImage) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("kdeconnect: %s is not a regular file", img.Source)
 	}
+	if info.Size() > recentImageMaxSourceBytes {
+		return "", fmt.Errorf("kdeconnect: %s exceeds the %d-byte thumbnail source limit", img.Source, recentImageMaxSourceBytes)
+	}
 	stageRoot := filepath.Join(recentImageThumbDir, "sources")
 	if err := os.MkdirAll(stageRoot, 0o700); err != nil {
 		return "", fmt.Errorf("kdeconnect: mkdir %s: %w", stageRoot, err)
@@ -1075,10 +1083,16 @@ func StageRecentImage(img RecentImage) (string, error) {
 		_ = os.RemoveAll(stageDir)
 		return "", fmt.Errorf("kdeconnect: create staged image: %w", err)
 	}
-	if _, err := io.Copy(out, file); err != nil {
+	copied, err := io.Copy(out, io.LimitReader(file, recentImageMaxSourceBytes+1))
+	if err != nil {
 		_ = out.Close()
 		_ = os.RemoveAll(stageDir)
 		return "", fmt.Errorf("kdeconnect: copy %s: %w", img.Source, err)
+	}
+	if copied > recentImageMaxSourceBytes {
+		_ = out.Close()
+		_ = os.RemoveAll(stageDir)
+		return "", fmt.Errorf("kdeconnect: %s exceeds the %d-byte thumbnail source limit", img.Source, recentImageMaxSourceBytes)
 	}
 	if err := out.Close(); err != nil {
 		_ = os.RemoveAll(stageDir)
@@ -1128,6 +1142,9 @@ func thumbnail(src, cacheDir, mount string) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("kdeconnect: %s is not a regular file", src)
 	}
+	if info.Size() > recentImageMaxSourceBytes {
+		return "", fmt.Errorf("kdeconnect: %s exceeds the %d-byte thumbnail source limit", src, recentImageMaxSourceBytes)
+	}
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", fmt.Errorf("kdeconnect: mkdir %s: %w", cacheDir, err)
 	}
@@ -1136,9 +1153,19 @@ func thumbnail(src, cacheDir, mount string) (string, error) {
 	if body, err := os.ReadFile(cached); err == nil && len(body) >= 4 && body[0] == 0xff && body[1] == 0xd8 {
 		return cached, nil
 	}
-	raw, err := io.ReadAll(file)
+	raw, err := io.ReadAll(io.LimitReader(file, recentImageMaxSourceBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("kdeconnect: read %s: %w", src, err)
+	}
+	if len(raw) > recentImageMaxSourceBytes {
+		return "", fmt.Errorf("kdeconnect: %s exceeds the %d-byte thumbnail source limit", src, recentImageMaxSourceBytes)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return "", fmt.Errorf("kdeconnect: read image dimensions for %s: %w", src, err)
+	}
+	if config.Width <= 0 || config.Height <= 0 || int64(config.Width) > recentImageMaxPixels/int64(config.Height) {
+		return "", fmt.Errorf("kdeconnect: %s exceeds the %d-pixel thumbnail limit", src, recentImageMaxPixels)
 	}
 	img, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {

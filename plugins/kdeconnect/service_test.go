@@ -1,13 +1,16 @@
 package kdeconnect
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -983,6 +986,78 @@ func TestThumbnailRejectsMissingSource(t *testing.T) {
 	cache := t.TempDir()
 	if _, err := thumbnail(filepath.Join(t.TempDir(), "no.png"), cache, t.TempDir()); err == nil {
 		t.Fatal("thumbnail accepted a missing source")
+	}
+}
+
+func TestThumbnailRejectsExcessiveDimensionsBeforeDecode(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	src := filepath.Join(mount, "oversized.png")
+	// DecodeConfig only needs the PNG signature and IHDR. Omitting IDAT makes
+	// this a cheap fixture: the implementation must reject dimensions before
+	// attempting a full decode.
+	data := make([]byte, 33)
+	copy(data, []byte{137, 80, 78, 71, 13, 10, 26, 10})
+	binary.BigEndian.PutUint32(data[8:12], 13)
+	copy(data[12:16], "IHDR")
+	binary.BigEndian.PutUint32(data[16:20], 5000)
+	binary.BigEndian.PutUint32(data[20:24], 4000)
+	data[24] = 8 // bit depth
+	data[25] = 0 // grayscale, so an accidental full decode stays small
+	binary.BigEndian.PutUint32(data[29:33], crc32.ChecksumIEEE(data[12:29]))
+	if err := os.WriteFile(src, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := thumbnail(src, t.TempDir(), mount)
+	if err == nil || !strings.Contains(err.Error(), "pixel thumbnail limit") {
+		t.Fatalf("thumbnail error = %v, want pixel-limit rejection before decoding", err)
+	}
+}
+
+func TestThumbnailRejectsOversizedSource(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	src := filepath.Join(mount, "oversized.png")
+	f, err := os.Create(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(recentImageMaxSourceBytes + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = thumbnail(src, t.TempDir(), mount)
+	if err == nil || !strings.Contains(err.Error(), "thumbnail source limit") {
+		t.Fatalf("thumbnail error = %v, want byte-limit rejection", err)
+	}
+}
+
+func TestStageRecentImageRejectsOversizedSource(t *testing.T) {
+	mount := t.TempDir()
+	src := filepath.Join(mount, "oversized.png")
+	f, err := os.Create(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(recentImageMaxSourceBytes + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	savedCache := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = savedCache })
+
+	_, err = StageRecentImage(RecentImage{Source: src, Mount: mount})
+	if err == nil || !strings.Contains(err.Error(), "thumbnail source limit") {
+		t.Fatalf("stage error = %v, want byte-limit rejection", err)
 	}
 }
 
