@@ -318,8 +318,8 @@
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
       "added_at": "2026-10-02T12:42:52.79671191Z",
-      "updated_at": "2026-10-02T12:42:52.79671191Z",
-      "version": "1.1.0",
+      "updated_at": "2026-10-02T12:56:00.026343172Z",
+      "version": "1.2.0",
       "protocol": {
         "major": 1,
         "minor": 14
@@ -335,17 +335,48 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/moonbit-v1.1.0/org.sysc.moonbit-1.1.0-linux-amd64.tar.gz",
-          "sha256": "e864cde5bd0158dae65cdbac0edbdd08d0bcc163f38afa524979e9272faede40",
-          "size": 2478307
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/moonbit-v1.2.0/org.sysc.moonbit-1.2.0-linux-amd64.tar.gz",
+          "sha256": "ef1935f7760ba9ead220939d84f9d4d844198561071b15f29bd9049b85368f40",
+          "size": 2489737
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/moonbit-v1.1.0/org.sysc.moonbit-1.1.0-linux-arm64.tar.gz",
-          "sha256": "fb6763e577f5f2c08afbf28b0cd9ddd7ff6a4e6583da4202553562da8601cb59",
-          "size": 2296403
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/moonbit-v1.2.0/org.sysc.moonbit-1.2.0-linux-arm64.tar.gz",
+          "sha256": "cb40fe0df31ad624cdf05f2011a07ac0ab08f8445ed3cf19fc254d0f023d6e67",
+          "size": 2306397
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/moonbit-v1.1.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/moonbit-v1.2.0",
+      "releases": [
+        {
+          "version": "1.1.0",
+          "protocol": {
+            "major": 1,
+            "minor": 14
+          },
+          "capabilities": [
+            "panels",
+            "state"
+          ],
+          "requires": {
+            "commands": [
+              "moonbit"
+            ]
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/moonbit-v1.1.0/org.sysc.moonbit-1.1.0-linux-amd64.tar.gz",
+              "sha256": "e864cde5bd0158dae65cdbac0edbdd08d0bcc163f38afa524979e9272faede40",
+              "size": 2478307
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/moonbit-v1.1.0/org.sysc.moonbit-1.1.0-linux-arm64.tar.gz",
+              "sha256": "fb6763e577f5f2c08afbf28b0cd9ddd7ff6a4e6583da4202553562da8601cb59",
+              "size": 2296403
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/moonbit-v1.1.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.notes",
