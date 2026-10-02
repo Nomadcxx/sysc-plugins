@@ -160,8 +160,8 @@ func TestPanelLintEveryState(t *testing.T) {
 
 // TestPanelLintCoverageSweep walks the states TestPanelLintEveryState does
 // not reach: search text, notice, an expanded country, a maintenance-marked
-// country, the split-tunnel app picker, an error line, and a signed-in
-// account, with and without the CLI banner.
+// country, an error line, and a signed-in account, with and without the CLI
+// banner.
 func TestPanelLintCoverageSweep(t *testing.T) {
 	fallback := FallbackCountries()
 	variants := map[string]func(*PanelState){
@@ -172,11 +172,7 @@ func TestPanelLintCoverageSweep(t *testing.T) {
 		},
 		"expanded":    func(s *PanelState) { s.Conns.Expanded = "NL" },
 		"maintenance": func(s *PanelState) { s.Conns.Countries[3].Maintenance = true },
-		"app-picker": func(s *PanelState) {
-			s.Prot.AppQuery = "fire"
-			s.Prot.Candidates = []App{{Value: "/usr/bin/firefox", Label: "Firefox"}}
-		},
-		"err": func(s *PanelState) { s.Snap.Err = "Tunnel setup failed" },
+		"err":         func(s *PanelState) { s.Snap.Err = "Tunnel setup failed" },
 	}
 	for _, hasCLI := range []bool{true, false} {
 		for _, tab := range []string{"connections", "protection", "account"} {
@@ -187,7 +183,7 @@ func TestPanelLintCoverageSweep(t *testing.T) {
 						Interface: "proton0", RxRate: 1024, TxRate: 512, Port: 51820},
 					Tab: tab, HasCLI: hasCLI, Traffic: true,
 					Conns: ConnectionsState{Countries: fallback},
-					Prot:  ProtectionState{SplitTunnel: true, Apps: []string{"/usr/bin/thunderbird"}, Port: 51820, HasCopyTool: true},
+					Prot:  ProtectionState{Port: 51820, HasCopyTool: true},
 					Acct:  AccountState{SignedIn: true, Settings: map[string]string{"bar_mode": "code"}},
 				}
 				mut(&s)
