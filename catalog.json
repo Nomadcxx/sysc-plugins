@@ -421,13 +421,13 @@
       "id": "org.sysc.protonvpn",
       "name": "ProtonVPN",
       "author": "Nomadcxx",
-      "description": "ProtonVPN from the bar: quick connect, server picker, split tunnel, and protection status.",
+      "description": "ProtonVPN from the bar: quick connect, server picker, and protection status.",
       "category": "utilities",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
       "added_at": "2026-09-29T04:04:42.299091194Z",
-      "updated_at": "2026-09-29T04:04:42.299091194Z",
-      "version": "1.0.0",
+      "updated_at": "2026-10-02T04:35:39.806702301Z",
+      "version": "1.0.1",
       "protocol": {
         "major": 1,
         "minor": 8
@@ -446,17 +446,51 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.0/org.sysc.protonvpn-1.0.0-linux-amd64.tar.gz",
-          "sha256": "8a645fd9ce5abf94a0ff414321404fad227ba2e4d1a1f561cd184face9b0648e",
-          "size": 2777182
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.1/org.sysc.protonvpn-1.0.1-linux-amd64.tar.gz",
+          "sha256": "ffb8de2e26effe28f1389007d5be316925f2d34c0258ef80ad0944cf8a0d5de6",
+          "size": 2724326
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.0/org.sysc.protonvpn-1.0.0-linux-arm64.tar.gz",
-          "sha256": "52c8f90696e68bb32952ba02a1488dfeee9ad44bd97675c4aa35ce62d22dd9eb",
-          "size": 2564105
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.1/org.sysc.protonvpn-1.0.1-linux-arm64.tar.gz",
+          "sha256": "0324d999ebd9781c7c5bd4e79e8370a1809c88419f64071df7bfc355ff38427a",
+          "size": 2520012
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/protonvpn-v1.0.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/protonvpn-v1.0.1",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "protocol": {
+            "major": 1,
+            "minor": 8
+          },
+          "capabilities": [
+            "panels",
+            "settings",
+            "state",
+            "notifications",
+            "clipboard-write"
+          ],
+          "requires": {
+            "commands": [
+              "protonvpn"
+            ]
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.0/org.sysc.protonvpn-1.0.0-linux-amd64.tar.gz",
+              "sha256": "8a645fd9ce5abf94a0ff414321404fad227ba2e4d1a1f561cd184face9b0648e",
+              "size": 2777182
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.0/org.sysc.protonvpn-1.0.0-linux-arm64.tar.gz",
+              "sha256": "52c8f90696e68bb32952ba02a1488dfeee9ad44bd97675c4aa35ce62d22dd9eb",
+              "size": 2564105
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/protonvpn-v1.0.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.screen-recorder",
