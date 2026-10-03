@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -41,11 +42,16 @@ const (
 	promptMarker = "[moonbit-panel-password]"
 	// readyTimeout bounds sudo's check and moonbit's start.
 	readyTimeout = 20 * time.Second
-	// cancelGrace bounds the wait for moonbit's terminal event after Cancel.
-	cancelGrace = 10 * time.Second
 	// maxEventLine fits clean_done, whose errors list is unbounded.
 	maxEventLine = 4 << 20
 )
+
+// cancelGrace bounds the wait for moonbit's terminal event after Cancel.
+var cancelGrace = 10 * time.Second
+
+// killWait covers sudo's terminate_command, which sleeps two seconds
+// between the catchable signals and SIGKILL.
+const killWait = 3 * time.Second
 
 // ErrWrongPassword means sudo asked again: the password was not accepted.
 var ErrWrongPassword = errors.New("wrong password")
@@ -59,7 +65,9 @@ type Op struct {
 }
 
 // Cancel ends the request side. moonbit cancels on EOF and still writes its
-// terminal event; a run still going after cancelGrace is killed.
+// terminal event; a run still going after cancelGrace is stopped, child
+// included. The stream stays open for that grace so a terminal event is not
+// dropped, and StreamEnded still runs if the stream then closes without one.
 func (o *Op) Cancel() {
 	o.once.Do(func() {
 		_ = o.stdin.Close()
@@ -91,6 +99,9 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 		return nil, err
 	}
 	cmd := exec.Command(r.sudo(), "-S", "-k", "-p", promptMarker, r.moonbit(), "panel")
+	// Own process group, so the grace kill can signal sudo's group without
+	// signalling this plugin.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -106,7 +117,10 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	kill := func() { _ = cmd.Process.Kill() }
+	// Setpgid makes sudo the group leader; keep its group ID even if sudo exits
+	// before Cancel's grace timer fires.
+	pgid := cmd.Process.Pid
+	kill := func() { stopCommand(cmd, stdout, pgid) }
 
 	prompts := make(chan struct{}, 4)
 	tail := &lastLine{}
@@ -165,6 +179,27 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 			kill()
 			return nil, errors.New("moonbit did not start in time")
 		}
+	}
+}
+
+// stopCommand lets sudo finish terminate_command before stopping its process
+// group. Killing sudo first aborts that cleanup and can orphan its root child.
+// Closing stdout still ends the event stream if a same-user descendant remains.
+func stopCommand(cmd *exec.Cmd, stdout io.Closer, pgid int) {
+	if cmd != nil && cmd.Process != nil {
+		if own, err := syscall.Getpgid(0); err != nil || pgid == own {
+			pgid = 0
+		}
+		if err := cmd.Process.Signal(syscall.SIGALRM); err == nil {
+			time.Sleep(killWait)
+		}
+		if pgid != 0 {
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		}
+		_ = cmd.Process.Kill()
+	}
+	if stdout != nil {
+		_ = stdout.Close()
 	}
 }
 
