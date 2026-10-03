@@ -40,6 +40,7 @@ func TestPanelStatesFitThePanel(t *testing.T) {
 		{"sms composer", pairedSnap(), testSettings(), ComposerSMS, false},
 		{"no device card", pairedSnap(), noCard, ComposerNone, false},
 		{"recent images", recentSnap(), testSettings(), ComposerNone, true},
+		{"sftp error", sftpErrorSnap(), testSettings(), ComposerNone, false},
 		{"unpaired", unpaired, testSettings(), ComposerNone, false},
 		{"incoming pairing", incoming, testSettings(), ComposerNone, false},
 		{"orphaned selection", orphaned, testSettings(), ComposerNone, false},
@@ -47,7 +48,7 @@ func TestPanelStatesFitThePanel(t *testing.T) {
 		{"daemon unavailable", Snapshot{}, testSettings(), ComposerNone, false},
 	} {
 		tree := PanelTreeForState(tc.snap, tc.settings, tc.composer, Drafts{}, tc.switcher)
-		for _, f := range shelllint.Tree(tree, v1.ViewPanel, PanelWidth, 760) {
+		for _, f := range shelllint.Tree(tree, v1.ViewPanel, PanelWidth, PanelHeight) {
 			t.Errorf("%s: %s", tc.name, f)
 		}
 	}

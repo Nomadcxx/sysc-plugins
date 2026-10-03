@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	_ "image/jpeg"
 	"image/png"
 	"net/url"
 	"os"
