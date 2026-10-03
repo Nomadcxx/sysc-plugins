@@ -189,6 +189,16 @@ func TestReviewDisablesCleanWhenNothingIsSelected(t *testing.T) {
 	}
 }
 
+// A Docker or schedule run that hangs with the stream open would otherwise
+// dead-end the user: Cancel closes the request side, and either the daemon's
+// terminal event or the grace kill followed by StreamEnded recovers the phase.
+func TestWorkingOffersCancel(t *testing.T) {
+	s := &State{Phase: PhaseWorking, Working: "Cleaning Docker", Back: PhaseDocker}
+	if findID(Panel(s), "cancel") == nil {
+		t.Fatal("working run has no escape")
+	}
+}
+
 func TestConfirmSaysWhatIsEmptiedRatherThanDeleted(t *testing.T) {
 	s := &State{Phase: PhaseConfirm, Selected: map[string]bool{"Pacman Cache": true, "System Logs": true},
 		Review: []CategoryStat{

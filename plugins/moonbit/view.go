@@ -483,6 +483,7 @@ func actionBar(s *State) *v1.Node {
 	case PhaseSchedule:
 		left = []*v1.Node{action("back", "Back", "chip", "chevron_left")}
 	case PhaseWorking:
+		right = []*v1.Node{action("cancel", "Cancel", "chip", "")}
 	default:
 		left = []*v1.Node{
 			action("docker", "Docker", "chip", "dns"),
