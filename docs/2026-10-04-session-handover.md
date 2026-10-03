@@ -34,7 +34,7 @@ Empty `recent_images_path` (the default) mounts with `mountAndWait` (never `star
 
 ### SFTP error card
 
-Failed `mountAndWait` copies `getMountError` onto `Device.SFTPError`. Failed Files (`startBrowsing` false) does the same and republishes. The panel shows **Phone files unavailable** plus the daemon reason under Actions. A successful Files click clears the error. Toasts still fire.
+Failed `mountAndWait` with a configured recents path copies `getMountError` onto `Device.SFTPError`. Failed Files (`startBrowsing` false) does the same and republishes. The panel shows **Phone files unavailable** plus the daemon reason under Actions. A successful mount or Files click clears the error. Empty-path background scans (default, recents off) do **not** write the card — permission nags stay on the Files action. Toasts still fire.
 
 ### Audit hold items that were fixed before this PR
 
@@ -81,7 +81,7 @@ Idle composite, 640 fold, error card, real Pixel `getMountError` string. Rebuild
 
 ### Remaining kdeconnect ceilings
 
-- Empty path still sshfs-scans on ticker (30s) and panel open / device switch. Not on battery ticks.
+- Empty-path idle scan mounts from service start (`newService` / ticker), not from panel visibility. Cost per scan: one `mountAndWait` + one `find` over existing `DCIM`/`Pictures` + one thumbnail resolve. A successful scan that finds no photos sets `idleScanEmpty` and further ticks skip until manual refresh, selection change, or settings change. Failed mounts keep retrying. A scan that found a photo still polls on the ticker so a newer screenshot can replace it.
 - `newestIdleImage` maxdepth 2; dated `DCIM/Camera/2026/…` trees are missed.
 - After music stops, idle fill waits until the next scan (ticker/refresh), because mpris signals publish without rescan.
 - Files success with no window is still a success toast. Shell FM is the follow-up, not Thunar-from-the-plugin.

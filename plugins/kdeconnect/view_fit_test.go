@@ -40,6 +40,7 @@ func TestPanelStatesFitThePanel(t *testing.T) {
 		{"sms composer", pairedSnap(), testSettings(), ComposerSMS, false},
 		{"no device card", pairedSnap(), noCard, ComposerNone, false},
 		{"recent images", recentSnap(), testSettings(), ComposerNone, true},
+		{"sftp error", sftpErrorSnap(), testSettings(), ComposerNone, false},
 		{"unpaired", unpaired, testSettings(), ComposerNone, false},
 		{"incoming pairing", incoming, testSettings(), ComposerNone, false},
 		{"orphaned selection", orphaned, testSettings(), ComposerNone, false},

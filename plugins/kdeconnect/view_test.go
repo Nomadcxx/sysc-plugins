@@ -41,6 +41,13 @@ func pairedSnap() Snapshot {
 	}
 }
 
+func sftpErrorSnap() Snapshot {
+	snap := pairedSnap()
+	snap.Devices[0].SFTPError = "Permissions missing: filesystem access. " +
+		"Enable the filesystem plugin on the phone and accept the mount prompt."
+	return snap
+}
+
 // findImage walks for the image node carrying id.
 func findImage(n *v1.Node, id string) *v1.Node {
 	if n == nil {

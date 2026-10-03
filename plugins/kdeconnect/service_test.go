@@ -1404,7 +1404,7 @@ func TestRefreshRecentImagesRecordsMountError(t *testing.T) {
 	sftp := bus.objects[pluginPath("devA", "sftp")]
 	sftp.mounts = false
 	sftp.mountError = "Permissions missing: filesystem access"
-	st := recentImagesState(&Service{})
+	st := recentImagesState(&Service{settings: Settings{RecentImagesPath: "DCIM"}})
 	st.devices["devA"].SFTPError = "stale"
 	chosen := "devA"
 	st.refreshRecentImages(bus, &chosen)
@@ -1416,6 +1416,83 @@ func TestRefreshRecentImagesRecordsMountError(t *testing.T) {
 	}
 	if !sftp.asked(sftpIface + ".getMountError") {
 		t.Fatalf("failed mount never asked getMountError: %v", sftp.calls)
+	}
+}
+
+func TestRefreshRecentImagesIdleMountFailureStaysQuiet(t *testing.T) {
+	t.Parallel()
+	bus := recentImagesBus(t.TempDir())
+	sftp := bus.objects[pluginPath("devA", "sftp")]
+	sftp.mounts = false
+	sftp.mountError = "Permissions missing: filesystem access"
+	st := recentImagesState(&Service{})
+	st.devices["devA"].SFTPError = "from browse"
+	chosen := "devA"
+	st.refreshRecentImages(bus, &chosen)
+	if got := st.devices["devA"].SFTPError; got != "from browse" {
+		t.Fatalf("idle mount failure overwrote SFTPError = %q", got)
+	}
+	if sftp.asked(sftpIface + ".getMountError") {
+		t.Fatalf("idle mount failure still asked getMountError: %v", sftp.calls)
+	}
+	n := 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			n++
+		}
+	}
+	st.refreshRecentImages(bus, &chosen)
+	got := 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			got++
+		}
+	}
+	if got != n+1 {
+		t.Fatalf("failed idle mount did not retry: mountAndWait %d -> %d", n, got)
+	}
+}
+
+func TestRefreshRecentImagesIdleEmptyScanMountsOnce(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(mount, "DCIM"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bus := recentImagesBus(mount)
+	st := recentImagesState(&Service{})
+	chosen := "devA"
+	st.refreshRecentImages(bus, &chosen)
+	sftp := bus.objects[pluginPath("devA", "sftp")]
+	n := 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			n++
+		}
+	}
+	if n == 0 {
+		t.Fatal("first empty scan never mounted")
+	}
+	st.refreshRecentImages(bus, &chosen)
+	got := 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			got++
+		}
+	}
+	if got != n {
+		t.Fatalf("empty idle scan remounted: mountAndWait %d -> %d", n, got)
+	}
+	st.idleScanEmpty = false
+	st.refreshRecentImages(bus, &chosen)
+	got = 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			got++
+		}
+	}
+	if got != n+1 {
+		t.Fatalf("cleared idleScanEmpty did not remount: mountAndWait %d -> %d", n, got)
 	}
 }
 

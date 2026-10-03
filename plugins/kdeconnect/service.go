@@ -91,9 +91,9 @@ type Device struct {
 	// newest SFTP photo, "" when neither exists.
 	MockupArt string
 
-	// SFTPError is the last mountAndWait / startBrowsing failure for this
-	// device, empty while the share is up. The panel shows it so a refused
-	// SFTP mount is not an empty mockup with no explanation.
+	// SFTPError is a mount failure the user asked about: a configured
+	// recents path that failed, or a Files click that failed. Empty-path
+	// background idle scans do not write it.
 	SFTPError string
 }
 
@@ -363,6 +363,7 @@ func (s *Service) serve(bus daemonBus) error {
 		case <-s.refresh:
 			// A manual refresh always runs; the shared rate limit is for the
 			// signal-driven reconciles only.
+			st.idleScanEmpty = false
 			_ = st.reconcileNow(bus)
 			scanAndPublish()
 		case a := <-s.actions:
@@ -371,6 +372,7 @@ func (s *Service) serve(bus daemonBus) error {
 				publish()
 			}
 		case set := <-s.configure:
+			st.idleScanEmpty = false
 			s.settings = set
 			interval = tickInterval(set.RefreshSeconds)
 			if ticker != nil {
@@ -383,6 +385,7 @@ func (s *Service) serve(bus daemonBus) error {
 				tickC = ticker.C
 			}
 		case id := <-s.selectReq:
+			st.idleScanEmpty = false
 			saved = id
 			scanAndPublish()
 		case sig, ok := <-signals:
@@ -431,6 +434,11 @@ type daemonState struct {
 	lastReconcile time.Time
 	events        chan<- Event
 	recentImages  []RecentImage
+	// idleScanEmpty is a successful empty-path scan that found no photos.
+	// Further ticks skip the mount until a refresh, selection change, or
+	// settings change; a failed mount never sets it, so permission grant
+	// can still recover.
+	idleScanEmpty bool
 }
 
 // emit delivers an event without ever blocking the serve loop.
@@ -573,6 +581,8 @@ func (st *daemonState) fetchMedia(bus daemonBus, dev *Device) {
 	}
 	props, err := getAllProps(bus.object(kdeService, pluginPath(dev.ID, "mprisremote")), mprisremoteIface)
 	if err != nil {
+		// Clear so applyIdleMockup can fill from SFTP. Leaving a stale
+		// path here freezes the mockup on the last cover forever.
 		dev.MockupArt = ""
 		return
 	}
@@ -962,28 +972,40 @@ func updateFromSignal(sig *dbus.Signal, bus daemonBus, st *daemonState) bool {
 // decodableExtensions covers png/xpm/jpg/jpeg/gif/bmp); the plan
 // deliberately drops webp because the host cannot decode it.
 func scanRecentImages(root, mountPoint string, max int, sub bool) ([]string, error) {
-	if root == "" || mountPoint == "" {
+	return scanRecentImagesAt([]string{root}, mountPoint, max, sub)
+}
+
+func scanRecentImagesAt(roots []string, mountPoint string, max int, sub bool) ([]string, error) {
+	if len(roots) == 0 || mountPoint == "" {
 		return nil, errors.New("kdeconnect: scanRecentImages needs a root and a mount point")
 	}
-	cleanedRoot := filepath.Clean(root)
 	cleanedMount := filepath.Clean(mountPoint)
-	if cleanedRoot != cleanedMount && !strings.HasPrefix(cleanedRoot, cleanedMount+string(filepath.Separator)) {
-		return nil, fmt.Errorf("kdeconnect: scan root %s is not under SFTP mount %s", cleanedRoot, cleanedMount)
+	cleaned := make([]string, 0, len(roots))
+	for _, root := range roots {
+		if root == "" {
+			return nil, errors.New("kdeconnect: scanRecentImages needs a root and a mount point")
+		}
+		cleanedRoot := filepath.Clean(root)
+		if cleanedRoot != cleanedMount && !strings.HasPrefix(cleanedRoot, cleanedMount+string(filepath.Separator)) {
+			return nil, fmt.Errorf("kdeconnect: scan root %s is not under SFTP mount %s", cleanedRoot, cleanedMount)
+		}
+		cleaned = append(cleaned, cleanedRoot)
 	}
 	depth := "1"
 	if sub {
 		depth = "2"
 	}
-	cmd := exec.Command("find", cleanedRoot,
+	args := append(append([]string{}, cleaned...),
 		"-maxdepth", depth,
 		"(", "-iname", "*.png", "-o", "-iname", "*.jpg", "-o", "-iname", "*.jpeg", ")",
 		"-printf", "%T@ %p\n")
+	cmd := exec.Command("find", args...)
 	out, err := cmd.Output()
 	// find exits nonzero on any error — one unreadable subdirectory under
 	// scan_subdirectories — while still printing what it walked. Keep the
 	// partial listing; only a walk that produced nothing is a failure.
 	if err != nil && len(bytes.TrimSpace(out)) == 0 {
-		return nil, fmt.Errorf("kdeconnect: find %s: %w", cleanedRoot, err)
+		return nil, fmt.Errorf("kdeconnect: find %s: %w", strings.Join(cleaned, " "), err)
 	}
 	if len(bytes.TrimSpace(out)) == 0 {
 		return nil, nil
@@ -1286,8 +1308,11 @@ var mockupIdleRoots = []string{"DCIM", "Pictures"}
 // empty. Every failure — no sftp plugin, a failed mount, an unreadable
 // file — degrades to an empty grid, never an unavailable panel.
 func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
-	st.recentImages = nil
 	gridPath := st.svc.settings.RecentImagesPath
+	if gridPath == "" && st.idleScanEmpty {
+		return
+	}
+	st.recentImages = nil
 	devices := make([]Device, 0, len(st.order))
 	for _, id := range st.order {
 		if dev, ok := st.devices[id]; ok {
@@ -1296,31 +1321,37 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 	}
 	selected := resolveSelection(devices, *saved)
 	dev := st.devices[selected]
-	if dev == nil || !dev.Reachable || !hasPlugin(dev, "sftp") {
+	if dev == nil || !dev.Reachable || !dev.Paired || !hasPlugin(dev, "sftp") {
 		if dev != nil {
 			dev.SFTPError = ""
 		}
 		return
 	}
-	dev.SFTPError = ""
 	obj := bus.object(kdeService, pluginPath(selected, "sftp"))
 	// mountAndWait mounts without a window; startBrowsing would also open
 	// the file manager, on every background refresh. mountPoint then reads
 	// where the share landed.
 	if call := obj.Call(sftpIface+".mountAndWait", 0); call.Err != nil || !replyTrue(call) {
-		dev.SFTPError = sftpMountReason(obj, call)
+		if gridPath != "" {
+			dev.SFTPError = sftpMountReason(obj, call)
+		}
 		return
 	}
 	call := obj.Call(sftpIface+".mountPoint", 0)
 	if call.Err != nil || len(call.Body) == 0 {
-		dev.SFTPError = "SFTP mounted with no mount point"
+		if gridPath != "" {
+			dev.SFTPError = "SFTP mounted with no mount point"
+		}
 		return
 	}
 	mount, _ := call.Body[0].(string)
 	if mount == "" {
-		dev.SFTPError = "SFTP mounted with no mount point"
+		if gridPath != "" {
+			dev.SFTPError = "SFTP mounted with no mount point"
+		}
 		return
 	}
+	dev.SFTPError = ""
 	var paths []string
 	if gridPath != "" {
 		found, err := scanRecentImages(filepath.Join(mount, gridPath), mount,
@@ -1344,31 +1375,29 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 		st.recentImages = images
 	}
 	st.applyIdleMockup(dev, images)
+	if gridPath == "" && len(images) == 0 {
+		st.idleScanEmpty = true
+	}
 }
 
 // newestIdleImage is the newest png/jpg under DCIM or Pictures, one level
 // of subdirectory included so Camera and Screenshots both hit.
 func newestIdleImage(mount string) []string {
-	var best string
-	var bestMtime time.Time
-	for _, root := range mockupIdleRoots {
-		found, err := scanRecentImages(filepath.Join(mount, root), mount, 1, true)
-		if err != nil || len(found) == 0 {
-			continue
-		}
-		info, err := os.Stat(found[0])
-		if err != nil {
-			continue
-		}
-		if best == "" || info.ModTime().After(bestMtime) {
-			best = found[0]
-			bestMtime = info.ModTime()
+	var roots []string
+	for _, name := range mockupIdleRoots {
+		p := filepath.Join(mount, name)
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			roots = append(roots, p)
 		}
 	}
-	if best == "" {
+	if len(roots) == 0 {
 		return nil
 	}
-	return []string{best}
+	found, err := scanRecentImagesAt(roots, mount, 1, true)
+	if err != nil || len(found) == 0 {
+		return nil
+	}
+	return found[:1]
 }
 
 func sftpMountReason(obj daemonObject, call *dbus.Call) string {
