@@ -33,10 +33,14 @@ func deviceIcon(dev *Device) string {
 	return "devices"
 }
 
-// PanelWidth is the popout width the manifest declares, one size for every
-// device type. The wire has no grow or flex and a list left-aligns natural
-// widths, so every fixed width in the panel derives from it here.
-const PanelWidth = 480
+// PanelWidth and PanelHeight are the popout size the manifest declares, one
+// box for every device type. The wire has no grow or flex and a list
+// left-aligns natural widths, so every fixed width in the panel derives
+// from PanelWidth. Height is the idle stack; recents and composers scroll.
+const (
+	PanelWidth  = 480
+	PanelHeight = 640
+)
 
 const (
 	listPad = 12 // the panel list's inset
@@ -96,8 +100,8 @@ func MockupKind(dev *Device) string {
 // deviceMockup resolves the device type's mockup artwork: the asset path
 // and the DMS size class for the type. ok is false when the type has no
 // mockup or the asset is not installed, and the card falls back to the
-// type icon. While the phone reports album art, the composite with the
-// cover in its screen stands in for the plain frame.
+// type icon. While a cover or a recent photo is composed into the screen,
+// that file stands in for the plain frame.
 func deviceMockup(dev *Device) (string, int, int, bool) {
 	kind := MockupKind(dev)
 	p, ok := mockupAsset(kind)
@@ -230,7 +234,8 @@ func PanelTree(snap Snapshot, settings Settings, composer Composer, drafts Draft
 // the panel tree pure. The compact chooser remains visible so the selected
 // device is always clear; opening it reveals every device and its actions.
 func PanelTreeForState(snap Snapshot, settings Settings, composer Composer, drafts Drafts, switcherOpen bool) *v1.Node {
-	col := &v1.Node{Kind: v1.KindList, Gap: 10, Padding: listPad, Children: []*v1.Node{headerTree(snap)}}
+	col := &v1.Node{Kind: v1.KindList, Gap: 10, Padding: listPad, Height: PanelHeight,
+		Events: []v1.EventKind{v1.EventScroll}, Children: []*v1.Node{headerTree(snap)}}
 	if !snap.Available {
 		col.Children = append(col.Children, unavailableCard())
 		return col
@@ -257,10 +262,13 @@ func PanelTreeForState(snap Snapshot, settings Settings, composer Composer, draf
 			col.Children = append(col.Children, deviceChooserTree(snap, selected, switcherOpen))
 		}
 		col.Children = append(col.Children, actionRowTree(selected, settings))
+		if selected.SFTPError != "" {
+			col.Children = append(col.Children, sftpErrorCard(selected.SFTPError))
+		}
 		switch composer {
 		case ComposerShare:
 			// Directly under the Actions card: at the tree's tail the
-			// composer falls below the 760px fold and looks dead.
+			// composer falls below the fold and looks dead.
 			col.Children = append(col.Children, shareComposerTree(drafts))
 		case ComposerSMS:
 			col.Children = append(col.Children, smsComposerTree(drafts))
@@ -671,6 +679,14 @@ func actionRowTree(dev *Device, settings Settings) *v1.Node {
 		Children: rows}
 }
 
+func sftpErrorCard(reason string) *v1.Node {
+	return &v1.Node{Kind: v1.KindColumn, Fill: "error-container", Radius: 12, Padding: cardPad, Gap: 4,
+		Children: []*v1.Node{
+			{Kind: v1.KindText, Text: "Phone files unavailable", Bold: true, Tone: v1.ToneError},
+			{Kind: v1.KindText, Text: reason, Tone: v1.ToneError},
+		}}
+}
+
 func actionButton(id, icon, text, name string, enabled bool) *v1.Node {
 	// A grid cell wide: the wire has no Grow/Flex, and content-sizing plus
 	// the stadium radius made the pills tight, ragged balls.
@@ -951,6 +967,7 @@ func samePanelStructure(prev, next Snapshot) bool {
 			a.BatteryKnown != b.BatteryKnown || a.NetworkKnown != b.NetworkKnown ||
 			a.NetworkType != b.NetworkType || a.NetworkStrength != b.NetworkStrength ||
 			a.NotificationsKnown != b.NotificationsKnown || a.MockupArt != b.MockupArt ||
+			a.SFTPError != b.SFTPError ||
 			!stringSlicesEqual(a.SupportedPlugins, b.SupportedPlugins) {
 			return false
 		}

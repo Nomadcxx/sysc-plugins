@@ -47,7 +47,7 @@ func TestPanelStatesFitThePanel(t *testing.T) {
 		{"daemon unavailable", Snapshot{}, testSettings(), ComposerNone, false},
 	} {
 		tree := PanelTreeForState(tc.snap, tc.settings, tc.composer, Drafts{}, tc.switcher)
-		for _, f := range shelllint.Tree(tree, v1.ViewPanel, PanelWidth, 760) {
+		for _, f := range shelllint.Tree(tree, v1.ViewPanel, PanelWidth, PanelHeight) {
 			t.Errorf("%s: %s", tc.name, f)
 		}
 	}
