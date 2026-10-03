@@ -249,6 +249,39 @@ func withShortGrace(t *testing.T) {
 	t.Cleanup(func() { cancelGrace = prev })
 }
 
+func TestStopCommandGivesSIGALRMHandlerTimeToFinish(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FAKE_DIR", dir)
+	marker := filepath.Join(dir, "alarm-handled")
+	script := fmt.Sprintf(`trap 'sleep 1; echo handled > %s; exit 0' ALRM
+sleep 100000 &
+echo $! > "$FAKE_DIR/child"
+wait
+`, strconv.Quote(marker))
+	cmd := exec.Command("bash", "-c", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	child := pidFile(t, "child")
+	t.Cleanup(func() { releasePIDs(child) })
+
+	stopCommand(cmd, stdout, cmd.Process.Pid)
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("command did not finish after SIGALRM: %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("SIGALRM handler did not finish before cleanup: %v", err)
+	}
+	if !waitForProcessEnd(child) {
+		t.Fatalf("descendant %d survived process-group cleanup", child)
+	}
+}
+
 func pidFile(t *testing.T, name string) int {
 	t.Helper()
 	path := filepath.Join(os.Getenv("FAKE_DIR"), name)
@@ -281,6 +314,17 @@ func processEnded(pid int) bool {
 		}
 	}
 	return false
+}
+
+func waitForProcessEnd(pid int) bool {
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if processEnded(pid) {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return processEnded(pid)
 }
 
 func releasePIDs(pids ...int) {
@@ -352,7 +396,7 @@ func TestCancelKillsHungGrandchildAndLeavesTheProgressPhase(t *testing.T) {
 	if s.Phase == PhaseError && s.Err == "" {
 		t.Fatal("StreamEnded left PhaseError with no message")
 	}
-	if !processEnded(child) {
+	if !waitForProcessEnd(child) {
 		t.Fatalf("grandchild %d still running", child)
 	}
 }

@@ -7,9 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -119,7 +117,10 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	kill := func() { stopCommand(cmd, stdout) }
+	// Setpgid makes sudo the group leader; keep its group ID even if sudo exits
+	// before Cancel's grace timer fires.
+	pgid := cmd.Process.Pid
+	kill := func() { stopCommand(cmd, stdout, pgid) }
 
 	prompts := make(chan struct{}, 4)
 	tail := &lastLine{}
@@ -181,88 +182,25 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 	}
 }
 
-// stopCommand ends sudo and the moonbit process it started.
-// moonbit runs as root, so this process cannot signal it. SIGKILL to sudo
-// reparents that child and leaves it holding the stdout pipe, which keeps
-// the event stream open and the daemon's operation lock taken. A group
-// signal skips the root child the same way. sudo catches SIGALRM and
-// SIGKILLs the command itself (terminate_command). Descendants this process
-// may signal are killed directly, for a sudo stand-in that does not forward
-// the alarm. The stdout read side is closed afterwards so the stream still
-// ends if a writer ignores the signal. sudo is killed only after that wait:
-// killing it first aborts terminate_command and orphans the root child.
-func stopCommand(cmd *exec.Cmd, stdout io.Closer) {
+// stopCommand lets sudo finish terminate_command before stopping its process
+// group. Killing sudo first aborts that cleanup and can orphan its root child.
+// Closing stdout still ends the event stream if a same-user descendant remains.
+func stopCommand(cmd *exec.Cmd, stdout io.Closer, pgid int) {
 	if cmd != nil && cmd.Process != nil {
-		pid := cmd.Process.Pid
-		kids := descendantPIDs(pid)
-		_ = cmd.Process.Signal(syscall.SIGALRM)
-		for _, kid := range kids {
-			_ = syscall.Kill(kid, syscall.SIGKILL)
+		if own, err := syscall.Getpgid(0); err != nil || pgid == own {
+			pgid = 0
 		}
-		deadline := time.Now().Add(killWait)
-		for time.Now().Before(deadline) && anyRunning(kids) {
-			time.Sleep(20 * time.Millisecond)
+		if err := cmd.Process.Signal(syscall.SIGALRM); err == nil {
+			time.Sleep(killWait)
 		}
-		if pgid, err := syscall.Getpgid(pid); err == nil && pgid == pid {
-			if own, err := syscall.Getpgid(0); err != nil || pgid != own {
-				_ = syscall.Kill(-pgid, syscall.SIGKILL)
-			}
+		if pgid != 0 {
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		}
 		_ = cmd.Process.Kill()
 	}
 	if stdout != nil {
 		_ = stdout.Close()
 	}
-}
-
-func descendantPIDs(pid int) []int {
-	var out []int
-	var walk func(int)
-	walk = func(p int) {
-		for _, c := range childPIDs(p) {
-			walk(c)
-			out = append(out, c)
-		}
-	}
-	walk(pid)
-	return out
-}
-
-func childPIDs(pid int) []int {
-	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/task/" + strconv.Itoa(pid) + "/children")
-	if err != nil {
-		return nil
-	}
-	var out []int
-	for _, field := range strings.Fields(string(b)) {
-		n, err := strconv.Atoi(field)
-		if err == nil && n > 0 {
-			out = append(out, n)
-		}
-	}
-	return out
-}
-
-func anyRunning(pids []int) bool {
-	for _, pid := range pids {
-		if processRunning(pid) {
-			return true
-		}
-	}
-	return false
-}
-
-func processRunning(pid int) bool {
-	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		if strings.HasPrefix(line, "State:") {
-			return !strings.Contains(line, "Z")
-		}
-	}
-	return true
 }
 
 // startError turns sudo's or moonbit's last words into the reason a run
