@@ -182,6 +182,79 @@ func TestRestoreKeepsTheTallyAndCadence(t *testing.T) {
 	}
 }
 
+// A deadline that passed while the plugin was down has to complete on the
+// next tick, the same way a live expiry does. The finished phase stays put
+// until that tick so the completion notify still names it; then the phase
+// rolls, a finished work phase counts, and Start can run whatever is next.
+func TestRestoreExpiredPhaseRollsOnTick(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+
+	t.Run("work", func(t *testing.T) {
+		now := start
+		s := NewSession(func() time.Time { return now })
+		s.SetDurations(25*time.Minute, 5*time.Minute, 15*time.Minute)
+		s.Start()
+		snap := s.Snapshot()
+
+		expiredAt := start.Add(30 * time.Minute)
+		restored := NewSession(func() time.Time { return expiredAt })
+		restored.SetDurations(25*time.Minute, 5*time.Minute, 15*time.Minute)
+		restored.RestoreSnapshot(snap)
+		if restored.Mode() != ModeWork {
+			t.Fatalf("mode before tick = %v, want the finished work phase", restored.Mode())
+		}
+		if _, done := restored.Tick(); !done {
+			t.Fatal("expired work phase did not complete on tick")
+		}
+		if restored.Mode() != ModeShort {
+			t.Fatalf("mode = %v, want short", restored.Mode())
+		}
+		if restored.Completed() != 1 {
+			t.Fatalf("completed = %d, want 1", restored.Completed())
+		}
+		if restored.Remaining() != 5*time.Minute {
+			t.Fatalf("remaining = %v, want the short break", restored.Remaining())
+		}
+		restored.Start()
+		if !restored.Running() {
+			t.Fatal("Start did nothing after the expired work phase rolled")
+		}
+	})
+
+	t.Run("break", func(t *testing.T) {
+		now := start
+		s := NewSession(func() time.Time { return now })
+		s.SetDurations(25*time.Minute, 5*time.Minute, 15*time.Minute)
+		s.SetMode(ModeShort)
+		s.Start()
+		snap := s.Snapshot()
+
+		expiredAt := start.Add(10 * time.Minute)
+		restored := NewSession(func() time.Time { return expiredAt })
+		restored.SetDurations(25*time.Minute, 5*time.Minute, 15*time.Minute)
+		restored.RestoreSnapshot(snap)
+		if restored.Mode() != ModeShort {
+			t.Fatalf("mode before tick = %v, want the finished break", restored.Mode())
+		}
+		if _, done := restored.Tick(); !done {
+			t.Fatal("expired break did not complete on tick")
+		}
+		if restored.Mode() != ModeWork {
+			t.Fatalf("mode = %v, want work", restored.Mode())
+		}
+		if restored.Completed() != 0 {
+			t.Fatalf("completed = %d, want 0", restored.Completed())
+		}
+		if restored.Remaining() != 25*time.Minute {
+			t.Fatalf("remaining = %v, want the work length", restored.Remaining())
+		}
+		restored.Start()
+		if !restored.Running() {
+			t.Fatal("Start did nothing after the expired break rolled")
+		}
+	})
+}
+
 func TestViewIsOneConsistentRead(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	s := NewSession(func() time.Time { return now })
