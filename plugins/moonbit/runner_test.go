@@ -194,5 +194,40 @@ func TestStreamEndedRecoversActiveOperation(t *testing.T) {
 	}
 }
 
+// Docker and schedule runs wait on PhaseWorking. Closing that stream without
+// docker_done, schedule_done, cancelled, or error must not leave the spinner
+// up: that screen's action bar is empty, and Cancel does nothing once the op
+// is gone.
+func TestStreamEndedRecoversWorkingRun(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		working string
+		back    Phase
+	}{
+		{name: "docker", working: "Cleaning Docker", back: PhaseDocker},
+		{name: "schedule", working: "Enabling daemon mode", back: PhaseSchedule},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &State{Phase: PhaseWorking, Working: tc.working, Back: tc.back}
+			if !s.StreamEnded() {
+				t.Fatal("closed stream must recover a working run")
+			}
+			if s.Phase != PhaseError || s.Err == "" {
+				t.Fatalf("phase = %d err = %q, want PhaseError with a message", s.Phase, s.Err)
+			}
+			if s.Working != "" {
+				t.Fatalf("working label still set: %q", s.Working)
+			}
+			var buttons int
+			for _, side := range actionBar(s).Children {
+				buttons += len(side.Children)
+			}
+			if buttons == 0 {
+				t.Fatal("action bar is empty, so there is no way off the screen")
+			}
+		})
+	}
+}
+
 // The daemon cancels on EOF of its request reader and still writes its
 // terminal event, so Cancel must leave the read side open to receive it.
