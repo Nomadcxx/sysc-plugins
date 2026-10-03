@@ -2,9 +2,13 @@ package moonbit
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -31,6 +35,12 @@ echo "$req" > "$FAKE_DIR/request"
 case "$FAKE_MODE" in
   cancel) echo '{"t":"category","name":"a","i":1,"total":9}'; cat >/dev/null; echo '{"t":"cancelled"}';;
   long) printf '{"t":"clean_done","deleted":3,"errors":["%s"]}\n' "$(head -c 200000 /dev/zero | tr '\0' x)";;
+  # Grandchild keeps stdout open and ignores stdin EOF and catchable signals.
+  # Killing the parent script must not be enough to end the run.
+  hung)
+    echo $$ > "$FAKE_DIR/sudo.pid"
+    bash -c 'trap "" TERM HUP INT QUIT ALRM; echo $BASHPID > "$FAKE_DIR/child"; exec sleep 100000' </dev/null &
+    wait;;
   *) echo '{"t":"category_done","name":"Pacman Cache","files":2,"bytes":20}'; echo '{"t":"done","scanned_at":"2026-10-02T12:30:54Z"}';;
 esac
 `
@@ -231,3 +241,176 @@ func TestStreamEndedRecoversWorkingRun(t *testing.T) {
 
 // The daemon cancels on EOF of its request reader and still writes its
 // terminal event, so Cancel must leave the read side open to receive it.
+
+func withShortGrace(t *testing.T) {
+	t.Helper()
+	prev := cancelGrace
+	cancelGrace = 200 * time.Millisecond
+	t.Cleanup(func() { cancelGrace = prev })
+}
+
+func pidFile(t *testing.T, name string) int {
+	t.Helper()
+	path := filepath.Join(os.Getenv("FAKE_DIR"), name)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(path)
+		if err == nil {
+			n, conv := strconv.Atoi(strings.TrimSpace(string(b)))
+			if conv == nil && n > 0 {
+				return n
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("pid file %s did not appear", name)
+	return 0
+}
+
+func processEnded(pid int) bool {
+	if pid <= 0 {
+		return true
+	}
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return true
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "State:") {
+			return strings.Contains(line, "Z")
+		}
+	}
+	return false
+}
+
+func releasePIDs(pids ...int) {
+	own, _ := syscall.Getpgid(0)
+	for _, pid := range pids {
+		if pid <= 0 || processEnded(pid) {
+			continue
+		}
+		if pgid, err := syscall.Getpgid(pid); err == nil && pgid > 0 && pgid != own {
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		}
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+			_ = exec.Command("sudo", "-n", "kill", "-9", strconv.Itoa(pid)).Run()
+		}
+	}
+}
+
+// recoverLikeStreamOp is the plugin loop's rule: a terminal event folds on
+// its own, and a stream that closes without one must go through StreamEnded.
+func recoverLikeStreamOp(t *testing.T, op *Op, s *State) {
+	t.Helper()
+	timer := time.NewTimer(cancelGrace + 5*time.Second)
+	defer timer.Stop()
+	terminal := false
+	for {
+		select {
+		case ev, ok := <-op.Events:
+			if !ok {
+				if !terminal && !s.StreamEnded() {
+					t.Fatal("closed stream skipped StreamEnded")
+				}
+				return
+			}
+			s.Fold(ev)
+			switch ev.T {
+			case "done", "clean_done", "cancelled", "error", "docker_done", "schedule_done":
+				terminal = true
+			}
+		case <-timer.C:
+			t.Fatalf("stream still open after cancel; phase %d", s.Phase)
+		}
+	}
+}
+
+// A sudo stand-in that forks a grandchild holding stdout must not survive
+// Cancel. The grandchild ignores stdin EOF, so closing the request side does
+// nothing; after the grace kill the child is dead and the working phase is
+// gone. StreamEnded is what leaves PhaseWorking when no terminal event arrives.
+func TestCancelKillsHungGrandchildAndLeavesTheProgressPhase(t *testing.T) {
+	withShortGrace(t)
+	r := fakeSudo(t, "hung")
+	op, err := r.Start([]byte("hunter2"), Request{Cmd: "docker", Op: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := pidFile(t, "child")
+	sudoPID := pidFile(t, "sudo.pid")
+	t.Cleanup(func() { releasePIDs(child, sudoPID) })
+
+	s := &State{Phase: PhaseWorking, Working: "Cleaning Docker", Back: PhaseDocker}
+	op.Cancel()
+	recoverLikeStreamOp(t, op, s)
+	if s.Phase == PhaseWorking {
+		t.Fatalf("phase still working; grandchild ended=%v", processEnded(child))
+	}
+	if s.Phase != PhaseError && s.Phase != PhaseIdle {
+		t.Fatalf("phase = %d, want PhaseError or PhaseIdle", s.Phase)
+	}
+	if s.Phase == PhaseError && s.Err == "" {
+		t.Fatal("StreamEnded left PhaseError with no message")
+	}
+	if !processEnded(child) {
+		t.Fatalf("grandchild %d still running", child)
+	}
+}
+
+// moonbit runs as root. A direct signal from the plugin is EPERM, and killing
+// sudo's process group does not reach that child. The child ignores catchable
+// signals and stdin EOF; Cancel must still end it and leave the progress phase.
+func TestCancelKillsRootChildThatIgnoresSignals(t *testing.T) {
+	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
+		t.Skip("passwordless sudo is required")
+	}
+	withShortGrace(t)
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "child")
+	reqPath := filepath.Join(dir, "request")
+	script := fmt.Sprintf(`#!/bin/bash
+trap '' TERM HUP INT ALRM QUIT
+echo '{"t":"ready"}'
+read -r req
+echo "$req" > %s
+echo $$ > %s
+exec sleep 100000
+`, strconv.Quote(reqPath), strconv.Quote(childPath))
+	bin := filepath.Join(dir, "moonbit")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	op, err := (Runner{Sudo: "sudo", Moonbit: bin}).Start(nil, Request{Cmd: "docker", Op: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var child int
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(childPath)
+		if err == nil {
+			child, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+			if child > 0 {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if child == 0 {
+		t.Fatal("root child pid did not appear")
+	}
+	t.Cleanup(func() { releasePIDs(child) })
+
+	s := &State{Phase: PhaseWorking, Working: "Cleaning Docker", Back: PhaseDocker}
+	op.Cancel()
+	recoverLikeStreamOp(t, op, s)
+	if s.Phase == PhaseWorking {
+		t.Fatalf("phase still working; root child ended=%v", processEnded(child))
+	}
+	if s.Phase != PhaseError && s.Phase != PhaseIdle {
+		t.Fatalf("phase = %d, want PhaseError or PhaseIdle", s.Phase)
+	}
+	if !processEnded(child) {
+		t.Fatalf("root child %d still running", child)
+	}
+}

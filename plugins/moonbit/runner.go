@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -41,11 +44,16 @@ const (
 	promptMarker = "[moonbit-panel-password]"
 	// readyTimeout bounds sudo's check and moonbit's start.
 	readyTimeout = 20 * time.Second
-	// cancelGrace bounds the wait for moonbit's terminal event after Cancel.
-	cancelGrace = 10 * time.Second
 	// maxEventLine fits clean_done, whose errors list is unbounded.
 	maxEventLine = 4 << 20
 )
+
+// cancelGrace bounds the wait for moonbit's terminal event after Cancel.
+var cancelGrace = 10 * time.Second
+
+// killWait covers sudo's terminate_command, which sleeps two seconds
+// between the catchable signals and SIGKILL.
+const killWait = 3 * time.Second
 
 // ErrWrongPassword means sudo asked again: the password was not accepted.
 var ErrWrongPassword = errors.New("wrong password")
@@ -59,7 +67,9 @@ type Op struct {
 }
 
 // Cancel ends the request side. moonbit cancels on EOF and still writes its
-// terminal event; a run still going after cancelGrace is killed.
+// terminal event; a run still going after cancelGrace is stopped, child
+// included. The stream stays open for that grace so a terminal event is not
+// dropped, and StreamEnded still runs if the stream then closes without one.
 func (o *Op) Cancel() {
 	o.once.Do(func() {
 		_ = o.stdin.Close()
@@ -91,6 +101,9 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 		return nil, err
 	}
 	cmd := exec.Command(r.sudo(), "-S", "-k", "-p", promptMarker, r.moonbit(), "panel")
+	// Own process group, so the grace kill can signal sudo's group without
+	// signalling this plugin.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -106,7 +119,7 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	kill := func() { _ = cmd.Process.Kill() }
+	kill := func() { stopCommand(cmd, stdout) }
 
 	prompts := make(chan struct{}, 4)
 	tail := &lastLine{}
@@ -166,6 +179,90 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 			return nil, errors.New("moonbit did not start in time")
 		}
 	}
+}
+
+// stopCommand ends sudo and the moonbit process it started.
+// moonbit runs as root, so this process cannot signal it. SIGKILL to sudo
+// reparents that child and leaves it holding the stdout pipe, which keeps
+// the event stream open and the daemon's operation lock taken. A group
+// signal skips the root child the same way. sudo catches SIGALRM and
+// SIGKILLs the command itself (terminate_command). Descendants this process
+// may signal are killed directly, for a sudo stand-in that does not forward
+// the alarm. The stdout read side is closed afterwards so the stream still
+// ends if a writer ignores the signal. sudo is killed only after that wait:
+// killing it first aborts terminate_command and orphans the root child.
+func stopCommand(cmd *exec.Cmd, stdout io.Closer) {
+	if cmd != nil && cmd.Process != nil {
+		pid := cmd.Process.Pid
+		kids := descendantPIDs(pid)
+		_ = cmd.Process.Signal(syscall.SIGALRM)
+		for _, kid := range kids {
+			_ = syscall.Kill(kid, syscall.SIGKILL)
+		}
+		deadline := time.Now().Add(killWait)
+		for time.Now().Before(deadline) && anyRunning(kids) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if pgid, err := syscall.Getpgid(pid); err == nil && pgid == pid {
+			if own, err := syscall.Getpgid(0); err != nil || pgid != own {
+				_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			}
+		}
+		_ = cmd.Process.Kill()
+	}
+	if stdout != nil {
+		_ = stdout.Close()
+	}
+}
+
+func descendantPIDs(pid int) []int {
+	var out []int
+	var walk func(int)
+	walk = func(p int) {
+		for _, c := range childPIDs(p) {
+			walk(c)
+			out = append(out, c)
+		}
+	}
+	walk(pid)
+	return out
+}
+
+func childPIDs(pid int) []int {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/task/" + strconv.Itoa(pid) + "/children")
+	if err != nil {
+		return nil
+	}
+	var out []int
+	for _, field := range strings.Fields(string(b)) {
+		n, err := strconv.Atoi(field)
+		if err == nil && n > 0 {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func anyRunning(pids []int) bool {
+	for _, pid := range pids {
+		if processRunning(pid) {
+			return true
+		}
+	}
+	return false
+}
+
+func processRunning(pid int) bool {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "State:") {
+			return !strings.Contains(line, "Z")
+		}
+	}
+	return true
 }
 
 // startError turns sudo's or moonbit's last words into the reason a run
