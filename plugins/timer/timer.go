@@ -163,9 +163,13 @@ func (t *Timer) Restore(deadline time.Time, duration time.Duration) {
 		t.duration = duration
 	}
 	if left <= 0 {
+		// Already due. Stay running at zero and unfired so the next Tick
+		// reports completion once, the same transition a live expiry uses
+		// to roll the phase and let Start run the next one.
 		t.remaining = 0
-		t.running = false
-		t.fired = true
+		t.running = true
+		t.origin = now
+		t.fired = false
 		return
 	}
 	t.remaining = left
