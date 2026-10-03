@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -155,12 +156,19 @@ func selectedDevice(snap Snapshot) *Device {
 // device charges; the panel and tooltip carry the charge level. The whole
 // control opens the panel.
 func BarTree(snap Snapshot) *v1.Node {
+	return BarTreeAtWidth(snap, barwidth.StandardWidth)
+}
+
+func BarTreeAtWidth(snap Snapshot, width int) *v1.Node {
 	icon, label := "smartphone", "N/A"
 	if snap.Available {
 		label = ""
 		if dev := selectedDevice(snap); dev != nil && !dev.Reachable {
 			icon = "devices_other"
 		}
+	}
+	if barwidth.Compact(width) {
+		label = ""
 	}
 	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{Kind: v1.KindButton, ID: "open",
 		Icon: icon, Text: label, Name: "Open phone connect", Role: "button",

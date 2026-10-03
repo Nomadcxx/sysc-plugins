@@ -28,6 +28,7 @@ func run(in *os.File, out *os.File) error {
 		kind     v1.ViewKind
 		rev      uint64
 		instance string
+		width    int
 	}
 	views := map[string]view{}
 	showWhenIdle := true
@@ -62,7 +63,7 @@ func run(in *os.File, out *os.File) error {
 			var root *v1.Node
 			switch v.kind {
 			case v1.ViewBar:
-				root = timer.BarTree(text, now.State, showWhenIdle)
+				root = timer.BarTreeAtWidth(text, now.State, showWhenIdle, v.width)
 			case v1.ViewTooltip:
 				root = timer.TooltipTree(text, now.State)
 			default:
@@ -150,7 +151,7 @@ func run(in *os.File, out *os.File) error {
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
-				views[m.ViewID] = view{kind: m.View, instance: m.Instance}
+				views[m.ViewID] = view{kind: m.View, instance: m.Instance, width: m.Width}
 				publish()
 			case *v1.ViewClose:
 				delete(views, m.ViewID)

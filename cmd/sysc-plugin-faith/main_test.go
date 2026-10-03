@@ -112,8 +112,12 @@ func (h *fakeHost) send(m v1.Message) error {
 }
 
 func (h *fakeHost) open(id string, kind v1.ViewKind) {
+	h.openAtWidth(id, kind, 0)
+}
+
+func (h *fakeHost) openAtWidth(id string, kind v1.ViewKind, width int) {
 	h.t.Helper()
-	if err := h.send(&v1.ViewOpen{ViewID: id, View: kind, Entry: map[v1.ViewKind]string{v1.ViewPanel: "panel"}[kind], Output: "DP-1"}); err != nil {
+	if err := h.send(&v1.ViewOpen{ViewID: id, View: kind, Entry: map[v1.ViewKind]string{v1.ViewPanel: "panel"}[kind], Output: "DP-1", Width: width}); err != nil {
 		h.t.Fatal(err)
 	}
 }
@@ -216,6 +220,26 @@ func TestClicksOnTheCross(t *testing.T) {
 	}
 	if p.Entry != "panel" || p.Output != "DP-1" || p.Instance != "bar-1" {
 		t.Fatalf("panel.open = %+v", p)
+	}
+}
+
+func TestBarWidthsStayPerView(t *testing.T) {
+	h := startPlugin(t, nil, offline())
+	h.openAtWidth("side", v1.ViewBar, 32)
+	h.waitFor("side bar", func() bool { return h.roots["side"] != nil })
+	if root := h.roots["side"]; len(root.Children) != 1 {
+		t.Fatalf("side bar children = %d, want icon only", len(root.Children))
+	}
+
+	h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: map[string]any{"show_reference": true}})
+	h.waitFor("settings", func() bool { return h.roots["side"] != nil })
+	h.openAtWidth("horizontal", v1.ViewBar, 240)
+	h.waitFor("horizontal bar", func() bool { return h.roots["horizontal"] != nil })
+	if root := h.roots["horizontal"]; len(root.Children) != 2 || root.Children[1].Text == "" {
+		t.Fatalf("horizontal bar = %+v", root)
+	}
+	if root := h.roots["side"]; len(root.Children) != 1 {
+		t.Fatalf("side bar changed after another width opened: %+v", root)
 	}
 }
 

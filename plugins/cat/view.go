@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -82,16 +83,26 @@ func BarCat(f Frame, s Settings, height int) *v1.Node {
 // BarTree is one control: the cat, and the load beside it when the user
 // asked for the number. Clicking it opens the panel.
 func BarTree(f Frame, s Settings, height int) *v1.Node {
+	return BarTreeAtWidth(f, s, height, barwidth.StandardWidth)
+}
+
+func BarTreeAtWidth(f Frame, s Settings, height, width int) *v1.Node {
+	compact := barwidth.Compact(width)
 	// A fixed height keeps the pill the cat's own height and drops the
 	// vertical inset, so the padding only opens the sides: the gallop is as
 	// wide as its square, and without it nose and tail touch the pill's rim.
 	cat := BarCat(f, s, height)
+	buttonHeight, padding := cat.IconSize, barInset
+	if compact {
+		cat.IconSize = min(cat.IconSize, 24)
+		buttonHeight, padding = 32, 4
+	}
 	// Fill "card" resolves to the capsule colour the shell already paints,
 	// so the button does not add a lighter inner pill over it.
 	open := &v1.Node{Kind: v1.KindButton, ID: "open", Name: "Open the cat", Role: "button",
-		Fill: "card", Height: cat.IconSize, Padding: barInset, Gap: 4, Events: []v1.EventKind{v1.EventActivate},
+		Fill: "card", Height: buttonHeight, Padding: padding, Gap: 4, Events: []v1.EventKind{v1.EventActivate},
 		Children: []*v1.Node{cat}}
-	if s.ShowPercent {
+	if s.ShowPercent && !compact {
 		tone := v1.ToneNormal
 		if s.alert(f.Percent, f.Known) {
 			tone = v1.ToneError

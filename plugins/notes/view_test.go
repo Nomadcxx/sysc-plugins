@@ -92,6 +92,19 @@ func TestBarAndTooltipFit(t *testing.T) {
 	}
 }
 
+func TestBarFitsSideWidths(t *testing.T) {
+	bar := BarTree()
+	for _, width := range []int{shelllint.BarWidth, 32, 64} {
+		for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
+			t.Errorf("width %d: %s", width, finding)
+		}
+	}
+	button := findByID(bar, "open")
+	if button == nil || button.Name != "Open Notes" || button.Role != "button" || len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
+		t.Fatalf("bar interaction = %+v", button)
+	}
+}
+
 func TestNoticeDoesNotHideLibrary(t *testing.T) {
 	tree := PanelTree(panelFixtures()["notice"], false)
 	if findByID(tree, "notice-dismiss") == nil || findByID(tree, "open:"+Token("Weekly review.md")) == nil {

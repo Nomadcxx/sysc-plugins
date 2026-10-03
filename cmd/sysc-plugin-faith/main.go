@@ -67,8 +67,9 @@ type commentaryResult struct {
 }
 
 type view struct {
-	kind v1.ViewKind
-	rev  uint64
+	kind  v1.ViewKind
+	rev   uint64
+	width int
 }
 
 func run(in io.Reader, out io.Writer, opt options) error {
@@ -121,7 +122,7 @@ func run(in io.Reader, out io.Writer, opt options) error {
 			v.rev++
 			switch v.kind {
 			case v1.ViewBar:
-				_ = c.Snapshot(id, v.rev, sess.BarTree())
+				_ = c.Snapshot(id, v.rev, sess.BarTreeAtWidth(v.width))
 			case v1.ViewTooltip:
 				_ = c.Snapshot(id, v.rev, sess.TooltipTree())
 			default:
@@ -188,7 +189,7 @@ func run(in io.Reader, out io.Writer, opt options) error {
 				saves.flush(time.Second)
 				return nil
 			case *v1.ViewOpen:
-				views[m.ViewID] = &view{kind: m.View}
+				views[m.ViewID] = &view{kind: m.View, width: m.Width}
 				if m.View == v1.ViewPanel || m.View == v1.ViewFloating {
 					perform(sess.PanelOpened())
 				}

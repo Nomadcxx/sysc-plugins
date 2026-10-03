@@ -96,7 +96,7 @@ func busy() *v1.SettingsChanged {
 func TestBarGetsASpriteAndNoPerPoseTraffic(t *testing.T) {
 	h := startPlugin(t)
 	h.send(busy())
-	h.send(&v1.ViewOpen{ViewID: "v1", View: v1.ViewBar, Entry: "bar", Output: "DP-1", Height: 32})
+	h.send(&v1.ViewOpen{ViewID: "v1", View: v1.ViewBar, Entry: "bar", Output: "DP-1", Width: 32, Height: 32})
 
 	var last *v1.ViewSnapshot
 	var rev uint64
@@ -113,7 +113,7 @@ func TestBarGetsASpriteAndNoPerPoseTraffic(t *testing.T) {
 		if snap.Revision != rev+1 {
 			t.Fatalf("snapshot rev %d after %d", snap.Revision, rev)
 		}
-		for _, f := range shelllint.Tree(snap.Root, v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight) {
+		for _, f := range shelllint.Tree(snap.Root, v1.ViewBar, 32, shelllint.BarHeight) {
 			t.Errorf("bar snapshot: %s", f)
 		}
 		last, rev = snap, snap.Revision
@@ -122,6 +122,9 @@ func TestBarGetsASpriteAndNoPerPoseTraffic(t *testing.T) {
 		t.Fatal("no snapshot")
 	}
 	cat := last.Root.Children[0].Children[0]
+	if len(last.Root.Children[0].Children) != 1 {
+		t.Fatalf("side bar retained extra cat content: %+v", last.Root.Children[0])
+	}
 	if cat.Key != "cat" || cat.Kind != v1.KindIcon || len(cat.Frames) < 2 || cat.CycleMS == 0 {
 		t.Fatalf("bar cat = %+v, want a sprite", cat)
 	}

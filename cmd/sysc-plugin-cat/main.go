@@ -48,6 +48,7 @@ type view struct {
 	kind     v1.ViewKind
 	rev      uint64
 	instance string
+	width    int
 	height   int
 }
 
@@ -143,7 +144,7 @@ func (p *plugin) handle(msg v1.Message) bool {
 		return false
 	case *v1.ViewOpen:
 		wasIdle := len(p.views) == 0
-		v := &view{kind: m.View, instance: m.Instance, height: m.Height}
+		v := &view{kind: m.View, instance: m.Instance, width: m.Width, height: m.Height}
 		p.views[m.ViewID] = v
 		p.snapshot(m.ViewID, v)
 		if wasIdle {
@@ -261,7 +262,7 @@ func (p *plugin) snapshot(id string, v *view) {
 	var root *v1.Node
 	switch v.kind {
 	case v1.ViewBar:
-		root = cat.BarTree(f, p.settings, v.height)
+		root = cat.BarTreeAtWidth(f, p.settings, v.height, v.width)
 	case v1.ViewTooltip:
 		root = cat.TooltipTree(f)
 	default:

@@ -66,8 +66,9 @@ func (s *settings) apply(values map[string]any) {
 }
 
 type view struct {
-	kind v1.ViewKind
-	rev  uint64
+	kind  v1.ViewKind
+	rev   uint64
+	width int
 }
 
 type session struct {
@@ -162,7 +163,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
-				s.views[m.ViewID] = view{kind: m.View}
+				s.views[m.ViewID] = view{kind: m.View, width: m.Width}
 				s.refresh(ctx)
 				s.scan(ctx)
 				s.snapshot(m.ViewID)

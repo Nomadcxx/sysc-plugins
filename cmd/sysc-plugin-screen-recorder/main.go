@@ -33,6 +33,7 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 		kind   v1.ViewKind
 		rev    uint64
 		output string
+		width  int
 	}
 	views := map[string]view{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -69,7 +70,7 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 			case v1.ViewPanel:
 				root = recorder.PanelTree(last, cfg, now)
 			default:
-				root = recorder.BarTree(last, cfg)
+				root = recorder.BarTreeAtWidth(last, cfg, v.width)
 			}
 			_ = c.Snapshot(id, v.rev, root)
 		}
@@ -108,7 +109,7 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 				rec.Close()
 				return nil
 			case *v1.ViewOpen:
-				views[m.ViewID] = view{kind: m.View, output: m.Output}
+				views[m.ViewID] = view{kind: m.View, output: m.Output, width: m.Width}
 				publish()
 			case *v1.ViewClose:
 				delete(views, m.ViewID)

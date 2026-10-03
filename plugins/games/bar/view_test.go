@@ -35,6 +35,26 @@ func TestPillValidatesAsBar(t *testing.T) {
 	}
 }
 
+func TestPillFitsSideWidths(t *testing.T) {
+	running := map[string]Run{"7": {Name: "Baldurs Gate 3 Divinity Original Sin", Start: now.Add(-125 * time.Minute)}}
+	for _, width := range []int{shelllint.BarWidth, 32, 64} {
+		bar := Pill(running, false, now)
+		if width != shelllint.BarWidth {
+			bar = PillAtWidth(running, false, now, width)
+		}
+		for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
+			t.Errorf("width %d: %s", width, finding)
+		}
+		if width <= 64 && bar.Children[0].Text != "" {
+			t.Errorf("width %d label %q should remain in the tooltip", width, bar.Children[0].Text)
+		}
+		button := bar.Children[0]
+		if button.ID != "bar" || button.Name != "games" || button.Role != "button" || len(button.Events) != 2 || button.Events[0] != v1.EventActivate || button.Events[1] != v1.EventPointer {
+			t.Fatalf("width %d bar interaction = %+v", width, button)
+		}
+	}
+}
+
 func TestPillIdle(t *testing.T) {
 	n := Pill(nil, false, now).Children[0]
 	if n.Kind != v1.KindButton || n.Key != "bar" {

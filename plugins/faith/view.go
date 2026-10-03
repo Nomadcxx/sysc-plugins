@@ -3,6 +3,7 @@ package faith
 import (
 	"fmt"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -65,12 +66,16 @@ type PanelModel struct {
 
 // BarTree is the cross, and the reference beside it when asked for.
 func BarTree(ref Ref, showReference bool) *v1.Node {
+	return BarTreeAtWidth(ref, showReference, barwidth.StandardWidth)
+}
+
+func BarTreeAtWidth(ref Ref, showReference bool, width int) *v1.Node {
 	children := []*v1.Node{{
 		Kind: v1.KindButton, ID: NodeCross, Key: NodeCross, Icon: "cross",
 		Name: "Faith: click for a prayer", Role: "button",
 		Events: []v1.EventKind{v1.EventActivate, v1.EventPointer},
 	}}
-	if showReference {
+	if showReference && !barwidth.Compact(width) {
 		children = append(children, &v1.Node{Kind: v1.KindText, Text: ref.String(), Tone: v1.ToneSubtle})
 	}
 	return &v1.Node{Kind: v1.KindRow, Gap: 4, Children: children}

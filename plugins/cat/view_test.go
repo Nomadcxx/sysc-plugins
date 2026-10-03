@@ -63,6 +63,27 @@ func TestEveryViewLaysOut(t *testing.T) {
 	}
 }
 
+func TestBarFitsSideWidths(t *testing.T) {
+	frame, settings := frames()["zooming"], DefaultSettings()
+	settings.ShowPercent = true
+	for _, width := range []int{shelllint.BarWidth, 32, 64} {
+		bar := BarTree(frame, settings, shelllint.BarHeight)
+		if width != shelllint.BarWidth {
+			bar = BarTreeAtWidth(frame, settings, shelllint.BarHeight, width)
+		}
+		for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
+			t.Errorf("width %d: %s", width, finding)
+		}
+		if width <= 64 && len(bar.Children[0].Children) != 1 {
+			t.Errorf("width %d has optional reading text in the cat button", width)
+		}
+		open := bar.Children[0]
+		if open.ID != "open" || open.Name != "Open the cat" || open.Role != "button" || len(open.Events) != 1 || open.Events[0] != v1.EventActivate {
+			t.Fatalf("width %d bar interaction = %+v", width, open)
+		}
+	}
+}
+
 // The cat is a host-animated sprite in both animated views, keyed so the
 // host keeps its phase across the snapshots each sample sends.
 func TestTheCatIsAKeyedSprite(t *testing.T) {

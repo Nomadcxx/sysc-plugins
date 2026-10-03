@@ -315,8 +315,13 @@ func (s *Session) ApplySettings(values map[string]any, now time.Time) []Effect {
 
 // Views.
 
-// BarTree is the bar view.
+// BarTree is the standard-width bar view.
 func (s *Session) BarTree() *v1.Node { return BarTree(s.ref, s.settings.ShowReference) }
+
+// BarTreeAtWidth keeps the reference in the tooltip when the bar is compact.
+func (s *Session) BarTreeAtWidth(width int) *v1.Node {
+	return BarTreeAtWidth(s.ref, s.settings.ShowReference, width)
+}
 
 // TooltipTree is the tooltip view.
 func (s *Session) TooltipTree() *v1.Node {

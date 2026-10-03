@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -163,6 +164,27 @@ func TestBarTreeShowsOfflineState(t *testing.T) {
 	}
 	if open.Icon != "smartphone" || open.Text != "N/A" {
 		t.Fatalf("offline pill = %q %q", open.Icon, open.Text)
+	}
+}
+
+func TestBarFitsSideWidths(t *testing.T) {
+	for name, snap := range map[string]Snapshot{"unavailable": {}, "connected": pairedSnap()} {
+		for _, width := range []int{shelllint.BarWidth, 32, 64} {
+			bar := BarTree(snap)
+			if width != shelllint.BarWidth {
+				bar = BarTreeAtWidth(snap, width)
+			}
+			for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
+				t.Errorf("%s width %d: %s", name, width, finding)
+			}
+			if width <= 64 && bar.Children[0].Text != "" {
+				t.Errorf("%s width %d label %q should move to the tooltip", name, width, bar.Children[0].Text)
+			}
+			button := bar.Children[0]
+			if button.ID != "open" || button.Name != "Open phone connect" || button.Role != "button" || len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
+				t.Fatalf("%s width %d interaction = %+v", name, width, button)
+			}
+		}
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -117,6 +118,12 @@ func severityTone(pct float64, hasPercent bool, cfg Config) v1.Tone {
 // across states; missing data renders as "--", a dimmed gauge, and muted
 // tones instead of vanishing nodes.
 func BarTree(r Report, inst Instance, cfg Config, hostMinor int, now time.Time) *v1.Node {
+	return BarTreeAtWidth(r, inst, cfg, hostMinor, now, barwidth.StandardWidth)
+}
+
+// BarTreeAtWidth keeps the launch affordance in side bars and moves the
+// configured usage details to the tooltip and panel.
+func BarTreeAtWidth(r Report, inst Instance, cfg Config, hostMinor int, now time.Time, width int) *v1.Node {
 	p := selectProvider(r, inst.Vendor, cfg.Warn, cfg.Crit)
 
 	tone := v1.ToneSubtle
@@ -169,6 +176,9 @@ func BarTree(r Report, inst Instance, cfg Config, hostMinor int, now time.Time) 
 		Kind: v1.KindButton, ID: "open", Icon: "ai-usage",
 		Name: "Open AI usage", Role: "button", Tooltip: tooltip,
 		Events: []v1.EventKind{v1.EventActivate},
+	}
+	if barwidth.Compact(width) {
+		return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{button}}
 	}
 	if inst.ShowGlyph && inst.GlyphPosition == "after" {
 		row.Children = append(row.Children, gaugeOrMeter(inst, value, absent, pctText, tone, cfg, hostMinor)...)

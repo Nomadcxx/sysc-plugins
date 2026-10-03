@@ -2454,6 +2454,21 @@ func TestBarTreeIsIconOnly(t *testing.T) {
 	}
 }
 
+func TestBarFitsSideWidths(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		bar := BarTree(unavailable)
+		for _, width := range []int{shelllint.BarWidth, 32, 64} {
+			for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
+				t.Errorf("unavailable %v width %d: %s", unavailable, width, finding)
+			}
+		}
+		button := bar.Children[0]
+		if button.ID != "open" || button.Name != "Open mini docker" || button.Role != "button" || len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
+			t.Fatalf("interaction = %+v", button)
+		}
+	}
+}
+
 func TestPanelTreeValidate(t *testing.T) {
 	containers := []Container{
 		{ID: "a1", Names: "web", Image: "nginx:latest", State: "running", Status: "Up 2 hours"},

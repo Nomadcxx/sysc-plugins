@@ -125,6 +125,27 @@ func TestBarCountdownAndTooltipHaveAccessibleEventContext(t *testing.T) {
 	}
 }
 
+func TestBarFitsSideWidths(t *testing.T) {
+	now := time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC)
+	event := Event{ID: "standup", Summary: "Daily standup with the whole team", Start: now.Add(25 * time.Minute), End: now.Add(time.Hour)}
+	bar := BarTree([]Event{event}, now)
+	for _, width := range []int{lint.BarWidth, 32, 64} {
+		if width != lint.BarWidth {
+			bar = BarTreeAtWidth([]Event{event}, now, width)
+		}
+		for _, finding := range lint.Tree(bar, v1.ViewBar, width, lint.BarHeight) {
+			t.Errorf("width %d: %s", width, finding)
+		}
+		if width <= 64 && bar.Children[0].Text != "" {
+			t.Errorf("width %d label %q should move to the tooltip", width, bar.Children[0].Text)
+		}
+	}
+	button := bar.Children[0]
+	if button.ID != "calendar-open" || button.Name == "" || button.Role != "button" || len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
+		t.Fatalf("bar interaction = %+v", button)
+	}
+}
+
 func findKind(t *testing.T, root *v1.Node, kind v1.NodeKind) *v1.Node {
 	t.Helper()
 	if root.Kind == kind {

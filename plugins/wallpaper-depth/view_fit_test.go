@@ -91,6 +91,21 @@ func TestBarIsGlyphOnlyAcrossStates(t *testing.T) {
 	}
 }
 
+func TestBarFitsSideWidths(t *testing.T) {
+	for _, snapshot := range []ControllerSnapshot{{}, {Checked: true, Helper: HelperStatus{Ready: true}}} {
+		bar := BarTree(snapshot)
+		for _, width := range []int{lint.BarWidth, 32, 64} {
+			for _, finding := range lint.Tree(bar, v1.ViewBar, width, lint.BarHeight) {
+				t.Errorf("width %d: %s", width, finding)
+			}
+		}
+		button := bar.Children[0]
+		if button == nil || button.Name != "Open Wallpaper Depth panel" || button.Role != "button" || len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
+			t.Fatalf("bar interaction = %+v", button)
+		}
+	}
+}
+
 func TestPanelRendersRequiredStatesAndOutputRows(t *testing.T) {
 	ready := HelperStatus{Ready: true, RuntimeReady: true, ModelReady: true}
 	settings := Settings{AutoGenerate: true, Threshold: 30, Feather: 8}

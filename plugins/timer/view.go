@@ -3,6 +3,7 @@ package timer
 import (
 	"fmt"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -23,8 +24,15 @@ func barTone(state State) v1.Tone {
 // notify state, clears the fired timer. When showWhenIdle is false the idle
 // timer collapses to the glyph alone.
 func BarTree(remaining string, state State, showWhenIdle bool) *v1.Node {
+	return BarTreeAtWidth(remaining, state, showWhenIdle, barwidth.StandardWidth)
+}
+
+func BarTreeAtWidth(remaining string, state State, showWhenIdle bool, width int) *v1.Node {
 	text := remaining
 	if state == StateIdle && !showWhenIdle {
+		text = ""
+	}
+	if barwidth.Compact(width) {
 		text = ""
 	}
 	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{

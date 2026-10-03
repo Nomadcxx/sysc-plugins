@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -122,6 +123,46 @@ func TestBarTreeStates(t *testing.T) {
 		}
 		if !tc.save && save != nil {
 			t.Fatalf("%s has save control: %+v", tc.mode, save)
+		}
+	}
+}
+
+func TestBarTreeFitsSideWidths(t *testing.T) {
+	for _, state := range []Snapshot{
+		{Mode: Idle}, {Mode: Recording, Elapsed: 72 * time.Second}, {Mode: ReplayActive}, {Mode: Failed},
+	} {
+		for _, width := range []int{shelllint.BarWidth, 32, 64} {
+			bar := BarTree(state, Config{})
+			if width != shelllint.BarWidth {
+				bar = BarTreeAtWidth(state, Config{}, width)
+			}
+			for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
+				t.Errorf("mode %s width %d: %s", state.Mode, width, finding)
+			}
+			if toggle := childByID(bar, nodeToggle); width <= 64 && toggle != nil && toggle.Text != "" {
+				t.Errorf("mode %s width %d retains elapsed text", state.Mode, width)
+			}
+			toggle := childByID(bar, nodeToggle)
+			if state.Mode == Idle || state.Mode == Recording || state.Mode == ReplayActive || state.Mode == Failed {
+				if toggle == nil || toggle.Name != "Toggle recording" || toggle.Role != "button" || len(toggle.Events) != 2 || toggle.Events[0] != v1.EventActivate || toggle.Events[1] != v1.EventPointer {
+					t.Fatalf("mode %s width %d toggle interaction = %+v", state.Mode, width, toggle)
+				}
+			}
+			if state.Mode == ReplayActive {
+				save := childByID(bar, nodeSave)
+				if width == 32 {
+					if save != nil {
+						t.Fatalf("32px bar should keep the save action in the panel, got %+v", save)
+					}
+					if panelSave := childByID(PanelTree(state, Config{ReplayEnabled: true}, time.Time{}), nodeSave); panelSave == nil || panelSave.Name != "Save replay" {
+						t.Fatalf("32px bar lost panel save action: %+v", panelSave)
+					}
+				} else if save == nil || save.Name != "Save replay" || save.Role != "button" || len(save.Events) != 1 || save.Events[0] != v1.EventActivate {
+					t.Fatalf("width %d save interaction = %+v", width, save)
+				} else if width == 64 && (save.Text != "" || save.Icon != "download") {
+					t.Fatalf("64px save control = %+v", save)
+				}
+			}
 		}
 	}
 }

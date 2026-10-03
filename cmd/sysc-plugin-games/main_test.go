@@ -211,7 +211,7 @@ func find(root *v1.Node, id string) *v1.Node {
 
 func TestBarShowsRunningGame(t *testing.T) {
 	h := start(t)
-	h.send(v1.ViewOpen{Type: "view.open", ViewID: "b", View: v1.ViewBar, Entry: "bar", Output: "DP-1"})
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "b", View: v1.ViewBar, Entry: "bar", Output: "DP-1", Width: 240})
 	line := h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
 		return s.ViewID == "b" && find(s.Root, "bar") != nil
@@ -222,6 +222,27 @@ func TestBarShowsRunningGame(t *testing.T) {
 	}
 	if pill.Text != "Hades · 0m" {
 		t.Fatalf("pill text = %q", pill.Text)
+	}
+}
+
+func TestBarWidthsRemainPerView(t *testing.T) {
+	h := start(t)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "side", View: v1.ViewBar, Entry: "bar", Output: "DP-1", Width: 32})
+	sideLine := h.pump(func(line []byte) bool {
+		s := snapshotOf(line)
+		return s.ViewID == "side" && find(s.Root, "bar") != nil
+	})
+	if got := find(snapshotOf(sideLine).Root, "bar").Text; got != "" {
+		t.Fatalf("side bar text = %q", got)
+	}
+
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "wide", View: v1.ViewBar, Entry: "bar", Output: "DP-1", Width: 240})
+	wideLine := h.pump(func(line []byte) bool {
+		s := snapshotOf(line)
+		return s.ViewID == "wide" && find(s.Root, "bar") != nil
+	})
+	if got := find(snapshotOf(wideLine).Root, "bar").Text; got != "Hades · 0m" {
+		t.Fatalf("horizontal bar text = %q", got)
 	}
 }
 
