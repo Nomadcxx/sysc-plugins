@@ -94,8 +94,13 @@ func BarTreeAtWidth(f Frame, s Settings, height, width int) *v1.Node {
 	cat := BarCat(f, s, height)
 	buttonHeight, padding := cat.IconSize, barInset
 	if compact {
-		buttonHeight, padding = 32, 4
-		cat.IconSize = min(cat.IconSize, 24, max(1, width-2*padding))
+		buttonHeight, padding = 32, 0
+		cat.IconSize = min(cat.IconSize, max(1, width))
+		cat.Icon += "-side"
+		cat.Frames = append([]string(nil), cat.Frames...)
+		for i := range cat.Frames {
+			cat.Frames[i] += "-side"
+		}
 	}
 	// Fill "card" resolves to the capsule colour the shell already paints,
 	// so the button does not add a lighter inner pill over it.

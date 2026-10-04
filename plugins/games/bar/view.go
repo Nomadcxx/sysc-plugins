@@ -42,6 +42,10 @@ func PillAtWidth(running map[string]Run, libraryMissing bool, now time.Time, wid
 		// painting a lighter inner shape (same contract as calendar/cat).
 		Fill: "card",
 	}
+	if compact {
+		n.Icon, n.Height, n.Padding = "", 32, 2
+		n.Children = []*v1.Node{{Kind: v1.KindIcon, Icon: "sports_esports", IconSize: min(24, max(1, width-4))}}
+	}
 	switch len(running) {
 	case 0:
 		if libraryMissing {

@@ -298,3 +298,26 @@ func TestTooltipNamesGaitAndLoad(t *testing.T) {
 		t.Fatalf("tooltip = %q", got)
 	}
 }
+
+func TestSideCatKeepsFullSizeAndRotatesOnlyBarFrames(t *testing.T) {
+	f, s := frames()["zooming"], DefaultSettings()
+	side := BarTreeAtWidth(f, s, 32, 28).Children[0].Children[0]
+	if side.IconSize != min(s.Size, 28) {
+		t.Fatalf("side cat size %d, want %d", side.IconSize, min(s.Size, 28))
+	}
+	if side.Icon != f.Motion.Frames[0]+"-side" || len(side.Frames) != len(f.Motion.Frames) {
+		t.Fatalf("side sprite = %+v", side)
+	}
+	for i, name := range f.Motion.Frames {
+		if side.Frames[i] != name+"-side" {
+			t.Fatalf("side frame %d = %s", i, side.Frames[i])
+		}
+	}
+	horizontal := BarTree(f, s, 32).Children[0].Children[0]
+	if horizontal.Icon != f.Motion.Frames[0] || PanelCat(f, s).Icon != f.Motion.Frames[0] {
+		t.Fatal("side rendering changed shared horizontal/panel frames")
+	}
+	if side.Key != horizontal.Key || side.CycleMS != horizontal.CycleMS {
+		t.Fatal("side rendering changed animation identity or pace")
+	}
+}

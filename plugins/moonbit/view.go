@@ -65,6 +65,10 @@ func BarAtWidth(s *State, width int) *v1.Node {
 			{Kind: v1.KindIcon, Icon: "moonbit", Tone: v1.ToneAccent},
 		},
 	}
+	if barwidth.Compact(width) {
+		btn.Height, btn.Padding = 32, 2
+		btn.Children[0].IconSize = min(24, max(1, width-4))
+	}
 	if label != "" {
 		btn.Children = append(btn.Children, &v1.Node{Kind: v1.KindText, Text: label, Tone: tone})
 	}

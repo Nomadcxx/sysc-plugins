@@ -191,3 +191,13 @@ func TestTooltipContent(t *testing.T) {
 		t.Fatalf("overflow line=%q, want +3 more", got)
 	}
 }
+
+func TestSideGamesUsesFullSizedIcon(t *testing.T) {
+	button := PillAtWidth(nil, false, now, 28).Children[0]
+	if len(button.Children) != 1 || button.Children[0].IconSize != 24 || button.Children[0].Icon != "sports_esports" {
+		t.Fatalf("side games icon = %+v", button)
+	}
+	if button.Height != 32 || button.Padding != 2 {
+		t.Fatalf("side games box = %+v", button)
+	}
+}

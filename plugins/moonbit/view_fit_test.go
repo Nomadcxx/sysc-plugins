@@ -61,3 +61,10 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 		}
 	}
 }
+
+func TestSideMoonbitUsesFullSizedIcon(t *testing.T) {
+	button := BarAtWidth(states()[PhaseIdle], 28).Children[0]
+	if button.Children[0].IconSize != 24 || button.Height != 32 || button.Padding != 2 {
+		t.Fatalf("side Moonbit icon/box = %+v", button)
+	}
+}
