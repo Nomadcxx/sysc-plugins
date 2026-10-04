@@ -62,7 +62,7 @@ func TestBarTreeIsIconOnlyAndOpensOnBothMouseButtons(t *testing.T) {
 func TestBarFitsSideWidths(t *testing.T) {
 	for _, unread := range []bool{false, true} {
 		bar := BarTree(unread)
-		for _, width := range []int{shelllint.BarWidth, 32, 64} {
+		for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
 			for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
 				t.Errorf("unread %v width %d: %s", unread, width, finding)
 			}

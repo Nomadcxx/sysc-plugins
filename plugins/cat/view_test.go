@@ -66,7 +66,7 @@ func TestEveryViewLaysOut(t *testing.T) {
 func TestBarFitsSideWidths(t *testing.T) {
 	frame, settings := frames()["zooming"], DefaultSettings()
 	settings.ShowPercent = true
-	for _, width := range []int{shelllint.BarWidth, 32, 64} {
+	for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
 		bar := BarTree(frame, settings, shelllint.BarHeight)
 		if width != shelllint.BarWidth {
 			bar = BarTreeAtWidth(frame, settings, shelllint.BarHeight, width)

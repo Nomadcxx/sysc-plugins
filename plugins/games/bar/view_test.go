@@ -37,7 +37,7 @@ func TestPillValidatesAsBar(t *testing.T) {
 
 func TestPillFitsSideWidths(t *testing.T) {
 	running := map[string]Run{"7": {Name: "Baldurs Gate 3 Divinity Original Sin", Start: now.Add(-125 * time.Minute)}}
-	for _, width := range []int{shelllint.BarWidth, 32, 64} {
+	for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
 		bar := Pill(running, false, now)
 		if width != shelllint.BarWidth {
 			bar = PillAtWidth(running, false, now, width)

@@ -28,7 +28,7 @@ func TestBarTreeIsOneControlWithGlyphAndLabel(t *testing.T) {
 }
 
 func TestBarTreeFitsSideWidths(t *testing.T) {
-	for _, width := range []int{shelllint.BarWidth, 32, 64} {
+	for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
 		bar := BarTree("04:12", StateRunning, true)
 		if width != shelllint.BarWidth {
 			bar = BarTreeAtWidth("04:12", StateRunning, true, width)

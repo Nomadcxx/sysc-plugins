@@ -129,7 +129,7 @@ func TestBarFitsSideWidths(t *testing.T) {
 	now := time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC)
 	event := Event{ID: "standup", Summary: "Daily standup with the whole team", Start: now.Add(25 * time.Minute), End: now.Add(time.Hour)}
 	bar := BarTree([]Event{event}, now)
-	for _, width := range []int{lint.BarWidth, 32, 64} {
+	for _, width := range []int{lint.BarWidth, 28, 32, 64} {
 		if width != lint.BarWidth {
 			bar = BarTreeAtWidth([]Event{event}, now, width)
 		}

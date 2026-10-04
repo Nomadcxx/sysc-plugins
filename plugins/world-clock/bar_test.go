@@ -55,7 +55,7 @@ func TestBarModes(t *testing.T) {
 }
 
 func TestBarFitsSideWidths(t *testing.T) {
-	for _, width := range []int{shelllint.BarWidth, 32, 64} {
+	for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
 		bar := Bar(BarPrimary, barZones(), 0)
 		if width != shelllint.BarWidth {
 			bar = BarAtWidth(BarPrimary, barZones(), 0, width)

@@ -59,7 +59,7 @@ func TestBarIsTheCross(t *testing.T) {
 
 func TestBarFitsSideWidths(t *testing.T) {
 	ref := Ref{Book: 42, Chapter: 3, Verse: 16}
-	for _, width := range []int{shelllint.BarWidth, 32, 64} {
+	for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
 		bar := BarTree(ref, true)
 		if width != shelllint.BarWidth {
 			bar = BarTreeAtWidth(ref, true, width)

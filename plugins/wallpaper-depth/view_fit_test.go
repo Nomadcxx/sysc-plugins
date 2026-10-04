@@ -94,7 +94,7 @@ func TestBarIsGlyphOnlyAcrossStates(t *testing.T) {
 func TestBarFitsSideWidths(t *testing.T) {
 	for _, snapshot := range []ControllerSnapshot{{}, {Checked: true, Helper: HelperStatus{Ready: true}}} {
 		bar := BarTree(snapshot)
-		for _, width := range []int{lint.BarWidth, 32, 64} {
+		for _, width := range []int{lint.BarWidth, 28, 32, 64} {
 			for _, finding := range lint.Tree(bar, v1.ViewBar, width, lint.BarHeight) {
 				t.Errorf("width %d: %s", width, finding)
 			}

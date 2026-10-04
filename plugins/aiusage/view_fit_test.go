@@ -92,7 +92,7 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 			for _, f := range shelllint.Tree(bar, v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight) {
 				t.Errorf("%s minor %d bar: %s", name, minor, f)
 			}
-			for _, width := range []int{32, 64} {
+			for _, width := range []int{28, 32, 64} {
 				sideBar := BarTreeAtWidth(r, inst, cfg, minor, viewNow, width)
 				if len(sideBar.Children) != 1 || sideBar.Children[0].Kind != v1.KindButton {
 					t.Errorf("%s minor %d width %d: side bar has %d root children, want the launcher only", name, minor, width, len(sideBar.Children))

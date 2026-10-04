@@ -169,7 +169,7 @@ func TestBarTreeShowsOfflineState(t *testing.T) {
 
 func TestBarFitsSideWidths(t *testing.T) {
 	for name, snap := range map[string]Snapshot{"unavailable": {}, "connected": pairedSnap()} {
-		for _, width := range []int{shelllint.BarWidth, 32, 64} {
+		for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
 			bar := BarTree(snap)
 			if width != shelllint.BarWidth {
 				bar = BarTreeAtWidth(snap, width)

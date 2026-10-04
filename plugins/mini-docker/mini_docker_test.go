@@ -2457,7 +2457,7 @@ func TestBarTreeIsIconOnly(t *testing.T) {
 func TestBarFitsSideWidths(t *testing.T) {
 	for _, unavailable := range []bool{false, true} {
 		bar := BarTree(unavailable)
-		for _, width := range []int{shelllint.BarWidth, 32, 64} {
+		for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
 			for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
 				t.Errorf("unavailable %v width %d: %s", unavailable, width, finding)
 			}

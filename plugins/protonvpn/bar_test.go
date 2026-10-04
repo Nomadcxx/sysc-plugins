@@ -129,7 +129,7 @@ func TestBarLintEveryState(t *testing.T) {
 func TestBarFitsSideWidths(t *testing.T) {
 	for _, mode := range []string{"icon", "code", "status"} {
 		state := BarState{Snap: Snapshot{Phase: PhaseConnected, Status: Status{Country: "US", Server: "US-NY#1"}}, Mode: mode}
-		for _, width := range []int{lint.BarWidth, 32, 64} {
+		for _, width := range []int{lint.BarWidth, 28, 32, 64} {
 			bar := Bar(state)
 			if width != lint.BarWidth {
 				bar = BarAtWidth(state, width)

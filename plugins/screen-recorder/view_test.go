@@ -131,7 +131,7 @@ func TestBarTreeFitsSideWidths(t *testing.T) {
 	for _, state := range []Snapshot{
 		{Mode: Idle}, {Mode: Recording, Elapsed: 72 * time.Second}, {Mode: ReplayActive}, {Mode: Failed},
 	} {
-		for _, width := range []int{shelllint.BarWidth, 32, 64} {
+		for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
 			bar := BarTree(state, Config{})
 			if width != shelllint.BarWidth {
 				bar = BarTreeAtWidth(state, Config{}, width)
@@ -150,7 +150,7 @@ func TestBarTreeFitsSideWidths(t *testing.T) {
 			}
 			if state.Mode == ReplayActive {
 				save := childByID(bar, nodeSave)
-				if width == 32 {
+				if width < 64 {
 					if save != nil {
 						t.Fatalf("32px bar should keep the save action in the panel, got %+v", save)
 					}
