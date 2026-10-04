@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -28,6 +29,11 @@ func Elapsed(start, now time.Time) string {
 // Pill returns the bar view root: a row wrapping the button, because the
 // host's Convert refuses any non-row bar root (internal/plugin/view.go).
 func Pill(running map[string]Run, libraryMissing bool, now time.Time) *v1.Node {
+	return PillAtWidth(running, libraryMissing, now, barwidth.StandardWidth)
+}
+
+func PillAtWidth(running map[string]Run, libraryMissing bool, now time.Time, width int) *v1.Node {
+	compact := barwidth.Compact(width)
 	n := &v1.Node{
 		Kind: v1.KindButton, ID: "bar", Key: "bar",
 		Icon: "sports_esports", Name: "games", Role: "button",
@@ -36,6 +42,10 @@ func Pill(running map[string]Run, libraryMissing bool, now time.Time) *v1.Node {
 		// painting a lighter inner shape (same contract as calendar/cat).
 		Fill: "card",
 	}
+	if compact {
+		n.Icon, n.Height, n.Padding = "", 32, 2
+		n.Children = []*v1.Node{{Kind: v1.KindIcon, Icon: "sports_esports", IconSize: min(24, max(1, width-4))}}
+	}
 	switch len(running) {
 	case 0:
 		if libraryMissing {
@@ -43,12 +53,16 @@ func Pill(running map[string]Run, libraryMissing bool, now time.Time) *v1.Node {
 		}
 	case 1:
 		for _, r := range running {
-			n.Text = fitLabel(r.Name, " · "+Elapsed(r.Start, now))
+			if !compact {
+				n.Text = fitLabel(r.Name, " · "+Elapsed(r.Start, now))
+			}
 		}
-		n.Tabular = true
+		n.Tabular = !compact
 	default:
-		first := newestFirst(running)[0].Name
-		n.Text = fitLabel(first, fmt.Sprintf(" +%d", len(running)-1))
+		if !compact {
+			first := newestFirst(running)[0].Name
+			n.Text = fitLabel(first, fmt.Sprintf(" +%d", len(running)-1))
+		}
 	}
 	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{n}}
 }

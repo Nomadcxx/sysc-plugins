@@ -379,6 +379,47 @@ func TestSettingsSwitchBarMode(t *testing.T) {
 	h.snapshotWhere(func(n *v1.Node) bool { return find(n, "open") != nil && find(n, "open").Icon == "public" })
 }
 
+func TestBarWidthsStayPerViewAcrossUpdates(t *testing.T) {
+	h := start(t, nil)
+	for _, item := range []struct {
+		id    string
+		width int
+	}{{"side", 32}, {"horizontal", 240}} {
+		h.send(v1.ViewOpen{Type: "view.open", ViewID: item.id, View: v1.ViewBar, Entry: "bar", Width: item.width})
+		snap := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "open") != nil })
+		button := find(snap.Root, "open")
+		if snap.ViewID != item.id {
+			t.Fatalf("opened %q, got snapshot for %q", item.id, snap.ViewID)
+		}
+		if item.width == 32 && (button.Icon != "public" || button.Text != "") {
+			t.Fatalf("side bar = %+v", button)
+		}
+		if item.width == 240 && (button.Icon != "" || button.Text == "") {
+			t.Fatalf("horizontal bar = %+v", button)
+		}
+	}
+
+	h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopePlugin, Values: map[string]any{"bar_mode": "primary"}})
+	updated := map[string]v1.ViewSnapshot{}
+	for len(updated) < 2 {
+		line := h.next()
+		if messageType(line) != v1.TypeViewSnapshot {
+			continue
+		}
+		var snap v1.ViewSnapshot
+		if err := json.Unmarshal(line, &snap); err != nil {
+			t.Fatal(err)
+		}
+		updated[snap.ViewID] = snap
+	}
+	if button := find(updated["side"].Root, "open"); button.Icon != "public" || button.Text != "" {
+		t.Fatalf("updated side bar = %+v", button)
+	}
+	if button := find(updated["horizontal"].Root, "open"); button.Icon != "" || button.Text == "" {
+		t.Fatalf("updated horizontal bar = %+v", button)
+	}
+}
+
 func startCyclingHarness(t *testing.T) *harness {
 	t.Helper()
 	h := start(t, nil)

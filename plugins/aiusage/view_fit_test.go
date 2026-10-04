@@ -86,9 +86,24 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 	for name, r := range states {
 		for _, minor := range []int{7, 6, 5, 4, 3, 2} {
 			cfg := viewConfig()
-			bar := BarTree(r, DefaultInstance(), cfg, minor, viewNow)
+			inst := DefaultInstance()
+			bar := BarTree(r, inst, cfg, minor, viewNow)
+			button := findByID(bar, "open")
 			for _, f := range shelllint.Tree(bar, v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight) {
 				t.Errorf("%s minor %d bar: %s", name, minor, f)
+			}
+			for _, width := range []int{28, 32, 64} {
+				sideBar := BarTreeAtWidth(r, inst, cfg, minor, viewNow, width)
+				if len(sideBar.Children) != 1 || sideBar.Children[0].Kind != v1.KindButton {
+					t.Errorf("%s minor %d width %d: side bar has %d root children, want the launcher only", name, minor, width, len(sideBar.Children))
+				}
+				sideButton := findByID(sideBar, "open")
+				if button == nil || sideButton == nil || button.Name != sideButton.Name || button.Role != sideButton.Role || len(button.Events) != 1 || len(sideButton.Events) != 1 || button.Events[0] != sideButton.Events[0] || button.Tooltip != sideButton.Tooltip {
+					t.Errorf("%s minor %d width %d changed the bar action or tooltip", name, minor, width)
+				}
+				for _, f := range shelllint.Tree(sideBar, v1.ViewBar, width, shelllint.BarHeight) {
+					t.Errorf("%s minor %d bar width %d: %s", name, minor, width, f)
+				}
 			}
 			panel := PanelTree(r, "alpha", hist, cfg, minor, viewNow)
 			for _, f := range shelllint.Tree(panel, v1.ViewPanel, contentW, contentH) {

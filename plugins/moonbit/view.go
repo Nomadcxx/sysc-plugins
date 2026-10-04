@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -46,7 +47,14 @@ func padRows(rows ...string) []string {
 // Bar is the fixed bar pill: the theme-accent Moonbit mark and a state word
 // or figure. Node count never changes with phase, so the bar does not jitter.
 func Bar(s *State) *v1.Node {
+	return BarAtWidth(s, barwidth.StandardWidth)
+}
+
+func BarAtWidth(s *State, width int) *v1.Node {
 	label, tone := barLabel(s)
+	if barwidth.Compact(width) {
+		label = ""
+	}
 	btn := &v1.Node{
 		Kind:   v1.KindButton,
 		ID:     "bar",
@@ -56,6 +64,10 @@ func Bar(s *State) *v1.Node {
 		Children: []*v1.Node{
 			{Kind: v1.KindIcon, Icon: "moonbit", Tone: v1.ToneAccent},
 		},
+	}
+	if barwidth.Compact(width) {
+		btn.Height, btn.Padding = 32, 2
+		btn.Children[0].IconSize = min(24, max(1, width-4))
 	}
 	if label != "" {
 		btn.Children = append(btn.Children, &v1.Node{Kind: v1.KindText, Text: label, Tone: tone})

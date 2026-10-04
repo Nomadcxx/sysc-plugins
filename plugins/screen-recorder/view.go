@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -37,19 +38,32 @@ func barPresentation(snap Snapshot) (icon string, tone v1.Tone, text string) {
 // BarTree is one control: the glyph beside the elapsed time, the whole thing
 // toggling the recording. A running replay grows a save control beside it.
 func BarTree(snap Snapshot, cfg Config) *v1.Node {
+	return BarTreeAtWidth(snap, cfg, barwidth.StandardWidth)
+}
+
+func BarTreeAtWidth(snap Snapshot, cfg Config, width int) *v1.Node {
+	compact := barwidth.Compact(width)
 	icon, tone, text := barPresentation(snap)
+	if compact {
+		text = ""
+	}
 	children := []*v1.Node{{
 		Kind: v1.KindButton, ID: nodeToggle, Key: nodeToggle,
 		Icon: icon, Text: text, Name: "Toggle recording", Role: "button",
 		Tone: tone, Tabular: true,
 		Events: []v1.EventKind{v1.EventActivate, v1.EventPointer},
 	}}
-	if snap.Mode == ReplayActive {
-		children = append(children, &v1.Node{
+	// ponytail: below 64px, keep one accessible control; the panel retains Save.
+	if snap.Mode == ReplayActive && (!compact || width >= 64) {
+		save := &v1.Node{
 			Kind: v1.KindButton, ID: nodeSave, Key: nodeSave,
 			Text: "Save", Name: "Save replay", Role: "button",
 			Events: []v1.EventKind{v1.EventActivate},
-		})
+		}
+		if compact {
+			save.Text, save.Icon = "", "download"
+		}
+		children = append(children, save)
 	}
 	// Hide when idle collapses the widget to nothing rather than a dead glyph.
 	if snap.Mode == Idle && cfg.HideInactive {

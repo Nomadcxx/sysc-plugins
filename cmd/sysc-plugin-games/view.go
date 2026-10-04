@@ -12,10 +12,10 @@ import (
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-func (s *session) tree(kind v1.ViewKind) *v1.Node {
-	switch kind {
+func (s *session) tree(v view) *v1.Node {
+	switch v.kind {
 	case v1.ViewBar:
-		return bar.Pill(s.barState(), s.missing, s.env.now())
+		return bar.PillAtWidth(s.barState(), s.missing, s.env.now(), v.width)
 	case v1.ViewFloating:
 		return switcher.Build(s.switcherState(), s.env.now())
 	case v1.ViewTooltip:
@@ -41,7 +41,7 @@ func (s *session) snapshot(id string) {
 	v := s.views[id]
 	v.rev++
 	s.views[id] = v
-	_ = s.client.Snapshot(id, v.rev, s.tree(v.kind))
+	_ = s.client.Snapshot(id, v.rev, s.tree(v))
 }
 
 func (s *session) snapshotAll() {

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -89,9 +90,17 @@ func BarText(mode BarMode, onBar []Reading, cycle int) string {
 // BarButton is the whole bar control: it opens the panel, and the minute
 // patch replaces it by its key.
 func BarButton(mode BarMode, onBar []Reading, cycle int) *v1.Node {
+	return BarButtonAtWidth(mode, onBar, cycle, barwidth.StandardWidth)
+}
+
+func BarButtonAtWidth(mode BarMode, onBar []Reading, cycle, width int) *v1.Node {
 	n := &v1.Node{Kind: v1.KindButton, ID: "open", Key: "bar", Name: "Open world clock", Role: "button",
 		Tabular: true, Events: []v1.EventKind{v1.EventActivate}}
-	if text := BarText(mode, onBar, cycle); text != "" {
+	text := BarText(mode, onBar, cycle)
+	if barwidth.Compact(width) {
+		text = ""
+	}
+	if text != "" {
 		n.Text = text
 	} else {
 		n.Icon = "public"
@@ -100,7 +109,11 @@ func BarButton(mode BarMode, onBar []Reading, cycle int) *v1.Node {
 }
 
 func Bar(mode BarMode, onBar []Reading, cycle int) *v1.Node {
-	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{BarButton(mode, onBar, cycle)}}
+	return BarAtWidth(mode, onBar, cycle, barwidth.StandardWidth)
+}
+
+func BarAtWidth(mode BarMode, onBar []Reading, cycle, width int) *v1.Node {
+	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{BarButtonAtWidth(mode, onBar, cycle, width)}}
 }
 
 func Tooltip(onBar []Reading) *v1.Node {

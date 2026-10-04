@@ -31,9 +31,19 @@ Sizes to check at:
 
 | View | Box |
 |---|---|
-| bar | `plugin/lint.BarWidth` × `plugin/lint.BarHeight` (240×32) |
+| horizontal bar | `plugin/lint.BarWidth` × `plugin/lint.BarHeight` (240×32) |
+| side bar | `ViewOpen.Width` × `ViewOpen.Height`; also check 32×32 and 64×32 |
 | tooltip | `plugin/lint.TooltipWidth` × `plugin/lint.TooltipHeight` (280×200) |
 | panel | the `width`/`height` your `manifest.json` declares |
+
+The host sends dimensions on each `ViewOpen`. For a side bar, `Width` is the
+available cross-axis width. Keep that width with the individual view: two
+outputs can open the same plugin at different sizes. A bar root remains a
+row at every width. When the width is narrow, use an icon-first version of
+the same action and keep longer status text in the tooltip or panel.
+
+First-party bars use the compact variant below 120 logical pixels; preserve
+the standard tree at 120 pixels and above.
 
 A panel with `"include_settings": true` is wrapped by the host in a card
 inside a scroll, so its tree is laid out in a box *smaller* than the declared

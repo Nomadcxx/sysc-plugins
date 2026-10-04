@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -67,6 +68,10 @@ func barLabel(s BarState) string {
 // mode, the country code or the status word. Activate opens the panel;
 // pointer carries the right click for quick connect.
 func Bar(s BarState) *v1.Node {
+	return BarAtWidth(s, barwidth.StandardWidth)
+}
+
+func BarAtWidth(s BarState, width int) *v1.Node {
 	icon, tone := phaseIcon(s.Snap.Phase)
 	btn := &v1.Node{
 		Kind:   v1.KindButton,
@@ -78,7 +83,11 @@ func Bar(s BarState) *v1.Node {
 			{Kind: v1.KindIcon, Icon: icon, Tone: tone},
 		},
 	}
-	if text := barLabel(s); text != "" {
+	text := barLabel(s)
+	if barwidth.Compact(width) {
+		text = ""
+	}
+	if text != "" {
 		btn.Children = append(btn.Children, &v1.Node{Kind: v1.KindText, Text: text, Tone: tone})
 	}
 	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{btn}}

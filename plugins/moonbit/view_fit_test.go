@@ -40,8 +40,18 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 	for _, phase := range []Phase{PhaseIdle, PhaseScanning, PhaseReview, PhaseConfirm, PhaseCleaning, PhaseDone, PhaseError,
 		PhaseAuth, PhaseDocker, PhaseDockerConfirm, PhaseSchedule, PhaseWorking} {
 		s := states()[phase]
-		for _, f := range lint.Tree(Bar(s), v1.ViewBar, lint.BarWidth, lint.BarHeight) {
+		standardBar := Bar(s)
+		for _, f := range lint.Tree(standardBar, v1.ViewBar, lint.BarWidth, lint.BarHeight) {
 			t.Errorf("bar %v: %s", phase, f)
+		}
+		for _, width := range []int{28, 32, 64} {
+			bar := BarAtWidth(s, width)
+			if len(bar.Children) != 1 || len(bar.Children[0].Children) != 1 {
+				t.Errorf("bar %v width %d retains state text", phase, width)
+			}
+			for _, f := range lint.Tree(bar, v1.ViewBar, width, lint.BarHeight) {
+				t.Errorf("bar %v width %d: %s", phase, width, f)
+			}
 		}
 		for _, f := range lint.Tree(Tooltip(s), v1.ViewTooltip, lint.TooltipWidth, lint.TooltipHeight) {
 			t.Errorf("tooltip %v: %s", phase, f)
@@ -49,5 +59,12 @@ func TestViewsFitTheirHostSlots(t *testing.T) {
 		for _, f := range lint.Tree(Panel(s), v1.ViewPanel, panelW, panelH) {
 			t.Errorf("panel %v: %s", phase, f)
 		}
+	}
+}
+
+func TestSideMoonbitUsesFullSizedIcon(t *testing.T) {
+	button := BarAtWidth(states()[PhaseIdle], 28).Children[0]
+	if button.Children[0].IconSize != 24 || button.Height != 32 || button.Padding != 2 {
+		t.Fatalf("side Moonbit icon/box = %+v", button)
 	}
 }

@@ -57,6 +57,26 @@ func TestBarIsTheCross(t *testing.T) {
 	}
 }
 
+func TestBarFitsSideWidths(t *testing.T) {
+	ref := Ref{Book: 42, Chapter: 3, Verse: 16}
+	for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
+		bar := BarTree(ref, true)
+		if width != shelllint.BarWidth {
+			bar = BarTreeAtWidth(ref, true, width)
+		}
+		for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
+			t.Errorf("width %d: %s", width, finding)
+		}
+		if width <= 64 && len(bar.Children) != 1 {
+			t.Errorf("width %d includes the reference label in the bar", width)
+		}
+		cross := find(bar, NodeCross)
+		if cross == nil || cross.Name != "Faith: click for a prayer" || cross.Role != "button" || len(cross.Events) != 2 || cross.Events[0] != v1.EventActivate || cross.Events[1] != v1.EventPointer {
+			t.Fatalf("width %d bar interaction = %+v", width, cross)
+		}
+	}
+}
+
 func TestTooltipShowsTwoLinesAndTheHint(t *testing.T) {
 	b := mustBible(t, "KJV")
 	ref := mustRef(t, "JHN 3:16")

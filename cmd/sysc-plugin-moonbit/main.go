@@ -28,9 +28,10 @@ func main() {
 const frameGap = 100 * time.Millisecond
 
 type view struct {
-	kind v1.ViewKind
-	rev  uint64
-	sent []byte // last tree sent, so an unchanged view is not resent
+	kind  v1.ViewKind
+	rev   uint64
+	width int
+	sent  []byte // last tree sent, so an unchanged view is not resent
 }
 
 type session struct {
@@ -82,7 +83,7 @@ func runPlugin(in io.Reader, out io.Writer) error {
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
-				s.views[m.ViewID] = view{kind: m.View}
+				s.views[m.ViewID] = view{kind: m.View, width: m.Width}
 				s.snapshot(m.ViewID, true)
 			case *v1.ViewClose:
 				delete(s.views, m.ViewID)
@@ -347,10 +348,10 @@ func (s *session) reviewLast() {
 	s.state.Phase, s.state.Err = moonbit.PhaseReview, ""
 }
 
-func (s *session) tree(kind v1.ViewKind) *v1.Node {
-	switch kind {
+func (s *session) tree(v view) *v1.Node {
+	switch v.kind {
 	case v1.ViewBar:
-		return moonbit.Bar(&s.state)
+		return moonbit.BarAtWidth(&s.state, v.width)
 	case v1.ViewTooltip:
 		return moonbit.Tooltip(&s.state)
 	}
@@ -361,7 +362,7 @@ func (s *session) tree(kind v1.ViewKind) *v1.Node {
 // host already has and force is false.
 func (s *session) snapshot(id string, force bool) {
 	v := s.views[id]
-	tree := s.tree(v.kind)
+	tree := s.tree(v)
 	b, err := json.Marshal(tree)
 	if err != nil {
 		return

@@ -63,6 +63,27 @@ func TestEveryViewLaysOut(t *testing.T) {
 	}
 }
 
+func TestBarFitsSideWidths(t *testing.T) {
+	frame, settings := frames()["zooming"], DefaultSettings()
+	settings.ShowPercent = true
+	for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
+		bar := BarTree(frame, settings, shelllint.BarHeight)
+		if width != shelllint.BarWidth {
+			bar = BarTreeAtWidth(frame, settings, shelllint.BarHeight, width)
+		}
+		for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
+			t.Errorf("width %d: %s", width, finding)
+		}
+		if width <= 64 && len(bar.Children[0].Children) != 1 {
+			t.Errorf("width %d has optional reading text in the cat button", width)
+		}
+		open := bar.Children[0]
+		if open.ID != "open" || open.Name != "Open the cat" || open.Role != "button" || len(open.Events) != 1 || open.Events[0] != v1.EventActivate {
+			t.Fatalf("width %d bar interaction = %+v", width, open)
+		}
+	}
+}
+
 // The cat is a host-animated sprite in both animated views, keyed so the
 // host keeps its phase across the snapshots each sample sends.
 func TestTheCatIsAKeyedSprite(t *testing.T) {
@@ -275,5 +296,28 @@ func TestTooltipNamesGaitAndLoad(t *testing.T) {
 	}
 	if got := strings.Join(text, " / "); got != "Cat · Zooming / CPU 100%" {
 		t.Fatalf("tooltip = %q", got)
+	}
+}
+
+func TestSideCatKeepsFullSizeAndRotatesOnlyBarFrames(t *testing.T) {
+	f, s := frames()["zooming"], DefaultSettings()
+	side := BarTreeAtWidth(f, s, 32, 28).Children[0].Children[0]
+	if side.IconSize != min(s.Size, 28) {
+		t.Fatalf("side cat size %d, want %d", side.IconSize, min(s.Size, 28))
+	}
+	if side.Icon != f.Motion.Frames[0]+"-side" || len(side.Frames) != len(f.Motion.Frames) {
+		t.Fatalf("side sprite = %+v", side)
+	}
+	for i, name := range f.Motion.Frames {
+		if side.Frames[i] != name+"-side" {
+			t.Fatalf("side frame %d = %s", i, side.Frames[i])
+		}
+	}
+	horizontal := BarTree(f, s, 32).Children[0].Children[0]
+	if horizontal.Icon != f.Motion.Frames[0] || PanelCat(f, s).Icon != f.Motion.Frames[0] {
+		t.Fatal("side rendering changed shared horizontal/panel frames")
+	}
+	if side.Key != horizontal.Key || side.CycleMS != horizontal.CycleMS {
+		t.Fatal("side rendering changed animation identity or pace")
 	}
 }

@@ -68,8 +68,9 @@ func (s *settings) apply(values map[string]any) {
 }
 
 type view struct {
-	kind v1.ViewKind
-	rev  uint64
+	kind  v1.ViewKind
+	rev   uint64
+	width int
 }
 
 type session struct {
@@ -153,7 +154,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
-				s.views[m.ViewID] = view{kind: m.View}
+				s.views[m.ViewID] = view{kind: m.View, width: m.Width}
 				s.snapshot(m.ViewID)
 			case *v1.ViewClose:
 				delete(s.views, m.ViewID)
@@ -293,11 +294,11 @@ func (s *session) panelState(readings []worldclock.Reading) worldclock.PanelStat
 	}
 }
 
-func (s *session) tree(kind v1.ViewKind, readings []worldclock.Reading) *v1.Node {
+func (s *session) tree(v view, readings []worldclock.Reading) *v1.Node {
 	onBar := worldclock.OnBar(readings)
-	switch kind {
+	switch v.kind {
 	case v1.ViewBar:
-		return worldclock.Bar(s.settings.mode, onBar, s.cycle)
+		return worldclock.BarAtWidth(s.settings.mode, onBar, s.cycle, v.width)
 	case v1.ViewTooltip:
 		return worldclock.Tooltip(onBar)
 	}
@@ -311,7 +312,7 @@ func (s *session) snapshot(id string) {
 	if v.kind == v1.ViewPanel && s.floorGen[id] != s.queryReseed {
 		s.searchFloor[id], s.floorGen[id] = v.rev, s.queryReseed
 	}
-	_ = s.client.Snapshot(id, v.rev, s.tree(v.kind, s.readings()))
+	_ = s.client.Snapshot(id, v.rev, s.tree(v, s.readings()))
 }
 
 func (s *session) snapshotAll() {
@@ -352,7 +353,7 @@ func (s *session) tick() {
 	for id, v := range s.views {
 		switch {
 		case v.kind == v1.ViewBar:
-			s.patch(id, []v1.Replacement{{Key: "bar", Node: worldclock.BarButton(s.settings.mode, worldclock.OnBar(readings), s.cycle)}})
+			s.patch(id, []v1.Replacement{{Key: "bar", Node: worldclock.BarButtonAtWidth(s.settings.mode, worldclock.OnBar(readings), s.cycle, v.width)}})
 		case v.kind == v1.ViewPanel && s.query == "":
 			s.patch(id, worldclock.PanelPatch(readings, s.store.Renaming()))
 		default:
@@ -365,7 +366,7 @@ func (s *session) patchBars() {
 	onBar := worldclock.OnBar(s.readings())
 	for id, v := range s.views {
 		if v.kind == v1.ViewBar {
-			s.patch(id, []v1.Replacement{{Key: "bar", Node: worldclock.BarButton(s.settings.mode, onBar, s.cycle)}})
+			s.patch(id, []v1.Replacement{{Key: "bar", Node: worldclock.BarButtonAtWidth(s.settings.mode, onBar, s.cycle, v.width)}})
 		}
 	}
 }

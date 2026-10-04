@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -23,6 +24,25 @@ func TestBarTreeIsOneControlWithGlyphAndLabel(t *testing.T) {
 	}
 	if open.Tone != v1.ToneNormal {
 		t.Fatalf("idle tone = %v", open.Tone)
+	}
+}
+
+func TestBarTreeFitsSideWidths(t *testing.T) {
+	for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
+		bar := BarTree("04:12", StateRunning, true)
+		if width != shelllint.BarWidth {
+			bar = BarTreeAtWidth("04:12", StateRunning, true, width)
+		}
+		for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
+			t.Errorf("width %d: %s", width, finding)
+		}
+		if width <= 64 && bar.Children[0].Text != "" {
+			t.Errorf("width %d retains countdown text %q", width, bar.Children[0].Text)
+		}
+		button := bar.Children[0]
+		if button.ID != "open" || button.Name != "Open timer" || button.Role != "button" || len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
+			t.Fatalf("width %d bar interaction = %+v", width, button)
+		}
 	}
 }
 

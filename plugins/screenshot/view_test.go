@@ -45,6 +45,19 @@ func TestBarIsOneCameraButton(t *testing.T) {
 	}
 }
 
+func TestBarFitsSideWidths(t *testing.T) {
+	bar := BarTree()
+	for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
+		for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
+			t.Errorf("width %d: %s", width, finding)
+		}
+	}
+	button := bar.Children[0]
+	if button == nil || button.Name != "Screenshot" || button.Role != "button" || len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
+		t.Fatalf("bar interaction = %+v", button)
+	}
+}
+
 func TestViewsPassTheHostLint(t *testing.T) {
 	for name, m := range map[string]Model{
 		"idle":       {Directory: "/home/u/Pictures/Screenshots"},

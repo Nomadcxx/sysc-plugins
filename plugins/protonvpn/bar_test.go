@@ -126,6 +126,28 @@ func TestBarLintEveryState(t *testing.T) {
 	}
 }
 
+func TestBarFitsSideWidths(t *testing.T) {
+	for _, mode := range []string{"icon", "code", "status"} {
+		state := BarState{Snap: Snapshot{Phase: PhaseConnected, Status: Status{Country: "US", Server: "US-NY#1"}}, Mode: mode}
+		for _, width := range []int{lint.BarWidth, 28, 32, 64} {
+			bar := Bar(state)
+			if width != lint.BarWidth {
+				bar = BarAtWidth(state, width)
+			}
+			for _, finding := range lint.Tree(bar, v1.ViewBar, width, lint.BarHeight) {
+				t.Errorf("mode %s width %d: %s", mode, width, finding)
+			}
+			if width <= 64 && len(bar.Children[0].Children) != 1 {
+				t.Errorf("mode %s width %d retains country/status text", mode, width)
+			}
+			button := bar.Children[0]
+			if button.ID != "bar" || button.Name != "ProtonVPN" || button.Role != "button" || len(button.Events) != 2 || button.Events[0] != v1.EventActivate || button.Events[1] != v1.EventPointer {
+				t.Fatalf("mode %s width %d interaction = %+v", mode, width, button)
+			}
+		}
+	}
+}
+
 func TestTooltipLint(t *testing.T) {
 	for _, phase := range []Phase{PhaseDisconnected, PhaseConnecting, PhaseConnected, PhaseDisconnecting, PhaseError} {
 		root := Tooltip(BarState{Snap: Snapshot{Phase: phase, Err: "Tunnel setup failed", IP: "198.51.100.7", Status: Status{Server: "US-NY#1", Location: "New York, United States", Country: "US", Protocol: "wireguard"}, RxRate: 1024, TxRate: 512, Port: 51820}})

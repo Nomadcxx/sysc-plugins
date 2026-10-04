@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -26,9 +27,17 @@ type LoadStatus struct {
 // capsule colour, so the button merges into the bar capsule like the
 // built-in glyph items instead of painting a lighter inner pill.
 func BarTree(events []Event, now time.Time) *v1.Node {
+	return BarTreeAtWidth(events, now, barwidth.StandardWidth)
+}
+
+func BarTreeAtWidth(events []Event, now time.Time, width int) *v1.Node {
+	compact := barwidth.Compact(width)
 	event, active, ok := NextTimedEvent(events, now)
 	if !ok {
 		label := now.Format("Mon 2 Jan")
+		if compact {
+			label = ""
+		}
 		return &v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{{
 			Kind: v1.KindButton, ID: "calendar-open", Icon: "calendar_month", Text: label, Name: "Open calendar, " + now.Format("Monday, 2 January 2006"), Role: "button",
 			Fill: "card", Events: []v1.EventKind{v1.EventActivate},
@@ -41,6 +50,9 @@ func BarTree(events []Event, now time.Time) *v1.Node {
 	// Bar capsule fits 240x32 = icon + 24 bytes of label (lint.Tree proves
 	// this in view_test); reserve the separator and the widest countdown.
 	label := truncateText(event.Summary, max(22-len(status), 8)) + "  " + status
+	if compact {
+		label = ""
+	}
 	return &v1.Node{Kind: v1.KindRow, Gap: 6, Tooltip: eventTooltip(event, now, active), Children: []*v1.Node{{
 		Kind: v1.KindButton, ID: "calendar-open", Icon: "calendar_month", Text: label, Name: "Open calendar. " + eventAccessibleName(event, now.Location()), Role: "button",
 		Fill: "card", Tabular: true, Events: []v1.EventKind{v1.EventActivate},

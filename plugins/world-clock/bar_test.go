@@ -54,6 +54,25 @@ func TestBarModes(t *testing.T) {
 	lintBar(t, Bar(BarAll, short, 0))
 }
 
+func TestBarFitsSideWidths(t *testing.T) {
+	for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
+		bar := Bar(BarPrimary, barZones(), 0)
+		if width != shelllint.BarWidth {
+			bar = BarAtWidth(BarPrimary, barZones(), 0, width)
+		}
+		for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
+			t.Errorf("width %d: %s", width, finding)
+		}
+		if width <= 64 && (bar.Children[0].Text != "" || bar.Children[0].Icon != "public") {
+			t.Errorf("width %d should use the globe, got %+v", width, bar.Children[0])
+		}
+		button := bar.Children[0]
+		if button.ID != "open" || button.Name != "Open world clock" || button.Role != "button" || len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
+			t.Fatalf("width %d bar interaction = %+v", width, button)
+		}
+	}
+}
+
 func TestBarFallsBackToGlobe(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []BarMode{BarIcon, BarPrimary, BarAll, BarCycle} {

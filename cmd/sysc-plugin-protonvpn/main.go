@@ -84,8 +84,9 @@ func (s settings) values() map[string]string {
 }
 
 type view struct {
-	kind v1.ViewKind
-	rev  uint64
+	kind  v1.ViewKind
+	rev   uint64
+	width int
 }
 
 type session struct {
@@ -175,7 +176,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
-				s.views[m.ViewID] = view{kind: m.View}
+				s.views[m.ViewID] = view{kind: m.View, width: m.Width}
 				s.snapshot(m.ViewID)
 			case *v1.ViewClose:
 				delete(s.views, m.ViewID)
@@ -591,10 +592,10 @@ func (s *session) signOut(ctx context.Context) {
 	}()
 }
 
-func (s *session) tree(kind v1.ViewKind) *v1.Node {
-	switch kind {
+func (s *session) tree(v view) *v1.Node {
+	switch v.kind {
 	case v1.ViewBar:
-		return barTree(s)
+		return barTreeAtWidth(s, v.width)
 	case v1.ViewTooltip:
 		return tooltipTree(s)
 	}
@@ -605,7 +606,7 @@ func (s *session) snapshot(id string) {
 	v := s.views[id]
 	v.rev++
 	s.views[id] = v
-	_ = s.client.Snapshot(id, v.rev, s.tree(v.kind))
+	_ = s.client.Snapshot(id, v.rev, s.tree(v))
 }
 
 func (s *session) snapshotAll() {
@@ -623,9 +624,9 @@ func (s *session) call(ctx context.Context, kind v1.CallKind, params any) (v1.Ho
 	return s.client.Call(ctx, kind, params)
 }
 
-func barTree(s *session) *v1.Node {
+func barTreeAtWidth(s *session, width int) *v1.Node {
 	snap := s.machine.Snapshot()
-	return protonvpn.Bar(protonvpn.BarState{Snap: snap, Mode: s.settings.barMode, Quick: s.settings.quickConnect})
+	return protonvpn.BarAtWidth(protonvpn.BarState{Snap: snap, Mode: s.settings.barMode, Quick: s.settings.quickConnect}, width)
 }
 
 func tooltipTree(s *session) *v1.Node {

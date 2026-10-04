@@ -47,8 +47,9 @@ func run(in *os.File, out *os.File) error {
 	defer svc.Close()
 
 	type view struct {
-		kind v1.ViewKind
-		rev  uint64
+		kind  v1.ViewKind
+		rev   uint64
+		width int
 	}
 	views := map[string]view{}
 	var snap kdeconnect.Snapshot
@@ -96,7 +97,7 @@ func run(in *os.File, out *os.File) error {
 			var root *v1.Node
 			switch v.kind {
 			case v1.ViewBar:
-				root = kdeconnect.BarTree(snap)
+				root = kdeconnect.BarTreeAtWidth(snap, v.width)
 			case v1.ViewTooltip:
 				root = kdeconnect.TooltipTree(snap)
 			default:
@@ -138,7 +139,7 @@ func run(in *os.File, out *os.File) error {
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
-				views[m.ViewID] = view{kind: m.View}
+				views[m.ViewID] = view{kind: m.View, width: m.Width}
 				if m.View == v1.ViewPanel {
 					// Opening the panel re-reads the daemon first, so the
 					// device state is fresh, the reference shell's behaviour

@@ -27,6 +27,7 @@ var defaultCalendarQuery calendarQuery = calendar.QueryEDS
 type openedView struct {
 	kind       v1.ViewKind
 	revision   uint64
+	width      int
 	instance   string
 	output     string
 	generation uint32
@@ -146,7 +147,7 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 		at := now()
 		switch view.kind {
 		case v1.ViewBar:
-			tree = calendar.BarTree(events, at)
+			tree = calendar.BarTreeAtWidth(events, at, view.width)
 		case v1.ViewTooltip:
 			tree = calendar.TooltipTree(events, at)
 		default:
@@ -301,7 +302,7 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
-				views[message.ViewID] = openedView{kind: message.View, instance: message.Instance, output: message.Output, generation: message.Generation}
+				views[message.ViewID] = openedView{kind: message.View, width: message.Width, instance: message.Instance, output: message.Output, generation: message.Generation}
 				if message.View == v1.ViewPanel {
 					requestRefresh(false)
 				}

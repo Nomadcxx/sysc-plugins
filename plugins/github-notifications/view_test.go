@@ -59,6 +59,21 @@ func TestBarTreeIsIconOnlyAndOpensOnBothMouseButtons(t *testing.T) {
 	}
 }
 
+func TestBarFitsSideWidths(t *testing.T) {
+	for _, unread := range []bool{false, true} {
+		bar := BarTree(unread)
+		for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
+			for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
+				t.Errorf("unread %v width %d: %s", unread, width, finding)
+			}
+		}
+		button := findNode(bar, "open")
+		if button == nil || button.Name != "Open GitHub Notifications" || button.Role != "button" || len(button.Events) != 2 || button.Events[0] != v1.EventActivate || button.Events[1] != v1.EventPointer {
+			t.Fatalf("unread %v interaction = %+v", unread, button)
+		}
+	}
+}
+
 func TestPanelModesExposeInboxWorkAndActivity(t *testing.T) {
 	inbox := InboxSnapshot{Status: StatusReady, Items: []Item{mustItem(t, rawItem("1", "Repair retry handling", "PullRequest", "review_requested"))}, HasMore: true}
 	work := WorkSnapshot{Status: StatusReady, TotalCount: 21, Items: []WorkItem{normalizedWorkPR(9)}}

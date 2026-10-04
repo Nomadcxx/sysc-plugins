@@ -92,7 +92,7 @@ func run(in, out *os.File) error {
 			var root *v1.Node
 			switch v.kind {
 			case v1.ViewBar:
-				root = aiusage.BarTree(rep, settings.instance(v.instance), settings.config, minor, now)
+				root = aiusage.BarTreeAtWidth(rep, settings.instance(v.instance), settings.config, minor, now, v.width)
 			case v1.ViewTooltip:
 				// The shell auto-opens this view under the bar widget; a
 				// text-only tree is what it can paint.
