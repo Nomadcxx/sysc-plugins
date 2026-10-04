@@ -78,7 +78,6 @@ type Recorder struct {
 	proc      *Proc
 	dest      string
 	replayDir string
-	before    map[string]struct{}
 
 	cmds    chan command
 	quit    chan struct{}
@@ -287,7 +286,6 @@ func (r *Recorder) startReplay(output string) {
 		r.fail(fmt.Errorf("recorder: process never became ready"))
 		return
 	}
-	r.before = listNames(dir)
 	r.remember()
 	r.set(Snapshot{Mode: ReplayActive})
 }
@@ -313,6 +311,8 @@ func (r *Recorder) saveReplay() {
 	if r.mode() != ReplayActive || r.proc == nil {
 		return
 	}
+	signaled := time.Now()
+	logged := len(r.proc.Logs())
 	_ = r.proc.Save()
 	dest, err := destPath(r.replayDir, r.cfg.ReplayFilenamePattern, r.opt.Now())
 	if err != nil {
@@ -324,11 +324,14 @@ func (r *Recorder) saveReplay() {
 		deadline = time.Now().Add(r.opt.StopWait)
 	}
 	for time.Now().Before(deadline) {
-		if path, err := claimNew(r.replayDir, r.before, dest); err == nil {
+		logs := r.proc.Logs()
+		if logged > len(logs) {
+			logged = 0
+		}
+		if path, err := claimReplay(r.replayDir, logs[logged:], signaled, dest); err == nil {
 			r.mu.Lock()
 			r.snap.Artifact = path
 			r.mu.Unlock()
-			r.before = listNames(r.replayDir)
 			return
 		}
 		time.Sleep(15 * time.Millisecond)
@@ -519,43 +522,78 @@ func expandHome(dir string) string {
 	return dir
 }
 
-func listNames(dir string) map[string]struct{} {
-	out := map[string]struct{}{}
-	ents, err := os.ReadDir(dir)
-	if err != nil {
-		return out
+// claimReplay renames the file gpu-screen-recorder just saved onto dest.
+// logs are the bytes written after SIGUSR1. The recorder prints that path
+// alone on stdout: Replay_YYYY-MM-DD_HH-MM-SS.ext inside the -o directory.
+// A line is claimed only when the name matches that pattern, the file is a
+// non-empty regular file in dir, and its mtime is not before signaled.
+func claimReplay(dir string, logs []byte, signaled time.Time, dest string) (string, error) {
+	dir = filepath.Clean(dir)
+	var claimed string
+	rest := logs
+	for {
+		i := bytes.IndexByte(rest, '\n')
+		if i < 0 {
+			break
+		}
+		line := bytes.TrimSpace(rest[:i])
+		rest = rest[i+1:]
+		if len(line) == 0 {
+			continue
+		}
+		path, ok := replayPath(dir, string(line))
+		if !ok || !replayReady(path, signaled) {
+			continue
+		}
+		claimed = path
 	}
-	for _, e := range ents {
-		out[e.Name()] = struct{}{}
+	if claimed == "" {
+		return "", fmt.Errorf("recorder: no new replay file")
 	}
-	return out
+	if claimed != dest {
+		if err := os.Rename(claimed, dest); err != nil {
+			return "", err
+		}
+	}
+	return dest, nil
 }
 
-func claimNew(dir string, before map[string]struct{}, dest string) (string, error) {
-	ents, err := os.ReadDir(dir)
-	if err != nil {
-		return "", err
+func replayPath(dir, line string) (string, bool) {
+	p := filepath.Clean(line)
+	if !filepath.IsAbs(p) {
+		if filepath.IsAbs(dir) {
+			return "", false
+		}
+		p = filepath.Clean(filepath.Join(dir, p))
 	}
-	for _, e := range ents {
-		if e.IsDir() {
-			continue
-		}
-		if _, ok := before[e.Name()]; ok {
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
-		st, err := os.Stat(path)
-		if err != nil || st.Size() == 0 {
-			continue
-		}
-		if path != dest {
-			if err := os.Rename(path, dest); err != nil {
-				return "", err
-			}
-		}
-		return dest, nil
+	rel, err := filepath.Rel(dir, p)
+	if err != nil || rel != filepath.Base(p) || !isReplayName(rel) {
+		return "", false
 	}
-	return "", fmt.Errorf("recorder: no new replay file")
+	return p, true
+}
+
+func isReplayName(name string) bool {
+	const prefix = "Replay_"
+	rest, ok := strings.CutPrefix(name, prefix)
+	if !ok {
+		return false
+	}
+	ext := filepath.Ext(rest)
+	if len(ext) < 2 {
+		return false
+	}
+	stamp := strings.TrimSuffix(rest, ext)
+	_, err := time.Parse("2006-01-02_15-04-05", stamp)
+	return err == nil && stamp != ""
+}
+
+func replayReady(path string, signaled time.Time) bool {
+	st, err := os.Lstat(path)
+	if err != nil || !st.Mode().IsRegular() || st.Size() == 0 {
+		return false
+	}
+	return !st.ModTime().Truncate(time.Second).Before(signaled.Truncate(time.Second))
 }
 
 func verifyArtifact(path string) error {

@@ -77,7 +77,9 @@ func runGateFakeRecorder() int {
 		if sig == syscall.SIGUSR1 {
 			if dir := argValue("-ro"); dir != "" {
 				_ = os.MkdirAll(dir, 0o755)
-				_ = os.WriteFile(filepath.Join(dir, "gsr.mp4"), []byte("mp4"), 0o644)
+				path := filepath.Join(dir, "Replay_"+time.Now().Format("2006-01-02_15-04-05")+".mp4")
+				_ = os.WriteFile(path, []byte("mp4"), 0o644)
+				_, _ = os.Stdout.WriteString(path + "\n")
 			}
 			continue
 		}

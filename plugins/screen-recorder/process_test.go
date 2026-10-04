@@ -249,5 +249,9 @@ func writeReplayArtifact() {
 		return
 	}
 	_ = os.MkdirAll(dir, 0o755)
-	_ = os.WriteFile(filepath.Join(dir, "gsr.mp4"), []byte("mp4"), 0o644)
+	// gpu-screen-recorder writes Replay_YYYY-MM-DD_HH-MM-SS.ext under -o and
+	// prints that path alone on stdout once the file is closed.
+	path := filepath.Join(dir, "Replay_"+time.Now().Format("2006-01-02_15-04-05")+".mp4")
+	_ = os.WriteFile(path, []byte("mp4"), 0o644)
+	_, _ = os.Stdout.WriteString(path + "\n")
 }
