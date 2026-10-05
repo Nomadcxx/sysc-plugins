@@ -485,13 +485,36 @@ func TestUpdateSameVersionReplacesRatherThanDuplicates(t *testing.T) {
 	}
 }
 
-func TestUpdateRefusesTagVersionMismatch(t *testing.T) {
+// The catalog job checks out main, so plugins/<dir>/manifest.json in the
+// working tree can carry a version that has moved past the tag. The archives
+// were built from the tag and the release publishes the tag, so a moving main
+// must not refuse a release that is already correct on its own terms. The
+// archive is the version gate; the working tree only supplies the id.
+func TestUpdateIgnoresWorkingTreeVersionForTag(t *testing.T) {
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.4.1")
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.4.0", "amd64", "v1")
+	if err := updateCatalog(root, "timer-v1.4.0", dist, time.Now().UTC()); err != nil {
+		t.Fatalf("updateCatalog: main is at 1.4.1 and the tag is 1.4.0: %v", err)
+	}
+	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
+	if e.Release.Version != "1.4.0" {
+		t.Fatalf("release version = %q, want the tagged 1.4.0", e.Release.Version)
+	}
+}
+
+// The archive is the only version gate now that the working tree is not
+// consulted, so the refusal has to come from the archive's own manifest.
+func TestUpdateRefusesArchiveVersionDisagreeingWithTag(t *testing.T) {
 	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
 	dist := t.TempDir()
 	writeDistArchiveWithManifest(t, dist, "org.sysc.timer", "9.9.9", "amd64", archiveManifest("org.sysc.timer", "1.0.0"), "v1")
 	err := updateCatalog(root, "timer-v9.9.9", dist, time.Now().UTC())
 	if err == nil {
-		t.Fatal("expected an error when the tag version disagrees with the manifest")
+		t.Fatal("expected an error when the archive manifest version disagrees with the tag")
+	}
+	if !strings.Contains(err.Error(), "archive manifest has") {
+		t.Fatalf("expected the archive to be the version gate, got %v", err)
 	}
 }
 
