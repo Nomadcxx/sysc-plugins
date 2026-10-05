@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"time"
 
@@ -18,12 +19,19 @@ func main() {
 	}
 }
 
-func run(in *os.File, out *os.File) error {
+func run(in io.Reader, out io.Writer) error {
+	return runClock(in, out, time.Now)
+}
+
+func runClock(in io.Reader, out io.Writer, now func() time.Time) error {
+	if now == nil {
+		now = time.Now
+	}
 	c := v1.NewClient(in, out)
 	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.timer", Name: "Pomodoro Timer", Version: "1.4.0"})); err != nil {
 		return err
 	}
-	tm := timer.NewSession(time.Now)
+	tm := timer.NewSession(now)
 	type view struct {
 		kind     v1.ViewKind
 		rev      uint64
@@ -129,6 +137,10 @@ func run(in *os.File, out *os.File) error {
 			prev := tm.Mode()
 			_, done := tm.Tick()
 			if done {
+				// Start stored this phase's deadline. The roll stays in
+				// memory until it is saved, and a restart would complete
+				// the finished phase again.
+				save(ctx, c, tm)
 				body := "Break over — back to work"
 				sound := timer.SoundBreakDone
 				if prev == timer.ModeWork {
