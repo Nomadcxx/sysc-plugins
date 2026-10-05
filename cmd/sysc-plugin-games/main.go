@@ -77,21 +77,22 @@ type session struct {
 	settings settings
 	views    map[string]view
 
-	src       source.Source
-	cacheDir  string
-	games     []source.Game
-	running   map[string]time.Time
-	missing   bool // library unavailable (no pga.db / source off)
-	machine   *panel.Machine
-	failed    map[string]bool
-	prefs     store.Prefs
-	sessions  store.Log
-	loaded    bool
-	query     string
-	selected  string
-	poll      *time.Ticker
-	pollC     <-chan time.Time
-	pollEvery time.Duration
+	src         source.Source
+	cacheDir    string
+	games       []source.Game
+	running     map[string]time.Time
+	missing     bool // library unavailable (no pga.db / source off)
+	machine     *panel.Machine
+	failed      map[string]bool
+	prefs       store.Prefs
+	sessions    store.Log
+	loaded      bool
+	prunedStale bool // stale open sessions pruned after first successful scan
+	query       string
+	selected    string
+	poll        *time.Ticker
+	pollC       <-chan time.Time
+	pollEvery   time.Duration
 
 	coverDirty map[string]bool
 	coverJobs  chan coverJob
@@ -214,16 +215,6 @@ func (s *session) panelOpen() bool {
 	}
 	return false
 }
-
-func (s *session) hasBar() bool {
-	for _, v := range s.views {
-		if v.kind == v1.ViewBar {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *session) openLutris() {
 	src, err := lutris.New(lutris.Options{DBPath: s.env.dbPath, ProcRoot: s.env.procRoot, Run: s.env.run})
 	if err != nil {
@@ -267,6 +258,14 @@ func (s *session) scan(ctx context.Context) {
 			s.save(ctx, "sessions", s.sessions)
 		}
 	}
+	// First successful scan after startup: dead games with a persisted open
+	// session (shell quit or reboot mid-game) get it closed here (#92).
+	if !s.prunedStale {
+		s.prunedStale = true
+		if closed := s.sessions.EndDangling(set, s.env.now()); len(closed) > 0 {
+			s.save(ctx, "sessions", s.sessions)
+		}
+	}
 	for _, ev := range s.machine.Observe(set, s.env.now()) {
 		switch ev.Kind {
 		case panel.EventStarted:
@@ -299,7 +298,9 @@ func (s *session) desiredPoll() time.Duration {
 		return time.Second
 	case s.panelOpen():
 		return 2 * time.Second
-	case len(s.running) > 0 && s.hasBar():
+	// Poll while anything runs even without a bar widget, or the game-quit
+	// event (and its session End stamp) waits for the next panel open (#92).
+	case len(s.running) > 0:
 		return 5 * time.Second
 	default:
 		return 0 // battery: nothing visible is time-based

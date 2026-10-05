@@ -5,6 +5,7 @@ package store
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 )
 
@@ -69,6 +70,22 @@ func (l *Log) End(id string, at time.Time) {
 	}
 	last.End = at
 	*l = setSessions(*l, id, sessions)
+}
+
+// EndDangling closes the open session of every game that is not alive,
+// stamping it at `at`, and returns the ids it closed (sorted). Used to close
+// sessions left open across a restart (#92).
+func (l *Log) EndDangling(alive map[string]bool, at time.Time) []string {
+	var closed []string
+	for id, sessions := range *l {
+		if len(sessions) == 0 || !sessions[len(sessions)-1].End.IsZero() || alive[id] {
+			continue
+		}
+		l.End(id, at)
+		closed = append(closed, id)
+	}
+	sort.Strings(closed)
+	return closed
 }
 
 func setSessions(l Log, id string, sessions []Session) Log {
