@@ -27,10 +27,7 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 
 	cfg, _ := recorder.ParseConfig(nil)
 	rec := recorder.New(cfg, opt)
-	defer func() {
-		rec.Close()
-		clearOwnership(c, rec)
-	}()
+	defer rec.Close()
 
 	type view struct {
 		kind   v1.ViewKind
@@ -189,14 +186,4 @@ func saveOwnership(ctx context.Context, c *v1.Client, rec *recorder.Recorder) {
 	own := rec.Ownership()
 	raw, _ := json.Marshal(own)
 	_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "ownership", Value: raw})
-}
-
-// clearOwnership persists the cleared ownership on shutdown. The host closes
-// the plugin's stdin right after HostShutdown, so ctx is already canceled and
-// Call would return without sending; send the state.set fire-and-forget.
-func clearOwnership(c *v1.Client, rec *recorder.Recorder) {
-	own := rec.Ownership()
-	value, _ := json.Marshal(own)
-	params, _ := json.Marshal(v1.StateSetParams{Key: "ownership", Value: value})
-	_ = c.Send(&v1.HostCall{ID: "shutdown-ownership", Call: v1.CallStateSet, Params: params})
 }
