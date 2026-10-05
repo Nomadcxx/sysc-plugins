@@ -128,15 +128,17 @@ func TestManifestPanelWidthMatchesTheView(t *testing.T) {
 	}
 	var manifest struct {
 		Panels []struct {
-			ID    string `json:"id"`
-			Width int    `json:"width"`
+			ID     string `json:"id"`
+			Width  int    `json:"width"`
+			Height int    `json:"height"`
 		} `json:"panels"`
 	}
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest.Panels) != 1 || manifest.Panels[0].Width != kdeconnect.PanelWidth {
-		t.Fatalf("manifest panels = %+v, want one panel %d wide", manifest.Panels, kdeconnect.PanelWidth)
+	if len(manifest.Panels) != 1 || manifest.Panels[0].Width != kdeconnect.PanelWidth ||
+		manifest.Panels[0].Height != kdeconnect.PanelHeight {
+		t.Fatalf("manifest panels = %+v, want one panel %dx%d", manifest.Panels, kdeconnect.PanelWidth, kdeconnect.PanelHeight)
 	}
 }
 

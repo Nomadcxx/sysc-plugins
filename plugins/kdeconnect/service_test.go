@@ -386,6 +386,47 @@ func TestBatteryRefreshedSignal(t *testing.T) {
 	}
 }
 
+func TestBatterySignalDoesNotRescanSFTP(t *testing.T) {
+	bus := testBus()
+	dev := bus.objects[devicePath("devA")]
+	dev.ifaces[kdeDeviceIface]["supportedPlugins"] = dbus.MakeVariant(
+		append(stringListOf(dev.ifaces[kdeDeviceIface]["supportedPlugins"]), "kdeconnect_sftp"))
+	bus.objects[pluginPath("devA", "sftp")].mountPoint = t.TempDir()
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
+	sftp := bus.objects[pluginPath("devA", "sftp")]
+	n := 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			n++
+		}
+	}
+	if n == 0 {
+		t.Fatal("first snapshot never mounted; the signal check would be vacuous")
+	}
+
+	bus.inject(t, &dbus.Signal{
+		Path: pluginPath("devA", "battery"),
+		Name: batteryIface + ".refreshed",
+		Body: []any{true, int32(42)},
+	})
+	waitForSnapshot(t, svc, func(s Snapshot) bool {
+		p := deviceByName(s, "Pixel 10 Pro XL")
+		return p != nil && p.BatteryCharging && p.BatteryCharge == 42
+	})
+	got := 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			got++
+		}
+	}
+	if got != n {
+		t.Fatalf("battery signal remounted sftp: mountAndWait %d -> %d", n, got)
+	}
+}
+
 func TestPropertiesChangedRereadsBattery(t *testing.T) {
 	bus := testBus()
 	svc := newService(singleConnect(bus))
@@ -770,6 +811,13 @@ func TestClipboardBrowseAndSMSAppActions(t *testing.T) {
 	if e.Err == nil || e.Detail != "Permissions missing: filesystem access" {
 		t.Fatalf("refused browse event = %+v", e)
 	}
+	snap := waitForSnapshot(t, svc, func(s Snapshot) bool {
+		p := deviceByName(s, "Pixel 10 Pro XL")
+		return p != nil && p.SFTPError == "Permissions missing: filesystem access"
+	})
+	if snap.SelectedID == "" {
+		t.Fatal("refused browse left no selected device")
+	}
 
 	svc.Do(Action{Kind: ActionLaunchSMSApp, DeviceID: "devA"})
 	e = waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "Opening the SMS app..." })
@@ -1096,9 +1144,28 @@ func recentImagesState(svc *Service) *daemonState {
 	return &daemonState{
 		svc:   svc,
 		order: []string{"devA"},
-		devices: map[string]*Device{"devA": {ID: "devA", Name: "Pixel 10 Pro XL",
+		devices: map[string]*Device{"devA": {ID: "devA", Name: "Pixel 10 Pro XL", Type: "phone",
 			Reachable: true, Paired: true, SupportedPlugins: []string{"sftp"}}},
 	}
+}
+
+func writeTimedPNG(t *testing.T, path string, when time.Time) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeArt(t, path, color.RGBA{R: 200, A: 255})
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func useRecentImageCaches(t *testing.T) {
+	t.Helper()
+	useRealMockups(t)
+	prev := recentImageThumbDir
+	recentImageThumbDir = t.TempDir()
+	t.Cleanup(func() { recentImageThumbDir = prev })
 }
 
 func TestRefreshRecentImagesWiresTheMount(t *testing.T) {
@@ -1175,19 +1242,16 @@ func TestRefreshRecentImagesWiresTheMount(t *testing.T) {
 func TestRefreshRecentImagesSkipsWithoutPathOrPlugin(t *testing.T) {
 	t.Parallel()
 	bus := recentImagesBus(t.TempDir())
-	svc := &Service{}
-	st := recentImagesState(svc)
+	st := recentImagesState(&Service{})
 	chosen := "devA"
 	st.refreshRecentImages(bus, &chosen)
 	if len(st.recentImages) != 0 {
 		t.Fatalf("empty path produced %+v", st.recentImages)
 	}
-	if sftp := bus.objects[pluginPath("devA", "sftp")]; sftp != nil && len(sftp.calls) > 0 {
-		t.Fatalf("empty path still called %v", sftp.calls)
-	}
 
-	// A selected device without the sftp plugin never mounts either.
-	svc.settings = Settings{RecentImagesPath: "DCIM"}
+	// A selected device without the sftp plugin never mounts.
+	bus = recentImagesBus(t.TempDir())
+	st = recentImagesState(&Service{settings: Settings{RecentImagesPath: "DCIM"}})
 	st.devices["devA"].SupportedPlugins = nil
 	st.refreshRecentImages(bus, &chosen)
 	if len(st.recentImages) != 0 {
@@ -1210,6 +1274,9 @@ func TestRefreshRecentImagesDegradesToEmptyGrid(t *testing.T) {
 	if len(st.recentImages) != 0 {
 		t.Fatalf("failed mount produced %+v", st.recentImages)
 	}
+	if got := st.devices["devA"].SFTPError; got == "" {
+		t.Fatal("empty mountPoint left SFTPError empty")
+	}
 
 	// A scan root outside the mount degrades the same way.
 	mount := t.TempDir()
@@ -1218,6 +1285,244 @@ func TestRefreshRecentImagesDegradesToEmptyGrid(t *testing.T) {
 	st.refreshRecentImages(bus, &chosen)
 	if len(st.recentImages) != 0 {
 		t.Fatalf("foreign root produced %+v", st.recentImages)
+	}
+}
+
+func TestRefreshRecentImagesEmptyPathFillsMockupNotGrid(t *testing.T) {
+	useRecentImageCaches(t)
+	mount := t.TempDir()
+	base := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	older := filepath.Join(mount, "DCIM", "Camera", "old.png")
+	newer := filepath.Join(mount, "Pictures", "Screenshots", "new.png")
+	if err := os.MkdirAll(filepath.Dir(older), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(newer), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeArt(t, older, color.RGBA{R: 220, A: 255})
+	writeArt(t, newer, color.RGBA{G: 220, A: 255})
+	if err := os.Chtimes(older, base, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newer, base.Add(time.Hour), base.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	bus := recentImagesBus(mount)
+	st := recentImagesState(&Service{settings: Settings{MaxRecentImages: 6}})
+	chosen := "devA"
+	st.refreshRecentImages(bus, &chosen)
+	if len(st.recentImages) != 0 {
+		t.Fatalf("empty path filled the grid: %+v", st.recentImages)
+	}
+	dev := st.devices["devA"]
+	if dev.MockupArt == "" {
+		t.Fatal("empty path left the mockup empty")
+	}
+	if img := readPNG(t, dev.MockupArt); img.Bounds().Dx() != 111 {
+		t.Fatalf("composite width = %d, want the phone mockup's 111", img.Bounds().Dx())
+	} else if r, g, b, _ := img.At(55, 111).RGBA(); r>>8 == 220 || g>>8 != 220 || b != 0 {
+		t.Fatalf("screen centre = %v, want the newer screenshot's green", img.At(55, 111))
+	}
+}
+
+func TestRefreshRecentImagesConfiguredPathFillsGridAndMockup(t *testing.T) {
+	useRecentImageCaches(t)
+	mount := t.TempDir()
+	writeTimedPNG(t, filepath.Join(mount, "DCIM", "photo.png"), time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC))
+
+	bus := recentImagesBus(mount)
+	st := recentImagesState(&Service{settings: Settings{RecentImagesPath: "DCIM", MaxRecentImages: 6}})
+	chosen := "devA"
+	st.refreshRecentImages(bus, &chosen)
+	if len(st.recentImages) != 1 {
+		t.Fatalf("recentImages = %+v, want one grid entry", st.recentImages)
+	}
+	if st.devices["devA"].MockupArt == "" {
+		t.Fatal("configured path left the mockup empty")
+	}
+}
+
+func TestRefreshRecentImagesAlbumArtWinsOverPhoto(t *testing.T) {
+	useRecentImageCaches(t)
+	mount := t.TempDir()
+	writeTimedPNG(t, filepath.Join(mount, "DCIM", "Camera", "photo.png"), time.Now())
+	art := filepath.Join(t.TempDir(), "cover.png")
+	writeArt(t, art, color.RGBA{G: 200, A: 255})
+
+	bus := recentImagesBus(mount)
+	dev := bus.objects[devicePath("devA")]
+	dev.ifaces[kdeDeviceIface]["supportedPlugins"] = dbus.MakeVariant(
+		append(stringListOf(dev.ifaces[kdeDeviceIface]["supportedPlugins"]), "kdeconnect_mprisremote"))
+	bus.objects[pluginPath("devA", "mprisremote")] = &fakeObject{ifaces: map[string]map[string]dbus.Variant{
+		mprisremoteIface: {"localAlbumArtUrl": dbus.MakeVariant("file://" + art)},
+	}}
+	st := recentImagesState(&Service{settings: Settings{MaxRecentImages: 6}})
+	st.devices["devA"].SupportedPlugins = append(st.devices["devA"].SupportedPlugins, "mprisremote")
+	chosen := "devA"
+	st.fetchMedia(bus, st.devices["devA"])
+	cover := st.devices["devA"].MockupArt
+	if cover == "" {
+		t.Fatal("album art did not compose")
+	}
+	st.refreshRecentImages(bus, &chosen)
+	if st.devices["devA"].MockupArt != cover {
+		t.Fatalf("sftp photo replaced album art: %q -> %q", cover, st.devices["devA"].MockupArt)
+	}
+}
+
+func TestFetchMediaGetAllFailureClearsMockupArt(t *testing.T) {
+	t.Parallel()
+	st := recentImagesState(&Service{})
+	st.devices["devA"].SupportedPlugins = append(st.devices["devA"].SupportedPlugins, "mprisremote")
+	st.devices["devA"].MockupArt = "/stale/cover.png"
+	st.fetchMedia(&fakeBus{objects: map[dbus.ObjectPath]*fakeObject{}}, st.devices["devA"])
+	if got := st.devices["devA"].MockupArt; got != "" {
+		t.Fatalf("GetAll failure left MockupArt = %q", got)
+	}
+}
+
+func TestApplyIdleMockupReplacesMissingArt(t *testing.T) {
+	useRecentImageCaches(t)
+	mount := t.TempDir()
+	writeTimedPNG(t, filepath.Join(mount, "DCIM", "Camera", "photo.png"), time.Now())
+	bus := recentImagesBus(mount)
+	st := recentImagesState(&Service{})
+	gone := filepath.Join(t.TempDir(), "gone.png")
+	st.devices["devA"].MockupArt = gone
+	chosen := "devA"
+	st.refreshRecentImages(bus, &chosen)
+	if st.devices["devA"].MockupArt == "" || st.devices["devA"].MockupArt == gone {
+		t.Fatal("missing album-art path blocked idle fill")
+	}
+}
+
+func TestRefreshRecentImagesRecordsMountError(t *testing.T) {
+	t.Parallel()
+	bus := recentImagesBus(t.TempDir())
+	sftp := bus.objects[pluginPath("devA", "sftp")]
+	sftp.mounts = false
+	sftp.mountError = "Permissions missing: filesystem access"
+	st := recentImagesState(&Service{settings: Settings{RecentImagesPath: "DCIM"}})
+	st.devices["devA"].SFTPError = "stale"
+	chosen := "devA"
+	st.refreshRecentImages(bus, &chosen)
+	if got := st.devices["devA"].SFTPError; got != sftp.mountError {
+		t.Fatalf("SFTPError = %q, want the daemon reason", got)
+	}
+	if st.devices["devA"].MockupArt != "" || len(st.recentImages) != 0 {
+		t.Fatalf("failed mount still filled mockup or grid")
+	}
+	if !sftp.asked(sftpIface + ".getMountError") {
+		t.Fatalf("failed mount never asked getMountError: %v", sftp.calls)
+	}
+}
+
+func TestRefreshRecentImagesIdleMountFailureStaysQuiet(t *testing.T) {
+	t.Parallel()
+	bus := recentImagesBus(t.TempDir())
+	sftp := bus.objects[pluginPath("devA", "sftp")]
+	sftp.mounts = false
+	sftp.mountError = "Permissions missing: filesystem access"
+	st := recentImagesState(&Service{})
+	st.devices["devA"].SFTPError = "from browse"
+	chosen := "devA"
+	st.refreshRecentImages(bus, &chosen)
+	if got := st.devices["devA"].SFTPError; got != "from browse" {
+		t.Fatalf("idle mount failure overwrote SFTPError = %q", got)
+	}
+	if sftp.asked(sftpIface + ".getMountError") {
+		t.Fatalf("idle mount failure still asked getMountError: %v", sftp.calls)
+	}
+	n := 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			n++
+		}
+	}
+	st.refreshRecentImages(bus, &chosen)
+	got := 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			got++
+		}
+	}
+	if got != n+1 {
+		t.Fatalf("failed idle mount did not retry: mountAndWait %d -> %d", n, got)
+	}
+}
+
+func TestRefreshRecentImagesIdleEmptyScanMountsOnce(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(mount, "DCIM"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bus := recentImagesBus(mount)
+	st := recentImagesState(&Service{})
+	chosen := "devA"
+	st.refreshRecentImages(bus, &chosen)
+	sftp := bus.objects[pluginPath("devA", "sftp")]
+	n := 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			n++
+		}
+	}
+	if n == 0 {
+		t.Fatal("first empty scan never mounted")
+	}
+	st.refreshRecentImages(bus, &chosen)
+	got := 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			got++
+		}
+	}
+	if got != n {
+		t.Fatalf("empty idle scan remounted: mountAndWait %d -> %d", n, got)
+	}
+	st.idleScanEmpty = false
+	st.refreshRecentImages(bus, &chosen)
+	got = 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			got++
+		}
+	}
+	if got != n+1 {
+		t.Fatalf("cleared idleScanEmpty did not remount: mountAndWait %d -> %d", n, got)
+	}
+}
+
+func TestRefreshRecentImagesClearsMountErrorOnSuccess(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	st := recentImagesState(&Service{})
+	st.devices["devA"].SFTPError = "Permissions missing: filesystem access"
+	chosen := "devA"
+	st.refreshRecentImages(recentImagesBus(mount), &chosen)
+	if got := st.devices["devA"].SFTPError; got != "" {
+		t.Fatalf("successful mount left SFTPError = %q", got)
+	}
+}
+
+func TestRefreshRecentImagesEmptyDirsLeaveMockupEmpty(t *testing.T) {
+	useRecentImageCaches(t)
+	mount := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(mount, "DCIM"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bus := recentImagesBus(mount)
+	st := recentImagesState(&Service{})
+	chosen := "devA"
+	st.refreshRecentImages(bus, &chosen)
+	if st.devices["devA"].MockupArt != "" {
+		t.Fatalf("empty dirs still composed %q", st.devices["devA"].MockupArt)
+	}
+	if len(st.recentImages) != 0 {
+		t.Fatalf("empty dirs filled the grid: %+v", st.recentImages)
 	}
 }
 
