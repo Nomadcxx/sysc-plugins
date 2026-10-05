@@ -3,6 +3,7 @@ package recorder
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -355,9 +356,14 @@ func (r *Recorder) recover(own Ownership) {
 	}
 	proc, err := Adopt(scan, own.Exe, own.Args)
 	if err != nil {
-		// The process is gone: a clean shutdown stopped it, or it crashed.
-		// Stay Idle (or Unavailable) so the next start is usable instead of
-		// reporting a failure for a process that is no longer there.
+		if errors.Is(err, ErrNoMatch) {
+			// The process is gone: a clean shutdown stopped it, or it
+			// crashed. Stay Idle (or Unavailable) so the next start is
+			// usable instead of reporting a failure for a process that is
+			// no longer there.
+			return
+		}
+		r.fail(err)
 		return
 	}
 	r.proc = proc

@@ -3,6 +3,7 @@ package recorder
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -215,6 +216,9 @@ func listProcs() ([]ProcInfo, error) {
 	return out, nil
 }
 
+// ErrNoMatch reports that no process matched the persisted ownership.
+var ErrNoMatch = errors.New("recorder: no matching process")
+
 func Adopt(scan Scanner, exe string, args []string) (*Proc, error) {
 	list, err := scan()
 	if err != nil {
@@ -227,7 +231,7 @@ func Adopt(scan Scanner, exe string, args []string) (*Proc, error) {
 		}
 	}
 	if len(hits) == 0 {
-		return nil, fmt.Errorf("recorder: no matching process")
+		return nil, ErrNoMatch
 	}
 	if len(hits) > 1 {
 		return nil, fmt.Errorf("recorder: %d matching processes", len(hits))
