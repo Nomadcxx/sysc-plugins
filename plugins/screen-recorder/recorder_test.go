@@ -1,6 +1,8 @@
 package recorder
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,6 +112,42 @@ func TestRecorderRetryAfterFailure(t *testing.T) {
 	r.ToggleRecord("DP-1")
 	waitMode(t, r, Failed)
 	r.Retry()
+	waitMode(t, r, Idle)
+}
+
+func TestRecorderRecoversFromFailed(t *testing.T) {
+	opt := testOpts("hang")
+	real := Start
+	fails := 1
+	opt.Start = func(ctx context.Context, path string, args, env []string) (*Proc, error) {
+		if fails > 0 {
+			fails--
+			return nil, errors.New("start refused")
+		}
+		return real(ctx, path, args, env)
+	}
+	r := New(mustConfig(t, map[string]any{"directory": t.TempDir()}), opt)
+	t.Cleanup(r.Close)
+
+	r.ToggleRecord("DP-1")
+	waitMode(t, r, Failed)
+	r.ToggleRecord("DP-1")
+	waitMode(t, r, Recording)
+	r.ToggleRecord("DP-1")
+	waitMode(t, r, Idle)
+}
+
+func TestRecorderReconfigureClearsFailed(t *testing.T) {
+	opt := testOpts("hang")
+	opt.Start = func(context.Context, string, []string, []string) (*Proc, error) {
+		return nil, errors.New("start refused")
+	}
+	r := New(mustConfig(t, map[string]any{"directory": t.TempDir()}), opt)
+	t.Cleanup(r.Close)
+
+	r.ToggleRecord("DP-1")
+	waitMode(t, r, Failed)
+	r.Reconfigure(mustConfig(t, map[string]any{"directory": t.TempDir()}))
 	waitMode(t, r, Idle)
 }
 

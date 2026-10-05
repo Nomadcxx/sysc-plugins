@@ -215,6 +215,9 @@ func (r *Recorder) handle(c command) {
 		}
 	case cmdReconfig:
 		r.cfg = c.cfg
+		if r.mode() == Failed {
+			r.set(Snapshot{Mode: Idle})
+		}
 	}
 }
 
@@ -222,7 +225,7 @@ func (r *Recorder) toggleRecord(output string) {
 	switch r.mode() {
 	case Recording, Adopted:
 		r.stopRecord()
-	case Idle:
+	case Idle, Failed:
 		r.startRecord(output)
 	}
 }
@@ -231,7 +234,7 @@ func (r *Recorder) toggleReplay(output string) {
 	switch r.mode() {
 	case ReplayActive:
 		r.stopReplay()
-	case Idle:
+	case Idle, Failed:
 		if r.cfg.ReplayEnabled {
 			r.startReplay(output)
 		}
