@@ -174,6 +174,50 @@ func TestPluginSettingsRebuildAndNotifyAndShutdown(t *testing.T) {
 	}
 }
 
+func TestPluginShutdownClearsOwnership(t *testing.T) {
+	h := startPlugin(t, recorder.Options{
+		Exe:      os.Args[0],
+		LookPath: func(string) (string, error) { return os.Args[0], nil },
+		Env:      append(os.Environ(), "SYSC_FAKE_RECORDER=1", "SYSC_FAKE_BEHAVIOR=hang"),
+		StopWait: 250 * time.Millisecond,
+	})
+	h.open("bar-a", v1.ViewBar, "DP-1")
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
+	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+		t.Fatal(err)
+	}
+	h.wait("bar-a", barCapturing)
+	h.waitOwnership(func(own recorder.Ownership) bool { return own.PID > 0 })
+
+	if err := h.send(&v1.HostShutdown{}); err != nil {
+		t.Fatal(err)
+	}
+	_ = h.fromHost.Close()
+	select {
+	case <-h.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown did not stop the plugin")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		h.mu.Lock()
+		n := len(h.stateSets)
+		var last recorder.Ownership
+		if n > 0 {
+			_ = json.Unmarshal(h.stateSets[n-1].Value, &last)
+		}
+		h.mu.Unlock()
+		if n > 0 && last.PID == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("shutdown ownership not cleared: %d state sets, last %+v", n, last)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestPluginFailureNotifyIncludesLogs(t *testing.T) {
 	h := startPlugin(t, recorder.Options{
 		Exe:      os.Args[0],
@@ -197,10 +241,12 @@ type pluginHost struct {
 	dir       string
 	enc       *v1.Encoder
 	dec       *v1.Decoder
+	fromHost  *io.PipeWriter
 	mu        sync.Mutex
 	roots     map[string]*v1.Node
 	notify    []v1.NotifyParams
 	panels    []v1.PanelParams
+	stateSets []v1.StateSetParams
 	wake      chan struct{}
 	done      chan struct{}
 	snapCount atomic.Int32
@@ -213,7 +259,8 @@ func startPlugin(t *testing.T, opt recorder.Options) *pluginHost {
 	h := &pluginHost{
 		t: t, dir: t.TempDir(),
 		enc: v1.NewEncoder(fromHost), dec: v1.NewDecoder(toHost, v1.ToHost),
-		roots: make(map[string]*v1.Node), wake: make(chan struct{}, 8), done: make(chan struct{}),
+		fromHost: fromHost,
+		roots:    make(map[string]*v1.Node), wake: make(chan struct{}, 8), done: make(chan struct{}),
 	}
 	go func() {
 		defer close(h.done)
@@ -268,6 +315,12 @@ func startPlugin(t *testing.T, opt recorder.Options) *pluginHost {
 				case v1.CallStateGet:
 					raw, _ := json.Marshal(v1.StateGetResult{Found: false})
 					reply.Result = raw
+				case v1.CallStateSet:
+					var p v1.StateSetParams
+					_ = json.Unmarshal(m.Params, &p)
+					h.mu.Lock()
+					h.stateSets = append(h.stateSets, p)
+					h.mu.Unlock()
 				}
 				_ = h.send(&reply)
 			case *v1.ViewSnapshot:
@@ -330,6 +383,25 @@ func (h *pluginHost) notifies() []v1.NotifyParams {
 	out := make([]v1.NotifyParams, len(h.notify))
 	copy(out, h.notify)
 	return out
+}
+
+func (h *pluginHost) waitOwnership(ok func(recorder.Ownership) bool) {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		for _, p := range h.stateSets {
+			var own recorder.Ownership
+			_ = json.Unmarshal(p.Value, &own)
+			if ok(own) {
+				h.mu.Unlock()
+				return
+			}
+		}
+		h.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+	h.t.Fatal("ownership state never matched")
 }
 
 func (h *pluginHost) waitNotify(ok func(v1.NotifyParams) bool) {

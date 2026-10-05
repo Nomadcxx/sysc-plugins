@@ -186,12 +186,12 @@ func HandleInput(ev *v1.InputEvent, mode Mode) (open, record, stop, replay, save
 		switch mode {
 		case Recording, Adopted, Stopping:
 			return false, false, true, false, false
-		case Idle:
+		case Idle, Failed:
 			return false, true, false, false, false
 		}
 		return false, false, false, false, false
 	case nodeRecord:
-		if mode == Idle {
+		if mode == Idle || mode == Failed {
 			return false, true, false, false, false
 		}
 	case nodeStop:
@@ -200,7 +200,7 @@ func HandleInput(ev *v1.InputEvent, mode Mode) (open, record, stop, replay, save
 			return false, false, true, false, false
 		}
 	case nodeReplay:
-		if mode == Idle {
+		if mode == Idle || mode == Failed {
 			return false, false, false, true, false
 		}
 	case nodeSave:
