@@ -396,3 +396,147 @@ func TestRecoverRestoresTheRecordingDestination(t *testing.T) {
 	}
 	t.Fatal("stop after adoption never reached idle")
 }
+func TestReplaySaveLeavesUnrelatedFiles(t *testing.T) {
+	r := testRecorder(t, map[string]any{"replay_enabled": true}, "hang")
+	r.ToggleReplay("DP-1")
+	waitMode(t, r, ReplayActive)
+	other := filepath.Join(r.cfg.Directory, "A-download.mp4")
+	if err := os.WriteFile(other, []byte("user-file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.SaveReplay()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		snap := r.Snapshot()
+		if snap.Artifact != "" || snap.Mode == Failed {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := r.Snapshot().Artifact
+	if got == "" || got == other {
+		t.Fatalf("claimed %q err=%s", got, r.Snapshot().Err)
+	}
+	body, err := os.ReadFile(other)
+	if err != nil || string(body) != "user-file" {
+		t.Fatalf("other file = %q err=%v", body, err)
+	}
+	claimed, err := os.ReadFile(got)
+	if err != nil || string(claimed) != "mp4" {
+		t.Fatalf("claimed body %q err=%v", claimed, err)
+	}
+}
+
+func TestClaimReplayIgnoresOtherNewFiles(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	other := filepath.Join(dir, "A-download.mp4")
+	if err := os.WriteFile(other, []byte("user-file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	replay := filepath.Join(dir, "Replay_2026-10-04_12-00-00.mp4")
+	if err := os.WriteFile(replay, []byte("mp4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "replay_20261004_120000.mp4")
+	got, err := claimReplay(dir, []byte(replay+"\n"), time.Now().Add(-time.Second), dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != dest {
+		t.Fatalf("claimed %s", got)
+	}
+	body, err := os.ReadFile(other)
+	if err != nil || string(body) != "user-file" {
+		t.Fatalf("other file = %q err=%v", body, err)
+	}
+	if _, err := os.Stat(replay); !os.IsNotExist(err) {
+		t.Fatal("replay source still present")
+	}
+	claimed, err := os.ReadFile(dest)
+	if err != nil || string(claimed) != "mp4" {
+		t.Fatalf("dest = %q err=%v", claimed, err)
+	}
+}
+
+func TestClaimReplayRejectsForeignAndStaleFiles(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	other := filepath.Join(dir, "A-download.mp4")
+	if err := os.WriteFile(other, []byte("user-file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outsideDir := t.TempDir()
+	outside := filepath.Join(outsideDir, "Replay_2026-10-04_12-00-00.mp4")
+	if err := os.WriteFile(outside, []byte("mp4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dir, "Replay_2026-10-04_11-00-00.mp4")
+	if err := os.WriteFile(stale, []byte("mp4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(dir, "Replay_2026-10-04_12-00-01.mp4")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "replay_out.mp4")
+	signaled := time.Now()
+	for _, logs := range []string{
+		other + "\n",
+		outside + "\n",
+		stale + "\n",
+		empty + "\n",
+		filepath.Join(dir, "Replay_2026-10-04_12-00-00.mp4"),
+		"gsr error: Failed to save replay\n",
+	} {
+		if _, err := claimReplay(dir, []byte(logs), signaled, dest); err == nil {
+			t.Fatalf("claimed %q", logs)
+		}
+	}
+	body, err := os.ReadFile(other)
+	if err != nil || string(body) != "user-file" {
+		t.Fatalf("other file = %q err=%v", body, err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatal("dest was created")
+	}
+}
+
+func TestReplaySaveAfterLogBufferSaturates(t *testing.T) {
+	r := testRecorder(t, map[string]any{"replay_enabled": true}, "flood-ready")
+	r.ToggleReplay("DP-1")
+	waitMode(t, r, ReplayActive)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !containsReady(r.proc.Logs()) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !containsReady(r.proc.Logs()) {
+		t.Fatal("fake recorder never became ready")
+	}
+	if got := len(r.proc.Logs()); got != maxLogBytes {
+		t.Fatalf("log buffer = %d, want %d", got, maxLogBytes)
+	}
+	r.SaveReplay()
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.Snapshot().Artifact != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := r.Snapshot().Artifact; got == "" {
+		t.Fatalf("replay save after log saturation failed: %s", r.Snapshot().Err)
+	}
+	r.ToggleReplay("DP-1")
+	waitMode(t, r, Idle)
+}
