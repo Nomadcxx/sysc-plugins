@@ -260,6 +260,37 @@ func TestReplayStartSaveAndStop(t *testing.T) {
 	waitMode(t, r, Idle)
 }
 
+// A saturated log buffer drops its oldest bytes, so the pre-save offset can
+// point past the replay path line. The save must still find it.
+func TestReplaySaveAfterLogBufferSaturates(t *testing.T) {
+	r := testRecorder(t, map[string]any{"replay_enabled": true}, "flood-ready")
+	r.ToggleReplay("DP-1")
+	waitMode(t, r, ReplayActive)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !containsReady(r.proc.Logs()) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !containsReady(r.proc.Logs()) {
+		t.Fatal("fake recorder never became ready")
+	}
+	if got := len(r.proc.Logs()); got != maxLogBytes {
+		t.Fatalf("log buffer = %d, want %d", got, maxLogBytes)
+	}
+	r.SaveReplay()
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.Snapshot().Artifact != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := r.Snapshot().Artifact; got == "" {
+		t.Fatalf("replay save after log saturation failed: %s", r.Snapshot().Err)
+	}
+	r.ToggleReplay("DP-1")
+	waitMode(t, r, Idle)
+}
+
 func TestRecorderAdoptedFromPersistedOwnership(t *testing.T) {
 	cfg := mustConfig(t, map[string]any{"directory": t.TempDir()})
 	args, err := cfg.RecordArgs("DP-1", filepath.Join(cfg.Directory, "live.mp4"))

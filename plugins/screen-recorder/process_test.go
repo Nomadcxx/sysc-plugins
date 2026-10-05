@@ -191,6 +191,15 @@ func runFakeRecorder() int {
 		for i := 0; i < 40; i++ {
 			_, _ = os.Stderr.Write(chunk)
 		}
+	case "flood-ready":
+		chunk := bytes.Repeat([]byte("x"), 4096)
+		for i := 0; i < 40; i++ {
+			_, _ = os.Stderr.Write(chunk)
+		}
+		_, _ = os.Stderr.WriteString("\n")
+		// Let the drains consume the flood before "ready", so the replay
+		// path lands on its own line after a saturated buffer.
+		time.Sleep(200 * time.Millisecond)
 	case "ignore-int":
 		signal.Ignore(syscall.SIGINT)
 		_, _ = os.Stdout.WriteString("ready\n")

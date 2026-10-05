@@ -325,7 +325,10 @@ func (r *Recorder) saveReplay() {
 	}
 	for time.Now().Before(deadline) {
 		logs := r.proc.Logs()
-		if logged > len(logs) {
+		// The log buffer drops its oldest bytes at maxLogBytes, so a length
+		// that stopped growing can still hide the new line. Rescan the whole
+		// buffer then; claimReplay's mtime check rejects stale lines.
+		if logged > len(logs) || len(logs) == maxLogBytes {
 			logged = 0
 		}
 		if path, err := claimReplay(r.replayDir, logs[logged:], signaled, dest); err == nil {
