@@ -107,6 +107,10 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 			switch m := msg.(type) {
 			case *v1.HostShutdown:
 				rec.Close()
+				// Close halts the recorder and clears ownership in memory;
+				// persist that so the next start does not try to adopt a
+				// process that was stopped on purpose.
+				saveOwnership(ctx, c, rec)
 				return nil
 			case *v1.ViewOpen:
 				views[m.ViewID] = view{kind: m.View, output: m.Output, width: m.Width}

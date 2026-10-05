@@ -174,6 +174,52 @@ func TestPluginSettingsRebuildAndNotifyAndShutdown(t *testing.T) {
 	}
 }
 
+func TestPluginShutdownClearsPersistedOwnership(t *testing.T) {
+	h := startPlugin(t, recorder.Options{
+		Exe:      os.Args[0],
+		LookPath: func(string) (string, error) { return os.Args[0], nil },
+		Env:      append(os.Environ(), "SYSC_FAKE_RECORDER=1", "SYSC_FAKE_BEHAVIOR=hang"),
+		StopWait: 250 * time.Millisecond,
+	})
+	h.open("bar-a", v1.ViewBar, "DP-1")
+	h.wait("bar-a", barIdle)
+	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+		t.Fatal(err)
+	}
+	h.wait("bar-a", barCapturing)
+
+	if err := h.send(&v1.HostShutdown{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-h.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown did not stop the plugin")
+	}
+
+	// The final ownership write must clear the just-stopped recorder's PID,
+	// or the next start tries to adopt a process that exited on purpose.
+	h.mu.Lock()
+	sets := append([]v1.StateSetParams(nil), h.stateSets...)
+	h.mu.Unlock()
+	var last *v1.StateSetParams
+	for i := range sets {
+		if sets[i].Key == "ownership" {
+			last = &sets[i]
+		}
+	}
+	if last == nil {
+		t.Fatal("no ownership state write issued")
+	}
+	var own recorder.Ownership
+	if err := json.Unmarshal(last.Value, &own); err != nil {
+		t.Fatal(err)
+	}
+	if own.PID != 0 {
+		t.Fatalf("ownership PID = %d after shutdown, want 0", own.PID)
+	}
+}
+
 func TestPluginFailureNotifyIncludesLogs(t *testing.T) {
 	h := startPlugin(t, recorder.Options{
 		Exe:      os.Args[0],
@@ -201,6 +247,7 @@ type pluginHost struct {
 	roots     map[string]*v1.Node
 	notify    []v1.NotifyParams
 	panels    []v1.PanelParams
+	stateSets []v1.StateSetParams
 	wake      chan struct{}
 	done      chan struct{}
 	snapCount atomic.Int32
@@ -268,6 +315,12 @@ func startPlugin(t *testing.T, opt recorder.Options) *pluginHost {
 				case v1.CallStateGet:
 					raw, _ := json.Marshal(v1.StateGetResult{Found: false})
 					reply.Result = raw
+				case v1.CallStateSet:
+					var p v1.StateSetParams
+					_ = json.Unmarshal(m.Params, &p)
+					h.mu.Lock()
+					h.stateSets = append(h.stateSets, p)
+					h.mu.Unlock()
 				}
 				_ = h.send(&reply)
 			case *v1.ViewSnapshot:

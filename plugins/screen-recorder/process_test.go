@@ -186,6 +186,17 @@ func runFakeRecorder() int {
 	case "crash":
 		_, _ = os.Stdout.WriteString("ready\n")
 		return 1
+	case "crash-once":
+		// Crashes on the first start only, then behaves like the default
+		// run; a marker file carries the "once" across process spawns.
+		marker := os.Getenv("SYSC_FAKE_MARKER")
+		if marker != "" {
+			if _, err := os.Stat(marker); os.IsNotExist(err) {
+				_ = os.WriteFile(marker, []byte("1"), 0o644)
+				_, _ = os.Stdout.WriteString("ready\n")
+				return 1
+			}
+		}
 	case "flood":
 		chunk := bytes.Repeat([]byte("x"), 4096)
 		for i := 0; i < 40; i++ {

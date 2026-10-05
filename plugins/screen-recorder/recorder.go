@@ -222,7 +222,9 @@ func (r *Recorder) toggleRecord(output string) {
 	switch r.mode() {
 	case Recording, Adopted:
 		r.stopRecord()
-	case Idle:
+	case Idle, Failed:
+		// A click on a failed recorder is the retry; a fresh failure just
+		// lands back in Failed with the new error.
 		r.startRecord(output)
 	}
 }
@@ -231,7 +233,7 @@ func (r *Recorder) toggleReplay(output string) {
 	switch r.mode() {
 	case ReplayActive:
 		r.stopReplay()
-	case Idle:
+	case Idle, Failed:
 		if r.cfg.ReplayEnabled {
 			r.startReplay(output)
 		}

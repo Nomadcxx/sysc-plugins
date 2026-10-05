@@ -113,6 +113,20 @@ func TestRecorderRetryAfterFailure(t *testing.T) {
 	waitMode(t, r, Idle)
 }
 
+func TestRecorderToggleRetriesAfterFailure(t *testing.T) {
+	opt := testOpts("crash-once")
+	opt.Env = append(opt.Env, "SYSC_FAKE_MARKER="+filepath.Join(t.TempDir(), "once"))
+	r := New(mustConfig(t, map[string]any{"directory": t.TempDir()}), opt)
+	t.Cleanup(r.Close)
+	r.ToggleRecord("DP-1")
+	waitMode(t, r, Failed)
+	// A second toggle from a failed recorder is the retry: it starts again.
+	r.ToggleRecord("DP-1")
+	waitMode(t, r, Recording)
+	r.ToggleRecord("DP-1")
+	waitMode(t, r, Idle)
+}
+
 func TestReplayStartSaveAndStop(t *testing.T) {
 	r := testRecorder(t, map[string]any{"replay_enabled": true}, "hang")
 	keep := filepath.Join(r.cfg.Directory, "keep.mp4")
