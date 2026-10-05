@@ -174,6 +174,20 @@ func TestPluginSettingsRebuildAndNotifyAndShutdown(t *testing.T) {
 	}
 }
 
+func TestPluginStaleOwnershipRecoversToIdle(t *testing.T) {
+	stale := recorder.Ownership{PID: 999999, Exe: "/nonexistent/gpu-screen-recorder", Args: []string{"-o", "/tmp/stale.mp4"}}
+	h := startPluginWith(t, recorder.Options{
+		Exe:      os.Args[0],
+		LookPath: func(string) (string, error) { return os.Args[0], nil },
+		Env:      append(os.Environ(), "SYSC_FAKE_RECORDER=1", "SYSC_FAKE_BEHAVIOR=hang"),
+		StopWait: 250 * time.Millisecond,
+	}, &stale)
+	time.Sleep(150 * time.Millisecond)
+	h.open("bar-a", v1.ViewBar, "DP-1")
+	h.wait("bar-a", barIdle)
+	h.waitOwnership(func(own recorder.Ownership) bool { return own.PID == 0 })
+}
+
 func TestPluginFailureNotifyIncludesLogs(t *testing.T) {
 	h := startPlugin(t, recorder.Options{
 		Exe:      os.Args[0],
@@ -197,22 +211,30 @@ type pluginHost struct {
 	dir       string
 	enc       *v1.Encoder
 	dec       *v1.Decoder
+	fromHost  *io.PipeWriter
+	stale     *recorder.Ownership
 	mu        sync.Mutex
 	roots     map[string]*v1.Node
 	notify    []v1.NotifyParams
 	panels    []v1.PanelParams
+	stateSets []v1.StateSetParams
 	wake      chan struct{}
 	done      chan struct{}
 	snapCount atomic.Int32
 }
 
 func startPlugin(t *testing.T, opt recorder.Options) *pluginHost {
+	return startPluginWith(t, opt, nil)
+}
+
+func startPluginWith(t *testing.T, opt recorder.Options, stale *recorder.Ownership) *pluginHost {
 	t.Helper()
 	toPlugin, fromHost := io.Pipe()
 	toHost, fromPlugin := io.Pipe()
 	h := &pluginHost{
 		t: t, dir: t.TempDir(),
 		enc: v1.NewEncoder(fromHost), dec: v1.NewDecoder(toHost, v1.ToHost),
+		fromHost: fromHost, stale: stale,
 		roots: make(map[string]*v1.Node), wake: make(chan struct{}, 8), done: make(chan struct{}),
 	}
 	go func() {
@@ -266,8 +288,20 @@ func startPlugin(t *testing.T, opt recorder.Options) *pluginHost {
 					raw, _ := json.Marshal(v1.OutputContextResult{Output: "DP-1", Generation: 1})
 					reply.Result = raw
 				case v1.CallStateGet:
-					raw, _ := json.Marshal(v1.StateGetResult{Found: false})
-					reply.Result = raw
+					if h.stale != nil {
+						value, _ := json.Marshal(h.stale)
+						raw, _ := json.Marshal(v1.StateGetResult{Found: true, Value: value})
+						reply.Result = raw
+					} else {
+						raw, _ := json.Marshal(v1.StateGetResult{Found: false})
+						reply.Result = raw
+					}
+				case v1.CallStateSet:
+					var p v1.StateSetParams
+					_ = json.Unmarshal(m.Params, &p)
+					h.mu.Lock()
+					h.stateSets = append(h.stateSets, p)
+					h.mu.Unlock()
 				}
 				_ = h.send(&reply)
 			case *v1.ViewSnapshot:
@@ -330,6 +364,25 @@ func (h *pluginHost) notifies() []v1.NotifyParams {
 	out := make([]v1.NotifyParams, len(h.notify))
 	copy(out, h.notify)
 	return out
+}
+
+func (h *pluginHost) waitOwnership(ok func(recorder.Ownership) bool) {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		for _, p := range h.stateSets {
+			var own recorder.Ownership
+			_ = json.Unmarshal(p.Value, &own)
+			if ok(own) {
+				h.mu.Unlock()
+				return
+			}
+		}
+		h.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+	h.t.Fatal("ownership state never matched")
 }
 
 func (h *pluginHost) waitNotify(ok func(v1.NotifyParams) bool) {

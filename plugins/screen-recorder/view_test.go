@@ -216,11 +216,15 @@ func TestHandleInputButtons(t *testing.T) {
 			t.Fatalf("toggle live in %s = %v %v %v %v %v", mode, open, record, stop, replay, save)
 		}
 	}
-	for _, mode := range []Mode{Unavailable, Failed, ReplayActive} {
+	for _, mode := range []Mode{Unavailable, ReplayActive} {
 		_, record, _, _, _ = HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventActivate}, mode)
 		if record {
 			t.Fatalf("toggle recorded in %s", mode)
 		}
+	}
+	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventActivate}, Failed)
+	if open || !record || stop || replay || save {
+		t.Fatalf("toggle failed = %v %v %v %v %v", open, record, stop, replay, save)
 	}
 
 	// The panel keeps explicit controls.
@@ -231,6 +235,14 @@ func TestHandleInputButtons(t *testing.T) {
 	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeRecord, Event: v1.EventActivate}, Recording)
 	if open || record || stop || replay || save {
 		t.Fatalf("record while recording = %v %v %v %v %v", open, record, stop, replay, save)
+	}
+	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeRecord, Event: v1.EventActivate}, Failed)
+	if open || !record || stop || replay || save {
+		t.Fatalf("record failed = %v %v %v %v %v", open, record, stop, replay, save)
+	}
+	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeReplay, Event: v1.EventActivate}, Failed)
+	if open || record || stop || !replay || save {
+		t.Fatalf("replay failed = %v %v %v %v %v", open, record, stop, replay, save)
 	}
 	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeStop, Event: v1.EventActivate}, Recording)
 	if open || record || !stop || replay || save {

@@ -215,6 +215,9 @@ func (r *Recorder) handle(c command) {
 		}
 	case cmdReconfig:
 		r.cfg = c.cfg
+		if r.mode() == Failed {
+			r.set(Snapshot{Mode: Idle})
+		}
 	}
 }
 
@@ -222,7 +225,7 @@ func (r *Recorder) toggleRecord(output string) {
 	switch r.mode() {
 	case Recording, Adopted:
 		r.stopRecord()
-	case Idle:
+	case Idle, Failed:
 		r.startRecord(output)
 	}
 }
@@ -231,7 +234,7 @@ func (r *Recorder) toggleReplay(output string) {
 	switch r.mode() {
 	case ReplayActive:
 		r.stopReplay()
-	case Idle:
+	case Idle, Failed:
 		if r.cfg.ReplayEnabled {
 			r.startReplay(output)
 		}
@@ -346,7 +349,9 @@ func (r *Recorder) recover(own Ownership) {
 	}
 	proc, err := Adopt(scan, own.Exe, own.Args)
 	if err != nil {
-		r.fail(err)
+		// The process is gone: a clean shutdown stopped it, or it crashed.
+		// Stay Idle (or Unavailable) so the next start is usable instead of
+		// reporting a failure for a process that is no longer there.
 		return
 	}
 	r.proc = proc
