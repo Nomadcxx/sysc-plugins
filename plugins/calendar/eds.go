@@ -185,8 +185,9 @@ type edsWireResult struct {
 	Truncated  bool     `json:"truncated"`
 }
 
-// QueryEDS reads enabled EDS calendars and asks EDS itself to expand recurring
-// occurrences for the requested half-open time range.
+// QueryEDS reads enabled EDS calendars for the requested half-open time
+// range; the EDS object query returns recurring masters, which expandInstances
+// then fans out into one VEVENT per occurrence before parsing.
 func QueryEDS(ctx context.Context, start, end time.Time) (EDSResult, error) {
 	if !start.Before(end) || end.Sub(start) > 370*24*time.Hour {
 		return EDSResult{}, fmt.Errorf("calendar: EDS query range is invalid or longer than a year")
@@ -237,12 +238,24 @@ func QueryEDS(ctx context.Context, start, end time.Time) (EDSResult, error) {
 			out.Errors = append(out.Errors, wire.FatalError)
 		}
 		for _, item := range wire.Events {
-			// ponytail: one malformed VEVENT must not discard the rest of its
-			// calendar; that was the "unreliable events" failure mode.
-			events, eventErrors := parseICalendar(item.CalendarID, item.Calendar, item.Color, item.ICal)
-			out.Events = append(out.Events, events...)
-			for _, message := range eventErrors {
-				out.Errors = append(out.Errors, item.Calendar+": "+message)
+			// EDS returns master VEVENTs for recurring series; expand them so
+			// every occurrence in range shows, not just the first.
+			instances, truncated, expandErr := expandInstances(item.ICal, start.Unix(), end.Unix())
+			switch {
+			case expandErr != nil:
+				out.Errors = append(out.Errors, item.Calendar+": recurrence expansion: "+expandErr.Error())
+				instances = []string{item.ICal}
+			case truncated:
+				out.Errors = append(out.Errors, item.Calendar+": recurrence expansion hit the per-event instance cap")
+			}
+			for _, ical := range instances {
+				// ponytail: one malformed VEVENT must not discard the rest of its
+				// calendar; that was the "unreliable events" failure mode.
+				events, eventErrors := parseICalendar(item.CalendarID, item.Calendar, item.Color, ical)
+				out.Events = append(out.Events, events...)
+				for _, message := range eventErrors {
+					out.Errors = append(out.Errors, item.Calendar+": "+message)
+				}
 			}
 		}
 		if len(out.Events) > maxEvents {
@@ -445,6 +458,8 @@ func parseICalendarDate(property icalProperty) (time.Time, string, bool, error) 
 	}
 	zone := time.Local
 	if tzid := property.params["TZID"]; tzid != "" {
+		// libical prefixes builtin zone TZIDs with its vendor path.
+		tzid = strings.TrimPrefix(tzid, "/freeassociation.sourceforge.net/")
 		loaded, err := time.LoadLocation(tzid)
 		if err != nil {
 			return time.Time{}, "", false, fmt.Errorf("unknown time zone %q", tzid)
