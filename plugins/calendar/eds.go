@@ -6,19 +6,77 @@ package calendar
 #include <json-glib/json-glib.h>
 #include <time.h>
 
-static gchar *sysc_utc_query_time(gint64 timestamp) {
-	time_t value = (time_t) timestamp;
-	struct tm parts;
-	char buffer[32];
-	gmtime_r(&value, &parts);
-	if (strftime(buffer, sizeof(buffer), "%Y%m%dT%H%M%SZ", &parts) == 0)
-		return NULL;
-	return g_strdup(buffer);
-}
-
 static void sysc_json_string(JsonBuilder *builder, const gchar *name, const gchar *value) {
 	json_builder_set_member_name(builder, name);
 	json_builder_add_string_value(builder, value ? value : "");
+}
+
+// SyscEventSink collects one calendar source's expanded instances into the
+// shared JSON event array, reusing the caps the pre-expansion query used.
+typedef struct {
+	JsonBuilder *builder;
+	const gchar *calendar_id;
+	const gchar *calendar;
+	const gchar *color;
+	guint *event_count;
+	gboolean *truncated;
+	GPtrArray *errors;
+} SyscEventSink;
+
+// sysc_record_instance materializes an instance the way an EDS-expanded
+// VEVENT looks: the callback hands us the master component, so stamp the
+// instance span onto a clone, drop recurrence rules and the now-redundant
+// DURATION, and add RECURRENCE-ID so each occurrence gets a distinct ID.
+// sysc_remove_kind strips every property of the given kind. Built from the
+// original libical-glib API because remove_property_by_kind is newer than the
+// CI's libical.
+static void sysc_remove_kind(ICalComponent *component, ICalPropertyKind kind) {
+	ICalProperty *prop = i_cal_component_get_first_property(component, kind);
+	while (prop) {
+		i_cal_component_remove_property(component, prop);
+		g_object_unref(prop);
+		prop = i_cal_component_get_first_property(component, kind);
+	}
+}
+
+static gboolean sysc_record_instance(ICalComponent *icomp, ICalTime *instance_start,
+                                     ICalTime *instance_end, gpointer user_data,
+                                     GCancellable *cancellable, GError **error) {
+	(void) cancellable;
+	(void) error;
+	SyscEventSink *sink = (SyscEventSink *) user_data;
+	if (*sink->event_count >= 2048) {
+		*sink->truncated = TRUE;
+		return FALSE;
+	}
+	ICalComponent *instance = i_cal_component_clone(icomp);
+	sysc_remove_kind(instance, ICAL_RRULE_PROPERTY);
+	sysc_remove_kind(instance, ICAL_RDATE_PROPERTY);
+	sysc_remove_kind(instance, ICAL_EXDATE_PROPERTY);
+	if (instance_start) {
+		i_cal_component_set_dtstart(instance, instance_start);
+		i_cal_component_take_property(instance, i_cal_property_new_recurrenceid(instance_start));
+	}
+	if (instance_end) {
+		sysc_remove_kind(instance, ICAL_DURATION_PROPERTY);
+		i_cal_component_set_dtend(instance, instance_end);
+	}
+	gchar *ical = i_cal_component_as_ical_string(instance);
+	g_object_unref(instance);
+	if (!ical || strlen(ical) > 65536) {
+		g_ptr_array_add(sink->errors, g_strdup("An event exceeded the iCalendar response limit"));
+		g_free(ical);
+		return TRUE;
+	}
+	json_builder_begin_object(sink->builder);
+	sysc_json_string(sink->builder, "calendar_id", sink->calendar_id);
+	sysc_json_string(sink->builder, "calendar", sink->calendar);
+	sysc_json_string(sink->builder, "color", sink->color);
+	sysc_json_string(sink->builder, "ical", ical);
+	json_builder_end_object(sink->builder);
+	g_free(ical);
+	(*sink->event_count)++;
+	return TRUE;
 }
 
 static gchar *sysc_calendar_query(gint64 start, gint64 end, GCancellable *cancellable) {
@@ -30,10 +88,6 @@ static gchar *sysc_calendar_query(gint64 start, gint64 end, GCancellable *cancel
 		fatal_error = g_strdup(error->message);
 		g_clear_error(&error);
 	}
-	gchar *start_text = sysc_utc_query_time(start);
-	gchar *end_text = sysc_utc_query_time(end);
-	gchar *sexp = start_text && end_text ? g_strdup_printf(
-		"(occur-in-time-range? (make-time \"%s\") (make-time \"%s\"))", start_text, end_text) : NULL;
 	json_builder_begin_object(builder);
 	json_builder_set_member_name(builder, "available");
 	json_builder_add_boolean_value(builder, registry != NULL);
@@ -62,7 +116,7 @@ static gchar *sysc_calendar_query(gint64 start, gint64 end, GCancellable *cancel
 	}
 	guint event_count = 0;
 	gboolean truncated = FALSE;
-	for (GList *link = sources; link && sexp; link = link->next) {
+	for (GList *link = sources; link; link = link->next) {
 		ESource *source = E_SOURCE(link->data);
 		GError *source_error = NULL;
 		ECalClient *client = E_CAL_CLIENT(e_cal_client_connect_sync(
@@ -75,40 +129,20 @@ static gchar *sysc_calendar_query(gint64 start, gint64 end, GCancellable *cancel
 			}
 			continue;
 		}
-		GSList *components = NULL;
-		if (!e_cal_client_get_object_list_as_comps_sync(client, sexp, &components, cancellable, &source_error)) {
-			if (source_error) {
-				gchar *message = g_strdup_printf("%s: %s", e_source_get_display_name(source), source_error->message);
-				g_ptr_array_add(errors, message);
-				g_clear_error(&source_error);
-			}
-			g_object_unref(client);
-			continue;
-		}
 		ESourceExtension *extension = e_source_get_extension(source, E_SOURCE_EXTENSION_CALENDAR);
 		gchar *color = extension ? e_source_selectable_dup_color(E_SOURCE_SELECTABLE(extension)) : NULL;
-		for (GSList *item = components; item; item = item->next) {
-			if (event_count >= 2048) {
-				truncated = TRUE;
-				break;
-			}
-			gchar *ical = e_cal_component_get_as_string(E_CAL_COMPONENT(item->data));
-			if (!ical || strlen(ical) > 65536) {
-				g_ptr_array_add(errors, g_strdup("An event exceeded the iCalendar response limit"));
-				g_free(ical);
-				continue;
-			}
-			json_builder_begin_object(builder);
-			sysc_json_string(builder, "calendar_id", e_source_get_uid(source));
-			sysc_json_string(builder, "calendar", e_source_get_display_name(source));
-			sysc_json_string(builder, "color", color);
-			sysc_json_string(builder, "ical", ical);
-			json_builder_end_object(builder);
-			g_free(ical);
-			event_count++;
-		}
+		SyscEventSink sink = {
+			builder,
+			e_source_get_uid(source),
+			e_source_get_display_name(source),
+			color,
+			&event_count,
+			&truncated,
+			errors,
+		};
+		e_cal_client_generate_instances_sync(client, (time_t) start, (time_t) end,
+			cancellable, sysc_record_instance, &sink);
 		g_free(color);
-		g_slist_free_full(components, g_object_unref);
 		g_object_unref(client);
 	}
 	json_builder_end_array(builder);
@@ -135,9 +169,6 @@ static gchar *sysc_calendar_query(gint64 start, gint64 end, GCancellable *cancel
 	if (registry)
 		g_object_unref(registry);
 	g_list_free_full(sources, g_object_unref);
-	g_free(start_text);
-	g_free(end_text);
-	g_free(sexp);
 	g_free(fatal_error);
 	return result;
 }
