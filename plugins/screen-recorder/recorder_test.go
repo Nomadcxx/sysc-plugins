@@ -151,6 +151,28 @@ func TestRecorderReconfigureClearsFailed(t *testing.T) {
 	waitMode(t, r, Idle)
 }
 
+func TestRecorderReplayRecoversFromFailed(t *testing.T) {
+	opt := testOpts("hang")
+	real := Start
+	fails := 1
+	opt.Start = func(ctx context.Context, path string, args, env []string) (*Proc, error) {
+		if fails > 0 {
+			fails--
+			return nil, errors.New("start refused")
+		}
+		return real(ctx, path, args, env)
+	}
+	r := New(mustConfig(t, map[string]any{"directory": t.TempDir(), "replay_enabled": true}), opt)
+	t.Cleanup(r.Close)
+
+	r.ToggleReplay("DP-1")
+	waitMode(t, r, Failed)
+	r.ToggleReplay("DP-1")
+	waitMode(t, r, ReplayActive)
+	r.ToggleReplay("DP-1")
+	waitMode(t, r, Idle)
+}
+
 func TestReplayStartSaveAndStop(t *testing.T) {
 	r := testRecorder(t, map[string]any{"replay_enabled": true}, "hang")
 	keep := filepath.Join(r.cfg.Directory, "keep.mp4")

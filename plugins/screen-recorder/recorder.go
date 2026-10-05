@@ -355,7 +355,9 @@ func (r *Recorder) recover(own Ownership) {
 	}
 	proc, err := Adopt(scan, own.Exe, own.Args)
 	if err != nil {
-		r.fail(err)
+		// The process is gone: a clean shutdown stopped it, or it crashed.
+		// Stay Idle (or Unavailable) so the next start is usable instead of
+		// reporting a failure for a process that is no longer there.
 		return
 	}
 	r.proc = proc
