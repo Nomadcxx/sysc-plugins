@@ -71,13 +71,15 @@ func updateCatalog(repoRoot, tag, dist string, now time.Time) error {
 	}
 	pluginDir, tagVersion := m[1], m[2]
 
+	// The working tree supplies only the directory-to-id mapping. The catalog
+	// job checks out main, so this manifest's version is main's tip and says
+	// nothing about the tag: gating on it refused releases whose archives were
+	// built from the tag, and the re-run failed identically until main's
+	// manifest was moved back. readTaggedManifest checks the archive's version
+	// against the tag, and the archive is what the release publishes.
 	identity, err := readManifest(filepath.Join(repoRoot, "plugins", pluginDir))
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
-	}
-	if identity.Version != tagVersion {
-		return fmt.Errorf("update: tag %q names version %q, but plugins/%s/manifest.json has %q",
-			tag, tagVersion, pluginDir, identity.Version)
 	}
 	manifest, err := readTaggedManifest(dist, pluginDir, tagVersion, identity.ID)
 	if err != nil {

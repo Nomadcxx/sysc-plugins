@@ -86,9 +86,15 @@ type Device struct {
 	NotificationCount  int
 	NotificationsKnown bool
 
-	// MockupArt is the cached mockup with the phone's current album art
-	// in its screen, "" while nothing reports a cover.
+	// MockupArt is the cached mockup with a picture in its screen:
+	// album art while the daemon names a local cover, otherwise the
+	// newest SFTP photo, "" when neither exists.
 	MockupArt string
+
+	// SFTPError is a mount failure the user asked about: a configured
+	// recents path that failed, or a Files click that failed. Empty-path
+	// background idle scans do not write it.
+	SFTPError string
 }
 
 // Snapshot is one immutable view of the daemon. Available false means the
@@ -335,14 +341,17 @@ func (s *Service) serve(bus daemonBus) error {
 	}
 
 	publish := func() {
-		st.refreshRecentImages(bus, &saved)
 		s.push(buildSnapshot(true, st.announced, st.selfID, st.order, st.devices, &saved, st.recentImages))
+	}
+	scanAndPublish := func() {
+		st.refreshRecentImages(bus, &saved)
+		publish()
 	}
 
 	if err := st.reconcile(bus); err != nil {
 		return err
 	}
-	publish()
+	scanAndPublish()
 
 	for {
 		select {
@@ -350,15 +359,20 @@ func (s *Service) serve(bus daemonBus) error {
 			return errStopped
 		case <-tickC:
 			_ = st.reconcile(bus)
-			publish()
+			scanAndPublish()
 		case <-s.refresh:
 			// A manual refresh always runs; the shared rate limit is for the
 			// signal-driven reconciles only.
+			st.idleScanEmpty = false
 			_ = st.reconcileNow(bus)
-			publish()
+			scanAndPublish()
 		case a := <-s.actions:
 			st.performAction(bus, a)
+			if a.Kind == ActionBrowse {
+				publish()
+			}
 		case set := <-s.configure:
+			st.idleScanEmpty = false
 			s.settings = set
 			interval = tickInterval(set.RefreshSeconds)
 			if ticker != nil {
@@ -371,8 +385,9 @@ func (s *Service) serve(bus daemonBus) error {
 				tickC = ticker.C
 			}
 		case id := <-s.selectReq:
+			st.idleScanEmpty = false
 			saved = id
-			publish()
+			scanAndPublish()
 		case sig, ok := <-signals:
 			if !ok {
 				return errDaemonGone
@@ -419,6 +434,11 @@ type daemonState struct {
 	lastReconcile time.Time
 	events        chan<- Event
 	recentImages  []RecentImage
+	// idleScanEmpty is a successful empty-path scan that found no photos.
+	// Further ticks skip the mount until a refresh, selection change, or
+	// settings change; a failed mount never sets it, so permission grant
+	// can still recover.
+	idleScanEmpty bool
 }
 
 // emit delivers an event without ever blocking the serve loop.
@@ -561,6 +581,9 @@ func (st *daemonState) fetchMedia(bus daemonBus, dev *Device) {
 	}
 	props, err := getAllProps(bus.object(kdeService, pluginPath(dev.ID, "mprisremote")), mprisremoteIface)
 	if err != nil {
+		// Clear so applyIdleMockup can fill from SFTP. Leaving a stale
+		// path here freezes the mockup on the last cover forever.
+		dev.MockupArt = ""
 		return
 	}
 	art, err := mediaMockup(dev, strOf(props["localAlbumArtUrl"]))
@@ -696,12 +719,8 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 		// startBrowsing answers false when the phone refuses the mount; the
 		// daemon keeps the reason, which is what the user can act on.
 		if !replyTrue(call) {
-			reason := "the device refused the mount"
-			if r := bus.object(kdeService, path).Call(sftpIface+".getMountError", 0); r.Err == nil && len(r.Body) > 0 {
-				if text, _ := r.Body[0].(string); text != "" {
-					reason = text
-				}
-			}
+			reason := sftpMountReason(bus.object(kdeService, path), call)
+			dev.SFTPError = reason
 			st.emit(Event{
 				Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
 				Message: actionFailureText(a.Kind, name), Detail: reason,
@@ -709,6 +728,7 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 			})
 			return
 		}
+		dev.SFTPError = ""
 	}
 	st.emit(Event{
 		Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
@@ -952,28 +972,40 @@ func updateFromSignal(sig *dbus.Signal, bus daemonBus, st *daemonState) bool {
 // decodableExtensions covers png/xpm/jpg/jpeg/gif/bmp); the plan
 // deliberately drops webp because the host cannot decode it.
 func scanRecentImages(root, mountPoint string, max int, sub bool) ([]string, error) {
-	if root == "" || mountPoint == "" {
+	return scanRecentImagesAt([]string{root}, mountPoint, max, sub)
+}
+
+func scanRecentImagesAt(roots []string, mountPoint string, max int, sub bool) ([]string, error) {
+	if len(roots) == 0 || mountPoint == "" {
 		return nil, errors.New("kdeconnect: scanRecentImages needs a root and a mount point")
 	}
-	cleanedRoot := filepath.Clean(root)
 	cleanedMount := filepath.Clean(mountPoint)
-	if cleanedRoot != cleanedMount && !strings.HasPrefix(cleanedRoot, cleanedMount+string(filepath.Separator)) {
-		return nil, fmt.Errorf("kdeconnect: scan root %s is not under SFTP mount %s", cleanedRoot, cleanedMount)
+	cleaned := make([]string, 0, len(roots))
+	for _, root := range roots {
+		if root == "" {
+			return nil, errors.New("kdeconnect: scanRecentImages needs a root and a mount point")
+		}
+		cleanedRoot := filepath.Clean(root)
+		if cleanedRoot != cleanedMount && !strings.HasPrefix(cleanedRoot, cleanedMount+string(filepath.Separator)) {
+			return nil, fmt.Errorf("kdeconnect: scan root %s is not under SFTP mount %s", cleanedRoot, cleanedMount)
+		}
+		cleaned = append(cleaned, cleanedRoot)
 	}
 	depth := "1"
 	if sub {
 		depth = "2"
 	}
-	cmd := exec.Command("find", cleanedRoot,
+	args := append(append([]string{}, cleaned...),
 		"-maxdepth", depth,
 		"(", "-iname", "*.png", "-o", "-iname", "*.jpg", "-o", "-iname", "*.jpeg", ")",
 		"-printf", "%T@ %p\n")
+	cmd := exec.Command("find", args...)
 	out, err := cmd.Output()
 	// find exits nonzero on any error — one unreadable subdirectory under
 	// scan_subdirectories — while still printing what it walked. Keep the
 	// partial listing; only a walk that produced nothing is a failure.
 	if err != nil && len(bytes.TrimSpace(out)) == 0 {
-		return nil, fmt.Errorf("kdeconnect: find %s: %w", cleanedRoot, err)
+		return nil, fmt.Errorf("kdeconnect: find %s: %w", strings.Join(cleaned, " "), err)
 	}
 	if len(bytes.TrimSpace(out)) == 0 {
 		return nil, nil
@@ -1263,18 +1295,24 @@ func recentImageID(source string) string {
 	return fmt.Sprintf("%x", sum[:6])
 }
 
+// mockupIdleRoots are scanned when recent_images_path is empty, so the
+// device mockup can show the newest Camera or Screenshots file without
+// opening the Recent grid.
+var mockupIdleRoots = []string{"DCIM", "Pictures"}
+
 // refreshRecentImages rebuilds the recent-images grid for the selected
 // device, the DMS sftp flow: mount() is idempotent, mountPoint() names
 // where the share landed, and the scan plus thumbnails run over the mount.
-// The configured path is relative to the mount point. Every failure —
-// no path configured, no sftp plugin, a failed mount, an unreadable file —
-// degrades to an empty grid, never an unavailable panel.
+// The configured path is relative to the mount point. An empty path still
+// mounts and scans DCIM plus Pictures for the mockup, but leaves the grid
+// empty. Every failure — no sftp plugin, a failed mount, an unreadable
+// file — degrades to an empty grid, never an unavailable panel.
 func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
-	st.recentImages = nil
-	sub := st.svc.settings.RecentImagesPath
-	if sub == "" {
+	gridPath := st.svc.settings.RecentImagesPath
+	if gridPath == "" && st.idleScanEmpty {
 		return
 	}
+	st.recentImages = nil
 	devices := make([]Device, 0, len(st.order))
 	for _, id := range st.order {
 		if dev, ok := st.devices[id]; ok {
@@ -1283,7 +1321,10 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 	}
 	selected := resolveSelection(devices, *saved)
 	dev := st.devices[selected]
-	if dev == nil || !dev.Reachable || !hasPlugin(dev, "sftp") {
+	if dev == nil || !dev.Reachable || !dev.Paired || !hasPlugin(dev, "sftp") {
+		if dev != nil {
+			dev.SFTPError = ""
+		}
 		return
 	}
 	obj := bus.object(kdeService, pluginPath(selected, "sftp"))
@@ -1291,20 +1332,36 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 	// the file manager, on every background refresh. mountPoint then reads
 	// where the share landed.
 	if call := obj.Call(sftpIface+".mountAndWait", 0); call.Err != nil || !replyTrue(call) {
+		if gridPath != "" {
+			dev.SFTPError = sftpMountReason(obj, call)
+		}
 		return
 	}
 	call := obj.Call(sftpIface+".mountPoint", 0)
 	if call.Err != nil || len(call.Body) == 0 {
+		if gridPath != "" {
+			dev.SFTPError = "SFTP mounted with no mount point"
+		}
 		return
 	}
 	mount, _ := call.Body[0].(string)
 	if mount == "" {
+		if gridPath != "" {
+			dev.SFTPError = "SFTP mounted with no mount point"
+		}
 		return
 	}
-	paths, err := scanRecentImages(filepath.Join(mount, sub), mount,
-		st.svc.settings.MaxRecentImages, st.svc.settings.ScanSubdirectories)
-	if err != nil {
-		return
+	dev.SFTPError = ""
+	var paths []string
+	if gridPath != "" {
+		found, err := scanRecentImages(filepath.Join(mount, gridPath), mount,
+			st.svc.settings.MaxRecentImages, st.svc.settings.ScanSubdirectories)
+		if err != nil {
+			return
+		}
+		paths = found
+	} else {
+		paths = newestIdleImage(mount)
 	}
 	images := make([]RecentImage, 0, len(paths))
 	for _, p := range paths {
@@ -1314,7 +1371,64 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 		}
 		images = append(images, RecentImage{ID: recentImageID(p), Source: p, Mount: mount, Thumb: thumb})
 	}
-	st.recentImages = images
+	if gridPath != "" {
+		st.recentImages = images
+	}
+	st.applyIdleMockup(dev, images)
+	if gridPath == "" && len(images) == 0 {
+		st.idleScanEmpty = true
+	}
+}
+
+// newestIdleImage is the newest png/jpg under DCIM or Pictures, one level
+// of subdirectory included so Camera and Screenshots both hit.
+func newestIdleImage(mount string) []string {
+	var roots []string
+	for _, name := range mockupIdleRoots {
+		p := filepath.Join(mount, name)
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			roots = append(roots, p)
+		}
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+	found, err := scanRecentImagesAt(roots, mount, 1, true)
+	if err != nil || len(found) == 0 {
+		return nil
+	}
+	return found[:1]
+}
+
+func sftpMountReason(obj daemonObject, call *dbus.Call) string {
+	if call != nil && call.Err != nil {
+		return call.Err.Error()
+	}
+	reason := "the device refused the mount"
+	if r := obj.Call(sftpIface+".getMountError", 0); r.Err == nil && len(r.Body) > 0 {
+		if text, _ := r.Body[0].(string); text != "" {
+			return text
+		}
+	}
+	return reason
+}
+
+// applyIdleMockup puts the newest local thumb in the device mockup when
+// fetchMedia did not already land album art.
+func (st *daemonState) applyIdleMockup(dev *Device, images []RecentImage) {
+	if dev == nil || len(images) == 0 {
+		return
+	}
+	if dev.MockupArt != "" {
+		if _, err := os.Stat(dev.MockupArt); err == nil {
+			return
+		}
+	}
+	art, err := composeMockup(MockupKind(dev), images[0].Thumb)
+	if err != nil {
+		return
+	}
+	dev.MockupArt = art
 }
 
 // buildSnapshot assembles the live model in the daemon's own device order

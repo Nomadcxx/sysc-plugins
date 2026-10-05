@@ -42,6 +42,13 @@ func pairedSnap() Snapshot {
 	}
 }
 
+func sftpErrorSnap() Snapshot {
+	snap := pairedSnap()
+	snap.Devices[0].SFTPError = "Permissions missing: filesystem access. " +
+		"Enable the filesystem plugin on the phone and accept the mount prompt."
+	return snap
+}
+
 // findImage walks for the image node carrying id.
 func findImage(n *v1.Node, id string) *v1.Node {
 	if n == nil {
@@ -236,10 +243,52 @@ func TestPanelTreeHeaderCounts(t *testing.T) {
 	if panel.Kind != v1.KindList {
 		t.Fatalf("panel root kind = %q, want list", panel.Kind)
 	}
+	if panel.Height != PanelHeight {
+		t.Fatalf("panel height = %d, want PanelHeight %d", panel.Height, PanelHeight)
+	}
+	if !hasEvent(panel, v1.EventScroll) {
+		t.Fatal("panel list does not scroll; recents and composers would clip")
+	}
 	header := panel.Children[0]
 	texts := headerTexts(header)
 	if len(texts) != 2 || texts[0] != "KDE Connect" || texts[1] != "2 connected • 2 paired" {
 		t.Fatalf("header texts = %v", texts)
+	}
+}
+
+func hasEvent(n *v1.Node, want v1.EventKind) bool {
+	for _, e := range n.Events {
+		if e == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestIdlePanelHeightCutsTheOldFold(t *testing.T) {
+	t.Parallel()
+	if PanelHeight >= 760 {
+		t.Fatalf("PanelHeight = %d, still the leftover 760 fold", PanelHeight)
+	}
+}
+
+func TestPanelTreeShowsSFTPError(t *testing.T) {
+	t.Parallel()
+	snap := pairedSnap()
+	reason := "Permissions missing: filesystem access"
+	snap.Devices[0].SFTPError = reason
+	panel := PanelTree(snap, testSettings(), ComposerNone, Drafts{})
+	if !treeHasText(panel, "Phone files unavailable") || !treeHasText(panel, reason) {
+		t.Fatal("panel hid the SFTP mount error; Files and the idle mockup look dead without it")
+	}
+}
+
+func TestSFTPErrorChangeIsStructural(t *testing.T) {
+	t.Parallel()
+	prev, next := pairedSnap(), pairedSnap()
+	next.Devices[0].SFTPError = "Permissions missing: filesystem access"
+	if samePanelStructure(prev, next) {
+		t.Fatal("an SFTP error looked like an in-place patch; the error card needs a full snapshot")
 	}
 }
 
@@ -1232,6 +1281,21 @@ func findButton(n *v1.Node, id string) *v1.Node {
 		}
 	}
 	return nil
+}
+
+func treeHasText(n *v1.Node, want string) bool {
+	if n == nil {
+		return false
+	}
+	if n.Kind == v1.KindText && n.Text == want {
+		return true
+	}
+	for _, c := range n.Children {
+		if treeHasText(c, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func buttonsIn(n *v1.Node) []*v1.Node {
