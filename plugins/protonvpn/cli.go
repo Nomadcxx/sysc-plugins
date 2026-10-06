@@ -128,8 +128,13 @@ func (c *CLI) Config(ctx context.Context) (Config, error) {
 
 // connectArgs builds the argv for `protonvpn connect`: "" for the fastest
 // server, "random"/"p2p"/"tor" for the matching flag, a 2-letter country code
-// via --country, or a raw server name.
+// via --country, or a raw server name. An option-like target yields no argv:
+// protonvpn changes the machine's network state, so a value that reached an
+// option position would be a flag the caller never chose.
 func connectArgs(target string) []string {
+	if strings.HasPrefix(target, "-") {
+		return nil
+	}
 	args := []string{"connect"}
 	switch target {
 	case "":
@@ -152,7 +157,11 @@ func connectArgs(target string) []string {
 // Connect runs `protonvpn connect` with the given target (see connectArgs).
 // Uses a 15s timeout when ctx has no deadline; a caller deadline wins.
 func (c *CLI) Connect(ctx context.Context, target string) (string, string, error) {
-	return c.run(ctx, 15*time.Second, connectArgs(target)...)
+	args := connectArgs(target)
+	if args == nil {
+		return "", "", fmt.Errorf("protonvpn: refusing option-like connect target %q", target)
+	}
+	return c.run(ctx, 15*time.Second, args...)
 }
 
 // Disconnect runs `protonvpn disconnect`.

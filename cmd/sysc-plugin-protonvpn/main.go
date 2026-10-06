@@ -458,7 +458,9 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	case node == "ks":
 		s.setConfig(ctx, "kill-switch", map[bool]string{true: "off", false: "standard"}[s.machine.Snapshot().Config.KillSwitch != "off"])
 	case strings.HasPrefix(node, "ns:"):
-		s.setConfig(ctx, "netshield", strings.TrimPrefix(node, "ns:"))
+		if level := strings.TrimPrefix(node, "ns:"); protonvpn.ValidNetShield(level) {
+			s.setConfig(ctx, "netshield", level)
+		}
 	case node == "pf":
 		s.setConfig(ctx, "port-forwarding", map[bool]string{true: "off", false: "on"}[s.machine.Snapshot().Config.PortForwarding])
 	case node == "copy-port":

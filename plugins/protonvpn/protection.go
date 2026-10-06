@@ -84,6 +84,25 @@ func killSwitchCard(s ProtectionState) *v1.Node {
 	}
 }
 
+// netShieldLevels is the three-way filter level the card offers. The handler
+// validates against this same set, so a suffix the view never produced cannot
+// reach `protonvpn config set`.
+var netShieldLevels = []struct{ value, label string }{
+	{"off", "Off"},
+	{"malware-only", "Malware"},
+	{"malware-ads-trackers", "Malware+Ads"},
+}
+
+// ValidNetShield reports whether v is one of the levels the card renders.
+func ValidNetShield(v string) bool {
+	for _, ns := range netShieldLevels {
+		if ns.value == v {
+			return true
+		}
+	}
+	return false
+}
+
 // netShieldCard is the three-way filter level, the active one accented.
 func netShieldCard(s ProtectionState) *v1.Node {
 	card := &v1.Node{
@@ -94,17 +113,17 @@ func netShieldCard(s ProtectionState) *v1.Node {
 		},
 	}
 	row := &v1.Node{Kind: v1.KindRow, Gap: 4}
-	for _, ns := range []struct {
-		value, label string
-		width        int
-	}{
-		{"off", "Off", 64},
-		{"malware-only", "Malware", 96},
-		{"malware-ads-trackers", "Malware+Ads", 128},
-	} {
+	for _, ns := range netShieldLevels {
+		width := 64
+		switch ns.value {
+		case "malware-only":
+			width = 96
+		case "malware-ads-trackers":
+			width = 128
+		}
 		row.Children = append(row.Children, &v1.Node{
 			Kind: v1.KindButton, ID: "ns:" + ns.value, Name: "NetShield " + ns.label, Role: "button",
-			Text: ns.label, Fill: fillFor(s.Snap.Config.NetShield == ns.value), Width: ns.width, Height: 32,
+			Text: ns.label, Fill: fillFor(s.Snap.Config.NetShield == ns.value), Width: width, Height: 32,
 			Events: []v1.EventKind{v1.EventActivate},
 		})
 	}
