@@ -35,10 +35,11 @@ func TestPluginKDEConnectGateServesViewsAndSurvivesInput(t *testing.T) {
 	h.openPanel()
 	h.waitView("panel-1", kdeconnectPanelLegal)
 
-	// An input round trip: refresh must neither crash nor wedge the tree.
-	beforeRefresh := h.revOf("panel-1")
+	// An input round trip: refresh must neither crash nor wedge the tree,
+	// paired or not. With no device paired the refresh is a byte-identical
+	// snapshot, so assert the click landed and the panel settles legal —
+	// not a revision bump (issue #113).
 	h.clickOn("panel-1", "refresh")
-	h.waitRev("panel-1", beforeRefresh+1)
 	h.waitView("panel-1", kdeconnectPanelLegal)
 
 	// The settings change is applied without a restart.
