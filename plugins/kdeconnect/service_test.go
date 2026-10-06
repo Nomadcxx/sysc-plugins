@@ -39,6 +39,8 @@ type fakeObject struct {
 	// report, and mountError its getMountError reply when they fail.
 	mounts     bool
 	mountError string
+	// directories is getDirectories: path → label. Empty means no shares.
+	directories map[string]dbus.Variant
 }
 
 func (f *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Call {
@@ -74,6 +76,12 @@ func (f *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Ca
 		return &dbus.Call{Body: []any{f.mounts}}
 	case sftpIface + ".getMountError":
 		return &dbus.Call{Body: []any{f.mountError}}
+	case sftpIface + ".getDirectories":
+		dirs := f.directories
+		if dirs == nil {
+			dirs = map[string]dbus.Variant{}
+		}
+		return &dbus.Call{Body: []any{dirs}}
 	default:
 		return &dbus.Call{Err: fmt.Errorf("fake: unexpected method %s", method)}
 	}
@@ -794,10 +802,28 @@ func TestClipboardBrowseAndSMSAppActions(t *testing.T) {
 		t.Fatalf("clipboard event = %+v", e)
 	}
 
+	mount := t.TempDir()
+	plugin("sftp").mountPoint = mount
 	svc.Do(Action{Kind: ActionBrowse, DeviceID: "devA"})
 	e = waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "Opening the file browser..." })
-	if e.Err != nil || !plugin("sftp").asked(sftpIface+".startBrowsing") {
-		t.Fatalf("browse event = %+v", e)
+	if e.Err != nil || e.Path != mount ||
+		!plugin("sftp").asked(sftpIface+".mountAndWait") || !plugin("sftp").asked(sftpIface+".mountPoint") {
+		t.Fatalf("browse event = %+v calls=%v", e, plugin("sftp").calls)
+	}
+	if plugin("sftp").asked(sftpIface + ".startBrowsing") {
+		t.Fatal("browse still called startBrowsing")
+	}
+
+	share := filepath.Join(mount, "storage", "emulated", "0")
+	plugin("sftp").directories = map[string]dbus.Variant{
+		share: dbus.MakeVariant("Internal shared storage"),
+	}
+	svc.Do(Action{Kind: ActionBrowse, DeviceID: "devA"})
+	e = waitForEvent(t, svc, func(e Event) bool {
+		return e.Kind == EventActionResult && e.Message == "Opening the file browser..." && e.Path == share
+	})
+	if e.Path != share {
+		t.Fatalf("browse path = %q, want the shared-storage directory", e.Path)
 	}
 
 	// A mount the phone refuses reports false; the toast names the

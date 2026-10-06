@@ -205,9 +205,9 @@ func startKDEConnect(t *testing.T) *kdeconnectHost {
 		}
 	}()
 	if err := h.send(&v1.HostHello{
-		Supported:    []v1.Version{{Major: 1, Minor: 2}},
+		Supported:    []v1.Version{{Major: 1, Minor: 16}, {Major: 1, Minor: 2}},
 		Plugin:       v1.Identity{ID: "org.sysc.kdeconnect", Name: "Phone Connect", Version: "0.1.0"},
-		Capabilities: []string{"notifications", "panels", "settings", "state"},
+		Capabilities: []string{"notifications", "panels", "settings", "state", "files"},
 		Limits:       v1.DefaultLimits,
 	}); err != nil {
 		t.Fatal(err)
