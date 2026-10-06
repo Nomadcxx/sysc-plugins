@@ -134,6 +134,7 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 	}()
 
 	var lastClockKey, lastMinuteKey string
+	//lint:ignore S1021 publishOne recurses, so it needs the declared-then-assigned form.
 	var publishOne func(string) error
 	publishOne = func(id string) error {
 		view, ok := views[id]

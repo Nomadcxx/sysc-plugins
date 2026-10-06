@@ -296,9 +296,7 @@ func QueryEDS(ctx context.Context, start, end time.Time) (EDSResult, error) {
 		if err := ValidateEvents(out.Events); err != nil {
 			kept, dropped := filterValid(out.Events)
 			out.Events = kept
-			for _, message := range dropped {
-				out.Errors = append(out.Errors, message)
-			}
+			out.Errors = append(out.Errors, dropped...)
 		}
 		sortEvents(out.Events)
 		return out, nil

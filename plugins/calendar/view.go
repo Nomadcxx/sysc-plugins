@@ -360,7 +360,7 @@ func dateButton(cell Cell, events []Event) *v1.Node {
 
 func scheduleView(state PanelState, events []Event, weekStart string, now time.Time, height int) *v1.Node {
 	start, end := ViewRange(state, weekStart)
-	days := int(end.Sub(start).Hours()/24 + 0.5)
+	var days int
 	if state.View == ViewDay {
 		days = 1
 	} else if state.View == ViewFourDays {

@@ -33,10 +33,6 @@ func writeOpenCodeCopilotAuth(t *testing.T, home, access string) {
 	}
 }
 
-// frozenNow is Wednesday 2026-09-16 noon UTC, so nextWeeklyReset lands on
-// the 21st.
-var frozenNow = time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
-
 func TestCommandCodeCollector(t *testing.T) {
 	t.Parallel()
 

@@ -455,7 +455,10 @@ func TestSessionClampsPageWhenRefreshShrinksListAndScopeChanges(t *testing.T) {
 	fd := &fakeDocker{containers: containers}
 	s := NewSession(fd)
 	s.Refresh(context.Background())
-	if !s.MovePage(1) || !s.MovePage(1) {
+	if !s.MovePage(1) {
+		t.Fatal("could not move to page one")
+	}
+	if !s.MovePage(1) {
 		t.Fatal("could not move to the final page")
 	}
 	fd.containers = fd.containers[:2]

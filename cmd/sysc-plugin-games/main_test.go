@@ -454,9 +454,9 @@ func TestCoverQueueIsAsyncAndCoalesced(t *testing.T) {
 		return path
 	}
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
-	line := h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
+	h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
 	h.send(v1.SettingsChanged{Type: "settings.changed", Values: map[string]any{"steamgriddb_key": "k"}})
-	line = h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
+	line := h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
 
 	rev := snapshotOf(line).Revision
 	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: rev, Node: "panel:card-2", Event: v1.EventActivate})
