@@ -83,15 +83,16 @@ func TestBarTreeStates(t *testing.T) {
 		icon     string
 		tone     v1.Tone
 		wantText string
+		wantName string
 		save     bool
 	}{
-		{Idle, "record", v1.ToneNormal, "", false},
-		{Recording, "stop", v1.ToneError, "00:00", false},
-		{Adopted, "stop", v1.ToneError, "00:00", false},
-		{Stopping, "stop", v1.ToneNormal, "", false},
-		{ReplayActive, "record", v1.ToneNormal, "", true},
-		{Unavailable, "camera-off", v1.ToneError, "", false},
-		{Failed, "camera-off", v1.ToneError, "", false},
+		{Idle, "record", v1.ToneNormal, "", "Toggle recording", false},
+		{Recording, "stop", v1.ToneError, "00:00", "Toggle recording", false},
+		{Adopted, "stop", v1.ToneError, "00:00", "Toggle recording", false},
+		{Stopping, "stop", v1.ToneNormal, "", "Toggle recording", false},
+		{ReplayActive, "record", v1.ToneNormal, "", "Stop replay", true},
+		{Unavailable, "camera-off", v1.ToneError, "", "Toggle recording", false},
+		{Failed, "camera-off", v1.ToneError, "", "Toggle recording", false},
 	}
 	for _, tc := range cases {
 		root := BarTree(Snapshot{Mode: tc.mode}, Config{})
@@ -114,8 +115,8 @@ func TestBarTreeStates(t *testing.T) {
 		if toggle.Text != tc.wantText {
 			t.Fatalf("%s toggle text = %q, want %q", tc.mode, toggle.Text, tc.wantText)
 		}
-		if toggle.Name != "Toggle recording" {
-			t.Fatalf("%s toggle name = %q", tc.mode, toggle.Name)
+		if toggle.Name != tc.wantName {
+			t.Fatalf("%s toggle name = %q, want %q", tc.mode, toggle.Name, tc.wantName)
 		}
 		save := childByID(root, nodeSave)
 		if tc.save && save == nil {
@@ -128,6 +129,14 @@ func TestBarTreeStates(t *testing.T) {
 }
 
 func TestBarTreeFitsSideWidths(t *testing.T) {
+	// The bar glyph stops a running replay too, so its accessible name
+	// tracks the mode. Both bar tests want the same expectation.
+	wantToggleName := func(m Mode) string {
+		if m == ReplayActive {
+			return "Stop replay"
+		}
+		return "Toggle recording"
+	}
 	for _, state := range []Snapshot{
 		{Mode: Idle}, {Mode: Recording, Elapsed: 72 * time.Second}, {Mode: ReplayActive}, {Mode: Failed},
 	} {
@@ -142,9 +151,8 @@ func TestBarTreeFitsSideWidths(t *testing.T) {
 			if toggle := childByID(bar, nodeToggle); width <= 64 && toggle != nil && toggle.Text != "" {
 				t.Errorf("mode %s width %d retains elapsed text", state.Mode, width)
 			}
-			toggle := childByID(bar, nodeToggle)
-			if state.Mode == Idle || state.Mode == Recording || state.Mode == ReplayActive || state.Mode == Failed {
-				if toggle == nil || toggle.Name != "Toggle recording" || toggle.Role != "button" || len(toggle.Events) != 2 || toggle.Events[0] != v1.EventActivate || toggle.Events[1] != v1.EventPointer {
+			if toggle := childByID(bar, nodeToggle); state.Mode == Idle || state.Mode == Recording || state.Mode == ReplayActive || state.Mode == Failed {
+				if toggle == nil || toggle.Name != wantToggleName(state.Mode) || toggle.Role != "button" || len(toggle.Events) != 2 || toggle.Events[0] != v1.EventActivate || toggle.Events[1] != v1.EventPointer {
 					t.Fatalf("mode %s width %d toggle interaction = %+v", state.Mode, width, toggle)
 				}
 			}
@@ -264,6 +272,26 @@ func TestHandleInputButtons(t *testing.T) {
 	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventPointer, Button: v1.ButtonMiddle}, Idle)
 	if open || record || stop || replay || save {
 		t.Fatalf("middle = %v %v %v %v %v", open, record, stop, replay, save)
+	}
+}
+
+// A replay that cannot be stopped keeps capturing the screen, so both the
+// bar toggle and the panel control have to reach ToggleReplay while one runs.
+func TestRunningReplayOffersAStopControl(t *testing.T) {
+	t.Parallel()
+	for _, node := range []string{nodeReplay, nodeToggle, nodeStop} {
+		open, record, stop, replay, save := HandleInput(&v1.InputEvent{Node: node, Event: v1.EventActivate}, ReplayActive)
+		if open || record || stop || !replay || save {
+			t.Fatalf("%s during replay = %v %v %v %v %v", node, open, record, stop, replay, save)
+		}
+	}
+	running := childByID(PanelTree(Snapshot{Mode: ReplayActive}, Config{ReplayEnabled: true}, time.Time{}), nodeReplay)
+	if running == nil || running.Text != "Stop replay" {
+		t.Fatalf("running replay button = %+v", running)
+	}
+	idle := childByID(PanelTree(Snapshot{Mode: Idle}, Config{ReplayEnabled: true}, time.Time{}), nodeReplay)
+	if idle == nil || idle.Text != "Start replay" {
+		t.Fatalf("idle replay button = %+v", idle)
 	}
 }
 

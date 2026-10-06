@@ -70,6 +70,17 @@ func TestRecorderRejectsRecordWhileReplay(t *testing.T) {
 	}
 }
 
+// Turning the replay setting off has to end a running buffer: the panel drops
+// the replay button with the setting, so a buffer left running would have no
+// control left to stop it.
+func TestReconfigOffStopsRunningReplay(t *testing.T) {
+	r := testRecorder(t, map[string]any{"replay_enabled": true}, "hang")
+	r.ToggleReplay("DP-1")
+	waitMode(t, r, ReplayActive)
+	r.Reconfigure(mustConfig(t, map[string]any{"directory": r.cfg.Directory}))
+	waitMode(t, r, Idle)
+}
+
 func TestRecorderRepeatedToggleDoesNotRestart(t *testing.T) {
 	r := testRecorder(t, nil, "hang")
 	r.ToggleRecord("DP-1")

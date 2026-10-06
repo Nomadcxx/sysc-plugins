@@ -218,6 +218,11 @@ func (r *Recorder) handle(c command) {
 		if r.mode() == Failed {
 			r.set(Snapshot{Mode: Idle})
 		}
+		if !r.cfg.ReplayEnabled && r.mode() == ReplayActive {
+			// The panel hides its replay controls with the setting, so a
+			// buffer left running here would have no way left to stop it.
+			r.stopReplay()
+		}
 	}
 }
 

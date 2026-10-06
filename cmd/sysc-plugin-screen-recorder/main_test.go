@@ -206,6 +206,54 @@ func TestPluginFailureNotifyIncludesLogs(t *testing.T) {
 	})
 }
 
+func TestPluginStopsRunningReplay(t *testing.T) {
+	h := startPlugin(t, recorder.Options{
+		Exe:      os.Args[0],
+		LookPath: func(string) (string, error) { return os.Args[0], nil },
+		Env:      append(os.Environ(), "SYSC_FAKE_RECORDER=1", "SYSC_FAKE_BEHAVIOR=hang"),
+		StopWait: 250 * time.Millisecond,
+	})
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: map[string]any{
+		"replay_enabled": true, "directory": h.dir,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	h.open("panel-a", v1.ViewPanel, "DP-1")
+	h.wait("panel-a", func(n *v1.Node) bool { return findNode(n, "replay") != nil })
+
+	if err := h.send(&v1.InputEvent{ViewID: "panel-a", Node: "replay", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+		t.Fatal(err)
+	}
+	h.wait("panel-a", func(n *v1.Node) bool {
+		b := findNode(n, "replay")
+		return b != nil && b.Text == "Stop replay"
+	})
+	var pid int
+	h.waitOwnership(func(own recorder.Ownership) bool {
+		pid = own.PID
+		return pid != 0
+	})
+	if syscall.Kill(pid, 0) != nil {
+		t.Fatalf("replay backend %d is not running", pid)
+	}
+
+	// The second click has to reach the backend, not just redraw the panel.
+	if err := h.send(&v1.InputEvent{ViewID: "panel-a", Node: "replay", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+		t.Fatal(err)
+	}
+	h.wait("panel-a", func(n *v1.Node) bool {
+		b := findNode(n, "replay")
+		return b != nil && b.Text == "Start replay"
+	})
+	deadline := time.Now().Add(3 * time.Second)
+	for syscall.Kill(pid, 0) == nil && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if syscall.Kill(pid, 0) == nil {
+		t.Fatalf("replay backend %d still running after the stop click", pid)
+	}
+}
+
 type pluginHost struct {
 	t         *testing.T
 	dir       string
