@@ -666,6 +666,28 @@ func TestPanelTreeKeepsTheHostFittedViewport(t *testing.T) {
 	}
 }
 
+func TestResetClockIsShownInLocalTime(t *testing.T) {
+	// The collectors normalise every reset instant to UTC, so the clock a
+	// user reads off the card has to be converted back before it is printed.
+	prev := time.Local
+	time.Local = time.FixedZone("test", 5*3600+30*60)
+	t.Cleanup(func() { time.Local = prev })
+
+	w := Window{Key: "primary", Label: "Session", HasPercent: true, UsedPercent: 40,
+		WindowMinutes: 300, ResetsAt: viewNow.Add(30 * time.Minute)}
+	want := w.ResetsAt.In(time.Local).Format("Mon 15:04")
+	if got := w.resetLine(); got != "resets "+want {
+		t.Fatalf("resetLine() = %q, want %q", got, "resets "+want)
+	}
+
+	rep := viewReport()
+	rep.Providers[0].Windows[0] = w
+	tree := PanelTree(rep, "alpha", nil, viewConfig(), 4, viewNow)
+	if findText(tree, want) == nil {
+		t.Fatalf("card missing the local reset clock %q", want)
+	}
+}
+
 func treeHasKey(n *v1.Node, key string) bool {
 	if n == nil {
 		return false
