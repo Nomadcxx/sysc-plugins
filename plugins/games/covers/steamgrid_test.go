@@ -58,6 +58,41 @@ func TestFetchGridEscapesSlug(t *testing.T) {
 	}
 }
 
+// The production caller passes a nil Doer (cmd/sysc-plugin-games defaultFetchGrid),
+// so a nil Doer has to fall back to a real client instead of panicking.
+func TestFetchGridNilDoerUsesDefaultClient(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/search/autocomplete/hades", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":42,"name":"Hades"}]}`)
+	})
+	mux.HandleFunc("/grids/game/42", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"data":[{"url":"http://%s/grid.jpg"}]}`, r.Host)
+	})
+	mux.HandleFunc("/grid.jpg", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "fakejpegbytes")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	dest := t.TempDir()
+	path := FetchGrid(context.Background(), nil, "key123", srv.URL, "hades", dest)
+	if path == "" {
+		t.Fatal("nil Doer fetched no cover")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil || string(body) != "fakejpegbytes" {
+		t.Errorf("downloaded %q err %v", body, err)
+	}
+}
+
+func TestFetchGridNilDoerUnreachableFailsQuietly(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	url := srv.URL
+	srv.Close() // nothing is listening: the fetch must fail, not panic
+	if p := FetchGrid(context.Background(), nil, "key", url, "hades", t.TempDir()); p != "" {
+		t.Errorf("want empty on unreachable host, got %q", p)
+	}
+}
+
 func TestFetchGridNoKey(t *testing.T) {
 	if p := FetchGrid(context.Background(), http.DefaultClient, "", "", "hades", t.TempDir()); p != "" {
 		t.Errorf("want empty with no key, got %q", p)

@@ -37,12 +37,17 @@ func CachedGrid(slug, destDir string) string {
 
 // FetchGrid downloads a 600x900 SteamGridDB image for the slug into destDir
 // and returns the local path, or "" on no key / no result / any error.
+// A nil do means "use the real client" — the production caller has no seam to
+// pass, so a nil must not be able to panic here.
 // Never retries, never logs: a missing cover is not an incident.
 // ponytail: slug-as-search-term matching; IGDB-grade matching if wrong-game
 // art ever shows up.
 func FetchGrid(ctx context.Context, do Doer, apiKey, baseURL, slug, destDir string) string {
 	if apiKey == "" || slug == "" {
 		return ""
+	}
+	if do == nil {
+		do = http.DefaultClient
 	}
 	if baseURL == "" {
 		baseURL = "https://www.steamgriddb.com/api/v2"
