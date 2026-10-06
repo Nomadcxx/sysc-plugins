@@ -181,10 +181,15 @@ func (r *Recorder) loop() {
 		case <-wait:
 			r.onExit()
 		case c := <-r.cmds:
-			r.handle(c)
+			// Coalesce a burst of toggles: keep the first command that
+			// arrived while the previous one was in flight, drop the rest.
+			// Draining here rather than after handle matters -- handle
+			// publishes the new mode, so draining afterwards could swallow a
+			// click made in between and lose a stop.
 			if c.kind == cmdRecord || c.kind == cmdReplay {
 				r.drain()
 			}
+			r.handle(c)
 		}
 	}
 }

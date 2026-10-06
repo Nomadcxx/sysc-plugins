@@ -48,6 +48,34 @@ func TestRecorderToggleRecordAndStop(t *testing.T) {
 	}
 }
 
+// A stop that lands while the recorder is still starting up must not be
+// swallowed. The flood-ready fake sleeps before printing ready, so the
+// recorder is provably still inside startRecord when the second toggle is
+// queued behind it.
+//
+// Where it lands afterwards is not the point: stopping this early leaves no
+// artifact behind, so the recorder honestly reports Failed. What must never
+// happen is staying in Recording with the child still capturing, which is
+// what a dropped command looks like.
+func TestStopDuringStartupIsNotSwallowed(t *testing.T) {
+	r := testRecorder(t, nil, "flood-ready")
+	r.ToggleRecord("DP-1")
+	// flood-ready holds the recorder in startRecord's readiness wait for
+	// roughly 100ms. Queuing the stop inside that window leaves it in the
+	// command queue with the loop busy, so the outcome is decided by
+	// whether the loop drains that queue rather than by timing luck.
+	time.Sleep(50 * time.Millisecond)
+	r.ToggleRecord("DP-1")
+	// Where it lands afterwards is not the point: stopping this early leaves
+	// no artifact behind, so the recorder honestly reports Failed. What
+	// must never happen is sitting in Recording afterwards, which is what a
+	// dropped command looks like.
+	time.Sleep(750 * time.Millisecond)
+	if got := r.Snapshot().Mode; got == Recording {
+		t.Fatalf("mode = %s, want the queued stop to have taken effect", got)
+	}
+}
+
 func TestRecorderRejectsReplayWhileRecording(t *testing.T) {
 	r := testRecorder(t, map[string]any{"replay_enabled": true}, "hang")
 	r.ToggleRecord("DP-1")
