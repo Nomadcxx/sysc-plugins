@@ -267,6 +267,26 @@ func TestHandleInputButtons(t *testing.T) {
 	}
 }
 
+// A replay that cannot be stopped keeps capturing the screen, so both the
+// bar toggle and the panel control have to reach ToggleReplay while one runs.
+func TestRunningReplayOffersAStopControl(t *testing.T) {
+	t.Parallel()
+	for _, node := range []string{nodeReplay, nodeToggle} {
+		open, record, stop, replay, save := HandleInput(&v1.InputEvent{Node: node, Event: v1.EventActivate}, ReplayActive)
+		if open || record || stop || !replay || save {
+			t.Fatalf("%s during replay = %v %v %v %v %v", node, open, record, stop, replay, save)
+		}
+	}
+	running := childByID(PanelTree(Snapshot{Mode: ReplayActive}, Config{ReplayEnabled: true}, time.Time{}), nodeReplay)
+	if running == nil || running.Text != "Stop replay" {
+		t.Fatalf("running replay button = %+v", running)
+	}
+	idle := childByID(PanelTree(Snapshot{Mode: Idle}, Config{ReplayEnabled: true}, time.Time{}), nodeReplay)
+	if idle == nil || idle.Text != "Start replay" {
+		t.Fatalf("idle replay button = %+v", idle)
+	}
+}
+
 func TestPanelTreeShowsFailureReason(t *testing.T) {
 	t.Parallel()
 	root := PanelTree(Snapshot{Mode: Failed, Err: "gpu-screen-recorder: process exited"}, Config{}, time.Time{})

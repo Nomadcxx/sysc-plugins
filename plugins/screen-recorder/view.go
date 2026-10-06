@@ -126,9 +126,15 @@ func PanelTree(snap Snapshot, cfg Config, now time.Time) *v1.Node {
 		stop,
 	}
 	if cfg.ReplayEnabled {
+		// The same control starts and stops the buffer, so it has to say
+		// which one the next click does while a replay runs.
+		label := "Start replay"
+		if snap.Mode == ReplayActive {
+			label = "Stop replay"
+		}
 		transport = append(transport,
 			&v1.Node{Kind: v1.KindButton, ID: nodeReplay, Key: nodeReplay,
-				Text: "Start replay", Name: "Start replay", Role: "button",
+				Text: label, Name: label, Role: "button",
 				Events: []v1.EventKind{v1.EventActivate}},
 			&v1.Node{Kind: v1.KindButton, ID: nodeSave, Key: nodeSave,
 				Text: "Save replay", Name: "Save replay", Role: "button",
@@ -188,6 +194,10 @@ func HandleInput(ev *v1.InputEvent, mode Mode) (open, record, stop, replay, save
 			return false, false, true, false, false
 		case Idle, Failed:
 			return false, true, false, false, false
+		case ReplayActive:
+			// The glyph is the only bar control, so it has to stop the
+			// replay too; ToggleReplay owns the active branch.
+			return false, false, false, true, false
 		}
 		return false, false, false, false, false
 	case nodeRecord:
@@ -200,7 +210,8 @@ func HandleInput(ev *v1.InputEvent, mode Mode) (open, record, stop, replay, save
 			return false, false, true, false, false
 		}
 	case nodeReplay:
-		if mode == Idle || mode == Failed {
+		// ReplayActive routes to the same toggle, which stops the buffer.
+		if mode == Idle || mode == Failed || mode == ReplayActive {
 			return false, false, false, true, false
 		}
 	case nodeSave:
