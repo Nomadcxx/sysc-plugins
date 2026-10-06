@@ -52,6 +52,34 @@ func TestSessionLongBreakAfterCadence(t *testing.T) {
 	}
 }
 
+func TestSkippedWorkPhaseDoesNotEarnALongBreak(t *testing.T) {
+	now := time.Unix(0, 0)
+	s := NewSession(func() time.Time { return now })
+	s.SetDurations(time.Second, time.Second, 3*time.Second)
+	s.SetSessions(2)
+	for i := 0; i < 2; i++ {
+		s.SetMode(ModeWork)
+		s.Start()
+		now = now.Add(time.Second)
+		if _, done := s.Tick(); !done {
+			t.Fatal("work phase did not complete")
+		}
+	}
+	if s.Mode() != ModeLong {
+		t.Fatalf("mode = %q, want long", s.Mode())
+	}
+	// The cadence is already spent, so the tally sits on a multiple of
+	// sessions. Skipping the next work phase must not re-award the break.
+	s.SetMode(ModeWork)
+	s.Skip()
+	if s.Mode() != ModeShort {
+		t.Fatalf("mode after skipped work phase = %q, want short", s.Mode())
+	}
+	if s.Completed() != 2 {
+		t.Fatalf("completed = %d, want 2", s.Completed())
+	}
+}
+
 func TestSessionAutoStart(t *testing.T) {
 	now := time.Unix(0, 0)
 	s := NewSession(func() time.Time { return now })

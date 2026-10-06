@@ -149,7 +149,7 @@ func (s *Session) advanceLocked(earned bool) {
 			s.completed++
 		}
 		next = ModeShort
-		if s.completed%s.sessions == 0 && s.completed > 0 {
+		if earned && s.completed > 0 && s.completed%s.sessions == 0 {
 			next = ModeLong
 		}
 		auto = s.autoBreak
