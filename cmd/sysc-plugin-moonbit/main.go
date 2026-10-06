@@ -294,8 +294,9 @@ func (s *session) handle(m *v1.InputEvent) {
 	case node == "docker":
 		s.state.Phase, s.state.Err, s.state.Notice = moonbit.PhaseDocker, "", ""
 	case strings.HasPrefix(node, "docker:"):
-		if s.state.Phase == moonbit.PhaseDocker {
-			s.state.DockerOp = strings.TrimPrefix(node, "docker:")
+		op := strings.TrimPrefix(node, "docker:")
+		if s.state.Phase == moonbit.PhaseDocker && moonbit.ValidDockerOp(op) {
+			s.state.DockerOp = op
 			s.state.Phase = moonbit.PhaseDockerConfirm
 		}
 	case node == "docker_run":
@@ -307,7 +308,7 @@ func (s *session) handle(m *v1.InputEvent) {
 		s.refreshStatus()
 	case strings.HasPrefix(node, "sched:"):
 		parts := strings.Split(node, ":") // sched:<target>:<action>
-		if s.state.Phase == moonbit.PhaseSchedule && len(parts) == 3 {
+		if s.state.Phase == moonbit.PhaseSchedule && len(parts) == 3 && moonbit.ValidSchedule(parts[1], parts[2]) {
 			s.requestAuth(moonbit.Request{Cmd: "schedule", Target: parts[1], Action: parts[2]})
 		}
 	case node == "select_all":

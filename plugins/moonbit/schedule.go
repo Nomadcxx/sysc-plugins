@@ -19,6 +19,22 @@ type Schedule struct {
 // TimersEnabled reports whether either timer is enabled.
 func (s Schedule) TimersEnabled() bool { return s.ScanTimer || s.CleanTimer }
 
+// ValidSchedule reports whether target and action are the ones the schedule
+// screen offers. The screen's node ids are host input, so this is the gate
+// that keeps an unknown unit or verb out of the sudo systemctl run.
+func ValidSchedule(target, action string) bool {
+	switch target {
+	case "daemon", "timers":
+	default:
+		return false
+	}
+	switch action {
+	case "enable", "disable":
+		return true
+	}
+	return false
+}
+
 // ReadSchedule asks systemd for the units' state.
 func ReadSchedule() Schedule {
 	if _, err := exec.LookPath("systemctl"); err != nil {

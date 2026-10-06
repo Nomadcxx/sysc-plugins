@@ -272,6 +272,14 @@ var dockerOps = map[string]struct{ label, detail, confirm, verb string }{
 	"all":    {"Clean All Unused Resources", "Removes unused images, stopped containers, networks, volumes and build cache.", "Clean all unused Docker resources?", "system prune"},
 }
 
+// ValidDockerOp reports whether op is one of the TUI's own Docker cleanups.
+// The docker screen's node ids are host input, so the set is the gate that
+// keeps an unknown op out of the sudo request.
+func ValidDockerOp(op string) bool {
+	_, ok := dockerOps[op]
+	return ok
+}
+
 func dockerCard(s *State) *v1.Node {
 	var rows []*v1.Node
 	for _, op := range []string{"images", "all"} {
