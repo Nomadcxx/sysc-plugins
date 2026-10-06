@@ -35,6 +35,12 @@ jobs:
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - name: vet
         run: go vet ./...
+      # staticcheck catches the correctness classes (SA/S1/U1000) that go vet
+      # does not. Run via `go run` so no linter enters go.mod. Pinned to
+      # @latest because 2025-era pins cannot parse Go 1.26 export data.
+      # Check selection and its rationale live in staticcheck.conf.
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
       - name: test
         run: go test -race ./...
       - name: build plugins

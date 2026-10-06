@@ -216,21 +216,6 @@ func TestProviderRowsKeepNamesAndStatusesReadable(t *testing.T) {
 	}
 }
 
-func treeHasAbsentMeter(n *v1.Node) bool {
-	if n == nil {
-		return false
-	}
-	if n.Kind == v1.KindProgress && n.Absent {
-		return true
-	}
-	for _, ch := range n.Children {
-		if treeHasAbsentMeter(ch) {
-			return true
-		}
-	}
-	return false
-}
-
 func TestBarTreeContentPerState(t *testing.T) {
 	t.Parallel()
 
@@ -377,9 +362,6 @@ func TestPanelTreeStructure(t *testing.T) {
 	}
 
 	// Rows are keyed and the selection is tinted.
-	if row := findByID(tree, ""); row == nil {
-		// findByID by key: walk keys instead.
-	}
 	if !treeHasKey(tree, "provider-alpha") || !treeHasKey(tree, "provider-beta") {
 		t.Fatal("provider rows missing their keys")
 	}
@@ -437,7 +419,6 @@ func TestPanelTreeStructure(t *testing.T) {
 	}
 
 	// The faulted provider's detail carries a retry.
-	tree = PanelTree(viewReport(), "beta", nil, cfg, 4, viewNow)
 	rep2 := viewReport()
 	rep2.Providers[1].State = StateFault
 	rep2.Providers[1].Err = "boom"
@@ -553,7 +534,7 @@ func TestPanelTreeBudgetsWithSixProviders(t *testing.T) {
 	rep := Report{}
 	for _, id := range []string{"claude", "codex", "commandcode", "minimax", "ollama", "synthetic"} {
 		p := freshRep(id)
-		p.Name = strings.Title(id[:1]) + id[1:]
+		p.Name = strings.ToUpper(id[:1]) + id[1:]
 		rep.Providers = append(rep.Providers, p)
 	}
 	tree := PanelTree(rep, "claude", nil, viewConfig(), 4, viewNow)
