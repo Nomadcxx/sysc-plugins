@@ -69,7 +69,19 @@ type State struct {
 
 // Visible returns the filtered, sorted, capped games for the current
 // section and query.
-func Visible(s State) []source.Game {
+func Visible(s State) []source.Game { return capCards(matched(s)) }
+
+// capCards bounds the tree a huge library can build.
+func capCards(out []source.Game) []source.Game {
+	if len(out) > maxCards {
+		return out[:maxCards]
+	}
+	return out
+}
+
+// matched is Visible without the cap, so BuildTree can say how many games
+// the grid left out.
+func matched(s State) []source.Game {
 	var out []source.Game
 	q := strings.ToLower(s.Query)
 	for _, g := range s.All {
@@ -110,9 +122,6 @@ func Visible(s State) []source.Game {
 			return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 		})
 	}
-	if len(out) > maxCards {
-		out = out[:maxCards]
-	}
 	return out
 }
 
@@ -124,7 +133,8 @@ func BuildTree(s State) *v1.Node {
 
 	list := &v1.Node{Kind: v1.KindList, ID: "game-list", Key: "game-list",
 		Width: listWidth, Height: bodyHeight, Gap: cardGap}
-	games := Visible(s)
+	all := matched(s)
+	games := capCards(all)
 	switch {
 	case s.LibraryMissing:
 		list.Children = append(list.Children, subtle("Lutris library not found"))
@@ -137,6 +147,14 @@ func BuildTree(s State) *v1.Node {
 				r.Children = append(r.Children, card(s, g))
 			}
 			list.Children = append(list.Children, r)
+		}
+		// The cap keeps a huge library from building a huge tree, but without
+		// this line the grid reads as the whole library while the bar tooltip
+		// counts every game.
+		if dropped := len(all) - len(games); dropped > 0 {
+			n := subtle(fmt.Sprintf("%d more games \u2014 search to narrow", dropped))
+			n.ID = "game-overflow"
+			list.Children = append(list.Children, n)
 		}
 	}
 
