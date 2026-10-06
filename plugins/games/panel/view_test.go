@@ -1,7 +1,9 @@
 package panel
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 
 	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
@@ -105,6 +107,43 @@ func TestSectionAndQueryFiltering(t *testing.T) {
 	if got := Visible(s); len(got) != 1 || got[0].ID != "1" {
 		t.Fatalf("query case-insensitive: %+v", got)
 	}
+}
+
+// The grid caps at maxCards so a huge library cannot build a huge tree, but
+// the cap used to be invisible: the panel looked like the whole library while
+// the bar tooltip counted every game. Say how many the grid left out.
+func TestTruncatedLibrarySaysHowManyAreHidden(t *testing.T) {
+	s := baseState()
+	s.All = manyGames(maxCards + 15)
+
+	if got := len(Visible(s)); got != maxCards {
+		t.Fatalf("grid shows %d cards, want the %d cap", got, maxCards)
+	}
+	n := find(t, BuildTree(s), "game-overflow")
+	if n == nil {
+		t.Fatalf("panel hides %d games without saying so", 15)
+	}
+	if !strings.Contains(n.Text, "15") {
+		t.Fatalf("overflow row %q does not name the hidden count", n.Text)
+	}
+
+	s.All = manyGames(maxCards)
+	if n := find(t, BuildTree(s), "game-overflow"); n != nil {
+		t.Fatalf("nothing is hidden at the cap, got overflow row %q", n.Text)
+	}
+}
+
+func manyGames(n int) []source.Game {
+	out := make([]source.Game, n)
+	for i := range out {
+		out[i] = source.Game{
+			ID:        strconv.Itoa(i),
+			Name:      fmt.Sprintf("Game %03d", i),
+			Runner:    "linux",
+			Installed: true,
+		}
+	}
+	return out
 }
 
 func TestSortModes(t *testing.T) {
