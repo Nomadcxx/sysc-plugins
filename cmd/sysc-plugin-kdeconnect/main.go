@@ -208,11 +208,34 @@ var actionNodes = map[string]kdeconnect.ActionKind{
 	"clipboard":   kdeconnect.ActionClipboard,
 }
 
+// pairingAction resolves a pairing node id to the action it means. The
+// pairing card renders "pair-accept", "pair-reject" and "pair-cancel",
+// while a device card renders "pair-<deviceID>" to request pairing, so
+// the ids share a prefix and need resolving as data.
+func pairingAction(node, selected string) (kdeconnect.Action, bool) {
+	switch node {
+	case "pair-accept":
+		return kdeconnect.Action{Kind: kdeconnect.ActionAcceptPair, DeviceID: selected}, true
+	case "pair-reject":
+		return kdeconnect.Action{Kind: kdeconnect.ActionRejectPair, DeviceID: selected}, true
+	case "pair-cancel":
+		// Withdrawing our own request is not a daemon operation, and the card
+		// clears once the daemon drops it. Deliberately inert rather than a
+		// pairing request aimed at a device named "cancel".
+		return kdeconnect.Action{}, false
+	}
+	if id := strings.TrimPrefix(node, "pair-"); id != node && id != "" {
+		return kdeconnect.Action{Kind: kdeconnect.ActionPair, DeviceID: id}, true
+	}
+	return kdeconnect.Action{}, false
+}
+
 // handleInput routes one input event. It reports whether the panel tree
 // changed and needs a republish — toggles, sends, and composer typing (the
 // send gating moves with the draft) do.
 func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *v1.InputEvent, ui *uiState, snap kdeconnect.Snapshot, busy *bool, recentImageResults chan<- recentImageResult) bool {
 	device := snap.SelectedID
+	pairing, isPairing := pairingAction(m.Node, device)
 	switch {
 	case m.Node == "open":
 		if m.Event != v1.EventActivate {
@@ -247,8 +270,8 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionAcceptPair, DeviceID: strings.TrimPrefix(m.Node, "accept-")})
 	case strings.HasPrefix(m.Node, "reject-"):
 		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionRejectPair, DeviceID: strings.TrimPrefix(m.Node, "reject-")})
-	case strings.HasPrefix(m.Node, "pair-"):
-		svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionPair, DeviceID: strings.TrimPrefix(m.Node, "pair-")})
+	case isPairing:
+		svc.Do(pairing)
 	case m.Node == "share":
 		return toggleComposer(ui, kdeconnect.ComposerShare)
 	case m.Node == "sms":

@@ -249,3 +249,36 @@ func TestFilesBrowseParamsFromSuccessfulBrowse(t *testing.T) {
 		t.Fatal("browse without a mount produced files.browse params")
 	}
 }
+
+// The pairing card renders "pair-accept", "pair-reject" and "pair-cancel",
+// while a device card renders "pair-<deviceID>" to request pairing. All four
+// share the "pair-" prefix, so a prefix match alone turns the card's three
+// buttons into a pairing request for a device named "accept".
+func TestPairingCardButtonsRouteToTheirOwnAction(t *testing.T) {
+	tests := []struct {
+		node     string
+		wantKind kdeconnect.ActionKind
+		wantID   string
+	}{
+		{"pair-accept", kdeconnect.ActionAcceptPair, "dev1"},
+		{"pair-reject", kdeconnect.ActionRejectPair, "dev1"},
+		{"pair-dev2", kdeconnect.ActionPair, "dev2"},
+	}
+	for _, tt := range tests {
+		got, ok := pairingAction(tt.node, "dev1")
+		if !ok {
+			t.Errorf("pairingAction(%q) routed nothing", tt.node)
+			continue
+		}
+		if got.Kind != tt.wantKind || got.DeviceID != tt.wantID {
+			t.Errorf("pairingAction(%q) = {%v %q}, want {%v %q}",
+				tt.node, got.Kind, got.DeviceID, tt.wantKind, tt.wantID)
+		}
+	}
+
+	// Cancel withdraws our own request, which has no daemon call. It must
+	// not become a pairing request aimed at a device named "cancel".
+	if got, ok := pairingAction("pair-cancel", "dev1"); ok {
+		t.Errorf("pairingAction(%q) = {%v %q}, want no action", "pair-cancel", got.Kind, got.DeviceID)
+	}
+}
