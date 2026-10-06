@@ -47,9 +47,15 @@ func BarTreeAtWidth(snap Snapshot, cfg Config, width int) *v1.Node {
 	if compact {
 		text = ""
 	}
+	// The glyph starts or stops recording but also stops a running replay,
+	// so the accessible name follows the mode instead of saying "recording".
+	toggleName := "Toggle recording"
+	if snap.Mode == ReplayActive {
+		toggleName = "Stop replay"
+	}
 	children := []*v1.Node{{
 		Kind: v1.KindButton, ID: nodeToggle, Key: nodeToggle,
-		Icon: icon, Text: text, Name: "Toggle recording", Role: "button",
+		Icon: icon, Text: text, Name: toggleName, Role: "button",
 		Tone: tone, Tabular: true,
 		Events: []v1.EventKind{v1.EventActivate, v1.EventPointer},
 	}}
@@ -208,6 +214,9 @@ func HandleInput(ev *v1.InputEvent, mode Mode) (open, record, stop, replay, save
 		switch mode {
 		case Recording, Adopted, Stopping:
 			return false, false, true, false, false
+		case ReplayActive:
+			// Stop stays a stop, whatever is capturing.
+			return false, false, false, true, false
 		}
 	case nodeReplay:
 		// ReplayActive routes to the same toggle, which stops the buffer.
