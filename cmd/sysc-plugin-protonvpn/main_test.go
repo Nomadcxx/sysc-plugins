@@ -307,6 +307,79 @@ func TestActionButtonWiresCommands(t *testing.T) {
 	}
 }
 
+// The panel renders exactly qc:fastest, qc:random, qc:p2p, qc:tor and
+// ns:off/malware-only/malware-ads-trackers. A suffix outside those sets is
+// not a value the view ever produced, so the handler must drop it rather
+// than hand it to the CLI.
+func TestCraftedNodeSuffixesNeverReachTheCLI(t *testing.T) {
+	h := start(t)
+	p := h.openPanel()
+	for _, node := range []string{
+		"qc:--killswitch", "qc:-o", "connect:--country", "connect:--",
+		"server-connect:--p2p", "ns:--off", "ns:../../x",
+	} {
+		h.input("p", p, node, v1.EventActivate, "", "")
+		// Every accepted click repaints, which advances the revision the
+		// next click must carry; the crafted ones die in argv validation.
+		p = h.snapshotUntil(func(n *v1.Node) bool { return find(n, "qc:p2p") != nil })
+	}
+	// A real click lands last and proves the loop drained the crafted ones.
+	h.input("p", p, "qc:p2p", v1.EventActivate, "", "")
+	h.awaitArgs("connect --p2p\n")
+
+	got, err := os.ReadFile(os.Getenv("PROTON_ARGS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(got)), "\n")
+	// Exactly one connect, the one the real qc:p2p click asked for.
+	if n := count(lines, "connect --p2p"); n != 1 {
+		t.Errorf("got %d 'connect --p2p' invocations, want exactly 1: %q", n, lines)
+	}
+	for _, line := range lines {
+		if line == "connect --p2p" {
+			continue
+		}
+		if strings.HasPrefix(line, "connect") || strings.HasPrefix(line, "config set netshield") {
+			t.Errorf("crafted node reached the CLI: %q", line)
+		}
+	}
+}
+
+// A click carrying a revision the panel no longer has is a stale input from
+// a view the user already moved past; it must be dropped, not executed.
+func TestStaleRevisionInputNeverReachesTheCLI(t *testing.T) {
+	h := start(t)
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p",
+		Revision: p.Revision + 7, Node: "qc:p2p", Event: v1.EventActivate})
+	h.input("p", p, "qc:tor", v1.EventActivate, "", "")
+	h.awaitArgs("connect --tor\n")
+
+	got, err := os.ReadFile(os.Getenv("PROTON_ARGS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(got)), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "connect --p2p") {
+			t.Errorf("stale-revision click reached the CLI: %q", line)
+		}
+	}
+	if n := count(lines, "connect --tor"); n != 1 {
+		t.Errorf("got %d 'connect --tor' invocations, want exactly 1: %q", n, lines)
+	}
+}
+func count(lines []string, want string) int {
+	n := 0
+	for _, line := range lines {
+		if line == want {
+			n++
+		}
+	}
+	return n
+}
+
 func TestRightClickQuickConnect(t *testing.T) {
 	h := start(t)
 	h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopePlugin, Values: map[string]any{"quick_connect": "p2p"}})

@@ -1,6 +1,7 @@
 package protonvpn
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -104,6 +105,39 @@ func TestConnectArgs(t *testing.T) {
 				t.Fatalf("connectArgs(%q) = %q, want %q", tt.target, got, tt.want)
 			}
 		})
+	}
+}
+
+// An option-like target must never reach the CLI. protonvpn changes the
+// machine's network state, so its argv is the only thing between a crafted
+// node id and a flag of the caller's choosing. The fake binary records every
+// argument, so this asserts on what would actually be run.
+func TestConnectRefusesOptionLikeTargets(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "argv")
+	bin := filepath.Join(dir, "fake-protonvpn")
+	script := "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\" >> " + log + "; done\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &CLI{Bin: bin}
+	ctx := context.Background()
+
+	for _, target := range []string{"--killswitch", "-o", "--", "--p2p-extra", "-c"} {
+		if _, _, err := c.Connect(ctx, target); err == nil {
+			t.Fatalf("Connect(%q) ran the CLI without complaint", target)
+		}
+	}
+	if b, err := os.ReadFile(log); err == nil && len(bytes.TrimSpace(b)) > 0 {
+		t.Fatalf("option-like target reached the CLI: %q", bytes.TrimSpace(b))
+	}
+
+	// The legitimate shapes still run, so the refusal is not a blanket no.
+	if _, _, err := c.Connect(ctx, "p2p"); err != nil {
+		t.Fatalf("Connect(%q) = %v, want the quick-connect flag to still work", "p2p", err)
+	}
+	if _, _, err := c.Connect(ctx, "US-NY#1"); err != nil {
+		t.Fatalf("Connect(%q) = %v, want a server name to still work", "US-NY#1", err)
 	}
 }
 

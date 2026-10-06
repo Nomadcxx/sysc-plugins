@@ -187,8 +187,17 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 					s.snapshot(m.ViewID)
 				}
 			case *v1.InputEvent:
+				// Stale input — a view closed or repainted past the
+				// revision it was sent for — must never reach the CLI.
+				if v, ok := s.views[m.ViewID]; !ok || m.Revision != v.rev {
+					continue
+				}
 				s.handle(ctx, m)
-				s.snapshotAll()
+				// A press carries no state the tree renders; republishing
+				// after it would make the matching release stale mid-gesture.
+				if m.Event == v1.EventActivate {
+					s.snapshotAll()
+				}
 			case *v1.SettingsChanged:
 				s.settings.apply(m.Values)
 				s.snapshotAll()
@@ -458,7 +467,9 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	case node == "ks":
 		s.setConfig(ctx, "kill-switch", map[bool]string{true: "off", false: "standard"}[s.machine.Snapshot().Config.KillSwitch != "off"])
 	case strings.HasPrefix(node, "ns:"):
-		s.setConfig(ctx, "netshield", strings.TrimPrefix(node, "ns:"))
+		if level := strings.TrimPrefix(node, "ns:"); protonvpn.ValidNetShield(level) {
+			s.setConfig(ctx, "netshield", level)
+		}
 	case node == "pf":
 		s.setConfig(ctx, "port-forwarding", map[bool]string{true: "off", false: "on"}[s.machine.Snapshot().Config.PortForwarding])
 	case node == "copy-port":
