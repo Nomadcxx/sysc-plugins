@@ -900,7 +900,7 @@ func windowCard(w Window, cfg Config, hostMinor int, now time.Time) *v1.Node {
 			&v1.Node{Kind: v1.KindText, Text: "resets in " + cd, Tabular: true})
 		if !w.ResetsAt.IsZero() {
 			clockRow.Children = append(clockRow.Children,
-				&v1.Node{Kind: v1.KindText, Text: w.ResetsAt.Format("Mon 15:04"), Tone: v1.ToneSubtle, Size: "caption"})
+				&v1.Node{Kind: v1.KindText, Text: w.ResetsAt.Local().Format("Mon 15:04"), Tone: v1.ToneSubtle, Size: "caption"})
 		}
 	default:
 		clockRow.Children = append(clockRow.Children,
@@ -925,7 +925,7 @@ func windowCard(w Window, cfg Config, hostMinor int, now time.Time) *v1.Node {
 
 func (w Window) resetLine() string {
 	if !w.ResetsAt.IsZero() {
-		return "resets " + w.ResetsAt.Format("Mon 15:04")
+		return "resets " + w.ResetsAt.Local().Format("Mon 15:04")
 	}
 	if w.ResetDescription != "" {
 		return w.ResetDescription
