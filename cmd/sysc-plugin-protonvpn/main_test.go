@@ -319,6 +319,9 @@ func TestCraftedNodeSuffixesNeverReachTheCLI(t *testing.T) {
 		"server-connect:--p2p", "ns:--off", "ns:../../x",
 	} {
 		h.input("p", p, node, v1.EventActivate, "", "")
+		// Every accepted click repaints, which advances the revision the
+		// next click must carry; the crafted ones die in argv validation.
+		p = h.snapshotUntil(func(n *v1.Node) bool { return find(n, "qc:p2p") != nil })
 	}
 	// A real click lands last and proves the loop drained the crafted ones.
 	h.input("p", p, "qc:p2p", v1.EventActivate, "", "")
@@ -343,6 +346,30 @@ func TestCraftedNodeSuffixesNeverReachTheCLI(t *testing.T) {
 	}
 }
 
+// A click carrying a revision the panel no longer has is a stale input from
+// a view the user already moved past; it must be dropped, not executed.
+func TestStaleRevisionInputNeverReachesTheCLI(t *testing.T) {
+	h := start(t)
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p",
+		Revision: p.Revision + 7, Node: "qc:p2p", Event: v1.EventActivate})
+	h.input("p", p, "qc:tor", v1.EventActivate, "", "")
+	h.awaitArgs("connect --tor\n")
+
+	got, err := os.ReadFile(os.Getenv("PROTON_ARGS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(got)), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "connect --p2p") {
+			t.Errorf("stale-revision click reached the CLI: %q", line)
+		}
+	}
+	if n := count(lines, "connect --tor"); n != 1 {
+		t.Errorf("got %d 'connect --tor' invocations, want exactly 1: %q", n, lines)
+	}
+}
 func count(lines []string, want string) int {
 	n := 0
 	for _, line := range lines {

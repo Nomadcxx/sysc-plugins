@@ -187,8 +187,17 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 					s.snapshot(m.ViewID)
 				}
 			case *v1.InputEvent:
+				// Stale input — a view closed or repainted past the
+				// revision it was sent for — must never reach the CLI.
+				if v, ok := s.views[m.ViewID]; !ok || m.Revision != v.rev {
+					continue
+				}
 				s.handle(ctx, m)
-				s.snapshotAll()
+				// A press carries no state the tree renders; republishing
+				// after it would make the matching release stale mid-gesture.
+				if m.Event == v1.EventActivate {
+					s.snapshotAll()
+				}
 			case *v1.SettingsChanged:
 				s.settings.apply(m.Values)
 				s.snapshotAll()
