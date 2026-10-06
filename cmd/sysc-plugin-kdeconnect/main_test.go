@@ -233,3 +233,19 @@ func TestRecentImageStagingRunsOffCaller(t *testing.T) {
 		t.Fatal("staging worker did not report its result")
 	}
 }
+
+func TestFilesBrowseParamsFromSuccessfulBrowse(t *testing.T) {
+	t.Parallel()
+	params, ok := filesBrowseParams(kdeconnect.Event{
+		Kind: kdeconnect.EventActionResult, DeviceName: "Pixel", Path: "/run/user/1000/phone",
+	})
+	if !ok || params.Root != "/run/user/1000/phone" || params.Mode != "open" || params.Title != "Pixel" {
+		t.Fatalf("params = %+v ok=%v", params, ok)
+	}
+	if _, ok := filesBrowseParams(kdeconnect.Event{Kind: kdeconnect.EventActionResult, Path: "/x", Err: os.ErrPermission}); ok {
+		t.Fatal("failed browse produced files.browse params")
+	}
+	if _, ok := filesBrowseParams(kdeconnect.Event{Kind: kdeconnect.EventActionResult}); ok {
+		t.Fatal("browse without a mount produced files.browse params")
+	}
+}

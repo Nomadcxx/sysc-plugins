@@ -167,6 +167,13 @@ func run(in *os.File, out *os.File) error {
 				publish(nil)
 			}
 		case e := <-svc.Events():
+			if params, ok := filesBrowseParams(e); ok {
+				if _, err := c.Call(ctx, v1.CallFilesBrowse, params); err != nil {
+					e.Err = err
+					e.Message = "Failed to open the file browser"
+					e.Detail = err.Error()
+				}
+			}
 			notify(ctx, c, e)
 		case result := <-recentImageResults:
 			finishRecentImageAction(ctx, c, svc, result)
@@ -405,6 +412,15 @@ func notify(ctx context.Context, c *v1.Client, e kdeconnect.Event) {
 		p.Urgency = v1.UrgencyCritical
 	}
 	_, _ = c.Call(ctx, v1.CallNotify, p)
+}
+
+// filesBrowseParams is the host files.browse call a successful Files action
+// needs: jail = the SFTP mount, open mode, title = the device name.
+func filesBrowseParams(e kdeconnect.Event) (v1.FilesBrowseParams, bool) {
+	if e.Kind != kdeconnect.EventActionResult || e.Err != nil || e.Path == "" {
+		return v1.FilesBrowseParams{}, false
+	}
+	return v1.FilesBrowseParams{Root: e.Path, Mode: "open", Title: e.DeviceName}, true
 }
 
 // restoreSelection reads the saved device choice from the plugin state.

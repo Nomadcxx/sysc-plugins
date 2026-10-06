@@ -77,6 +77,7 @@ var allowedCapabilities = map[string]bool{
 	"clipboard-write":   true,
 	"open-url":          true,
 	"screenshot":        true,
+	"files":             true,
 }
 
 var allowedSettingTypes = map[string]bool{
@@ -222,6 +223,7 @@ var requiredCap = map[string]string{
 	"CallOpenURL":             "open-url",
 	"CallScreenshotStart":     "screenshot",
 	"CallScreenshotDirectory": "screenshot",
+	"CallFilesBrowse":         "files",
 }
 
 // validateHostcallCaps scans the plugin's Go sources under

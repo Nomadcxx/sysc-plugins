@@ -187,13 +187,15 @@ type Action struct {
 
 // Event is one daemon-side occurrence worth surfacing: an incoming pairing
 // request or an action's result. Message is the toast title, Detail the
-// optional body, and Err marks a failure.
+// optional body, and Err marks a failure. Path is the SFTP mount a successful
+// Files action names so the entry point can open the host browser.
 type Event struct {
 	Kind       EventKind
 	DeviceID   string
 	DeviceName string
 	Message    string
 	Detail     string
+	Path       string
 	Err        error
 }
 
@@ -689,7 +691,7 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 	case ActionClipboard:
 		method, plugin = clipboardIface+".sendClipboard", "clipboard"
 	case ActionBrowse:
-		method, plugin = sftpIface+".startBrowsing", "sftp"
+		method, plugin = sftpIface+".mountAndWait", "sftp"
 	case ActionLaunchSMSApp:
 		method, plugin = smsIface+".launchApp", "sms"
 	default:
@@ -712,12 +714,13 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 		})
 		return
 	}
+	mount := ""
 	switch a.Kind {
 	case ActionPair, ActionAcceptPair, ActionRejectPair, ActionUnpair:
 		_ = st.reconcileNow(bus)
 	case ActionBrowse:
-		// startBrowsing answers false when the phone refuses the mount; the
-		// daemon keeps the reason, which is what the user can act on.
+		// mountAndWait mounts without a window; the host file browser
+		// then opens on the mount point. False means the phone refused.
 		if !replyTrue(call) {
 			reason := sftpMountReason(bus.object(kdeService, path), call)
 			dev.SFTPError = reason
@@ -728,11 +731,32 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 			})
 			return
 		}
+		mp := bus.object(kdeService, path).Call(sftpIface+".mountPoint", 0)
+		if mp.Err != nil || len(mp.Body) == 0 {
+			dev.SFTPError = "SFTP mounted with no mount point"
+			st.emit(Event{
+				Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
+				Message: actionFailureText(a.Kind, name), Detail: dev.SFTPError,
+				Err: errors.New("kdeconnect: sftp mount failed: " + dev.SFTPError),
+			})
+			return
+		}
+		mount, _ = mp.Body[0].(string)
+		if mount == "" || !filepath.IsAbs(mount) {
+			dev.SFTPError = "SFTP mounted with no mount point"
+			st.emit(Event{
+				Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
+				Message: actionFailureText(a.Kind, name), Detail: dev.SFTPError,
+				Err: errors.New("kdeconnect: sftp mount failed: " + dev.SFTPError),
+			})
+			return
+		}
+		mount = sftpBrowseRoot(bus.object(kdeService, path), mount)
 		dev.SFTPError = ""
 	}
 	st.emit(Event{
 		Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
-		Message: actionSuccessText(a.Kind, name), Detail: actionDetail(a),
+		Message: actionSuccessText(a.Kind, name), Detail: actionDetail(a), Path: mount,
 	})
 }
 
@@ -1398,6 +1422,45 @@ func newestIdleImage(mount string) []string {
 		return nil
 	}
 	return found[:1]
+}
+
+// sftpBrowseRoot prefers a getDirectories share under mount. The sshfs
+// root is the phone's /, which Android will not list; the daemon names
+// the readable "Internal shared storage" path instead.
+func sftpBrowseRoot(obj daemonObject, mount string) string {
+	call := obj.Call(sftpIface+".getDirectories", 0)
+	if call.Err != nil || len(call.Body) == 0 {
+		return mount
+	}
+	dirs, ok := call.Body[0].(map[string]dbus.Variant)
+	if !ok || len(dirs) == 0 {
+		return mount
+	}
+	var internal, fallback string
+	for p, v := range dirs {
+		if !filepath.IsAbs(p) {
+			continue
+		}
+		rel, err := filepath.Rel(mount, p)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			continue
+		}
+		label, _ := v.Value().(string)
+		if strings.EqualFold(label, "Internal shared storage") {
+			internal = p
+			continue
+		}
+		if fallback == "" || p < fallback {
+			fallback = p
+		}
+	}
+	if internal != "" {
+		return internal
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return mount
 }
 
 func sftpMountReason(obj daemonObject, call *dbus.Call) string {

@@ -48,6 +48,8 @@ func TestHostRulesMirrored(t *testing.T) {
 		{"screenshot_needs_capability", "CallScreenshotStart", 10, `["panels"]`, `capability "screenshot" is not granted`, ""},
 		{"screenshot_directory_needs_capability", "CallScreenshotDirectory", 10, `["panels"]`, `capability "screenshot" is not granted`, ""},
 		{"screenshot_granted", "CallScreenshotStart", 10, `["panels", "screenshot"]`, "", ""},
+		{"files_needs_capability", "CallFilesBrowse", 16, `["panels"]`, `capability "files" is not granted`, ""},
+		{"files_granted", "CallFilesBrowse", 16, `["panels", "files"]`, "", ""},
 		{"center_needs_minor12", "", 11, `["panels"]`, "center placement requires protocol minor 12", "center"},
 		{"center_at_minor12", "", 12, `["panels"]`, "", "center"},
 		{"unknown_placement", "", 12, `["panels"]`, `placement "floating" is not one the shell supports`, "floating"},
