@@ -15,7 +15,8 @@ PLUGINS := \
 	sysc-plugin-games:games \
 	sysc-plugin-protonvpn:protonvpn \
 	sysc-plugin-moonbit:moonbit \
-	sysc-plugin-herdr:herdr
+	sysc-plugin-herdr:herdr \
+	sysc-plugin-updates:updates
 
 # Calendar is the only cgo plugin; skip it when its pkg-config modules are
 # missing so one optional plugin's headers do not block the remaining plugins.
