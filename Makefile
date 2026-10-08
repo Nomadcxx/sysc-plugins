@@ -15,6 +15,17 @@ PLUGINS := \
 	sysc-plugin-games:games \
 	sysc-plugin-protonvpn:protonvpn \
 	sysc-plugin-moonbit:moonbit
+
+# Calendar is the only cgo plugin; skip it when its pkg-config modules are
+# missing so one optional plugin's headers do not block the other 15.
+PKG_CONFIG ?= pkg-config
+CALENDAR_PC := libecal-2.0 json-glib-1.0
+ifeq ($(shell $(PKG_CONFIG) --exists $(CALENDAR_PC) 2>/dev/null && echo yes),)
+  ifeq ($(STRICT),)
+    $(info note: skipping calendar; it needs $(CALENDAR_PC) via pkg-config (evolution-data-server headers))
+    PLUGINS := $(filter-out sysc-plugin-calendar:calendar,$(PLUGINS))
+  endif
+endif
 USER_PLUGIN_ROOT := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/sysc-shell/plugins
 
 .PHONY: build install link test vet fmt validate catalog-validate clean
