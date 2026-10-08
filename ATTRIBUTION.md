@@ -65,3 +65,19 @@ listed with commits and checksums in `plugins/faith/data/SOURCES.md`:
 Adam Clarke's commentary (public domain) is not bundled. When the panel is
 open, it is fetched from the [Free Use Bible API](https://bible.helloao.org),
 the only network request the plugin makes. Nothing about the user is sent.
+
+## Thumbnail assets
+
+The catalog thumbnails are rendered by `internal/thumbnail` with these embedded
+assets:
+
+| Asset | Origin | Licence |
+|---|---|---|
+| Inter (Regular, ExtraBold), subset | [rsms/inter](https://github.com/rsms/inter) | SIL OFL 1.1 |
+| JetBrains Mono (Bold), subset | [JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono) | SIL OFL 1.1 |
+| sysc wordmark | sysc-shell (`internal/render/icons/wordmark/sysc-mark.png`) | same project |
+| `github.com/HugoSmits86/nativewebp` | pure-Go WebP encoder | MIT |
+
+The card layout follows the idea of Noctalia's community-plugins
+`thumbnail.webp` requirement (one fixed size, enforced in CI); the design is
+sysc's own.

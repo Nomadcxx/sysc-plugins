@@ -47,5 +47,7 @@ jobs:
         run: make build STRICT=1
       - name: validate manifests
         run: go run ./tools/validate-manifests
+      - name: check thumbnails
+        run: go run ./tools/thumbnail -check
       - name: validate catalog
         run: go run ./tools/catalog validate

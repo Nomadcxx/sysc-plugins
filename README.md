@@ -68,8 +68,8 @@ To update, pull and run `make install` again.
 
 - [Writing a plugin](docs/writing-plugins.md): layout, the manifest, and what the host will reject
 - [Plugin UI rules](docs/plugin-ui-rules.md): sizes and layout checks every view must pass
-- [Publishing](docs/publishing.md): per-plugin release tags, the catalog, and running your own plugin
-  source
+- [Publishing](docs/publishing.md): per-plugin release tags, the catalog, the thumbnail every plugin ships, and
+  running your own plugin source
 
 Any git repository can be a plugin source. Copy the catalog tooling from here and keep a
 `catalog.json` at the root of the default branch.

@@ -17,7 +17,11 @@ shell's plugin wire protocol. The protocol types come from sysc-shell's
    `main.go` under `cmd/sysc-plugin-<name>/` that handshakes via
    `plugin/v1`'s `Client` and serves its views.
 3. Add the plugin to `PLUGINS` in the `Makefile` and to the table in the README.
-4. Validate every view tree with `v1.Validate(...)` in a test — the host
+4. Capture the plugin at work as `plugins/<name>/screenshot.png` and generate
+   its catalog card with `go run ./tools/thumbnail -plugin plugins/<name>`;
+   commit both. CI fails a new plugin without them. See "Thumbnails" in
+   [publishing.md](publishing.md).
+5. Validate every view tree with `v1.Validate(...)` in a test — the host
    rejects invalid trees at render time. Validation is geometry-blind, so lay
    every view out with `plugin/lint` at the sizes the host uses: see
    [plugin-ui-rules.md](plugin-ui-rules.md).
