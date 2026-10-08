@@ -24,6 +24,7 @@ it.
 | **ProtonVPN** | Quick connect, server picker and protection status | `protonvpn` |
 | **Screen Recorder** | Record the screen or a window, with optional audio and a replay buffer | `gpu-screen-recorder` |
 | **Screenshot** | Region, window or screen capture from a bar button, using the shell's own capture engine | |
+| **System Updates** | Pending repo, AUR and Flatpak updates in the bar, a reboot-needed marker, and updates run in a terminal you can watch | pacman, pacman-contrib |
 | **Wallpaper Depth** | Depth masks for image wallpapers, so scenery can sit in front of the shell's centred clock | `python3` |
 | **World Clock** | Labelled clocks for other cities in the bar and panel | |
 

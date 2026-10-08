@@ -1,0 +1,137 @@
+{
+  "schema": 1,
+  "id": "org.sysc.updates",
+  "name": "System Updates",
+  "description": "Pending repo, AUR and Flatpak updates, a reboot-needed marker, and updates run in a terminal you can watch.",
+  "version": "0.1.0",
+  "protocol": {
+    "major": 1,
+    "minor": 13
+  },
+  "exec": "bin/sysc-plugin-updates",
+  "capabilities": [
+    "notifications",
+    "panels",
+    "settings",
+    "state",
+    "open-url"
+  ],
+  "requires": {
+    "commands": [
+      "pacman"
+    ]
+  },
+  "services": [
+    {
+      "id": "updates"
+    }
+  ],
+  "widgets": [
+    {
+      "id": "bar",
+      "settings": []
+    }
+  ],
+  "panels": [
+    {
+      "id": "panel",
+      "width": 420,
+      "height": 600,
+      "placement": "attached",
+      "shortcuts": [
+        {
+          "key": "u",
+          "node": "updates-run"
+        },
+        {
+          "key": "r",
+          "node": "updates-refresh"
+        },
+        {
+          "key": "n",
+          "node": "updates-news"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "key": "interval_hours",
+      "type": "int",
+      "label": "Check every (hours)",
+      "default": 3,
+      "min": 1,
+      "max": 24
+    },
+    {
+      "key": "aur_helper",
+      "type": "select",
+      "label": "AUR helper",
+      "default": "auto",
+      "options": [
+        {
+          "value": "auto",
+          "label": "Automatic"
+        },
+        {
+          "value": "paru",
+          "label": "paru"
+        },
+        {
+          "value": "yay",
+          "label": "yay"
+        },
+        {
+          "value": "off",
+          "label": "Off"
+        }
+      ]
+    },
+    {
+      "key": "include_flatpak",
+      "type": "bool",
+      "label": "Include Flatpak",
+      "default": true
+    },
+    {
+      "key": "notify",
+      "type": "bool",
+      "label": "Notify once a day",
+      "default": false
+    },
+    {
+      "key": "hide_when_zero",
+      "type": "bool",
+      "label": "Hide from the bar when there is nothing to do",
+      "default": true
+    },
+    {
+      "key": "terminal",
+      "type": "string",
+      "label": "Terminal (empty picks the first found)",
+      "default": ""
+    },
+    {
+      "key": "update_command",
+      "type": "string",
+      "label": "Update command (empty detects the helper)",
+      "default": ""
+    },
+    {
+      "key": "update_method",
+      "type": "select",
+      "label": "Update method",
+      "default": "terminal",
+      "options": [
+        {
+          "value": "terminal",
+          "label": "Visible terminal"
+        },
+        {
+          "value": "pkexec",
+          "label": "pkexec (repo only)"
+        }
+      ]
+    }
+  ]
+}
