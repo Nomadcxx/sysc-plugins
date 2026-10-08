@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -691,4 +692,102 @@ func bumpManifestVersion(t *testing.T, root, dir, version string) {
 		"protocol": {"major": 1, "minor": 2},
 		"capabilities": ["panels"], "requires": {"commands": []}
 	}`, m.ID, m.Name, version, m.Exec))
+}
+
+func releaseVersions(e catalog.Entry) []string {
+	versions := make([]string, 0, len(e.Releases))
+	for _, r := range e.Releases {
+		versions = append(versions, r.Version)
+	}
+	return versions
+}
+
+func TestUpdateOlderTagDoesNotReplaceTopLevel(t *testing.T) {
+	withReadmeServer(t, http.StatusNotFound, nil)
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	dist := t.TempDir()
+	for i, v := range []string{"1.0.0", "1.1.0"} {
+		writeDistArchive(t, dist, "org.sysc.timer", v, "amd64", "c-"+v)
+		if err := updateCatalog(root, "timer-v"+v, dist, time.Date(2026, 1, i+1, 0, 0, 0, 0, time.UTC)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A maintenance release on the older line must not demote the newest.
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.1", "amd64", "c-1.0.1")
+	if err := updateCatalog(root, "timer-v1.0.1", dist, time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
+	if e.Version != "1.1.0" {
+		t.Fatalf("top-level release is %s, want 1.1.0 (releases=%v)", e.Version, e.Releases)
+	}
+	if got := releaseVersions(e); !slices.Equal(got, []string{"1.0.1", "1.0.0"}) {
+		t.Fatalf("releases = %v, want [1.0.1 1.0.0]", got)
+	}
+}
+
+func TestUpdateOlderTagKeepsNewestListingFields(t *testing.T) {
+	withReadmeServer(t, http.StatusNotFound, nil)
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	dist := t.TempDir()
+	for i, v := range []string{"1.0.0", "1.1.0"} {
+		writeDistArchive(t, dist, "org.sysc.timer", v, "amd64", "c-"+v)
+		if err := updateCatalog(root, "timer-v"+v, dist, time.Date(2026, 2, i+1, 0, 0, 0, 0, time.UTC)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := archiveManifest("org.sysc.timer", "1.0.1")
+	old.Name = "Legacy Timer"
+	old.Description = "The old line."
+	writeDistArchiveWithManifest(t, dist, "org.sysc.timer", "1.0.1", "amd64", old, "c-1.0.1")
+	if err := updateCatalog(root, "timer-v1.0.1", dist, time.Date(2026, 2, 9, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
+	if e.Version != "1.1.0" || e.Name != "Pomodoro Timer" || e.Description != "A test plugin." {
+		t.Fatalf("older tag changed the listing: version=%s name=%q description=%q", e.Version, e.Name, e.Description)
+	}
+}
+
+func TestUpdateRerunOfOlderTagReplacesInPlace(t *testing.T) {
+	withReadmeServer(t, http.StatusNotFound, nil)
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	dist := t.TempDir()
+	for i, v := range []string{"1.0.0", "1.1.0"} {
+		writeDistArchive(t, dist, "org.sysc.timer", v, "amd64", "c-"+v)
+		if err := updateCatalog(root, "timer-v"+v, dist, time.Date(2026, 3, i+1, 0, 0, 0, 0, time.UTC)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rerun := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "c-1.0.0-rebuilt")
+	if err := updateCatalog(root, "timer-v1.0.0", dist, rerun); err != nil {
+		t.Fatal(err)
+	}
+	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
+	if e.Version != "1.1.0" || len(e.Releases) != 1 || e.Releases[0].Version != "1.0.0" {
+		t.Fatalf("rerun of the older tag changed the row: top=%s releases=%v", e.Version, e.Releases)
+	}
+	if !e.UpdatedAt.Equal(rerun) {
+		t.Fatalf("updated_at = %s, want the rerun time %s", e.UpdatedAt, rerun)
+	}
+}
+
+func TestUpdateReleasesSortedNewestFirst(t *testing.T) {
+	withReadmeServer(t, http.StatusNotFound, nil)
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	dist := t.TempDir()
+	for i, v := range []string{"1.0.0", "1.2.0", "1.1.0"} {
+		writeDistArchive(t, dist, "org.sysc.timer", v, "amd64", "c-"+v)
+		if err := updateCatalog(root, "timer-v"+v, dist, time.Date(2026, 4, i+1, 0, 0, 0, 0, time.UTC)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
+	if e.Version != "1.2.0" {
+		t.Fatalf("top-level release is %s, want 1.2.0", e.Version)
+	}
+	if got := releaseVersions(e); !slices.Equal(got, []string{"1.1.0", "1.0.0"}) {
+		t.Fatalf("releases = %v, want [1.1.0 1.0.0]", got)
+	}
 }

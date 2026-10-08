@@ -100,6 +100,19 @@ func validateEntry(e catalog.Entry, metaAll map[string]catalogMeta, dirsByID map
 	if !ok {
 		return fmt.Errorf("no plugins/<dir> declares id %q", e.ID)
 	}
+	// The embedded release is the newest by contract; Releases hold the older
+	// versions for hosts below it, unique and strictly oldest-last.
+	prev := e.Release.Version
+	seen := map[string]bool{prev: true}
+	for i, r := range e.Releases {
+		if seen[r.Version] {
+			return fmt.Errorf("releases[%d] repeats version %s", i, r.Version)
+		}
+		if !catalog.Newer(prev, r.Version) {
+			return fmt.Errorf("releases[%d] %s is not older than %s", i, r.Version, prev)
+		}
+		seen[r.Version], prev = true, r.Version
+	}
 	// The working tree can contain edits made after the release. Always check
 	// the immutable tag so coordinated edits to the checkout and catalog cannot
 	// make unpublished metadata appear valid.

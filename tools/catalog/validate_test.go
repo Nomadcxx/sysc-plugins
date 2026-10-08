@@ -322,3 +322,39 @@ func rewriteCatalogAssetURL(t *testing.T, root, url, sha256Hex string) {
 `, url, sha256Hex)
 	writeFile(t, path, doc)
 }
+
+func TestValidateRejectsTopLevelOlderThanReleases(t *testing.T) {
+	root := buildValidatingRepo(t)
+	path := filepath.Join(root, "catalog.json")
+	cat := readCatalogFile(t, path)
+	newer := cat.Entries[0].Release
+	newer.Version = "1.1.0"
+	cat.Entries[0].Releases = append(cat.Entries[0].Releases, newer)
+	if err := writeCatalog(path, cat.Entries); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := validateCatalog(root, false, false, &out); err == nil {
+		t.Fatalf("expected a validation failure, output: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "not older than") {
+		t.Fatalf("expected the ordering failure, got: %s", out.String())
+	}
+}
+
+func TestValidateRejectsDuplicateReleaseVersions(t *testing.T) {
+	root := buildValidatingRepo(t)
+	path := filepath.Join(root, "catalog.json")
+	cat := readCatalogFile(t, path)
+	cat.Entries[0].Releases = append(cat.Entries[0].Releases, cat.Entries[0].Release)
+	if err := writeCatalog(path, cat.Entries); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := validateCatalog(root, false, false, &out); err == nil {
+		t.Fatalf("expected a validation failure, output: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "repeats version") {
+		t.Fatalf("expected the duplicate failure, got: %s", out.String())
+	}
+}
