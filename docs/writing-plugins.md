@@ -27,8 +27,11 @@ Notes the hard way taught us:
 - Icon names must come from the shell's catalogue (`render.IconNames()` in
   sysc-shell: weather, battery, camera, record, notifications, close,
   schedule, ghost, sysmon gauges). They are `[a-z0-9-]` identifiers — no
-  underscores — and an unknown name fails the host's conversion. Additions
-  need a sysc-shell font update.
+  underscores — and an unknown name fails the host's conversion. A small
+  Material subset also exists under underscore names (`download`, `refresh`,
+  `restart_alt`, `upload`, `lock`, ...); matching entries from
+  `render.MaterialIconNames()` work too. Additions need a sysc-shell font
+  update.
 - Text tones are `normal`, `error`, `subtle` and `accent` (the last two
   from plugin/v1 minor 1); interactive nodes need
   `ID`, `Name`, `Role`, and a non-empty `Events` list; buttons cannot carry

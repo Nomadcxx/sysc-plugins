@@ -1,0 +1,2 @@
+org.mozilla.firefox 143.0.2
+com.spotify.Client 1.2.63.394.g9aa800a8
