@@ -44,7 +44,9 @@ sysc-shell ipc panel.toggle '{"panel":"plugin"}'
 
 ### From source
 
-**Requires:** Go 1.26.4+ and `make`.
+**Requires:** Go 1.26.4+ and `make`. Calendar also needs `pkg-config` and the
+evolution-data-server development files (`libecal-2.0`, `json-glib-1.0`); without them
+`make install` skips Calendar with a notice and installs the other 15 plugins.
 
 ```bash
 git clone https://github.com/Nomadcxx/sysc-plugins

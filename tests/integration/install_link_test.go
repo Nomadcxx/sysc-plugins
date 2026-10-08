@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -41,5 +42,46 @@ func TestMakeLinkRefusesRealDirectory(t *testing.T) {
 	}
 	if fi.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("%s is %v, want symlink", dest, fi.Mode())
+	}
+}
+
+// Issue #124: one cgo plugin's missing headers must not block the others.
+func TestMakeLinkSkipsCalendarWithoutLibecal(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	plug := t.TempDir()
+	args := []string{"-C", root, "link", "USER_PLUGIN_ROOT=" + plug, "PKG_CONFIG=false"}
+	out, err := exec.Command("make", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("make link failed without libecal:\n%s", out)
+	}
+	if !strings.Contains(string(out), "skipping calendar") {
+		t.Fatalf("make link did not mention the calendar skip:\n%s", out)
+	}
+	if _, err := os.Lstat(filepath.Join(plug, "org.sysc.calendar")); err == nil {
+		t.Fatal("make link linked calendar without libecal")
+	}
+	entries, err := os.ReadDir(plug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 15 {
+		t.Fatalf("linked %d plugins, want 15", len(entries))
+	}
+	if out, err := exec.Command("make", "-C", root, "-n", "build", "PKG_CONFIG=false").CombinedOutput(); err != nil {
+		t.Fatalf("make -n build failed:\n%s", out)
+	} else if strings.Contains(string(out), "sysc-plugin-calendar") {
+		t.Fatalf("dry-run build without libecal still builds calendar:\n%s", out)
+	}
+}
+
+func TestMakeBuildStrictKeepsCalendarWithoutLibecal(t *testing.T) {
+	t.Parallel()
+	out, err := exec.Command("make", "-C", repoRoot(t), "-n", "build", "PKG_CONFIG=false", "STRICT=1").CombinedOutput()
+	if err != nil {
+		t.Fatalf("make -n build STRICT=1 failed:\n%s", out)
+	}
+	if !strings.Contains(string(out), "sysc-plugin-calendar") {
+		t.Fatalf("STRICT=1 did not keep calendar in the build list:\n%s", out)
 	}
 }
