@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
@@ -337,7 +338,10 @@ func runPlugin(in io.Reader, out io.Writer, gh githubnotifications.GH, opener fu
 	}
 }
 
-func openURL(ctx context.Context, raw string) error {
+// openURL launches the browser through xdg-open and detaches: a browser that
+// stays running is a successful open, not a job to wait on. Only an opener
+// that fails immediately (no handler, bad URL) counts as a failure.
+func openURL(_ context.Context, raw string) error {
 	if !githubnotifications.CanonicalGitHubURL(raw) {
 		return errors.New("refusing to open a non-canonical GitHub URL")
 	}
@@ -345,9 +349,20 @@ func openURL(ctx context.Context, raw string) error {
 	if err != nil {
 		return err
 	}
-	openCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	return exec.CommandContext(openCtx, path, raw).Run()
+	cmd := exec.Command(path, raw)
+	// The browser must outlive the plugin, so it gets its own session.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }() // reap the opener; its exit is not our result
+	select {
+	case err := <-done:
+		return err // exited quickly: its status is the answer
+	case <-time.After(500 * time.Millisecond):
+		return nil // still running: the browser launched
+	}
 }
 
 func notification(snapshot githubnotifications.InboxSnapshot, id string) (githubnotifications.Item, bool) {
