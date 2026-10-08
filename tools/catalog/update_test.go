@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/thumbnail"
 	"github.com/Nomadcxx/sysc-shell/plugin/catalog"
 )
 
@@ -176,6 +178,9 @@ func withTaggedContentServer(t *testing.T, manifest []byte) {
 	catalogHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Host != "catalog-test.invalid" {
 			return http.DefaultTransport.RoundTrip(r)
+		}
+		if resp, ok := stubThumbnail(r); ok {
+			return resp, nil
 		}
 		status, body := http.StatusNotFound, []byte(nil)
 		if strings.HasSuffix(r.URL.Path, "/manifest.json") {
@@ -854,5 +859,76 @@ func TestRunUpdateRejectsBadRepo(t *testing.T) {
 	err := runUpdate([]string{"-repo", "../x", "-tag", "timer-v1.0.0", "-dist", t.TempDir()})
 	if err == nil {
 		t.Fatal("expected runUpdate to reject a bad -repo")
+	}
+}
+
+func TestUpdatePinsTheTaggedThumbnail(t *testing.T) {
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	base := withReadmeServer(t, http.StatusNotFound, nil)
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+		t.Fatalf("updateCatalog: %v", err)
+	}
+
+	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
+	if e.Screenshot == nil {
+		t.Fatal("row has no screenshot")
+	}
+	if want := base + "/Nomadcxx/sysc-plugins/timer-v1.0.0/plugins/timer/thumbnail.webp"; e.Screenshot.URL != want {
+		t.Errorf("screenshot URL = %q, want %q", e.Screenshot.URL, want)
+	}
+	sum := sha256.Sum256(stubThumbnailBytes)
+	if e.Screenshot.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Errorf("screenshot sha256 = %q, want %x", e.Screenshot.SHA256, sum)
+	}
+}
+
+func TestUpdateFailsWhenTheTagHasNoThumbnail(t *testing.T) {
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	withReadmeServer(t, http.StatusNotFound, nil)
+	withThumbnailResponse(t, http.StatusNotFound, nil)
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
+	err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), "plugins/timer/thumbnail.webp") {
+		t.Fatalf("err = %v, want one naming plugins/timer/thumbnail.webp", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "catalog.json")); statErr == nil {
+		t.Error("catalog.json was written for a release with no thumbnail")
+	}
+}
+
+func TestUpdateRejectsATaggedThumbnailOfTheWrongSize(t *testing.T) {
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	withReadmeServer(t, http.StatusNotFound, nil)
+	small, err := thumbnail.Encode(image.NewNRGBA(image.Rect(0, 0, 100, 100)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	withThumbnailResponse(t, http.StatusOK, small)
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
+	err = updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), "100x100") {
+		t.Fatalf("err = %v, want one naming the 100x100 size", err)
+	}
+}
+
+func TestMetaScreenshotStillOverridesTheTaggedThumbnail(t *testing.T) {
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	writeFile(t, filepath.Join(root, catalogMetaFile), `{
+		"org.sysc.timer": {"category": "productivity", "author": "Nomadcxx", "license": "MIT",
+			"screenshot": {"url": "https://example.com/timer.png", "sha256": "`+strings.Repeat("a", 64)+`"}}
+	}`)
+	withReadmeServer(t, http.StatusNotFound, nil)
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+		t.Fatalf("updateCatalog: %v", err)
+	}
+	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
+	if e.Screenshot == nil || e.Screenshot.URL != "https://example.com/timer.png" {
+		t.Fatalf("screenshot = %+v, want the catalog-meta.json override", e.Screenshot)
 	}
 }
