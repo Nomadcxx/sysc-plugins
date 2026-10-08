@@ -1,9 +1,32 @@
 package calendar
 
 import (
+	"fmt"
+	"os"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
+
+func rssKB(t *testing.T) int64 {
+	t.Helper()
+	status, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		t.Skipf("no /proc/self/status: %v", err)
+	}
+	for _, line := range strings.Split(string(status), "\n") {
+		if strings.HasPrefix(line, "VmRSS:") {
+			var kb int64
+			if _, err := fmt.Sscanf(line, "VmRSS: %d kB", &kb); err != nil {
+				t.Fatalf("parse %q: %v", line, err)
+			}
+			return kb
+		}
+	}
+	t.Fatal("VmRSS not found in /proc/self/status")
+	return 0
+}
 
 func octWeek(t *testing.T) (time.Time, time.Time) {
 	t.Helper()
@@ -161,4 +184,33 @@ func TestExpandInstancesKeepsEventSpanningIntoRange(t *testing.T) {
 	if len(instances) != 1 {
 		t.Fatalf("spanning event lost: got %d instances, want 1", len(instances))
 	}
+}
+
+func TestExpandInstancesConstantMemory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow: 5500 native expansions")
+	}
+	// ponytail: RSS is allocator-noisy, so this asserts a generous bound
+	// rather than flatness; the leak on the pre-fix code was ~110 MB per 5k
+	// calls and grew linearly.
+	ical := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:standup@example\r\nDTSTAMP:20261001T000000Z\r\nDTSTART:20261001T090000Z\r\nDTEND:20261001T091500Z\r\nSUMMARY:Standup\r\nRRULE:FREQ=DAILY\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Unix()
+	end := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC).Unix()
+	run := func(n int) {
+		for i := 0; i < n; i++ {
+			got, _, err := expandInstances(ical, start, end)
+			if err != nil || len(got) != 31 {
+				t.Fatalf("expansion %d: got %d instances, err %v", i, len(got), err)
+			}
+		}
+		runtime.GC()
+	}
+	run(500)
+	before := rssKB(t)
+	run(5000)
+	grew := rssKB(t) - before
+	if grew > 16*1024 {
+		t.Fatalf("RSS grew %d KB over 5000 expansions, want under 16 MB", grew)
+	}
+	t.Logf("RSS grew %d KB over 5000 expansions", grew)
 }
