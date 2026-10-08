@@ -581,6 +581,103 @@ func TestUpdateSortsCatalogByID(t *testing.T) {
 	}
 }
 
+// A re-run of an already-published tag must leave the file byte-identical:
+// the workflow commits only when catalog.json changed, so an unchanged row
+// has to keep its original updated_at even though the run passes a new now.
+func TestUpdateIdenticalRerunIsNoOp(t *testing.T) {
+	withReadmeServer(t, http.StatusNotFound, nil)
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "same")
+
+	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := updateCatalog(root, "timer-v1.0.0", dist, first); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "catalog.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	if err := updateCatalog(root, "timer-v1.0.0", dist, second); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("identical re-run changed catalog.json\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if e := entryByID(t, readCatalogFile(t, path), "org.sysc.timer"); !e.UpdatedAt.Equal(first) {
+		t.Fatalf("updated_at = %v, want the original %v", e.UpdatedAt, first)
+	}
+}
+
+// A real change under the same tag (the archive was rebuilt) must still move
+// updated_at, or the shortcut would hide the new asset.
+func TestUpdateRerunWithNewAssetBumpsUpdatedAt(t *testing.T) {
+	withReadmeServer(t, http.StatusNotFound, nil)
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "first-build")
+
+	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := updateCatalog(root, "timer-v1.0.0", dist, first); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "catalog.json")
+	oldSHA := entryByID(t, readCatalogFile(t, path), "org.sysc.timer").Assets["linux-amd64"].SHA256
+
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "rebuilt-same-version")
+	second := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	if err := updateCatalog(root, "timer-v1.0.0", dist, second); err != nil {
+		t.Fatal(err)
+	}
+
+	e := entryByID(t, readCatalogFile(t, path), "org.sysc.timer")
+	if e.Assets["linux-amd64"].SHA256 == oldSHA {
+		t.Fatal("expected the rebuilt archive to replace the asset sha256")
+	}
+	if !e.UpdatedAt.Equal(second) {
+		t.Fatalf("updated_at = %v, want %v after a rebuilt asset", e.UpdatedAt, second)
+	}
+}
+
+// Editing catalog-meta.json is a real change too, even when the archive is
+// byte-identical.
+func TestUpdateMetaChangeBumpsUpdatedAt(t *testing.T) {
+	withReadmeServer(t, http.StatusNotFound, nil)
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "same")
+
+	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := updateCatalog(root, "timer-v1.0.0", dist, first); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, filepath.Join(root, catalogMetaFile), `{
+		"org.sysc.timer": {"category": "productivity", "author": "Nomadcxx", "license": "MIT",
+		     "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+		     "long_description": "Now with a richer description."}
+	}`)
+	second := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	if err := updateCatalog(root, "timer-v1.0.0", dist, second); err != nil {
+		t.Fatal(err)
+	}
+
+	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
+	if e.LongDescription != "Now with a richer description." {
+		t.Fatalf("long_description = %q, want the meta change", e.LongDescription)
+	}
+	if !e.UpdatedAt.Equal(second) {
+		t.Fatalf("updated_at = %v, want %v after a meta change", e.UpdatedAt, second)
+	}
+}
+
 func bumpManifestVersion(t *testing.T, root, dir, version string) {
 	t.Helper()
 	path := filepath.Join(root, "plugins", dir, "manifest.json")

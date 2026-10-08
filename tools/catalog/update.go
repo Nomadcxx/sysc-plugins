@@ -194,7 +194,27 @@ func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.
 	if meta.Screenshot != nil {
 		e.Screenshot = meta.Screenshot.toCatalog()
 	}
+	// A re-run of the same tag rebuilds the identical row. Keeping the
+	// original updated_at makes the file byte-identical, so the release
+	// workflow's "already up to date" shortcut fires instead of opening an
+	// empty catalog PR. A real change (new asset, new meta) still bumps it.
+	if sameJSON(*existing, e) {
+		e.UpdatedAt = existing.UpdatedAt
+	}
 	return e
+}
+
+// sameJSON reports whether two catalog rows are byte-identical once
+// updated_at is normalized away; it decides whether a re-run of the same
+// release actually changed anything.
+func sameJSON(a, b catalog.Entry) bool {
+	a.UpdatedAt, b.UpdatedAt = time.Time{}, time.Time{}
+	aJSON, errA := json.Marshal(a)
+	bJSON, errB := json.Marshal(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return bytes.Equal(aJSON, bJSON)
 }
 
 // taggedFileBaseURL is the raw host for content pinned to release tags. Tests
