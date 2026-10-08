@@ -79,8 +79,9 @@ Rendering rules (B1), all measurements in output pixels:
 - Frame inset 24 px, radius 18, 2 px `#2c354f` border, fill
   `rgba(9,11,18,0.82)`.
 - Title bar 58 px high with a 2 px rule beneath: left
-  `┌─ sysc://plugins/<dir>`, centre the blue sysc wordmark (116×16) flanked by
-  `//////`, right `<plugin id> ─┐`.
+  `┌─ sysc://plugins/<dir>` (`┌─ plugins/<dir>` when the directory name is too
+  long to clear the wordmark, as `github-notifications` is), centre the blue
+  sysc wordmark (116×16) flanked by `//////`, right `<plugin id> ─┐`.
 - Left column: `// PLUGIN` in mono blue; the plugin name in Inter ExtraBold
   54 px (46 px on two lines) with a blue `█` cursor; a `│` gutter beside the
   description in Inter Regular 21/29; chips `[ <CATEGORY> ]`, `[ PANEL ]`,
@@ -147,6 +148,10 @@ data, not an empty or loading view.
   the plugins whose releases were tagged before thumbnails existed.
 - `validate -community` is unchanged and still requires a screenshot on every
   row. `validate -fetch` already downloads and hashes it.
+- `catalog package` (`collectEntries`) ships everything in a plugin directory
+  except `*.go`, `testdata/` and `bin/`, so it would put `screenshot.png` and
+  `thumbnail.webp` into every install archive. Both root files are excluded:
+  they are catalog media, not part of the install.
 
 ### 4. Enforcement in CI
 
