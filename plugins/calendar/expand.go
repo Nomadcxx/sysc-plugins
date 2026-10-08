@@ -25,6 +25,14 @@ static gboolean sysc_time_in_skip_list(SyscExpandCtx *ctx, ICalTime *value) {
 	return FALSE;
 }
 
+static gboolean sysc_has_property(ICalComponent *component, ICalPropertyKind kind) {
+	ICalProperty *prop = i_cal_component_get_first_property(component, kind);
+	if (!prop)
+		return FALSE;
+	g_object_unref(prop);
+	return TRUE;
+}
+
 static gboolean sysc_push_instance(SyscExpandCtx *ctx, ICalComponent *source,
                                    ICalTime *start, ICalTime *end, gboolean annotate) {
 	if (ctx->count >= SYSC_MAX_INSTANCES_PER_EVENT) {
@@ -34,8 +42,13 @@ static gboolean sysc_push_instance(SyscExpandCtx *ctx, ICalComponent *source,
 	ICalComponent *clone = i_cal_component_clone(source);
 	if (start)
 		i_cal_component_set_dtstart(clone, start);
-	if (end && i_cal_component_get_dtend(source))
-		i_cal_component_set_dtend(clone, end);
+	if (end) {
+		ICalTime *source_end = i_cal_component_get_dtend(source);
+		if (source_end) {
+			i_cal_component_set_dtend(clone, end);
+			g_object_unref(source_end);
+		}
+	}
 	if (annotate) {
 		// Occurrences of one master share UID + empty RECURRENCE-ID, which
 		// would collapse to a single Event.ID downstream. Annotate each
@@ -43,7 +56,7 @@ static gboolean sysc_push_instance(SyscExpandCtx *ctx, ICalComponent *source,
 		// already carry this value, so override wins on ID collision.
 		// get_recurrenceid returns a non-null empty time even when the
 		// property is absent; check the property itself.
-		if (!i_cal_component_get_first_property(clone, I_CAL_RECURRENCEID_PROPERTY)) {
+		if (!sysc_has_property(clone, I_CAL_RECURRENCEID_PROPERTY)) {
 			ICalTime *rid = i_cal_time_clone(start);
 			i_cal_component_set_recurrenceid(clone, rid);
 			g_object_unref(rid); // The setter copies; the clone was ours.
@@ -94,9 +107,9 @@ static gboolean sysc_vevent_overlaps_range(ICalComponent *vevent, ICalTimezone *
 
 static void sysc_expand_vevent(ICalComponent *vevent, GPtrArray *vevents,
                                gint64 start, gint64 end, SyscExpandCtx *ctx) {
-	gboolean detached = i_cal_component_get_first_property(vevent, I_CAL_RECURRENCEID_PROPERTY) != NULL;
-	gboolean recurring = i_cal_component_get_first_property(vevent, I_CAL_RRULE_PROPERTY) != NULL ||
-	                     i_cal_component_get_first_property(vevent, I_CAL_RDATE_PROPERTY) != NULL;
+	gboolean detached = sysc_has_property(vevent, I_CAL_RECURRENCEID_PROPERTY);
+	gboolean recurring = sysc_has_property(vevent, I_CAL_RRULE_PROPERTY) ||
+	                     sysc_has_property(vevent, I_CAL_RDATE_PROPERTY);
 	if (detached || !recurring) {
 		// Detached override or plain event: a literal, not a rule to expand.
 		if (sysc_vevent_overlaps_range(vevent, ctx->utc, start, end))
@@ -111,7 +124,7 @@ static void sysc_expand_vevent(ICalComponent *vevent, GPtrArray *vevents,
 		ICalComponent *sibling = g_ptr_array_index(vevents, i);
 		if (sibling == vevent)
 			continue;
-		if (!i_cal_component_get_first_property(sibling, I_CAL_RECURRENCEID_PROPERTY))
+		if (!sysc_has_property(sibling, I_CAL_RECURRENCEID_PROPERTY))
 			continue;
 		gboolean same = g_strcmp0(i_cal_component_get_uid(sibling), uid) == 0;
 		if (!same)
@@ -168,8 +181,10 @@ static gchar *sysc_expand_instances_json(const gchar *ical_text, gint64 start, g
 	json_builder_add_boolean_value(builder, ctx.truncated);
 	json_builder_end_object(builder);
 	JsonGenerator *generator = json_generator_new();
-	json_generator_set_root(generator, json_builder_get_root(builder));
+	JsonNode *json_root = json_builder_get_root(builder);
+	json_generator_set_root(generator, json_root);
 	gchar *result = json_generator_to_data(generator, NULL);
+	json_node_unref(json_root);
 	g_object_unref(generator);
 	g_object_unref(builder);
 	g_ptr_array_unref(ctx.strings);
