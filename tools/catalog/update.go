@@ -34,16 +34,29 @@ var tagPattern = regexp.MustCompile(`^(.+)-v(\d+\.\d+\.\d+)$`)
 // plugin, per the Controller ruling.
 const releasesCap = 5
 
+// defaultRepo is the publishing repository used when neither -repo nor
+// GITHUB_REPOSITORY names one.
+const defaultRepo = "Nomadcxx/sysc-plugins"
+
+// repoSlugPattern accepts GitHub owner/name slugs, including dots and
+// underscores in the name.
+var repoSlugPattern = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
+
 func runUpdate(args []string) error {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	tag := fs.String("tag", "", "release tag, <dir>-v<version>")
 	dist := fs.String("dist", "", "directory holding the built release archives")
+	repoFlag := fs.String("repo", "", "publishing repository as owner/name (default $GITHUB_REPOSITORY, then "+defaultRepo+")")
 	nowFlag := fs.String("now", "", "RFC3339 timestamp to use instead of the current time")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *tag == "" || *dist == "" {
 		return fmt.Errorf("update: -tag and -dist are both required")
+	}
+	repo, err := resolveRepo(*repoFlag)
+	if err != nil {
+		return fmt.Errorf("update: %w", err)
 	}
 	now := time.Now().UTC()
 	if *nowFlag != "" {
@@ -57,14 +70,30 @@ func runUpdate(args []string) error {
 	if err != nil {
 		return err
 	}
-	return updateCatalog(repoRoot, *tag, *dist, now)
+	return updateCatalog(repoRoot, repo, *tag, *dist, now)
+}
+
+// resolveRepo picks the publishing repository: the -repo flag, the
+// GITHUB_REPOSITORY Actions environment, then defaultRepo.
+func resolveRepo(flagValue string) (string, error) {
+	repo := flagValue
+	if repo == "" {
+		repo = os.Getenv("GITHUB_REPOSITORY")
+	}
+	if repo == "" {
+		repo = defaultRepo
+	}
+	if !repoSlugPattern.MatchString(repo) {
+		return "", fmt.Errorf("repo %q is not <owner>/<name>", repo)
+	}
+	return repo, nil
 }
 
 // updateCatalog rewrites catalog.json for one tagged release: it resolves
 // the release's assets from dist, merges the row into the existing catalog
 // (creating one if this is the plugin's first release), and writes the
 // result back sorted by id.
-func updateCatalog(repoRoot, tag, dist string, now time.Time) error {
+func updateCatalog(repoRoot, repo, tag, dist string, now time.Time) error {
 	m := tagPattern.FindStringSubmatch(tag)
 	if m == nil {
 		return fmt.Errorf("update: tag %q is not <dir>-v<version>", tag)
@@ -86,11 +115,11 @@ func updateCatalog(repoRoot, tag, dist string, now time.Time) error {
 		return fmt.Errorf("update: %w", err)
 	}
 
-	assets, err := scanAssets(dist, manifest.ID, manifest.Version, tag)
+	assets, err := scanAssets(dist, manifest.ID, manifest.Version, repo, tag)
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
 	}
-	readme, err := readPluginReadme(pluginDir, tag)
+	readme, err := readPluginReadme(repo, pluginDir, tag)
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
 	}
@@ -120,7 +149,7 @@ func updateCatalog(repoRoot, tag, dist string, now time.Time) error {
 		Capabilities: manifest.Capabilities,
 		Requires:     catalog.Requires{Commands: manifest.Requires.Commands},
 		Assets:       assets,
-		ReleaseNotes: fmt.Sprintf("https://github.com/Nomadcxx/sysc-plugins/releases/tag/%s", tag),
+		ReleaseNotes: fmt.Sprintf("https://github.com/%s/releases/tag/%s", repo, tag),
 	}
 
 	var existing *catalog.Entry
@@ -252,8 +281,8 @@ var catalogHTTPClient = &http.Client{Timeout: 45 * time.Second}
 // readPluginReadme returns a tag-pinned URL and hash for the plugin README,
 // when the tagged tree includes one. The hash and presence both come from
 // the tagged URL, so the catalog describes what shipped.
-func readPluginReadme(pluginDir, tag string) (*catalog.Screenshot, error) {
-	url := fmt.Sprintf("%s/Nomadcxx/sysc-plugins/%s/plugins/%s/README.md", taggedFileBaseURL, tag, pluginDir)
+func readPluginReadme(repo, pluginDir, tag string) (*catalog.Screenshot, error) {
+	url := fmt.Sprintf("%s/%s/%s/plugins/%s/README.md", taggedFileBaseURL, repo, tag, pluginDir)
 	resp, err := catalogHTTPClient.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("readme: %w", err)
@@ -277,9 +306,9 @@ func readPluginReadme(pluginDir, tag string) (*catalog.Screenshot, error) {
 }
 
 // readTaggedManifestURL fetches the manifest from the published release tag.
-func readTaggedManifestURL(pluginDir, version, id string) (pluginManifest, error) {
+func readTaggedManifestURL(repo, pluginDir, version, id string) (pluginManifest, error) {
 	tag := pluginDir + "-v" + version
-	url := fmt.Sprintf("%s/Nomadcxx/sysc-plugins/%s/plugins/%s/manifest.json", taggedFileBaseURL, tag, pluginDir)
+	url := fmt.Sprintf("%s/%s/%s/plugins/%s/manifest.json", taggedFileBaseURL, repo, tag, pluginDir)
 	resp, err := catalogHTTPClient.Get(url)
 	if err != nil {
 		return pluginManifest{}, fmt.Errorf("manifest %s: %w", url, err)
@@ -409,7 +438,7 @@ func checkMetaCategories(metaAll map[string]catalogMeta) error {
 // scanAssets finds <id>-<version>-linux-<arch>.tar.gz files in dist and
 // returns them keyed "linux-<arch>", with the download URL Global
 // Constraints define, the file's size, and its sha256.
-func scanAssets(dist, id, version, tag string) (map[string]catalog.Asset, error) {
+func scanAssets(dist, id, version, repo, tag string) (map[string]catalog.Asset, error) {
 	pattern := filepath.Join(dist, fmt.Sprintf("%s-%s-linux-*.tar.gz", id, version))
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
@@ -428,7 +457,7 @@ func scanAssets(dist, id, version, tag string) (map[string]catalog.Asset, error)
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 		assets["linux-"+arch] = catalog.Asset{
-			URL:    fmt.Sprintf("https://github.com/Nomadcxx/sysc-plugins/releases/download/%s/%s", tag, base),
+			URL:    fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", repo, tag, base),
 			SHA256: sum,
 			Size:   size,
 		}

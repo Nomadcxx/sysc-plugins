@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,10 +114,16 @@ func validateEntry(e catalog.Entry, metaAll map[string]catalogMeta, dirsByID map
 		}
 		seen[r.Version], prev = true, r.Version
 	}
+
+	repo, err := repoFromAssets(dir, e)
+	if err != nil {
+		return err
+	}
 	// The working tree can contain edits made after the release. Always check
 	// the immutable tag so coordinated edits to the checkout and catalog cannot
-	// make unpublished metadata appear valid.
-	tagged, err := readTaggedManifestURL(dir, e.Release.Version, e.ID)
+	// make unpublished metadata appear valid. The tag is read from the
+	// repository the row's assets come from, not from our own environment.
+	tagged, err := readTaggedManifestURL(repo, dir, e.Release.Version, e.ID)
 	if err != nil {
 		return fmt.Errorf("cannot check tagged release manifest: %w", err)
 	}
@@ -128,6 +135,37 @@ func validateEntry(e catalog.Entry, metaAll map[string]catalogMeta, dirsByID map
 		return fmt.Errorf("no screenshot; required for the community catalog")
 	}
 	return nil
+}
+
+// repoFromAssets derives the repository a row's assets come from. GitHub
+// asset URLs must be release downloads for <dir>-v<version> in one
+// repository; the loopback URLs the schema admits for tests carry no
+// repository, so a row without a GitHub asset falls back to defaultRepo.
+func repoFromAssets(dir string, e catalog.Entry) (string, error) {
+	wantTag := dir + "-v" + e.Release.Version
+	repo := ""
+	for arch, a := range e.Assets {
+		u, err := url.Parse(a.URL)
+		if err != nil {
+			return "", fmt.Errorf("asset %s: %w", arch, err)
+		}
+		if u.Host != "github.com" {
+			continue
+		}
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) != 6 || parts[2] != "releases" || parts[3] != "download" || parts[4] != wantTag {
+			return "", fmt.Errorf("asset %s: %s is not a GitHub release download for %s", arch, a.URL, wantTag)
+		}
+		if r := parts[0] + "/" + parts[1]; repo == "" {
+			repo = r
+		} else if r != repo {
+			return "", fmt.Errorf("asset %s: %s names repository %s, other assets name %s", arch, a.URL, r, repo)
+		}
+	}
+	if repo == "" {
+		repo = defaultRepo
+	}
+	return repo, nil
 }
 
 func manifestMismatches(m pluginManifest, e catalog.Entry) []string {

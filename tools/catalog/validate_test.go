@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,7 +29,7 @@ func buildValidatingRepo(t *testing.T) string {
 	withTaggedContentServer(t, manifest)
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
-	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
 		t.Fatalf("seed updateCatalog: %v", err)
 	}
 	return root
@@ -165,7 +166,7 @@ func TestValidateCommunityPassesWithScreenshot(t *testing.T) {
 	}`)
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
-	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,7 +191,7 @@ func TestValidateFetchCatchesSHAMismatch(t *testing.T) {
 	// -edit the catalog row's asset URL and sha to point at the httptest
 	// server with a WRONG sha256, so -fetch must catch the mismatch.
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
-	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,7 +222,7 @@ func TestValidateFetchPassesOnMatch(t *testing.T) {
 	withRepoTaggedManifest(t, root, "timer")
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
-	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	rewriteCatalogAssetURL(t, root, srv.URL+"/asset.tar.gz", correctSHA)
@@ -356,5 +357,56 @@ func TestValidateRejectsDuplicateReleaseVersions(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "repeats version") {
 		t.Fatalf("expected the duplicate failure, got: %s", out.String())
+	}
+}
+
+// recordTaggedManifestRequests serves the working-tree manifest for tag
+// lookups and records the path of the last one.
+func recordTaggedManifestRequests(t *testing.T, root string) *string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "plugins", "timer", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := new(string)
+	oldURL, oldTransport := taggedFileBaseURL, catalogHTTPClient.Transport
+	taggedFileBaseURL = "https://catalog-test.invalid"
+	catalogHTTPClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "catalog-test.invalid" {
+			return http.DefaultTransport.RoundTrip(r)
+		}
+		*got = r.URL.Path
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: http.StatusText(http.StatusOK),
+			Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(data)), Request: r,
+		}, nil
+	})
+	t.Cleanup(func() { taggedFileBaseURL, catalogHTTPClient.Transport = oldURL, oldTransport })
+	return got
+}
+
+func TestValidateFetchesTaggedManifestFromRowRepo(t *testing.T) {
+	root := buildValidatingRepo(t)
+	rewriteCatalogAssetURL(t, root, "https://github.com/acme/plugins/releases/download/timer-v1.0.0/org.sysc.timer-1.0.0-linux-amd64.tar.gz", strings.Repeat("0", 64))
+	got := recordTaggedManifestRequests(t, root)
+	var out bytes.Buffer
+	if err := validateCatalog(root, false, false, &out); err != nil {
+		t.Fatalf("validateCatalog: %v (output: %s)", err, out.String())
+	}
+	if want := "/acme/plugins/timer-v1.0.0/plugins/timer/manifest.json"; *got != want {
+		t.Fatalf("tagged manifest path = %q, want %q", *got, want)
+	}
+}
+
+func TestValidateRejectsAssetURLForOtherTag(t *testing.T) {
+	root := buildValidatingRepo(t)
+	rewriteCatalogAssetURL(t, root, "https://github.com/Nomadcxx/sysc-plugins/releases/download/timer-v9.9.9/org.sysc.timer-9.9.9-linux-amd64.tar.gz", strings.Repeat("0", 64))
+	var out bytes.Buffer
+	err := validateCatalog(root, false, false, &out)
+	if err == nil {
+		t.Fatalf("expected validation to reject an asset for another tag, output: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "timer-v1.0.0") {
+		t.Fatalf("expected the failure to name the expected tag, got: %s", out.String())
 	}
 }

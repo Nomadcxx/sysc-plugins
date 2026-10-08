@@ -124,7 +124,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          go run ./tools/catalog update -tag "$tag" -dist dist
+          go run ./tools/catalog update -tag "$tag" -dist dist -repo "$GITHUB_REPOSITORY"
           go run ./tools/catalog validate -fetch
       - name: Open catalog PR
         env:

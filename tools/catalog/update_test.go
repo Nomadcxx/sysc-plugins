@@ -134,7 +134,7 @@ func TestUpdateCreatesFirstRow(t *testing.T) {
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
 
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	if err := updateCatalog(root, "timer-v1.0.0", dist, now); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, now); err != nil {
 		t.Fatalf("updateCatalog: %v", err)
 	}
 
@@ -210,7 +210,7 @@ func TestUpdatePinsReadmeWhenPresent(t *testing.T) {
 			base := withReadmeServer(t, tc.status, []byte(body))
 			dist := t.TempDir()
 			writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
-			if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+			if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
 				t.Fatalf("updateCatalog: %v", err)
 			}
 
@@ -255,7 +255,7 @@ func TestUpdatePinsReadmeFromTagNotWorkingTree(t *testing.T) {
 	writeFile(t, filepath.Join(root, "plugins", "timer", "README.md"), "# Timer\n\nWorking tree bytes, edited after the tag.\n")
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
-	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
 		t.Fatalf("updateCatalog: %v", err)
 	}
 
@@ -294,7 +294,7 @@ func TestUpdateUsesTaggedArchiveManifest(t *testing.T) {
 	tagged.Requires.Commands = []string{"moonbit"}
 	dist := t.TempDir()
 	writeDistArchiveWithManifest(t, dist, tagged.ID, tagged.Version, "amd64", tagged, "v1")
-	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
 		t.Fatalf("updateCatalog: %v", err)
 	}
 
@@ -318,7 +318,7 @@ func TestUpdateRejectsArchiveWithWrongExec(t *testing.T) {
 	wrongExec.Exec = "bin/sysc-plugin-other"
 	writeDistArchiveWithManifest(t, dist, wrongExec.ID, wrongExec.Version, "arm64", wrongExec, "wrong exec")
 
-	err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC())
+	err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC())
 	if err == nil || !strings.Contains(err.Error(), "manifest exec") {
 		t.Fatalf("expected wrong-Exec archive to fail, got %v", err)
 	}
@@ -340,7 +340,7 @@ func TestUpdateThenValidateUsesTaggedManifest(t *testing.T) {
 
 	dist := t.TempDir()
 	writeDistArchiveWithManifest(t, dist, tagged.ID, tagged.Version, "amd64", tagged, "v1")
-	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
 		t.Fatalf("updateCatalog: %v", err)
 	}
 
@@ -372,7 +372,7 @@ func TestCatalogHTTPRequestsHaveTimeout(t *testing.T) {
 	taggedFileBaseURL = srv.URL
 	t.Cleanup(func() { taggedFileBaseURL = oldBase })
 
-	if _, err := readPluginReadme("timer", "timer-v1.0.0"); err == nil {
+	if _, err := readPluginReadme(defaultRepo, "timer", "timer-v1.0.0"); err == nil {
 		t.Fatal("README fetch should time out")
 	}
 	sum := sha256.Sum256([]byte(body))
@@ -388,7 +388,7 @@ func TestUpdateRefusesInvalidMetaCategory(t *testing.T) {
 	}`)
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
-	err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC())
+	err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC())
 	if err == nil || !strings.Contains(err.Error(), "games") {
 		t.Fatalf("expected a category error naming games, got %v", err)
 	}
@@ -399,14 +399,14 @@ func TestUpdateMovesOldReleaseToFrontOfReleases(t *testing.T) {
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
 	added := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	if err := updateCatalog(root, "timer-v1.0.0", dist, added); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, added); err != nil {
 		t.Fatal(err)
 	}
 
 	bumpManifestVersion(t, root, "timer", "1.1.0")
 	writeDistArchive(t, dist, "org.sysc.timer", "1.1.0", "amd64", "v2")
 	updated := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-	if err := updateCatalog(root, "timer-v1.1.0", dist, updated); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.1.0", dist, updated); err != nil {
 		t.Fatal(err)
 	}
 
@@ -436,7 +436,7 @@ func TestUpdateCapsReleasesAtFive(t *testing.T) {
 		}
 		writeDistArchive(t, dist, "org.sysc.timer", v, "amd64", "content-"+v)
 		now := time.Date(2026, 1, i+1, 0, 0, 0, 0, time.UTC)
-		if err := updateCatalog(root, "timer-v"+v, dist, now); err != nil {
+		if err := updateCatalog(root, defaultRepo, "timer-v"+v, dist, now); err != nil {
 			t.Fatalf("update %s: %v", v, err)
 		}
 	}
@@ -461,14 +461,14 @@ func TestUpdateSameVersionReplacesRatherThanDuplicates(t *testing.T) {
 	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "first-build")
-	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	firstSHA := readCatalogFile(t, filepath.Join(root, "catalog.json"))
 
 	dist2 := t.TempDir()
 	writeDistArchive(t, dist2, "org.sysc.timer", "1.0.0", "amd64", "rebuilt-same-version")
-	if err := updateCatalog(root, "timer-v1.0.0", dist2, time.Now().UTC()); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist2, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -495,7 +495,7 @@ func TestUpdateIgnoresWorkingTreeVersionForTag(t *testing.T) {
 	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.4.1")
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.timer", "1.4.0", "amd64", "v1")
-	if err := updateCatalog(root, "timer-v1.4.0", dist, time.Now().UTC()); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.4.0", dist, time.Now().UTC()); err != nil {
 		t.Fatalf("updateCatalog: main is at 1.4.1 and the tag is 1.4.0: %v", err)
 	}
 	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
@@ -510,7 +510,7 @@ func TestUpdateRefusesArchiveVersionDisagreeingWithTag(t *testing.T) {
 	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
 	dist := t.TempDir()
 	writeDistArchiveWithManifest(t, dist, "org.sysc.timer", "9.9.9", "amd64", archiveManifest("org.sysc.timer", "1.0.0"), "v1")
-	err := updateCatalog(root, "timer-v9.9.9", dist, time.Now().UTC())
+	err := updateCatalog(root, defaultRepo, "timer-v9.9.9", dist, time.Now().UTC())
 	if err == nil {
 		t.Fatal("expected an error when the archive manifest version disagrees with the tag")
 	}
@@ -521,7 +521,7 @@ func TestUpdateRefusesArchiveVersionDisagreeingWithTag(t *testing.T) {
 
 func TestUpdateRefusesUnparsableTag(t *testing.T) {
 	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
-	err := updateCatalog(root, "not-a-tag", t.TempDir(), time.Now().UTC())
+	err := updateCatalog(root, defaultRepo, "not-a-tag", t.TempDir(), time.Now().UTC())
 	if err == nil {
 		t.Fatal("expected an error for a tag that is not <dir>-v<version>")
 	}
@@ -533,7 +533,7 @@ func TestUpdateRefusesMissingCatalogMetaEntry(t *testing.T) {
 	writeFile(t, filepath.Join(root, catalogMetaFile), "{}")
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
-	if err := updateCatalog(root, "timer-v1.0.0", dist, time.Now().UTC()); err == nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Now().UTC()); err == nil {
 		t.Fatal("expected an error when catalog-meta.json has no entry for the plugin")
 	}
 }
@@ -557,11 +557,11 @@ func TestUpdateSortsCatalogByID(t *testing.T) {
 	}`)
 	dist := t.TempDir()
 	writeDistArchive(t, dist, "org.sysc.world-clock", "1.0.0", "amd64", "a")
-	if err := updateCatalog(root, "world-clock-v1.0.0", dist, time.Now().UTC()); err != nil {
+	if err := updateCatalog(root, defaultRepo, "world-clock-v1.0.0", dist, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	writeDistArchive(t, dist, "org.sysc.aiusage", "1.0.0", "amd64", "b")
-	if err := updateCatalog(root, "aiusage-v1.0.0", dist, time.Now().UTC()); err != nil {
+	if err := updateCatalog(root, defaultRepo, "aiusage-v1.0.0", dist, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -592,7 +592,7 @@ func TestUpdateIdenticalRerunIsNoOp(t *testing.T) {
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "same")
 
 	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	if err := updateCatalog(root, "timer-v1.0.0", dist, first); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, first); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "catalog.json")
@@ -602,7 +602,7 @@ func TestUpdateIdenticalRerunIsNoOp(t *testing.T) {
 	}
 
 	second := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	if err := updateCatalog(root, "timer-v1.0.0", dist, second); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, second); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(path)
@@ -626,7 +626,7 @@ func TestUpdateRerunWithNewAssetBumpsUpdatedAt(t *testing.T) {
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "first-build")
 
 	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	if err := updateCatalog(root, "timer-v1.0.0", dist, first); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, first); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "catalog.json")
@@ -634,7 +634,7 @@ func TestUpdateRerunWithNewAssetBumpsUpdatedAt(t *testing.T) {
 
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "rebuilt-same-version")
 	second := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	if err := updateCatalog(root, "timer-v1.0.0", dist, second); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, second); err != nil {
 		t.Fatal(err)
 	}
 
@@ -656,7 +656,7 @@ func TestUpdateMetaChangeBumpsUpdatedAt(t *testing.T) {
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "same")
 
 	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	if err := updateCatalog(root, "timer-v1.0.0", dist, first); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, first); err != nil {
 		t.Fatal(err)
 	}
 
@@ -666,7 +666,7 @@ func TestUpdateMetaChangeBumpsUpdatedAt(t *testing.T) {
 		     "long_description": "Now with a richer description."}
 	}`)
 	second := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	if err := updateCatalog(root, "timer-v1.0.0", dist, second); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, second); err != nil {
 		t.Fatal(err)
 	}
 
@@ -708,13 +708,13 @@ func TestUpdateOlderTagDoesNotReplaceTopLevel(t *testing.T) {
 	dist := t.TempDir()
 	for i, v := range []string{"1.0.0", "1.1.0"} {
 		writeDistArchive(t, dist, "org.sysc.timer", v, "amd64", "c-"+v)
-		if err := updateCatalog(root, "timer-v"+v, dist, time.Date(2026, 1, i+1, 0, 0, 0, 0, time.UTC)); err != nil {
+		if err := updateCatalog(root, defaultRepo, "timer-v"+v, dist, time.Date(2026, 1, i+1, 0, 0, 0, 0, time.UTC)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// A maintenance release on the older line must not demote the newest.
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.1", "amd64", "c-1.0.1")
-	if err := updateCatalog(root, "timer-v1.0.1", dist, time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC)); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.1", dist, time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
@@ -732,7 +732,7 @@ func TestUpdateOlderTagKeepsNewestListingFields(t *testing.T) {
 	dist := t.TempDir()
 	for i, v := range []string{"1.0.0", "1.1.0"} {
 		writeDistArchive(t, dist, "org.sysc.timer", v, "amd64", "c-"+v)
-		if err := updateCatalog(root, "timer-v"+v, dist, time.Date(2026, 2, i+1, 0, 0, 0, 0, time.UTC)); err != nil {
+		if err := updateCatalog(root, defaultRepo, "timer-v"+v, dist, time.Date(2026, 2, i+1, 0, 0, 0, 0, time.UTC)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -740,7 +740,7 @@ func TestUpdateOlderTagKeepsNewestListingFields(t *testing.T) {
 	old.Name = "Legacy Timer"
 	old.Description = "The old line."
 	writeDistArchiveWithManifest(t, dist, "org.sysc.timer", "1.0.1", "amd64", old, "c-1.0.1")
-	if err := updateCatalog(root, "timer-v1.0.1", dist, time.Date(2026, 2, 9, 0, 0, 0, 0, time.UTC)); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.1", dist, time.Date(2026, 2, 9, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
@@ -755,13 +755,13 @@ func TestUpdateRerunOfOlderTagReplacesInPlace(t *testing.T) {
 	dist := t.TempDir()
 	for i, v := range []string{"1.0.0", "1.1.0"} {
 		writeDistArchive(t, dist, "org.sysc.timer", v, "amd64", "c-"+v)
-		if err := updateCatalog(root, "timer-v"+v, dist, time.Date(2026, 3, i+1, 0, 0, 0, 0, time.UTC)); err != nil {
+		if err := updateCatalog(root, defaultRepo, "timer-v"+v, dist, time.Date(2026, 3, i+1, 0, 0, 0, 0, time.UTC)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	rerun := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
 	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "c-1.0.0-rebuilt")
-	if err := updateCatalog(root, "timer-v1.0.0", dist, rerun); err != nil {
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, rerun); err != nil {
 		t.Fatal(err)
 	}
 	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
@@ -779,7 +779,7 @@ func TestUpdateReleasesSortedNewestFirst(t *testing.T) {
 	dist := t.TempDir()
 	for i, v := range []string{"1.0.0", "1.2.0", "1.1.0"} {
 		writeDistArchive(t, dist, "org.sysc.timer", v, "amd64", "c-"+v)
-		if err := updateCatalog(root, "timer-v"+v, dist, time.Date(2026, 4, i+1, 0, 0, 0, 0, time.UTC)); err != nil {
+		if err := updateCatalog(root, defaultRepo, "timer-v"+v, dist, time.Date(2026, 4, i+1, 0, 0, 0, 0, time.UTC)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -789,5 +789,70 @@ func TestUpdateReleasesSortedNewestFirst(t *testing.T) {
 	}
 	if got := releaseVersions(e); !slices.Equal(got, []string{"1.1.0", "1.0.0"}) {
 		t.Fatalf("releases = %v, want [1.1.0 1.0.0]", got)
+	}
+}
+
+func TestUpdateUsesRepoForURLs(t *testing.T) {
+	var gotReadmePath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotReadmePath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("# Timer\n"))
+	}))
+	t.Cleanup(srv.Close)
+	old := taggedFileBaseURL
+	taggedFileBaseURL = srv.URL
+	t.Cleanup(func() { taggedFileBaseURL = old })
+
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
+	if err := updateCatalog(root, "acme/plugins", "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+		t.Fatalf("updateCatalog: %v", err)
+	}
+	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
+	a, ok := e.Assets["linux-amd64"]
+	if !ok {
+		t.Fatalf("missing linux-amd64 asset: %v", e.Assets)
+	}
+	const prefix = "https://github.com/acme/plugins/releases/download/timer-v1.0.0/"
+	if !strings.HasPrefix(a.URL, prefix) {
+		t.Fatalf("asset url = %q, want prefix %q", a.URL, prefix)
+	}
+	if e.ReleaseNotes != "https://github.com/acme/plugins/releases/tag/timer-v1.0.0" {
+		t.Fatalf("release_notes = %q", e.ReleaseNotes)
+	}
+	if want := "/acme/plugins/timer-v1.0.0/plugins/timer/README.md"; gotReadmePath != want {
+		t.Fatalf("readme path = %q, want %q", gotReadmePath, want)
+	}
+}
+
+func TestUpdateDefaultRepoUnchanged(t *testing.T) {
+	t.Setenv("GITHUB_REPOSITORY", "")
+	repo, err := resolveRepo("")
+	if err != nil || repo != defaultRepo {
+		t.Fatalf("resolveRepo() = %q, %v; want %q", repo, err, defaultRepo)
+	}
+	withReadmeServer(t, http.StatusNotFound, nil)
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
+	if err := updateCatalog(root, repo, "timer-v1.0.0", dist, time.Now().UTC()); err != nil {
+		t.Fatalf("updateCatalog: %v", err)
+	}
+	e := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
+	const want = "https://github.com/Nomadcxx/sysc-plugins/releases/download/timer-v1.0.0/"
+	if !strings.HasPrefix(e.Assets["linux-amd64"].URL, want) {
+		t.Fatalf("asset url = %q, want prefix %q", e.Assets["linux-amd64"].URL, want)
+	}
+	if e.ReleaseNotes != "https://github.com/Nomadcxx/sysc-plugins/releases/tag/timer-v1.0.0" {
+		t.Fatalf("release_notes = %q", e.ReleaseNotes)
+	}
+}
+
+func TestRunUpdateRejectsBadRepo(t *testing.T) {
+	err := runUpdate([]string{"-repo", "../x", "-tag", "timer-v1.0.0", "-dist", t.TempDir()})
+	if err == nil {
+		t.Fatal("expected runUpdate to reject a bad -repo")
 	}
 }
