@@ -144,6 +144,9 @@ func updateCatalog(repoRoot, tag, dist string, now time.Time) error {
 // release moves to the front of Releases (capped at releasesCap), unless the
 // new release is the same version being re-published, in which case it
 // replaces the old top-level release rather than duplicating it there.
+// A release older than the current top level only joins Releases, newest-first;
+// it never becomes the top-level release and never changes the listing fields
+// taken from the newest tag.
 func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.Time, meta catalogMeta, manifest pluginManifest, readme *catalog.Screenshot) catalog.Entry {
 	if existing == nil {
 		return catalog.Entry{
@@ -164,8 +167,12 @@ func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.
 	}
 
 	e := *existing
+	// An older tag never becomes the top-level release: it only joins
+	// Releases so hosts below the newest protocol can still install it,
+	// leaving the top-level release and its listing fields alone.
+	older := catalog.Newer(e.Release.Version, newRelease.Version)
 	releases := slices.Clone(e.Releases)
-	if e.Release.Version != newRelease.Version {
+	if !older && e.Release.Version != newRelease.Version {
 		releases = append([]catalog.Release{e.Release}, releases...)
 	}
 	filtered := releases[:0]
@@ -174,23 +181,42 @@ func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.
 			filtered = append(filtered, r)
 		}
 	}
-	if len(filtered) > releasesCap {
-		filtered = filtered[:releasesCap]
+	if older {
+		filtered = append(filtered, newRelease)
+	}
+	releases = filtered
+	// Newest-first, so ordering never depends on publish order.
+	slices.SortFunc(releases, func(a, b catalog.Release) int {
+		switch {
+		case catalog.Newer(a.Version, b.Version):
+			return -1
+		case catalog.Newer(b.Version, a.Version):
+			return 1
+		}
+		return 0
+	})
+	if len(releases) > releasesCap {
+		releases = releases[:releasesCap]
+		if !slices.ContainsFunc(releases, func(r catalog.Release) bool { return r.Version == newRelease.Version }) {
+			fmt.Fprintf(os.Stderr, "catalog: %s is older than the %d newest kept releases and will not appear in the row\n", newRelease.Version, releasesCap)
+		}
 	}
 
-	e.Releases = filtered
-	e.Release = newRelease
+	e.Releases = releases
 	e.UpdatedAt = now
 	// Listing fields are refreshed from the archive and catalog-meta.json on
 	// every update, so they never drift from what actually shipped.
-	e.Name = manifest.Name
-	e.Description = manifest.Description
+	if !older {
+		e.Release = newRelease
+		e.Name = manifest.Name
+		e.Description = manifest.Description
+		e.Readme = readme
+	}
 	e.Author = meta.Author
 	e.Category = meta.Category
 	e.License = meta.License
 	e.Homepage = meta.Homepage
 	e.LongDescription = meta.LongDescription
-	e.Readme = readme
 	if meta.Screenshot != nil {
 		e.Screenshot = meta.Screenshot.toCatalog()
 	}
