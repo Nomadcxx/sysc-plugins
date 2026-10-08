@@ -13,9 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	githubnotifications "github.com/Nomadcxx/sysc-plugins/plugins/github-notifications"
-	"github.com/Nomadcxx/sysc-shell/plugin/v1"
+	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 const (
@@ -77,7 +78,7 @@ func runPlugin(in io.Reader, out io.Writer, gh githubnotifications.GH, opener fu
 		}
 	}()
 
-	if reply, err := c.Call(ctx, v1.CallStateGet, v1.StateGetParams{Key: stateCacheKey}); err == nil && reply.OK {
+	if reply, err := hostcall.Call(ctx, c, v1.CallStateGet, v1.StateGetParams{Key: stateCacheKey}); err == nil && reply.OK {
 		var result v1.StateGetResult
 		if json.Unmarshal(reply.Result, &result) == nil && result.Found {
 			session.RestoreCache(result.Value)

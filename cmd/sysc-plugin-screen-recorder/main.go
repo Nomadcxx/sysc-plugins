@@ -8,8 +8,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
-	"github.com/Nomadcxx/sysc-plugins/plugins/screen-recorder"
+	recorder "github.com/Nomadcxx/sysc-plugins/plugins/screen-recorder"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -76,13 +77,13 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 		}
 		if last.Mode == recorder.Failed && last.Err != notified {
 			notified = last.Err
-			if _, err := c.Call(ctx, v1.CallNotify, v1.NotifyParams{Summary: "Screen Recorder", Body: notifyBody(last.Err, last.Logs), Urgency: v1.UrgencyNormal}); err != nil {
+			if _, err := hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "Screen Recorder", Body: notifyBody(last.Err, last.Logs), Urgency: v1.UrgencyNormal}); err != nil {
 				fmt.Fprintln(os.Stderr, "sysc-plugin-screen-recorder: notify:", err)
 			}
 		}
 		if last.Artifact != "" && last.Artifact != notified && last.Mode == recorder.Idle {
 			notified = last.Artifact
-			_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{Summary: "Recording saved", Body: last.Artifact, Urgency: v1.UrgencyNormal})
+			_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "Recording saved", Body: last.Artifact, Urgency: v1.UrgencyNormal})
 		}
 		saveOwnership(ctx, c, rec)
 	}
@@ -121,7 +122,7 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 			case *v1.InputEvent:
 				output := m.Output
 				if output == "" {
-					reply, err := c.Call(ctx, v1.CallOutputContext, v1.OutputContextParams{Generation: m.Generation})
+					reply, err := hostcall.Call(ctx, c, v1.CallOutputContext, v1.OutputContextParams{Generation: m.Generation})
 					if err == nil && reply.OK {
 						var got v1.OutputContextResult
 						_ = json.Unmarshal(reply.Result, &got)
@@ -130,7 +131,7 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 				}
 				open, record, stop, replay, save := recorder.HandleInput(m, last.Mode)
 				if open {
-					_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: output, Instance: m.ViewID})
+					_, _ = hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: output, Instance: m.ViewID})
 				}
 				if record || stop {
 					rec.ToggleRecord(output)
@@ -167,7 +168,7 @@ func notifyBody(errText, logs string) string {
 }
 
 func restore(ctx context.Context, c *v1.Client, rec *recorder.Recorder) {
-	reply, err := c.Call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "ownership"})
+	reply, err := hostcall.Call(ctx, c, v1.CallStateGet, v1.StateGetParams{Key: "ownership"})
 	if err != nil || !reply.OK {
 		return
 	}
@@ -185,5 +186,5 @@ func restore(ctx context.Context, c *v1.Client, rec *recorder.Recorder) {
 func saveOwnership(ctx context.Context, c *v1.Client, rec *recorder.Recorder) {
 	own := rec.Ownership()
 	raw, _ := json.Marshal(own)
-	_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "ownership", Value: raw})
+	_, _ = hostcall.Call(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "ownership", Value: raw})
 }

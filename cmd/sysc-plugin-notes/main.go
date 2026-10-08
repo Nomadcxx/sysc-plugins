@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	"github.com/Nomadcxx/sysc-plugins/plugins/notes"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -406,7 +407,7 @@ func handlePanel(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.I
 	sel := snap.Selected
 	switch {
 	case m.Node == "open":
-		_, err := c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
+		_, err := hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
 		fail(err)
 	case m.Node == "omnibox" && m.Event == v1.EventSubmit:
 		failName(sess.SubmitQuery())
@@ -706,7 +707,7 @@ func setState(ctx context.Context, c *v1.Client, key string, value any) error {
 }
 
 func call(ctx context.Context, c *v1.Client, kind v1.CallKind, params, result any) error {
-	reply, err := c.Call(ctx, kind, params)
+	reply, err := hostcall.Call(ctx, c, kind, params)
 	if err != nil {
 		return err
 	}

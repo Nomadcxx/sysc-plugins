@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	minidocker "github.com/Nomadcxx/sysc-plugins/plugins/mini-docker"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -239,7 +240,7 @@ func run(in *os.File, out *os.File) error {
 				switch {
 				case msg.Node == "open" && current.kind == v1.ViewBar:
 					sendMu.Lock()
-					_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{
+					_, _ = hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{
 						Entry: "panel", Output: msg.Output, Generation: msg.Generation, Instance: current.instance,
 					})
 					sendMu.Unlock()
