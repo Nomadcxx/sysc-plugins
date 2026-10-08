@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	"github.com/Nomadcxx/sysc-plugins/plugins/aiusage"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -153,10 +154,10 @@ func run(in, out *os.File) error {
 				if n.Critical {
 					urgency = v1.UrgencyCritical
 				}
-				_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{Summary: n.Summary, Body: n.Body, Urgency: urgency})
+				_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: n.Summary, Body: n.Body, Urgency: urgency})
 			}
 			if raw, err := json.Marshal(ledger); err == nil {
-				_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "alerts", Value: raw})
+				_, _ = hostcall.Call(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "alerts", Value: raw})
 			}
 		}
 		publish()
@@ -239,7 +240,7 @@ func run(in, out *os.File) error {
 				}
 				switch {
 				case m.Node == "open":
-					_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+					_, _ = hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 				case m.Node == "settings" || m.Node == "back":
 					source := views[m.ViewID]
 					switchErr := switchPanel(ctx, c.Call, m.Node, v1.PanelParams{
@@ -263,12 +264,12 @@ func run(in, out *os.File) error {
 					round(true)
 				case m.Node == "export":
 					if path, err := loop.ExportCSV(""); err == nil {
-						_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{
+						_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{
 							Summary: "Usage history exported",
 							Body:    path,
 						})
 					} else {
-						_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{
+						_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{
 							Summary: "Export failed", Body: err.Error(), Urgency: v1.UrgencyCritical})
 					}
 				case strings.HasPrefix(m.Node, "peak:"):

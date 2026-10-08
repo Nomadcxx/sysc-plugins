@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	"github.com/Nomadcxx/sysc-plugins/plugins/kdeconnect"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -280,5 +282,98 @@ func TestPairingCardButtonsRouteToTheirOwnAction(t *testing.T) {
 	// not become a pairing request aimed at a device named "cancel".
 	if got, ok := pairingAction("pair-cancel", "dev1"); ok {
 		t.Errorf("pairingAction(%q) = {%v %q}, want no action", "pair-cancel", got.Kind, got.DeviceID)
+	}
+}
+
+func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
+	orig := hostcall.Default
+	hostcall.Default = 400 * time.Millisecond
+	defer func() { hostcall.Default = orig }()
+
+	toPluginR, hostOutW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostInR, pluginOutW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer toPluginR.Close()
+	defer hostOutW.Close()
+	defer hostInR.Close()
+	defer pluginOutW.Close()
+
+	go func() { _ = run(toPluginR, pluginOutW) }()
+
+	var sendMu sync.Mutex
+	send := func(m v1.Message) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		return v1.NewEncoder(hostOutW).Encode(m)
+	}
+
+	held := make(chan struct{}, 1)
+	snapshotted := make(chan struct{}, 1)
+	go func() {
+		dec := v1.NewDecoder(hostInR, v1.ToHost)
+		for {
+			m, err := dec.Decode()
+			if err != nil {
+				return
+			}
+			switch msg := m.(type) {
+			case *v1.HostCall:
+				if msg.Call == v1.CallPanelOpen {
+					select {
+					case held <- struct{}{}:
+					default:
+					}
+					continue
+				}
+				var result json.RawMessage
+				if msg.Call == v1.CallStateGet {
+					result, _ = json.Marshal(v1.StateGetResult{Found: false})
+				}
+				_ = send(&v1.HostReply{ID: msg.ID, OK: true, Result: result})
+			case *v1.ViewSnapshot:
+				if msg.ViewID == "bar-after" {
+					select {
+					case snapshotted <- struct{}{}:
+					default:
+					}
+				}
+			}
+		}
+	}()
+
+	hello := &v1.HostHello{
+		Supported:    []v1.Version{{Major: v1.ProtocolMajor, Minor: v1.ProtocolMinor}},
+		Plugin:       v1.Identity{ID: "org.sysc.kdeconnect", Name: "Phone Connect", Version: "0.1.0"},
+		Capabilities: []string{"notifications", "panels", "settings", "state"},
+		Limits:       v1.DefaultLimits,
+	}
+	if err := send(hello); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+	if err := send(&v1.InputEvent{ViewID: "panel", Node: "open", Event: v1.EventActivate}); err != nil {
+		t.Fatalf("send open: %v", err)
+	}
+	select {
+	case <-held:
+	case <-time.After(3 * time.Second):
+		t.Fatal("plugin never reached the panel.open call")
+	}
+
+	go func() {
+		for i := 0; i < 10; i++ {
+			_ = send(&v1.InputEvent{Node: "sms-body", Event: v1.EventChange})
+		}
+		_ = send(&v1.ViewOpen{ViewID: "bar-after", View: v1.ViewBar, Width: 200})
+	}()
+
+	select {
+	case <-snapshotted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("plugin is wedged: it never rendered the view opened after the input burst")
 	}
 }

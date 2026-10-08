@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	"github.com/Nomadcxx/sysc-plugins/plugins/kdeconnect"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -159,7 +160,7 @@ func run(in *os.File, out *os.File) error {
 				if node, ok := composerFocus(prev, ui.composer); ok {
 					// Best-effort: the composer can close before the host
 					// answers, and a gone node refuses the focus.
-					_, _ = c.Call(ctx, v1.CallViewFocus, v1.ViewFocusParams{View: m.ViewID, Node: node})
+					_, _ = hostcall.Call(ctx, c, v1.CallViewFocus, v1.ViewFocusParams{View: m.ViewID, Node: node})
 				}
 			case *v1.SettingsChanged:
 				settings = settingsFrom(m.Values)
@@ -168,7 +169,7 @@ func run(in *os.File, out *os.File) error {
 			}
 		case e := <-svc.Events():
 			if params, ok := filesBrowseParams(e); ok {
-				if _, err := c.Call(ctx, v1.CallFilesBrowse, params); err != nil {
+				if _, err := hostcall.Call(ctx, c, v1.CallFilesBrowse, params); err != nil {
 					e.Err = err
 					e.Message = "Failed to open the file browser"
 					e.Detail = err.Error()
@@ -241,7 +242,7 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 		if m.Event != v1.EventActivate {
 			return false
 		}
-		_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+		_, _ = hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 	case m.Node == "device-switcher":
 		if m.Event != v1.EventActivate {
 			return false
@@ -434,7 +435,7 @@ func notify(ctx context.Context, c *v1.Client, e kdeconnect.Event) {
 	if e.Err != nil {
 		p.Urgency = v1.UrgencyCritical
 	}
-	_, _ = c.Call(ctx, v1.CallNotify, p)
+	_, _ = hostcall.Call(ctx, c, v1.CallNotify, p)
 }
 
 // filesBrowseParams is the host files.browse call a successful Files action
@@ -448,7 +449,7 @@ func filesBrowseParams(e kdeconnect.Event) (v1.FilesBrowseParams, bool) {
 
 // restoreSelection reads the saved device choice from the plugin state.
 func restoreSelection(ctx context.Context, c *v1.Client) string {
-	reply, err := c.Call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "selected_device_id"})
+	reply, err := hostcall.Call(ctx, c, v1.CallStateGet, v1.StateGetParams{Key: "selected_device_id"})
 	if err != nil || !reply.OK {
 		return ""
 	}
@@ -470,7 +471,7 @@ func saveSelection(ctx context.Context, c *v1.Client, id string) {
 	if err != nil {
 		return
 	}
-	_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "selected_device_id", Value: raw})
+	_, _ = hostcall.Call(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "selected_device_id", Value: raw})
 }
 
 func settingsFrom(values map[string]any) kdeconnect.Settings {

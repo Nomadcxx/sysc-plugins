@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	"github.com/Nomadcxx/sysc-plugins/plugins/timer"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -91,9 +92,9 @@ func runClock(in io.Reader, out io.Writer, now func() time.Time) error {
 				save(ctx, c, tm)
 				return
 			}
-			_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+			_, _ = hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 		case "close":
-			_, _ = c.Call(ctx, v1.CallPanelClose, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+			_, _ = hostcall.Call(ctx, c, v1.CallPanelClose, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 		case "start":
 			// The panel stays open. It carries the ring, the phase pills and
 			// the transport, so closing it on start takes the controls away
@@ -153,7 +154,7 @@ func runClock(in io.Reader, out io.Writer, now func() time.Time) error {
 				if playSound {
 					timer.Play(sound)
 				}
-				_, _ = c.Call(ctx, v1.CallNotify, v1.NotifyParams{Summary: "Pomodoro", Body: body, Urgency: v1.UrgencyNormal})
+				_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "Pomodoro", Body: body, Urgency: v1.UrgencyNormal})
 			}
 			if tm.Running() || done {
 				publish()
@@ -232,11 +233,11 @@ func save(ctx context.Context, c *v1.Client, tm *timer.Session) {
 	if err != nil {
 		return
 	}
-	_, _ = c.Call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "session", Value: raw})
+	_, _ = hostcall.Call(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "session", Value: raw})
 }
 
 func restore(ctx context.Context, c *v1.Client, tm *timer.Session) {
-	reply, err := c.Call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "session"})
+	reply, err := hostcall.Call(ctx, c, v1.CallStateGet, v1.StateGetParams{Key: "session"})
 	if err != nil || !reply.OK {
 		return
 	}
