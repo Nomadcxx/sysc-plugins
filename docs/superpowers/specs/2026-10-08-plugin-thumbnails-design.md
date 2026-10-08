@@ -140,7 +140,9 @@ data, not an empty or loading view.
 - `update` pins `plugins/<dir>/thumbnail.webp` at the release tag by raw URL and
   sha256, exactly as `readPluginReadme` does for the README, and writes it to
   the row's `screenshot`. A tagged tree without a thumbnail fails the update;
-  no row is written without one.
+  no row is written without one. The exception is a tag older than the row's
+  newest release (a backport): it only joins the row's `releases` and never
+  supplies the screenshot, so it needs no thumbnail.
 - `catalog-meta.json`'s `screenshot` field stays accepted as an override but is
   no longer how a thumbnail is normally recorded.
 - A new subcommand, `thumbnails -ref <commit>`, pins `screenshot` on existing
