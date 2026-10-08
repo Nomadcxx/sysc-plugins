@@ -124,12 +124,26 @@ func updateCatalog(repoRoot, repo, tag, dist string, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
 	}
-	thumb, found, err := fetchThumbnail(repo, tag, pluginDir)
+
+	catalogPath := filepath.Join(repoRoot, "catalog.json")
+	cat, err := decodeCatalogFile(catalogPath)
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
 	}
-	if !found {
-		return fmt.Errorf("update: %s has no plugins/%[2]s/thumbnail.webp; generate one with `go run ./tools/thumbnail -plugin plugins/%[2]s` and tag again (a backport tag from before thumbnails needs one too)", tag, pluginDir)
+
+	// A tag older than the row's newest release only joins its Releases list
+	// (see mergeRelease) and never supplies the screenshot, so a backport cut
+	// from before thumbnails existed does not need one. Any release that
+	// becomes the newest must ship one.
+	var thumb *catalog.Screenshot
+	if !isOlderRelease(cat, manifest.ID, manifest.Version) {
+		var found bool
+		if thumb, found, err = fetchThumbnail(repo, tag, pluginDir); err != nil {
+			return fmt.Errorf("update: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("update: %s has no plugins/%[2]s/thumbnail.webp; generate one with `go run ./tools/thumbnail -plugin plugins/%[2]s` and tag again", tag, pluginDir)
+		}
 	}
 
 	metaPath := filepath.Join(repoRoot, catalogMetaFile)
@@ -149,12 +163,6 @@ func updateCatalog(repoRoot, repo, tag, dist string, now time.Time) error {
 	screenshot := thumb
 	if meta.Screenshot != nil {
 		screenshot = meta.Screenshot.toCatalog()
-	}
-
-	catalogPath := filepath.Join(repoRoot, "catalog.json")
-	cat, err := decodeCatalogFile(catalogPath)
-	if err != nil {
-		return fmt.Errorf("update: %w", err)
 	}
 
 	newRelease := catalog.Release{
@@ -315,6 +323,18 @@ func readPluginReadme(repo, pluginDir, tag string) (*catalog.Screenshot, error) 
 	}
 	sum := sha256.Sum256(data)
 	return &catalog.Screenshot{URL: url, SHA256: hex.EncodeToString(sum[:])}, nil
+}
+
+// isOlderRelease reports whether the catalog already has a row for id whose
+// newest release is newer than version. mergeRelease treats such a release as
+// a backport: it joins the row's Releases and changes nothing else.
+func isOlderRelease(cat catalog.Catalog, id, version string) bool {
+	for _, e := range cat.Entries {
+		if e.ID == id {
+			return catalog.Newer(e.Release.Version, version)
+		}
+	}
+	return false
 }
 
 // fetchThumbnail returns a pin (URL and sha256) for the plugin's

@@ -8,6 +8,8 @@ import (
 	"image"
 	"math"
 	"strings"
+
+	"golang.org/x/image/font/opentype"
 )
 
 // Input is everything a thumbnail shows. Dir is the plugin directory name
@@ -58,10 +60,19 @@ func Render(in Input) (img *image.NRGBA, warnings []string, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	for _, field := range []struct{ label, text string }{
-		{"name", in.Name}, {"description", in.Description}, {"category", in.Category},
+	// Check each piece of text against the face it is drawn in: the name and
+	// description in Inter, everything else in the narrower monospace subset.
+	for _, field := range []struct {
+		label, text string
+		font        *opentype.Font
+	}{
+		{"name", in.Name, fs.interExtraBold},
+		{"description", in.Description, fs.interRegular},
+		{"category", strings.ToUpper(in.Category), fs.monoBold},
+		{"directory", in.Dir, fs.monoBold},
+		{"id", in.ID, fs.monoBold},
 	} {
-		if r, ok := missingRune(fs.interExtraBold, field.text); !ok {
+		if r, ok := missingRune(field.font, field.text); !ok {
 			return nil, nil, fmt.Errorf("thumbnail: %s %q has %q, which the embedded font does not cover", field.label, field.text, r)
 		}
 	}

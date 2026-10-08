@@ -179,3 +179,21 @@ func TestRenderWithoutDescriptionOrFeatureChips(t *testing.T) {
 		t.Fatalf("Render = %v, %v", warnings, err)
 	}
 }
+
+// The category, directory and id are drawn in the monospace face, whose
+// subset is narrower than Inter's: text it lacks must fail like any other.
+func TestMonospaceTextTheFontCannotDrawIsAnError(t *testing.T) {
+	for name, mutate := range map[string]func(*Input){
+		"category":  func(in *Input) { in.Category = "café" },
+		"directory": func(in *Input) { in.Dir = "ノート" },
+		"id":        func(in *Input) { in.ID = "org.sysc.ノート" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := notes()
+			mutate(&in)
+			if _, _, err := Render(in); err == nil || !strings.Contains(err.Error(), "does not cover") {
+				t.Fatalf("Render = %v, want a font coverage error", err)
+			}
+		})
+	}
+}

@@ -114,8 +114,14 @@ release does not make it stale. Changing any of those does: CI runs
 regenerate. `make thumbnails` runs the same check locally.
 
 `validate-manifests` fails a plugin that lacks either file, and `catalog
-update` refuses a release whose tagged tree has no valid thumbnail. Both files
-stay out of the install archive.
+update` refuses a release whose tagged tree has no valid thumbnail. A tag older
+than the row's newest release (a backport) is exempt, since its thumbnail would
+never be read. Both files stay out of the install archive.
+
+The output is lossless and compared byte for byte, so generate thumbnails on
+amd64, as CI does. Floating-point rounding can differ by a level on other
+architectures; if `-check` fails there with nothing changed, regenerate on
+amd64.
 
 Plugins listed in `tools/thumbnail/grandfathered.txt` predate this rule. The
 list only shrinks: a plugin leaves it in the PR that adds its two files, and a

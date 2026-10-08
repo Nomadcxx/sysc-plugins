@@ -932,3 +932,30 @@ func TestMetaScreenshotStillOverridesTheTaggedThumbnail(t *testing.T) {
 		t.Fatalf("screenshot = %+v, want the catalog-meta.json override", e.Screenshot)
 	}
 }
+
+// A tag older than the row's newest release only joins its Releases list and
+// never supplies the screenshot, so a backport cut from before thumbnails
+// existed must not need one.
+func TestUpdateOfAnOlderTagNeedsNoThumbnail(t *testing.T) {
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "2.0.0")
+	withReadmeServer(t, http.StatusNotFound, nil)
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "2.0.0", "amd64", "v2")
+	if err := updateCatalog(root, defaultRepo, "timer-v2.0.0", dist, time.Now().UTC()); err != nil {
+		t.Fatalf("newest release: %v", err)
+	}
+	before := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
+
+	withThumbnailResponse(t, http.StatusNotFound, nil)
+	writeDistArchive(t, dist, "org.sysc.timer", "1.9.1", "amd64", "v191")
+	if err := updateCatalog(root, defaultRepo, "timer-v1.9.1", dist, time.Now().UTC()); err != nil {
+		t.Fatalf("backport with no thumbnail: %v", err)
+	}
+	after := entryByID(t, readCatalogFile(t, filepath.Join(root, "catalog.json")), "org.sysc.timer")
+	if after.Version != "2.0.0" || len(after.Releases) != 1 || after.Releases[0].Version != "1.9.1" {
+		t.Errorf("row = version %s, releases %+v; want 2.0.0 with 1.9.1 listed", after.Version, after.Releases)
+	}
+	if before.Screenshot == nil || after.Screenshot == nil || *before.Screenshot != *after.Screenshot {
+		t.Errorf("screenshot changed: %+v -> %+v", before.Screenshot, after.Screenshot)
+	}
+}
