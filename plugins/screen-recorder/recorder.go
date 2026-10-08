@@ -46,7 +46,10 @@ type Options struct {
 	Scan     Scanner
 	Env      []string
 	StopWait time.Duration
-	Now      func() time.Time
+	// ReadyTimeout bounds the wait for the backend to announce readiness.
+	// Default 2s; raise it when the child is a spawned test binary under -race.
+	ReadyTimeout time.Duration
+	Now          func() time.Time
 }
 
 type command struct {
@@ -98,6 +101,9 @@ func New(cfg Config, opt Options) *Recorder {
 	}
 	if opt.StopWait <= 0 {
 		opt.StopWait = 2 * time.Second
+	}
+	if opt.ReadyTimeout <= 0 {
+		opt.ReadyTimeout = 2 * time.Second
 	}
 	r := &Recorder{
 		cfg:     cfg,
@@ -405,7 +411,7 @@ func (r *Recorder) remember() {
 }
 
 func (r *Recorder) waitReady(p *Proc) bool {
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(r.opt.ReadyTimeout)
 	var runningSince time.Time
 	for time.Now().Before(deadline) {
 		if containsReady(p.Logs()) {
