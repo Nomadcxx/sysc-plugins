@@ -12,7 +12,10 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
+	"syscall"
+	"time"
 )
 
 // HelperStatus is the parsed output of the helper's status/setup commands.
@@ -46,10 +49,28 @@ func (h Helper) Run(ctx context.Context, args ...string) (json.RawMessage, error
 	var stdout, stderr syncBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("%w: %s", err, stderr.String())
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err == syscall.ESRCH {
+			return os.ErrProcessDone
+		} else if err != nil {
+			return err
+		}
+		return nil
 	}
-	return json.RawMessage(stdout.String()), nil
+	cmd.WaitDelay = 2 * time.Second
+	if err := cmd.Run(); err != nil {
+		msg := stderr.String()
+		if len(msg) > 2048 {
+			msg = msg[len(msg)-2048:]
+		}
+		return nil, fmt.Errorf("%w: %s", err, msg)
+	}
+	out := strings.TrimSpace(stdout.String())
+	if i := strings.LastIndexByte(out, '\n'); i >= 0 {
+		out = out[i+1:]
+	}
+	return json.RawMessage(out), nil
 }
 
 type syncBuffer struct {
