@@ -359,9 +359,10 @@ func testOpts(behavior string) Options {
 		LookPath: func(string) (string, error) {
 			return os.Args[0], nil
 		},
-		Env:      append(os.Environ(), "SYSC_FAKE_RECORDER=1", "SYSC_FAKE_BEHAVIOR="+behavior),
-		StopWait: 250 * time.Millisecond,
-		Now:      func() time.Time { return time.Date(2026, 9, 2, 18, 0, 0, 0, time.UTC) },
+		Env:          append(os.Environ(), "SYSC_FAKE_RECORDER=1", "SYSC_FAKE_BEHAVIOR="+behavior),
+		StopWait:     250 * time.Millisecond,
+		ReadyTimeout: 10 * time.Second,
+		Now:          func() time.Time { return time.Date(2026, 9, 2, 18, 0, 0, 0, time.UTC) },
 	}
 }
 
@@ -376,7 +377,9 @@ func mustConfig(t *testing.T, values map[string]any) Config {
 
 func waitMode(t *testing.T, r *Recorder, want Mode) {
 	t.Helper()
-	deadline := time.Now().Add(4 * time.Second)
+	// Headroom for a loaded runner: > ReadyTimeout in testOpts, or a slow
+	// child spawn trips this deadline before waitReady ever returns.
+	deadline := time.Now().Add(15 * time.Second)
 	var last Mode
 	for time.Now().Before(deadline) {
 		last = r.Snapshot().Mode

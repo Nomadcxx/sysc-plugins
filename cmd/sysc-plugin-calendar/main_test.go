@@ -57,6 +57,10 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 	fixture := calendar.Event{ID: "0123456789abcdef0123456789abcdef", CalendarID: "work", Calendar: "Work", Summary: "Product review", Location: "Room 2", URL: "https://meet.example/room", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour)}
 	input, host := io.Pipe()
 	plugin, output := io.Pipe()
+
+	// The test body and the auto-reply goroutine below both write to host;
+	// io.Pipe allows only one writer at a time.
+	hostOut := &lockedWriter{w: host}
 	finished := make(chan error, 1)
 	go func() {
 		finished <- runPlugin(input, output, func() time.Time { return now }, func(_ context.Context, start, end time.Time) (calendar.EDSResult, error) {
@@ -90,7 +94,7 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 		}
 		close(lines)
 	}()
-	sendHostJSON(t, host, map[string]any{"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 8}}, "capabilities": []string{"panels", "state", "clipboard-write", "open-url"}})
+	sendHostJSON(t, hostOut, map[string]any{"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 8}}, "capabilities": []string{"panels", "state", "clipboard-write", "open-url"}})
 	if got := nextPluginLine(t, lines); messageType(got) != "plugin.hello" {
 		t.Fatalf("first plugin message = %s", got)
 	}
@@ -100,8 +104,8 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 		t.Fatalf("preference call = %s err=%v", stateCall, err)
 	}
 	result, _ := json.Marshal(v1.StateGetResult{Found: false})
-	sendHostJSON(t, host, v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: result})
-	sendHostJSON(t, host, v1.ViewOpen{Type: "view.open", ViewID: "calendar-panel", View: v1.ViewPanel, Entry: "panel", Width: calendar.PanelWidth, Height: calendar.PanelHeight})
+	sendHostJSON(t, hostOut, v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: result})
+	sendHostJSON(t, hostOut, v1.ViewOpen{Type: "view.open", ViewID: "calendar-panel", View: v1.ViewPanel, Entry: "panel", Width: calendar.PanelWidth, Height: calendar.PanelHeight})
 
 	// Snapshot publishes can land while the test reads; keep the LAST
 	// event-bearing snapshot so the input revision is never stale.
@@ -125,7 +129,7 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 	if err := v1.Validate(populated.Root, v1.ViewPanel); err != nil {
 		t.Fatalf("populated month tree: %v", err)
 	}
-	sendHostJSON(t, host, v1.InputEvent{Type: "input.event", ViewID: populated.ViewID, Revision: populated.Revision, Node: "cal-view-week", Event: v1.EventActivate})
+	sendHostJSON(t, hostOut, v1.InputEvent{Type: "input.event", ViewID: populated.ViewID, Revision: populated.Revision, Node: "cal-view-week", Event: v1.EventActivate})
 	var schedule v1.ViewSnapshot
 	for {
 		line := nextPluginLine(t, lines)
@@ -139,7 +143,7 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 	if err := v1.Validate(schedule.Root, v1.ViewPanel); err != nil {
 		t.Fatalf("week schedule tree: %v", err)
 	}
-	sendHostJSON(t, host, v1.InputEvent{Type: "input.event", ViewID: schedule.ViewID, Revision: schedule.Revision, Node: fixture.ID, Event: v1.EventActivate})
+	sendHostJSON(t, hostOut, v1.InputEvent{Type: "input.event", ViewID: schedule.ViewID, Revision: schedule.Revision, Node: fixture.ID, Event: v1.EventActivate})
 	var details v1.ViewSnapshot
 	for {
 		line := nextPluginLine(t, lines)
@@ -153,23 +157,23 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 		}
 	}
 
-	call = activateForHostCall(t, host, lines, details, "action-copy", v1.EventShortcut, v1.CallClipboardWrite)
+	call = activateForHostCall(t, hostOut, lines, details, "action-copy", v1.EventShortcut, v1.CallClipboardWrite)
 	var clipboard v1.ClipboardWriteParams
 	if err := json.Unmarshal(call.Params, &clipboard); err != nil || !strings.Contains(clipboard.Text, "Product review") || !strings.Contains(clipboard.Text, "Room 2") {
 		t.Fatalf("clipboard summary = %+v err=%v", clipboard, err)
 	}
-	sendHostJSON(t, host, v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: json.RawMessage(`{}`)})
+	sendHostJSON(t, hostOut, v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: json.RawMessage(`{}`)})
 	details = waitProcessSnapshot(t, lines, details.ViewID, "Event details copied")
 
-	call = activateForHostCall(t, host, lines, details, "action-join", v1.EventActivate, v1.CallOpenURL)
+	call = activateForHostCall(t, hostOut, lines, details, "action-join", v1.EventActivate, v1.CallOpenURL)
 	var meeting v1.OpenURLParams
 	if err := json.Unmarshal(call.Params, &meeting); err != nil || meeting.URL != fixture.URL {
 		t.Fatalf("meeting URL = %+v err=%v", meeting, err)
 	}
-	sendHostJSON(t, host, v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: json.RawMessage(`{}`)})
+	sendHostJSON(t, hostOut, v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: json.RawMessage(`{}`)})
 	_ = waitProcessSnapshot(t, lines, details.ViewID, "Opening meeting link")
 
-	sendHostJSON(t, host, v1.HostShutdown{Type: "host.shutdown"})
+	sendHostJSON(t, hostOut, v1.HostShutdown{Type: "host.shutdown"})
 	_ = host.Close()
 	_ = input.Close()
 	select {
