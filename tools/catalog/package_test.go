@@ -313,6 +313,27 @@ func TestCollectEntries(t *testing.T) {
 				"org.sysc.wallpaper-depth/bin/sysc-plugin-wallpaper-depth",
 			},
 		},
+		{
+			name: "catalog-only media",
+			id:   "org.sysc.notes",
+			files: []string{
+				"manifest.json",
+				"README.md",
+				"screenshot.png",
+				"thumbnail.webp",
+				"assets/screenshot.png",
+			},
+			wantIn: []string{
+				"org.sysc.notes/manifest.json",
+				"org.sysc.notes/README.md",
+				// Only the plugin root's two catalog files are excluded.
+				"org.sysc.notes/assets/screenshot.png",
+			},
+			wantOut: []string{
+				"org.sysc.notes/screenshot.png",
+				"org.sysc.notes/thumbnail.webp",
+			},
+		},
 	}
 
 	for _, tc := range cases {

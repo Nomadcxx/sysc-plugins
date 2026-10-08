@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/thumbnail"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -94,8 +95,17 @@ func main() {
 		fatal(fmt.Errorf("no plugin directories found under plugins/"))
 	}
 
-	seenIDs := map[string]string{}
+	grand, err := thumbnail.LoadGrandfathered("tools/thumbnail/grandfathered.txt")
+	if err != nil {
+		fatal(err)
+	}
 	failures := 0
+	if err := checkGrandfatheredExist(".", grand); err != nil {
+		fmt.Printf("FAIL tools/thumbnail/grandfathered.txt: %v\n", err)
+		failures++
+	}
+
+	seenIDs := map[string]string{}
 	for _, dir := range roots {
 		info, err := os.Stat(dir)
 		if err != nil || !info.IsDir() {
@@ -107,6 +117,10 @@ func main() {
 			failures++
 		} else {
 			fmt.Printf("ok   %s\n", path)
+		}
+		if err := checkThumbnail(dir, grand[filepath.Base(dir)]); err != nil {
+			fmt.Printf("FAIL %s: %v\n", dir, err)
+			failures++
 		}
 	}
 	if failures > 0 {
@@ -305,6 +319,52 @@ func isIdentChar(b byte) bool {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "validate-manifests:", err)
 	os.Exit(1)
+}
+
+// checkThumbnail enforces the catalog-thumbnail rule for one plugin
+// directory. A grandfathered plugin must have neither file yet, so the list
+// can only shrink; any other plugin must have a capture and a valid
+// thumbnail.
+func checkThumbnail(pluginDir string, grandfathered bool) error {
+	shot := filepath.Join(pluginDir, "screenshot.png")
+	thumb := filepath.Join(pluginDir, "thumbnail.webp")
+	regenerate := "go run ./tools/thumbnail -plugin plugins/" + filepath.Base(pluginDir)
+
+	if grandfathered {
+		for _, p := range []string{shot, thumb} {
+			if _, err := os.Stat(p); err == nil {
+				return fmt.Errorf("has %s but is still listed; remove it from tools/thumbnail/grandfathered.txt", filepath.Base(p))
+			}
+		}
+		return nil
+	}
+	if _, err := os.Stat(shot); err != nil {
+		return fmt.Errorf("missing screenshot.png; capture the plugin's panel (docs/publishing.md, \"Thumbnails\")")
+	}
+	data, err := os.ReadFile(thumb)
+	if err != nil {
+		return fmt.Errorf("missing thumbnail.webp; run: %s", regenerate)
+	}
+	if err := thumbnail.Validate(data); err != nil {
+		return fmt.Errorf("thumbnail.webp %w; regenerate with: %s", err, regenerate)
+	}
+	return nil
+}
+
+// checkGrandfatheredExist rejects a list entry that names no plugin, so a
+// typo cannot silently exempt nothing (or a plugin added later).
+func checkGrandfatheredExist(root string, grand map[string]bool) error {
+	names := make([]string, 0, len(grand))
+	for name := range grand {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, err := os.Stat(filepath.Join(root, "plugins", name, "manifest.json")); err != nil {
+			return fmt.Errorf("lists %q, which is not a plugin directory", name)
+		}
+	}
+	return nil
 }
 
 // validateSettings checks one settings list: keys unique and typed, and any

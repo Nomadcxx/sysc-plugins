@@ -28,7 +28,7 @@ ifeq ($(shell $(PKG_CONFIG) --exists $(CALENDAR_PC) 2>/dev/null && echo yes),)
 endif
 USER_PLUGIN_ROOT := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/sysc-shell/plugins
 
-.PHONY: build install link test vet fmt validate catalog-validate clean
+.PHONY: build install link test vet fmt validate thumbnails catalog-validate clean
 
 build:
 	@set -e; for entry in $(PLUGINS); do \
@@ -65,6 +65,9 @@ fmt:
 
 validate:
 	go run ./tools/validate-manifests
+
+thumbnails:
+	go run ./tools/thumbnail -check
 
 catalog-validate:
 	go run ./tools/catalog validate

@@ -1,11 +1,12 @@
 // Command catalog packages plugin release archives and maintains
 // catalog.json, the file sysc-shell's built-in "sysc" plugin source reads.
 //
-// It has three verbs:
+// It has four verbs:
 //
-//	catalog package  -plugin <dir> -arch <amd64|arm64> -out <dist>
-//	catalog update   -tag <dir>-v<version> -dist <dir> [-now RFC3339]
-//	catalog validate [-community] [-fetch]
+//	catalog package    -plugin <dir> -arch <amd64|arm64> -out <dist>
+//	catalog update     -tag <dir>-v<version> -dist <dir> [-now RFC3339]
+//	catalog validate   [-community] [-fetch]
+//	catalog thumbnails -ref <commit> [-repo owner/name] [-plugin <dir>]
 //
 // Every verb runs from the sysc-plugins repository root: paths like
 // plugins/<dir>, catalog.json and catalog-meta.json are read relative to the
@@ -33,6 +34,8 @@ func main() {
 		err = runUpdate(args)
 	case "validate":
 		err = runValidate(args)
+	case "thumbnails":
+		err = runThumbnails(args)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -53,5 +56,6 @@ func usage() {
 verbs:
   package  -plugin <dir> -arch <amd64|arm64> -out <dist>
   update   -tag <dir>-v<version> -dist <dir> [-now RFC3339]
-  validate [-community] [-fetch]`)
+  validate [-community] [-fetch]
+  thumbnails -ref <40-hex commit> [-repo owner/name] [-plugin <dir>]`)
 }

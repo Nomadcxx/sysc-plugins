@@ -19,6 +19,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/thumbnail"
 	"github.com/Nomadcxx/sysc-shell/plugin/catalog"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -124,6 +125,27 @@ func updateCatalog(repoRoot, repo, tag, dist string, now time.Time) error {
 		return fmt.Errorf("update: %w", err)
 	}
 
+	catalogPath := filepath.Join(repoRoot, "catalog.json")
+	cat, err := decodeCatalogFile(catalogPath)
+	if err != nil {
+		return fmt.Errorf("update: %w", err)
+	}
+
+	// A tag older than the row's newest release only joins its Releases list
+	// (see mergeRelease) and never supplies the screenshot, so a backport cut
+	// from before thumbnails existed does not need one. Any release that
+	// becomes the newest must ship one.
+	var thumb *catalog.Screenshot
+	if !isOlderRelease(cat, manifest.ID, manifest.Version) {
+		var found bool
+		if thumb, found, err = fetchThumbnail(repo, tag, pluginDir); err != nil {
+			return fmt.Errorf("update: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("update: %s has no plugins/%[2]s/thumbnail.webp; generate one with `go run ./tools/thumbnail -plugin plugins/%[2]s` and tag again", tag, pluginDir)
+		}
+	}
+
 	metaPath := filepath.Join(repoRoot, catalogMetaFile)
 	metaAll, err := readCatalogMeta(metaPath)
 	if err != nil {
@@ -136,11 +158,11 @@ func updateCatalog(repoRoot, repo, tag, dist string, now time.Time) error {
 	if !ok {
 		return fmt.Errorf("update: %s has no entry for %q", catalogMetaFile, manifest.ID)
 	}
-
-	catalogPath := filepath.Join(repoRoot, "catalog.json")
-	cat, err := decodeCatalogFile(catalogPath)
-	if err != nil {
-		return fmt.Errorf("update: %w", err)
+	// catalog-meta.json can still pin a screenshot by hand; otherwise the
+	// tagged thumbnail is the row's screenshot.
+	screenshot := thumb
+	if meta.Screenshot != nil {
+		screenshot = meta.Screenshot.toCatalog()
 	}
 
 	newRelease := catalog.Release{
@@ -162,7 +184,7 @@ func updateCatalog(repoRoot, repo, tag, dist string, now time.Time) error {
 		}
 		entries = append(entries, e)
 	}
-	entries = append(entries, mergeRelease(existing, newRelease, now, meta, manifest, readme))
+	entries = append(entries, mergeRelease(existing, newRelease, now, meta, manifest, readme, screenshot))
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 	return writeCatalog(catalogPath, entries)
@@ -176,7 +198,7 @@ func updateCatalog(repoRoot, repo, tag, dist string, now time.Time) error {
 // A release older than the current top level only joins Releases, newest-first;
 // it never becomes the top-level release and never changes the listing fields
 // taken from the newest tag.
-func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.Time, meta catalogMeta, manifest pluginManifest, readme *catalog.Screenshot) catalog.Entry {
+func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.Time, meta catalogMeta, manifest pluginManifest, readme, screenshot *catalog.Screenshot) catalog.Entry {
 	if existing == nil {
 		return catalog.Entry{
 			ID:              manifest.ID,
@@ -187,7 +209,7 @@ func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.
 			Category:        meta.Category,
 			License:         meta.License,
 			Homepage:        meta.Homepage,
-			Screenshot:      meta.Screenshot.toCatalog(),
+			Screenshot:      screenshot,
 			Readme:          readme,
 			AddedAt:         now,
 			UpdatedAt:       now,
@@ -240,15 +262,13 @@ func mergeRelease(existing *catalog.Entry, newRelease catalog.Release, now time.
 		e.Name = manifest.Name
 		e.Description = manifest.Description
 		e.Readme = readme
+		e.Screenshot = screenshot
 	}
 	e.Author = meta.Author
 	e.Category = meta.Category
 	e.License = meta.License
 	e.Homepage = meta.Homepage
 	e.LongDescription = meta.LongDescription
-	if meta.Screenshot != nil {
-		e.Screenshot = meta.Screenshot.toCatalog()
-	}
 	// A re-run of the same tag rebuilds the identical row. Keeping the
 	// original updated_at makes the file byte-identical, so the release
 	// workflow's "already up to date" shortcut fires instead of opening an
@@ -303,6 +323,46 @@ func readPluginReadme(repo, pluginDir, tag string) (*catalog.Screenshot, error) 
 	}
 	sum := sha256.Sum256(data)
 	return &catalog.Screenshot{URL: url, SHA256: hex.EncodeToString(sum[:])}, nil
+}
+
+// isOlderRelease reports whether the catalog already has a row for id whose
+// newest release is newer than version. mergeRelease treats such a release as
+// a backport: it joins the row's Releases and changes nothing else.
+func isOlderRelease(cat catalog.Catalog, id, version string) bool {
+	for _, e := range cat.Entries {
+		if e.ID == id {
+			return catalog.Newer(e.Release.Version, version)
+		}
+	}
+	return false
+}
+
+// fetchThumbnail returns a pin (URL and sha256) for the plugin's
+// thumbnail.webp at ref, after checking the bytes really are a thumbnail. ref
+// is a release tag for a release and a commit for a backfill. found is false
+// when ref has no thumbnail, which each caller decides how to treat.
+func fetchThumbnail(repo, ref, pluginDir string) (shot *catalog.Screenshot, found bool, err error) {
+	url := fmt.Sprintf("%s/%s/%s/plugins/%s/thumbnail.webp", taggedFileBaseURL, repo, ref, pluginDir)
+	resp, err := catalogHTTPClient.Get(url)
+	if err != nil {
+		return nil, false, fmt.Errorf("thumbnail: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("thumbnail %s: status %s", url, resp.Status)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, thumbnail.MaxBytes+1))
+	if err != nil {
+		return nil, false, fmt.Errorf("thumbnail %s: %w", url, err)
+	}
+	if err := thumbnail.Validate(data); err != nil {
+		return nil, false, fmt.Errorf("thumbnail %s %w", url, err)
+	}
+	sum := sha256.Sum256(data)
+	return &catalog.Screenshot{URL: url, SHA256: hex.EncodeToString(sum[:])}, true, nil
 }
 
 // readTaggedManifestURL fetches the manifest from the published release tag.

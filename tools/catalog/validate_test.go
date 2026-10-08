@@ -145,8 +145,35 @@ func TestValidateCatalogCatchesInvalidMetaCategory(t *testing.T) {
 	}
 }
 
+// stripScreenshots removes every row's screenshot from catalog.json, to model
+// a row that predates thumbnails or comes from a source that has none.
+// updateCatalog no longer produces such a row.
+func stripScreenshots(t *testing.T, root string) {
+	t.Helper()
+	path := filepath.Join(root, "catalog.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range doc["plugins"].([]any) {
+		delete(row.(map[string]any), "screenshot")
+	}
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateCommunityRequiresScreenshot(t *testing.T) {
 	root := buildValidatingRepo(t)
+	stripScreenshots(t, root)
 	var out bytes.Buffer
 	if err := validateCatalog(root, true, false, &out); err == nil {
 		t.Fatalf("expected -community to require a screenshot, output: %s", out.String())

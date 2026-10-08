@@ -271,7 +271,8 @@ func copyFile(w io.Writer, source io.Reader) error {
 // keyed by archive path under archiveRoot (the plugin id): directories and
 // regular files, minus *.go source, testdata/ and bin/ (the build's own
 // output directory, which the caller replaces with the freshly built
-// binary).
+// binary), and the plugin root's screenshot.png and thumbnail.webp, which are
+// catalog media for the store rather than part of the install.
 func collectEntries(pluginRoot, archiveRoot string) (map[string]tarEntry, error) {
 	entries := map[string]tarEntry{archiveRoot: {archivePath: archiveRoot, isDir: true}}
 	err := filepath.WalkDir(pluginRoot, func(p string, d fs.DirEntry, err error) error {
@@ -302,6 +303,11 @@ func collectEntries(pluginRoot, archiveRoot string) (map[string]tarEntry, error)
 			return nil
 		}
 		if filepath.Ext(name) == ".go" {
+			return nil
+		}
+		// Catalog media is for the store, not the install: the screenshot and
+		// thumbnail at the plugin root stay out of the archive.
+		if rel == "screenshot.png" || rel == "thumbnail.webp" {
 			return nil
 		}
 		if !info.Mode().IsRegular() {
