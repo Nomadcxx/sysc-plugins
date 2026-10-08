@@ -101,7 +101,9 @@ Any git repository can be a plugin source: sysc-shell's plugin store reads a
 `catalog.json` at the root of the default branch. To publish your own:
 
 1. Copy `tools/catalog` and `.github/workflows/release.yml` into your
-   repository.
+   repository. The tool writes URLs for the repository that published the
+   release: in Actions it takes that from `GITHUB_REPOSITORY`, and
+   `update -repo <owner>/<name>` sets it explicitly for local runs.
 2. Keep `catalog.json` at the root of the default branch — that's the one
    file the store actually reads. Everything else (`catalog-meta.json`, the
    workflow, this guide) is authoring machinery.
