@@ -4,7 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -172,3 +177,55 @@ func (barTestGH) Activity(context.Context, time.Time, time.Time) (githubnotifica
 
 func (barTestGH) MarkRead(context.Context, string) error { return nil }
 func (barTestGH) MarkAll(context.Context) error          { return nil }
+
+// fakeOpener replaces xdg-open with a script for openURL tests.
+func fakeOpener(t *testing.T, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "xdg-open"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestOpenURLDoesNotWaitForBrowser(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	fakeOpener(t, "#!/bin/sh\necho $$ > "+pidFile+"\nsleep 30\n")
+
+	start := time.Now()
+	err := openURL(context.Background(), "https://github.com/Nomadcxx/sysc-plugins/issues/1")
+	if err != nil {
+		t.Fatalf("opening with a browser that stays running: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("openURL waited %v for the opener", elapsed)
+	}
+
+	var pid int
+	deadline := time.Now().Add(time.Second)
+	for {
+		raw, err := os.ReadFile(pidFile)
+		if err == nil {
+			pid, err = strconv.Atoi(strings.TrimSpace(string(raw)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("opener never ran: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	defer syscall.Kill(-pid, syscall.SIGKILL)
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("opener was killed instead of detached: %v", err)
+	}
+}
+
+func TestOpenURLReportsImmediateOpenerFailure(t *testing.T) {
+	fakeOpener(t, "#!/bin/sh\nexit 3\n")
+	if err := openURL(context.Background(), "https://github.com/Nomadcxx/sysc-plugins/issues/1"); err == nil {
+		t.Fatal("an opener that fails immediately was reported as a successful open")
+	}
+}
