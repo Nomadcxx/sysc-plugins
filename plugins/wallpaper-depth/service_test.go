@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -486,4 +487,51 @@ func flagArg(args []string, flag string) string {
 		}
 	}
 	return ""
+}
+
+func writeHelperScript(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "helper.py")
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestHelperRunToleratesLeadingStdoutLines(t *testing.T) {
+	script := writeHelperScript(t, "print(\"Collecting six\")\nprint('{\"ready\": true, \"runtimeReady\": true, \"modelReady\": true}')\n")
+	h := Helper{ScriptPath: script, DataDir: t.TempDir()}
+	raw, err := h.Run(context.Background(), "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := parseHelperStatus(raw)
+	if err != nil {
+		t.Fatalf("setup output rejected: %v (raw %q)", err, raw)
+	}
+	if !status.Ready || !status.RuntimeReady {
+		t.Fatalf("status = %+v, want ready", status)
+	}
+}
+
+func TestControllerSetupSurvivesChildOutputOnStdout(t *testing.T) {
+	script := writeHelperScript(t, "print(\"Collecting six\")\nprint(\"Successfully installed six\")\nprint('{\"ready\": true, \"runtimeReady\": true, \"modelReady\": true}')\n")
+	c := NewController(context.Background(), Helper{ScriptPath: script, DataDir: t.TempDir()}, &fakeRegistrar{})
+	t.Cleanup(c.Close)
+	c.Setup()
+	waitSnapshot(t, c, func(s ControllerSnapshot) bool { return s.Helper.Ready && s.Error == "" })
+}
+
+func TestHelperRunCancellationKillsGrandchildren(t *testing.T) {
+	script := writeHelperScript(t, "import subprocess, time\nsubprocess.Popen([\"sleep\", \"30\"])\ntime.sleep(30)\n")
+	h := Helper{ScriptPath: script, DataDir: t.TempDir()}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := h.Run(ctx, "generate"); err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("Run took %v to return after cancellation, want under 3s", elapsed)
+	}
 }

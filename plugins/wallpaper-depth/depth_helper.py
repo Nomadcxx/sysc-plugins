@@ -127,6 +127,7 @@ def setup(data_dir: Path) -> None:
         subprocess.run(
             [sys.executable, "-m", "venv", "--clear", str(venv)],
             stdin=subprocess.DEVNULL,
+            stdout=sys.stderr,
             check=True,
         )
         subprocess.run(
@@ -142,6 +143,7 @@ def setup(data_dir: Path) -> None:
                 *PACKAGES,
             ],
             stdin=subprocess.DEVNULL,
+            stdout=sys.stderr,
             check=True,
         )
     if not verify_model(model_path(data_dir)):
