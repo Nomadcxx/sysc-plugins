@@ -142,10 +142,6 @@ amd64, as CI does. Floating-point rounding can differ by a level on other
 architectures; if `-check` fails there with nothing changed, regenerate on
 amd64.
 
-Plugins listed in `tools/thumbnail/grandfathered.txt` predate this rule. The
-list only shrinks: a plugin leaves it in the PR that adds its two files, and a
-new plugin is never added to it.
-
 For rows released before thumbnails existed, `go run ./tools/catalog
 thumbnails -ref <full commit hash>` points each row's `screenshot` at the
 thumbnail at that commit without a new version.
