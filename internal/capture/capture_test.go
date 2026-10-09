@@ -3,6 +3,7 @@ package capture
 import (
 	"encoding/json"
 	"image"
+	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -192,5 +193,28 @@ func TestCaptureIsOffUnlessAskedFor(t *testing.T) {
 	t.Setenv(envCapture, "1")
 	if !enabled() {
 		t.Error("capture is off for CAPTURE=1")
+	}
+}
+
+func TestGradientWritesADecodablePNGOfTheAskedSize(t *testing.T) {
+	path := Gradient(t, 40, 30, color.NRGBA{R: 200, A: 255}, color.NRGBA{B: 200, A: 255})
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := img.Bounds(); b.Dx() != 40 || b.Dy() != 30 {
+		t.Fatalf("size = %v, want 40x30", b)
+	}
+	topLeft, bottomRight := color.NRGBAModel.Convert(img.At(0, 0)).(color.NRGBA), color.NRGBAModel.Convert(img.At(39, 29)).(color.NRGBA)
+	if topLeft.R <= bottomRight.R || topLeft.B >= bottomRight.B {
+		t.Errorf("corners %v and %v do not run from the first colour to the second", topLeft, bottomRight)
+	}
+	if !strings.HasPrefix(path, os.TempDir()) {
+		t.Errorf("wrote %s outside the temp directory", path)
 	}
 }
