@@ -28,7 +28,7 @@ ifeq ($(shell $(PKG_CONFIG) --exists $(CALENDAR_PC) 2>/dev/null && echo yes),)
 endif
 USER_PLUGIN_ROOT := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/sysc-shell/plugins
 
-.PHONY: build install link test vet fmt validate thumbnails catalog-validate clean
+.PHONY: build install link test vet fmt validate thumbnails capture-check capture captures catalog-validate clean
 
 build:
 	@set -e; for entry in $(PLUGINS); do \
@@ -68,6 +68,30 @@ validate:
 
 thumbnails:
 	go run ./tools/thumbnail -check
+
+# Screenshots come from fixture-driven scenes (plugins/*/capture_test.go and
+# cmd/*/capture_test.go) rendered by sysc-shell's sysc-panel-preview command.
+CAPTURE_PKGS := $(patsubst %/capture_test.go,./%,$(wildcard plugins/*/capture_test.go cmd/*/capture_test.go))
+
+capture-check:
+	@bin="$${SYSC_PANEL_PREVIEW:-$$(command -v sysc-panel-preview)}"; \
+	[ -n "$$bin" ] || { echo "sysc-panel-preview is not installed (or set SYSC_PANEL_PREVIEW); run:" >&2; \
+		echo "  go install github.com/Nomadcxx/sysc-shell/cmd/sysc-panel-preview@latest" >&2; exit 1; }; \
+	echo "using $$bin"
+
+# make capture PLUGIN=timer: one plugin's screenshot and thumbnail.
+capture: capture-check
+	@[ -n "$(PLUGIN)" ] || { echo "usage: make capture PLUGIN=<dir>" >&2; exit 2; }
+	CAPTURE=1 go test -count=1 -p 2 -run '^TestCapturePanel$$' ./plugins/$(PLUGIN)/
+	go run ./tools/thumbnail -plugin plugins/$(PLUGIN)
+
+# make captures: every plugin that has a scene, then every thumbnail.
+captures: capture-check
+	@set -e; for pkg in $(CAPTURE_PKGS); do \
+		echo "capture $$pkg"; \
+		CAPTURE=1 go test -count=1 -p 2 -run '^TestCapturePanel$$' "$$pkg"; \
+	done
+	go run ./tools/thumbnail
 
 catalog-validate:
 	go run ./tools/catalog validate

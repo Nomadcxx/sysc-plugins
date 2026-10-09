@@ -100,7 +100,26 @@ widget uses a crop of the bar. The capture must be a PNG, at least 320 px wide
 and at most 4 MiB; a tall panel bleeds off the card with a fade, a short or
 wide one is centred whole.
 
-Then generate the thumbnail:
+Captures are generated from fixture data, not taken by hand. Each plugin has a
+`capture_test.go` that builds its real panel tree from invented data and, with
+`CAPTURE=1`, renders it through sysc-shell's `sysc-panel-preview` at the panel
+size its manifest declares (see `plugins/timer/capture_test.go`). Install the
+command once per machine, then:
+
+```sh
+go install github.com/Nomadcxx/sysc-shell/cmd/sysc-panel-preview@latest
+make capture PLUGIN=<dir>     # screenshot.png and thumbnail.webp for one plugin
+make captures                 # every plugin that has a scene, then every thumbnail
+```
+
+Scenes use fictional data only: the repository is public, so never put real
+accounts, devices, paths, hosts or message text in a fixture. A scene calls the
+plugin's real panel builder, so the screenshot changes when the UI does; rerun
+`make capture` after a visual change. Captures use the fonts installed on the
+machine, so they are not byte-reproducible; commit the result. A plain
+`go test` runs no scene.
+
+To use a hand-made `screenshot.png` instead, generate the thumbnail yourself:
 
 ```sh
 go run ./tools/thumbnail -plugin plugins/<dir>
