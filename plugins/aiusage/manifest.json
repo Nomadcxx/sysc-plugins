@@ -27,11 +27,11 @@
             {"value": "minimax", "label": "MiniMax"},
             {"value": "ollama", "label": "Ollama"},
             {"value": "opencode-go", "label": "OpenCode Go"},
-            {"value": "synthetic", "label": "Synthetic"},
             {"value": "kimi", "label": "Kimi"},
             {"value": "zai", "label": "Z.AI"},
             {"value": "deepseek", "label": "DeepSeek"},
-            {"value": "alibaba", "label": "Alibaba"}
+            {"value": "alibaba", "label": "Alibaba"},
+            {"value": "synthetic", "label": "Synthetic"}
           ]
         },
         {
@@ -85,11 +85,11 @@
     {"key": "track_ollama", "type": "bool", "label": "Track Ollama", "default": false},
     {"key": "track_minimax", "type": "bool", "label": "Track MiniMax", "default": false},
     {"key": "track_opencode_go", "type": "bool", "label": "Track OpenCode Go", "default": false},
-    {"key": "track_synthetic", "type": "bool", "label": "Track Synthetic", "default": false},
     {"key": "track_kimi", "type": "bool", "label": "Track Kimi", "default": false},
     {"key": "track_zai", "type": "bool", "label": "Track Z.AI", "default": false},
     {"key": "track_deepseek", "type": "bool", "label": "Track DeepSeek", "default": false},
     {"key": "track_alibaba", "type": "bool", "label": "Track Alibaba", "default": false},
+    {"key": "track_synthetic", "type": "bool", "label": "Track Synthetic", "default": false},
     {
       "key": "commandcode_api_key",
       "type": "string",
@@ -119,13 +119,6 @@
       "visible_when": {"key": "track_opencode_go", "equals": true}
     },
     {
-      "key": "synthetic_api_key",
-      "type": "string",
-      "label": "Synthetic API key",
-      "default": "",
-      "visible_when": {"key": "track_synthetic", "equals": true}
-    },
-    {
       "key": "kimi_api_key",
       "type": "string",
       "label": "Kimi Code API key",
@@ -153,6 +146,13 @@
       "description": "Token plan has no API-key usage endpoint. Paste the full Cookie header from a Model Studio console request (bailian-singapore-cs.alibabacloud.com).",
       "default": "",
       "visible_when": {"key": "track_alibaba", "equals": true}
+    },
+    {
+      "key": "synthetic_api_key",
+      "type": "string",
+      "label": "Synthetic API key",
+      "default": "",
+      "visible_when": {"key": "track_synthetic", "equals": true}
     },
     {
       "key": "refresh_interval",
