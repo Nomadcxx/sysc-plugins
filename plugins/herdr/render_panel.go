@@ -115,7 +115,7 @@ func panelHeader(m *Model, st PanelState, width int) *v1.Node {
 		{Kind: v1.KindIcon, Icon: barIconName, IconSize: panelIconSize},
 		{Kind: v1.KindColumn, Width: infoWidth, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: "Herdr", Bold: true, Size: "title"},
-			{Kind: v1.KindText, Text: summary(m), Size: "caption", Tone: v1.ToneSubtle},
+			{Kind: v1.KindText, Text: summary(m), Size: "caption", Tone: v1.ToneSubtle, Tabular: true},
 		}},
 		{Kind: v1.KindButton, ID: "refresh", Icon: "refresh", Width: 32, Height: 32,
 			Name: "Refresh", Role: "button", Tooltip: "Refresh sessions",
@@ -145,7 +145,14 @@ func summary(m *Model) string {
 func messageCards(m *Model) []*v1.Node {
 	var out []*v1.Node
 	if m.HerdrMissing {
-		out = append(out, messageCard("herdr not found on PATH", v1.ToneError, "error-container", ""))
+		out = append(out, &v1.Node{Kind: v1.KindColumn, Fill: "error-container", Shape: "small", Padding: 8, Gap: 4,
+			Children: []*v1.Node{
+				{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
+					{Kind: v1.KindIcon, Icon: "do_not_disturb_on", IconSize: panelIconSize, Tone: v1.ToneError},
+					{Kind: v1.KindText, Text: "herdr not found on PATH", Bold: true, Tone: v1.ToneError},
+				}},
+				{Kind: v1.KindText, Text: "Install herdr or fix PATH, then refresh", Size: "caption", Tone: v1.ToneSubtle},
+			}})
 	} else if len(m.Sessions) == 0 {
 		out = append(out, &v1.Node{Kind: v1.KindColumn, Fill: "container", Shape: "small", Padding: 8, Gap: 4,
 			Children: []*v1.Node{
@@ -182,7 +189,7 @@ func sessionCard(s SessionRow, st PanelState, width int) *v1.Node {
 	if s.Running {
 		card.Children = append(card.Children, runningHeader(s))
 		if c := countsCaption(s.Counts); c != "" {
-			card.Children = append(card.Children, &v1.Node{Kind: v1.KindText, Text: c, Size: "caption", Tone: v1.ToneSubtle})
+			card.Children = append(card.Children, &v1.Node{Kind: v1.KindText, Text: c, Size: "caption", Tone: v1.ToneSubtle, Tabular: true})
 		}
 		budget := maxPanesPerSession
 		for _, ws := range s.Workspaces {
@@ -202,12 +209,17 @@ func sessionCard(s SessionRow, st PanelState, width int) *v1.Node {
 }
 
 func runningHeader(s SessionRow) *v1.Node {
+	// Spec: a socket that stopped answering keeps its last data, labelled stale.
+	state, stateTone := "running", v1.ToneSubtle
+	if s.Stale {
+		state, stateTone = "stale", v1.ToneError
+	}
 	attach := &v1.Node{Kind: v1.KindButton, ID: "attach:" + s.Name, Name: "Attach to " + s.Name,
-		Role: "button", Tooltip: "Attach in terminal", Events: []v1.EventKind{v1.EventActivate},
+		Role: "button", Tooltip: "Attach " + s.Name + " in terminal", Events: []v1.EventKind{v1.EventActivate},
 		Children: []*v1.Node{
 			{Kind: v1.KindIcon, Icon: "dns", IconSize: panelIconSize, Tone: v1.ToneSubtle},
 			{Kind: v1.KindText, Text: s.Name, Bold: true, MaxWidth: 120},
-			{Kind: v1.KindText, Text: "running", Size: "caption", Tone: v1.ToneSubtle},
+			{Kind: v1.KindText, Text: state, Size: "caption", Tone: stateTone},
 		}}
 	return &v1.Node{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
 		attach,
@@ -222,13 +234,13 @@ func stoppedHeader(s SessionRow, st PanelState) *v1.Node {
 		{Kind: v1.KindIcon, Icon: "terminal", IconSize: panelIconSize, Tone: v1.ToneSubtle},
 		{Kind: v1.KindText, Text: s.Name + " (stopped)", Bold: true, MaxWidth: 140},
 		{Kind: v1.KindButton, ID: "attach:" + s.Name, Icon: "dns", Width: 24, Height: 24,
-			Name: "Attach to " + s.Name, Role: "button", Tooltip: "Attach in terminal",
+			Name: "Attach to " + s.Name, Role: "button", Tooltip: "Attach " + s.Name + " in terminal",
 			Events: []v1.EventKind{v1.EventActivate}},
 	}}
 	if st.ConfirmDelete == s.Name {
 		row.Children = append(row.Children,
-			&v1.Node{Kind: v1.KindButton, ID: "confirmdelete", Icon: "check", Width: 24, Height: 24,
-				Tone: v1.ToneError, Name: "Confirm delete " + s.Name, Role: "button", Tooltip: "Delete this session",
+			&v1.Node{Kind: v1.KindButton, ID: "confirmdelete", Icon: "delete", Width: 24, Height: 24,
+				Tone: v1.ToneError, Name: "Confirm delete " + s.Name, Role: "button", Tooltip: "Confirm delete " + s.Name,
 				Events: []v1.EventKind{v1.EventActivate}},
 			&v1.Node{Kind: v1.KindButton, ID: "canceldelete", Icon: "close", Width: 24, Height: 24,
 				Name: "Cancel delete", Role: "button", Tooltip: "Keep this session",
@@ -290,7 +302,7 @@ func workspaceHeader(ws WorkspaceRow) *v1.Node {
 	return &v1.Node{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
 		{Kind: v1.KindIcon, Icon: "folder-open", IconSize: panelIconSize, Tone: v1.ToneSubtle},
 		{Kind: v1.KindText, Text: ws.Label, Bold: true},
-		{Kind: v1.KindText, Text: fmt.Sprintf("%d panes · %d agents", len(ws.Panes), agents), Size: "caption", Tone: v1.ToneSubtle},
+		{Kind: v1.KindText, Text: fmt.Sprintf("%d panes · %d agents", len(ws.Panes), agents), Size: "caption", Tone: v1.ToneSubtle, Tabular: true},
 		{Kind: v1.KindText, Text: StatusLabel(nil, ws.Status), Size: "caption", Tone: statusTone(ws.Status)},
 	}}
 }
@@ -307,7 +319,7 @@ func paneRow(p PaneRow, sess, primary string, withTitle bool, st PanelState) *v1
 	}
 
 	button := &v1.Node{Kind: v1.KindButton, ID: "focus:" + sess + ":" + p.PaneID, Name: p.Title,
-		Role: "button", Tooltip: "Focus agent", Events: []v1.EventKind{v1.EventActivate},
+		Role: "button", Tooltip: "Focus " + p.Title, Events: []v1.EventKind{v1.EventActivate},
 		Children: []*v1.Node{
 			{Kind: v1.KindIcon, Icon: statusGlyph(p.Status), IconSize: panelIconSize, Tone: statusTone(p.Status)},
 			{Kind: v1.KindText, Text: primary, Bold: true, MaxWidth: 72},
@@ -330,7 +342,7 @@ func paneRow(p PaneRow, sess, primary string, withTitle bool, st PanelState) *v1
 			Events: []v1.EventKind{v1.EventActivate}})
 	}
 	if p.SinceLabel != "" {
-		row.Children = append(row.Children, &v1.Node{Kind: v1.KindText, Text: p.SinceLabel, Size: "caption", Tone: v1.ToneSubtle})
+		row.Children = append(row.Children, &v1.Node{Kind: v1.KindText, Text: p.SinceLabel, Size: "caption", Tone: v1.ToneSubtle, Tabular: true})
 	}
 	// time-in-state is pre-computed by the model (PaneRow.SinceLabel); the
 	// renderer stays pure (no clock).
@@ -414,7 +426,7 @@ func statusTone(s Status) v1.Tone {
 }
 
 func moreText(n int, noun string) *v1.Node {
-	return &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("… %d more %s", n, noun), Size: "caption", Tone: v1.ToneSubtle}
+	return &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("… %d more %s", n, noun), Size: "caption", Tone: v1.ToneSubtle, Tabular: true}
 }
 
 // sortedSessions orders default first, then name, without mutating the model.

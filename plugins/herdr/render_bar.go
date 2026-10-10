@@ -45,14 +45,18 @@ func worstTone(m *Model) v1.Tone {
 		return v1.ToneError
 	}
 	var blocked, done, working int
+	stale := false
 	for i := range m.Sessions {
 		c := m.Sessions[i].Counts
 		blocked += c.Blocked
 		done += c.Done
 		working += c.Working
+		if m.Sessions[i].Running && m.Sessions[i].Stale {
+			stale = true
+		}
 	}
 	switch {
-	case blocked > 0:
+	case stale || blocked > 0:
 		return v1.ToneError
 	case done > 0:
 		return v1.ToneAccent
@@ -135,22 +139,22 @@ func TooltipTree(m *Model, ws WidgetSettings) *v1.Node {
 		working += c.Working
 	}
 	col.Children = append(col.Children, &v1.Node{
-		Kind: v1.KindText, Text: fmt.Sprintf("%d sessions · %d agents", n, agents),
+		Kind: v1.KindText, Text: fmt.Sprintf("%d sessions · %d agents", n, agents), Tabular: true,
 	})
 	if blocked > 0 {
-		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d blocked", blocked), Tone: v1.ToneError})
+		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d blocked", blocked), Tone: v1.ToneError, Tabular: true})
 	}
 	if done > 0 {
-		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d done", done), Tone: v1.ToneAccent})
+		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d done", done), Tone: v1.ToneAccent, Tabular: true})
 	}
 	if working > 0 {
-		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d working", working)})
+		col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("%d working", working), Tabular: true})
 	}
 	return col
 }
 
-// tooltipText is the bar control's bounded hover hint, mirroring the first
-// line of TooltipTree without duplicating the detail lines.
+// tooltipText is the bar control's bounded hover hint; it mirrors the panel
+// header summary so both surfaces lead with the same subject.
 func tooltipText(m *Model) string {
 	if m == nil {
 		return "Herdr"
@@ -158,10 +162,5 @@ func tooltipText(m *Model) string {
 	if m.HerdrMissing {
 		return "herdr not found"
 	}
-	n, agents := 0, 0
-	for i := range m.Sessions {
-		n++
-		agents += m.Sessions[i].Counts.Agents
-	}
-	return fmt.Sprintf("%d sessions · %d agents", n, agents)
+	return summary(m)
 }

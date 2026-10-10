@@ -348,6 +348,20 @@ func (p *plugin) confirmDeleteNow() {
 	if name == "" {
 		return
 	}
+	found := false
+	for _, s := range p.service.Model().Sessions {
+		if s.Name == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		p.confirmDelete = ""
+		p.actionErr = "session no longer exists: " + name
+		p.service.Refresh()
+		p.snapshotAll()
+		return
+	}
 	p.actionErr = ""
 	p.runAction(stopTimeout, func(ctx context.Context) error {
 		return p.actions.Delete(ctx, name)

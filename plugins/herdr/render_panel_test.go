@@ -2,6 +2,7 @@ package herdr
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -153,7 +154,7 @@ func TestPanelPeekAndActions(t *testing.T) {
 		t.Fatal("stopped session must not offer stop")
 	}
 
-	// Action error lands in an error-container card at the bottom.
+	// Action error lands in an error-container card at the bottom (spec).
 	errTree := PanelTree(panelStates()["actionerror"], PanelWidth, PanelHeight)
 	found := false
 	walk(errTree, func(n *v1.Node) {
@@ -302,4 +303,46 @@ func strings_ContainsSpace(s string) bool {
 		}
 	}
 	return false
+}
+
+func TestPanelStaleLabelAndErrorPlacement(t *testing.T) {
+	t.Parallel()
+	stale := runningSess("alpha", Counts{Sessions: 1, Agents: 1},
+		onePaneWS("work", pane("p1", "shell", StatusIdle)))
+	stale.Stale = true
+	tree := PanelTree(PanelState{Model: modelWith(stale), Settings: DefaultSettings()}, PanelWidth, PanelHeight)
+	checkLint(t, v1.ViewPanel, tree, PanelWidth, PanelHeight)
+	labeled := false
+	walk(tree, func(n *v1.Node) {
+		if n.Kind == v1.KindText && n.Text == "stale" && n.Tone == v1.ToneError {
+			labeled = true
+		}
+	})
+	if !labeled {
+		t.Fatal("stale session not labelled in error tone")
+	}
+	if got := worstTone(modelWith(stale)); got != v1.ToneError {
+		t.Fatalf("worstTone(stale) = %v, want error tone", got)
+	}
+
+	// Spec: the action-error card sits at the bottom, after the session cards.
+	errTree := PanelTree(panelStates()["actionerror"], PanelWidth, PanelHeight)
+	var texts []string
+	walk(errTree, func(n *v1.Node) {
+		if n.Kind == v1.KindText {
+			texts = append(texts, n.Text)
+		}
+	})
+	errIdx, sessIdx := -1, -1
+	for i, tx := range texts {
+		if sessIdx < 0 && tx == "alpha" {
+			sessIdx = i
+		}
+		if errIdx < 0 && strings.Contains(tx, "stop failed") {
+			errIdx = i
+		}
+	}
+	if errIdx < 0 || sessIdx < 0 || errIdx < sessIdx {
+		t.Fatalf("action error at %d must follow session name at %d in %q", errIdx, sessIdx, texts)
+	}
 }
