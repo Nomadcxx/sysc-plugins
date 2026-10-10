@@ -65,8 +65,8 @@ func TestMakeLinkSkipsCalendarWithoutLibecal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 15 {
-		t.Fatalf("linked %d plugins, want 15", len(entries))
+	if len(entries) != 16 {
+		t.Fatalf("linked %d plugins, want 16", len(entries))
 	}
 	if out, err := exec.Command("make", "-C", root, "-n", "build", "PKG_CONFIG=false").CombinedOutput(); err != nil {
 		t.Fatalf("make -n build failed:\n%s", out)

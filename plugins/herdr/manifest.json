@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "id": "org.sysc.herdr",
+  "name": "Herdr",
+  "description": "Monitor herdr terminal sessions and coding agents from the bar.",
+  "version": "0.1.0",
+  "protocol": {"major": 1, "minor": 16},
+  "exec": "bin/sysc-plugin-herdr",
+  "capabilities": ["notifications", "panels", "settings"],
+  "requires": {"commands": ["herdr"]},
+  "widgets": [
+    {
+      "id": "bar",
+      "settings": [
+        {
+          "key": "display_mode",
+          "type": "select",
+          "label": "Display",
+          "default": "icon_and_count",
+          "options": [
+            {"value": "icon", "label": "Icon only"},
+            {"value": "icon_and_count", "label": "Icon and count"}
+          ]
+        },
+        {"key": "hide_count_when_zero", "type": "bool", "label": "Hide count at zero", "default": true}
+      ]
+    }
+  ],
+  "panels": [
+    {"id": "panel", "width": 440, "height": 560, "placement": "attached"},
+    {"id": "settings", "width": 440, "height": 560, "placement": "attached", "include_settings": true}
+  ],
+  "settings": [
+    {"key": "notify_on_blocked", "type": "bool", "label": "Notify when an agent needs you", "default": true},
+    {"key": "notify_on_done", "type": "bool", "label": "Notify when an agent finishes", "default": false},
+    {"key": "show_stopped_sessions", "type": "bool", "label": "Show stopped sessions", "default": true},
+    {
+      "key": "output_preview_lines",
+      "type": "select",
+      "label": "Output preview lines",
+      "default": "20",
+      "options": [
+        {"value": "10", "label": "10 lines"},
+        {"value": "20", "label": "20 lines"},
+        {"value": "40", "label": "40 lines"}
+      ]
+    }
+  ]
+}
