@@ -52,6 +52,22 @@ catalog:
 sysc-shell ipc panel.toggle '{"panel":"plugin"}'
 ```
 
+### AUR
+
+On Arch, install [sysc-plugins-git](https://aur.archlinux.org/packages/sysc-plugins-git) with
+your AUR helper:
+
+```sh
+yay -S sysc-plugins-git
+```
+
+This development package builds the official plugin bundle and installs it
+under `/usr/share/sysc-shell/plugins`. Enable the plugins you want in Settings.
+Keep one install source per plugin ID; a catalog install or checkout alongside
+the packaged copy creates a duplicate.
+
+[Documentation](https://nomadcxx.github.io/sysc/docs/).
+
 ### From source
 
 **Requires:** Go 1.26.4+ and `make`. Calendar also needs `pkg-config` and the
