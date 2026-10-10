@@ -1,10 +1,18 @@
 <p align="center">
-  <img src="assets/header.png" width="920" alt="sysc-plugins" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/header.png">
+    <img src="assets/header-light.png" width="920" alt="sysc-plugins">
+  </picture>
 </p>
 
 The official plugins for [sysc-shell](https://github.com/Nomadcxx/sysc-shell). Each one is a small Go
 program the shell starts and talks to over a pipe, so a plugin that crashes takes nothing else down with
 it.
+
+<p align="center">
+  <img src="assets/gallery.webp" alt="Nine sysc-shell plugin panels: AI Usage, Calendar, Games, GitHub Notifications, Phone Connect, Notes, Moonbit, World Clock and Mini Docker" width="920"><br>
+  <sub>AI Usage, Calendar, Games, GitHub Notifications, Phone Connect, Notes, Moonbit, World Clock and Mini Docker, captured from fixture data.</sub>
+</p>
 
 ## Plugins
 
