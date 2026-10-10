@@ -10,8 +10,8 @@ program the shell starts and talks to over a pipe, so a plugin that crashes take
 it.
 
 <p align="center">
-  <img src="assets/gallery.webp" alt="Nine sysc-shell plugin panels: AI Usage, Calendar, Games, GitHub Notifications, Phone Connect, Notes, Moonbit, World Clock and Mini Docker" width="920"><br>
-  <sub>AI Usage, Calendar, Games, GitHub Notifications, Phone Connect, Notes, Moonbit, World Clock and Mini Docker, captured from fixture data.</sub>
+  <img src="assets/gallery.webp" alt="All sixteen official sysc-shell plugin panels" width="920"><br>
+  <sub>AI Usage, Calendar, Cat, Faith, Games, GitHub Notifications, Phone Connect, Mini Docker, Moonbit, Notes, ProtonVPN, Screen Recorder, Screenshot, Pomodoro Timer, Wallpaper Depth and World Clock, captured from fixture data.</sub>
 </p>
 
 [Documentation site](https://nomadcxx.github.io/sysc/docs/plugins/) · [Plugins](#plugins) · [Installation](#installation) · [Writing plugins](#writing-plugins)
