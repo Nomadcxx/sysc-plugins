@@ -230,3 +230,75 @@ func TestAlibabaStaleCookie(t *testing.T) {
 		t.Errorf("no cookie: %+v", rep)
 	}
 }
+
+func TestQuotaEnvKeyFallback(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer env-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true,"code":200,"data":{"limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":40}]}}`))
+	}))
+	defer srv.Close()
+	env := directEnv(t.TempDir(), func(k string) string {
+		if k == "Z_AI_API_KEY" {
+			return "env-key"
+		}
+		return ""
+	}, nil)
+	c := &zaiCollector{env: env, base: srv.URL}
+	if rep, err := c.Fetch(t.Context()); err != nil || rep.State != StateFresh {
+		t.Fatalf("zai env fallback: %+v %v", rep, err)
+	}
+	dsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer env-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"1.00"}]}`))
+	}))
+	defer dsrv.Close()
+	denv := directEnv(t.TempDir(), func(k string) string {
+		if k == "DEEPSEEK_API_KEY" {
+			return "env-key"
+		}
+		return ""
+	}, nil)
+	dc := &deepseekCollector{env: denv, base: dsrv.URL}
+	if rep, err := dc.Fetch(t.Context()); err != nil || rep.State != StateFresh {
+		t.Fatalf("deepseek env fallback: %+v %v", rep, err)
+	}
+}
+
+func TestZAIUsageWithoutCountersKeepsPercentage(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"code":200,"data":{"limits":[
+			{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":77,"usage":1000000}]}}`))
+	}))
+	defer srv.Close()
+	c := &zaiCollector{env: directEnv(t.TempDir(), nil, map[string]string{"zai": "z1"}), base: srv.URL}
+	rep, err := c.Fetch(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Windows[0].UsedPercent != 77 || rep.Windows[0].DisplayValue != "" {
+		t.Errorf("window = %+v", rep.Windows[0])
+	}
+}
+
+func TestRoundKeepsCreditsOnlyFresh(t *testing.T) {
+	t.Parallel()
+	env, _ := loopEnv()
+	bal := 5.5
+	fc := &fakeCollector{id: "alpha", rep: ProviderReport{ID: "alpha", Name: "alpha", State: StateFresh, Credits: &bal}}
+	cfg := testConfig()
+	cfg.Track = map[string]bool{"alpha": true}
+	cache, history := loopPaths(t)
+	l := NewLoop(testRegistry(fc), cfg, env, cache, history)
+	rep := l.Round(t.Context(), false)
+	if len(rep.Providers) != 1 || rep.Providers[0].State != StateFresh || rep.Providers[0].Credits == nil {
+		t.Fatalf("credits-only report = %+v", rep.Providers)
+	}
+}

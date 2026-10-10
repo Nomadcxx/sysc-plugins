@@ -290,8 +290,7 @@ func (c *zaiCollector) key() (string, *ErrSetup) {
 	if k := c.env.key("zai"); k != "" {
 		return k, nil
 	}
-	tried = append(tried, "env Z_AI_API_KEY")
-	for _, e := range []string{"BIGMODEL_API_KEY", "GLM_API_KEY"} {
+	for _, e := range []string{"Z_AI_API_KEY", "BIGMODEL_API_KEY", "GLM_API_KEY"} {
 		tried = append(tried, "env "+e)
 		if k := c.env.getenv(e); k != "" {
 			return k, nil
@@ -361,15 +360,17 @@ func (c *zaiCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 		percent := clampPercent(l.Percentage)
 		disp := ""
 		if l.Usage != nil && *l.Usage > 0 {
-			used := 0.0
+			used, have := 0.0, false
 			switch {
 			case l.Remaining != nil:
-				used = math.Max(0, *l.Usage-*l.Remaining)
+				used, have = math.Max(0, *l.Usage-*l.Remaining), true
 			case l.CurrentValue != nil:
-				used = *l.CurrentValue
+				used, have = *l.CurrentValue, true
 			}
-			percent = clampPercent(used / *l.Usage * 100)
-			disp = formatAmount(used) + " / " + formatAmount(*l.Usage)
+			if have {
+				percent = clampPercent(used / *l.Usage * 100)
+				disp = formatAmount(used) + " / " + formatAmount(*l.Usage)
+			}
 		}
 		w := lane{minutes: l.Number * m, percent: percent, disp: disp}
 		if l.NextReset > 0 {
@@ -430,8 +431,7 @@ func (c *deepseekCollector) key() (string, *ErrSetup) {
 	if k := c.env.key("deepseek"); k != "" {
 		return k, nil
 	}
-	tried = append(tried, "env DEEPSEEK_API_KEY")
-	for _, e := range []string{"DEEPSEEK_KEY"} {
+	for _, e := range []string{"DEEPSEEK_API_KEY", "DEEPSEEK_KEY"} {
 		tried = append(tried, "env "+e)
 		if k := c.env.getenv(e); k != "" {
 			return k, nil
