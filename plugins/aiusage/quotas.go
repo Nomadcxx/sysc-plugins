@@ -523,6 +523,14 @@ func (c *alibabaCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 		rep.State, rep.Err = StateNeedsSetup, setup.Error()
 		return rep, setup
 	}
+	// An sk- key pasted here authenticates inference only; the console RPC
+	// behind this field answers login-required, which would otherwise read
+	// as a stale cookie. Name the mistake instead.
+	if strings.HasPrefix(cookie, "sk-") {
+		msg := "this field wants the console cookie — token-plan API keys work for inference only"
+		rep.State, rep.Err = StateFault, msg
+		return rep, errors.New(msg)
+	}
 	envelope := map[string]any{
 		"Api": alibabaUsageAPI,
 		"V":   "1.0",
