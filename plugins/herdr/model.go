@@ -152,6 +152,7 @@ type SessionRow struct {
 	Running           bool
 	Stale             bool
 	Err               string
+	Socket            string
 	Workspaces        []WorkspaceRow
 	Counts            Counts
 	StoppedWorkspaces []string
@@ -180,6 +181,7 @@ func BuildSession(info SessionInfo, doc *SnapshotDoc, stopped []StoppedWorkspace
 		Name:    info.Name,
 		Default: info.Default,
 		Running: info.Running,
+		Socket:  info.Socket,
 		Counts:  Counts{Sessions: 1},
 	}
 	for _, w := range stopped {
