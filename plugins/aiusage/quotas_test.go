@@ -302,3 +302,17 @@ func TestRoundKeepsCreditsOnlyFresh(t *testing.T) {
 		t.Fatalf("credits-only report = %+v", rep.Providers)
 	}
 }
+
+func TestAlibabaApiKeyGuard(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("the sk- guard must short-circuit before any request")
+	}))
+	defer srv.Close()
+	c := &alibabaCollector{env: directEnv(t.TempDir(), nil, map[string]string{"alibaba": "sk-sp-abc"}), base: srv.URL}
+	rep, err := c.Fetch(t.Context())
+	want := "this field wants the console cookie — token-plan API keys work for inference only"
+	if err == nil || rep.State != StateFault || rep.Err != want {
+		t.Errorf("%+v %v", rep, err)
+	}
+}
