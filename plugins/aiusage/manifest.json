@@ -27,7 +27,11 @@
             {"value": "minimax", "label": "MiniMax"},
             {"value": "ollama", "label": "Ollama"},
             {"value": "opencode-go", "label": "OpenCode Go"},
-            {"value": "synthetic", "label": "Synthetic"}
+            {"value": "synthetic", "label": "Synthetic"},
+            {"value": "kimi", "label": "Kimi"},
+            {"value": "zai", "label": "Z.AI"},
+            {"value": "deepseek", "label": "DeepSeek"},
+            {"value": "alibaba", "label": "Alibaba"}
           ]
         },
         {
@@ -82,6 +86,10 @@
     {"key": "track_minimax", "type": "bool", "label": "Track MiniMax", "default": false},
     {"key": "track_opencode_go", "type": "bool", "label": "Track OpenCode Go", "default": false},
     {"key": "track_synthetic", "type": "bool", "label": "Track Synthetic", "default": false},
+    {"key": "track_kimi", "type": "bool", "label": "Track Kimi", "default": false},
+    {"key": "track_zai", "type": "bool", "label": "Track Z.AI", "default": false},
+    {"key": "track_deepseek", "type": "bool", "label": "Track DeepSeek", "default": false},
+    {"key": "track_alibaba", "type": "bool", "label": "Track Alibaba", "default": false},
     {
       "key": "commandcode_api_key",
       "type": "string",
@@ -116,6 +124,35 @@
       "label": "Synthetic API key",
       "default": "",
       "visible_when": {"key": "track_synthetic", "equals": true}
+    },
+    {
+      "key": "kimi_api_key",
+      "type": "string",
+      "label": "Kimi Code API key",
+      "default": "",
+      "visible_when": {"key": "track_kimi", "equals": true}
+    },
+    {
+      "key": "zai_api_key",
+      "type": "string",
+      "label": "Z.AI API key",
+      "default": "",
+      "visible_when": {"key": "track_zai", "equals": true}
+    },
+    {
+      "key": "deepseek_api_key",
+      "type": "string",
+      "label": "DeepSeek API key",
+      "default": "",
+      "visible_when": {"key": "track_deepseek", "equals": true}
+    },
+    {
+      "key": "alibaba_api_key",
+      "type": "string",
+      "label": "Alibaba console cookie",
+      "description": "Token plan has no API-key usage endpoint. Paste the full Cookie header from a Model Studio console request (bailian-singapore-cs.alibabacloud.com).",
+      "default": "",
+      "visible_when": {"key": "track_alibaba", "equals": true}
     },
     {
       "key": "refresh_interval",

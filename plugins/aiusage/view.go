@@ -636,7 +636,7 @@ func rowTooltip(p ProviderReport, cfg Config, now time.Time) string {
 	}
 	h := Headline(p.Windows)
 	if h == nil {
-		if p.State == StateFresh {
+		if p.State == StateFresh && p.Credits == nil {
 			parts = append(parts, "no readings yet")
 		}
 		return strings.Join(parts, " · ")

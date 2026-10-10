@@ -437,6 +437,10 @@ func registry() aiusage.Registry {
 		"ollama":      aiusage.NewOllama,
 		"opencode-go": aiusage.NewOpenCodeGo,
 		"synthetic":   aiusage.NewSynthetic,
+		"kimi":        aiusage.NewKimi,
+		"zai":         aiusage.NewZAI,
+		"deepseek":    aiusage.NewDeepSeek,
+		"alibaba":     aiusage.NewAlibaba,
 	}
 }
 
@@ -505,6 +509,10 @@ func resolveConfig(values map[string]any, minor int) aiusage.Config {
 			"ollama":      b("track_ollama", false),
 			"opencode-go": b("track_opencode_go", false),
 			"synthetic":   b("track_synthetic", false),
+			"kimi":        b("track_kimi", false),
+			"zai":         b("track_zai", false),
+			"deepseek":    b("track_deepseek", false),
+			"alibaba":     b("track_alibaba", false),
 		},
 		Keys: map[string]string{
 			"commandcode": s("commandcode_api_key"),
@@ -512,6 +520,10 @@ func resolveConfig(values map[string]any, minor int) aiusage.Config {
 			"opencode-go": s("opencode_go_api_key"),
 			"minimax":     s("minimax_api_key"),
 			"synthetic":   s("synthetic_api_key"),
+			"kimi":        s("kimi_api_key"),
+			"zai":         s("zai_api_key"),
+			"deepseek":    s("deepseek_api_key"),
+			"alibaba":     s("alibaba_api_key"),
 		},
 		Refresh:          time.Duration(i("refresh_interval", 300)) * time.Second,
 		Warn:             warn,

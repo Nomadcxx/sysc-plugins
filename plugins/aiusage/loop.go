@@ -271,7 +271,7 @@ func (l *Loop) Round(ctx context.Context, force bool) Report {
 			l.nextDue[id] = now.Add(l.backoffWait(id, floor))
 			// Last good carries forward — but only a snapshot that was
 			// itself error-free and non-empty counts as "good".
-			if lg, ok := l.lastGood[id]; ok && lg.State == StateFresh && len(lg.Windows) > 0 {
+			if lg, ok := l.lastGood[id]; ok && lg.State == StateFresh && (len(lg.Windows) > 0 || lg.Credits != nil) {
 				lg.Stale = true
 				l.latest[id] = lg
 				providers = append(providers, lg)
@@ -281,19 +281,21 @@ func (l *Loop) Round(ctx context.Context, force bool) Report {
 			}
 		default:
 			if rep.State == 0 {
-				if len(rep.Windows) > 0 {
+				if len(rep.Windows) > 0 || rep.Credits != nil {
 					rep.State = StateFresh
 				} else {
 					rep.State = StateNoData
 				}
 			}
-			if rep.State == StateFresh && len(rep.Windows) == 0 {
+			// A wallet is a complete report without windows, so a balance
+			// alone survives; a truly empty Fresh is still No Data.
+			if rep.State == StateFresh && len(rep.Windows) == 0 && rep.Credits == nil {
 				rep.State = StateNoData
 			}
 			l.failures[id] = 0
 			l.nextDue[id] = now.Add(maxDuration(l.cfg.Refresh, floor))
 			l.floorUntil[id] = now.Add(floor)
-			if rep.State == StateFresh && len(rep.Windows) > 0 {
+			if rep.State == StateFresh && (len(rep.Windows) > 0 || rep.Credits != nil) {
 				l.lastGood[id] = rep
 			}
 			l.latest[id] = rep
