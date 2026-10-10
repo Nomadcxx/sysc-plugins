@@ -14,6 +14,8 @@ it.
   <sub>AI Usage, Calendar, Games, GitHub Notifications, Phone Connect, Notes, Moonbit, World Clock and Mini Docker, captured from fixture data.</sub>
 </p>
 
+[Documentation site](https://nomadcxx.github.io/sysc/docs/plugins/) · [Plugins](#plugins) · [Installation](#installation) · [Writing plugins](#writing-plugins)
+
 ## Plugins
 
 | Plugin | What it does | Needs |
