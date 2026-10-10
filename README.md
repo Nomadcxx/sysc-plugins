@@ -26,6 +26,7 @@ it.
 | **Faith** | A cross in the bar that offers a prayer, and a Scripture panel with cross-references and commentary | |
 | **Games** | Lutris game deck: launch games, see what's running, session history, cover art | Lutris |
 | **GitHub Notifications** | Triage unread GitHub notifications and contribution activity from the panel | `gh` |
+| **Herdr** | Monitor herdr terminal sessions and coding agents from the bar, with a session panel | `herdr` |
 | **Mini Docker** | The Docker whale in the bar, with a panel to manage containers | `docker` |
 | **Moonbit** | System cleaner: scan and clean progress from the bar, with a category review panel | `moonbit` |
 | **Notes** | Markdown notes and pastel sticky notes for an Obsidian folder, with one box to search or start a note | |
@@ -72,7 +73,7 @@ the packaged copy creates a duplicate.
 
 **Requires:** Go 1.26.4+ and `make`. Calendar also needs `pkg-config` and the
 evolution-data-server development files (`libecal-2.0`, `json-glib-1.0`); without them
-`make install` skips Calendar with a notice and installs the other 15 plugins.
+`make install` skips Calendar with a notice and installs the other 16 plugins.
 
 ```bash
 git clone https://github.com/Nomadcxx/sysc-plugins

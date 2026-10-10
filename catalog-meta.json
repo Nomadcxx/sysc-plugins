@@ -94,5 +94,11 @@
     "author": "Nomadcxx",
     "license": "MIT",
     "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
+  "org.sysc.herdr": {
+    "category": "monitoring",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
   }
 }
