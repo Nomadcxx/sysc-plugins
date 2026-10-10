@@ -70,7 +70,9 @@ func run(in, out *os.File) error {
 	views := map[string]view{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	incoming := make(chan v1.Message, 8)
+	// ponytail: provider rounds run inline and take up to 20s each; a deep
+	// buffer keeps stdin draining so the host's pipe never fills meanwhile.
+	incoming := make(chan v1.Message, 256)
 	go func() {
 		for {
 			msg, err := c.Recv()
