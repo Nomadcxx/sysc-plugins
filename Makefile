@@ -18,7 +18,7 @@ PLUGINS := \
 	sysc-plugin-herdr:herdr
 
 # Calendar is the only cgo plugin; skip it when its pkg-config modules are
-# missing so one optional plugin's headers do not block the other 15.
+# missing so one optional plugin's headers do not block the remaining plugins.
 PKG_CONFIG ?= pkg-config
 CALENDAR_PC := libecal-2.0 json-glib-1.0
 ifeq ($(shell $(PKG_CONFIG) --exists $(CALENDAR_PC) 2>/dev/null && echo yes),)

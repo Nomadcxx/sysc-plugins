@@ -20,6 +20,12 @@ func stoppedSess(name string, projects ...string) SessionRow {
 	return SessionRow{Name: name, Running: false, StoppedWorkspaces: projects}
 }
 
+func defaultStoppedSess(name string, projects ...string) SessionRow {
+	s := stoppedSess(name, projects...)
+	s.Default = true
+	return s
+}
+
 func ws(id, label string, st Status, panes ...PaneRow) WorkspaceRow {
 	return WorkspaceRow{ID: id, Label: label, Panes: panes, Status: st}
 }
@@ -64,7 +70,9 @@ func panelStates() map[string]PanelState {
 		"peek": {Model: modelWith(runningSess("alpha", Counts{Sessions: 1, Agents: 1},
 			onePaneWS("work", pane("p1", "shell", StatusIdle)))),
 			Settings: def,
-			Peeks:    map[string]Peek{"p1": {PaneID: "p1", Text: "line one\nline two", Lines: 20}}},
+			Peeks: map[string]Peek{PeekKey("alpha", "p1"): {Session: "alpha", PaneID: "p1",
+				Status: StatusIdle, Text: "line one\nline two", Lines: 20}}},
+		"stoppeddefault": {Model: modelWith(defaultStoppedSess("default", "proj-a")), Settings: def},
 		"confirm": {Model: modelWith(stoppedSess("old")),
 			Settings:      def,
 			ConfirmDelete: "old"},
@@ -88,6 +96,51 @@ func TestPanelLintsInEveryState(t *testing.T) {
 		t.Fatal("SettingsPanelTree returned nil")
 	} else {
 		checkLint(t, v1.ViewPanel, tree, PanelWidth, PanelHeight)
+	}
+}
+
+func TestPanelBodyScrollAndPinnedNewSession(t *testing.T) {
+	t.Parallel()
+	tree := PanelTree(panelStates()["multi"], PanelWidth, PanelHeight)
+	if len(tree.Children) != 4 {
+		t.Fatalf("panel root has %d children, want fixed header, separator, body, and new-session row", len(tree.Children))
+	}
+	headerTitle, headerRefresh := false, false
+	walk(tree.Children[0], func(n *v1.Node) {
+		headerTitle = headerTitle || n.Text == "Herdr"
+		headerRefresh = headerRefresh || n.ID == "refresh"
+	})
+	if tree.Children[0].Kind != v1.KindRow || !headerTitle || !headerRefresh {
+		t.Fatal("panel header is not fixed above the session body")
+	}
+	body := tree.Children[2]
+	if body.Kind != v1.KindList {
+		t.Fatalf("panel body kind = %q, want scrollable list", body.Kind)
+	}
+	if body.Height != PanelHeight-105 {
+		t.Fatalf("panel body height = %d, want %d", body.Height, PanelHeight-105)
+	}
+	footerIDs := map[string]bool{}
+	walk(tree.Children[3], func(n *v1.Node) { footerIDs[n.ID] = true })
+	if !footerIDs["newname"] || !footerIDs["newstart"] {
+		t.Fatal("new-session controls are not pinned below the scrolling body")
+	}
+	checkLint(t, v1.ViewPanel, tree, PanelWidth, PanelHeight)
+}
+
+func TestWorkspaceHeaderBoundsLongLabel(t *testing.T) {
+	t.Parallel()
+	label := strings.Repeat("workspace-", 20)
+	header := workspaceHeader(ws("w1", label, StatusBlocked,
+		pane("p1", "first", StatusBlocked), pane("p2", "second", StatusWorking)))
+	var found *v1.Node
+	walk(header, func(n *v1.Node) {
+		if n.Kind == v1.KindText && n.Text == label {
+			found = n
+		}
+	})
+	if found == nil || found.MaxWidth <= 0 || found.MaxWidth > 120 {
+		t.Fatalf("workspace label max width = %v, want a bound no larger than 120", found)
 	}
 }
 
@@ -135,6 +188,27 @@ func TestPanelPeekAndActions(t *testing.T) {
 	})
 	if !texts["line one"] || !texts["line two"] {
 		t.Fatalf("peek text = %v, want the two wrapped lines", texts)
+	}
+
+	// The read control flips to a collapse affordance while its peek is open.
+	var readOpen *v1.Node
+	walk(tree, func(n *v1.Node) {
+		if n.ID == "read:alpha:p1" {
+			readOpen = n
+		}
+	})
+	if readOpen == nil || readOpen.Icon != "visibility_off" || !strings.HasPrefix(readOpen.Name, "Hide") {
+		t.Fatalf("open peek read control = %+v, want visibility_off/Hide", readOpen)
+	}
+	closed := PanelTree(panelStates()["single"], PanelWidth, PanelHeight)
+	var readClosed *v1.Node
+	walk(closed, func(n *v1.Node) {
+		if n.ID == "read:alpha:p1" {
+			readClosed = n
+		}
+	})
+	if readClosed == nil || readClosed.Icon != "visibility" {
+		t.Fatalf("closed peek read control = %+v, want visibility", readClosed)
 	}
 
 	// Delete confirmation renders both steps; the plain delete renders alone.
@@ -344,5 +418,45 @@ func TestPanelStaleLabelAndErrorPlacement(t *testing.T) {
 	}
 	if errIdx < 0 || sessIdx < 0 || errIdx < sessIdx {
 		t.Fatalf("action error at %d must follow session name at %d in %q", errIdx, sessIdx, texts)
+	}
+}
+
+// The default session cannot be deleted by herdr, so its card must not offer
+// the affordance at all (only its non-default siblings do).
+func TestPanelDeleteOnlyForNonDefault(t *testing.T) {
+	t.Parallel()
+	tree := PanelTree(panelStates()["stoppeddefault"], PanelWidth, PanelHeight)
+	ids := map[string]*v1.Node{}
+	walk(tree, func(n *v1.Node) { ids[n.ID] = n })
+	if ids["delete:default"] != nil {
+		t.Fatal("default session must not offer delete")
+	}
+	if ids["attach:default"] == nil {
+		t.Fatal("default session must still offer attach")
+	}
+}
+
+// PrunePeeks drops previews whose pane changed status or vanished, keyed by
+// session+pane so same-named panes in two sessions are independent.
+func TestPrunePeeks(t *testing.T) {
+	t.Parallel()
+	m := modelWith(
+		runningSess("alpha", Counts{Sessions: 1, Agents: 1, Blocked: 1},
+			onePaneWS("work", pane("p1", "shell", StatusBlocked))),
+		runningSess("beta", Counts{Sessions: 1, Agents: 1},
+			onePaneWS("work", pane("p1", "shell", StatusIdle))),
+	)
+	peeks := map[string]Peek{
+		PeekKey("alpha", "p1"): {Session: "alpha", PaneID: "p1", Status: StatusBlocked},
+		PeekKey("beta", "p1"):  {Session: "beta", PaneID: "p1", Status: StatusBlocked},
+		PeekKey("alpha", "p9"): {Session: "alpha", PaneID: "p9", Status: StatusIdle},
+		PeekKey("gamma", "p1"): {Session: "gamma", PaneID: "p1", Status: StatusIdle},
+	}
+	PrunePeeks(m, peeks)
+	if len(peeks) != 1 {
+		t.Fatalf("pruned peeks = %+v, want only alpha:p1", peeks)
+	}
+	if _, ok := peeks[PeekKey("alpha", "p1")]; !ok {
+		t.Fatalf("unchanged peek was pruned: %+v", peeks)
 	}
 }

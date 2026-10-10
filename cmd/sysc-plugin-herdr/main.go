@@ -44,7 +44,7 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 const (
 	callTimeout   = 5 * time.Second
 	actionTimeout = 6 * time.Second
-	stopTimeout   = 25 * time.Second
+	stopTimeout   = herdr.DefaultStopTimeout
 )
 
 type view struct {
@@ -117,6 +117,7 @@ func run(in io.Reader, out io.Writer) error {
 		case <-ctx.Done():
 			return nil
 		case <-p.service.Updates():
+			herdr.PrunePeeks(p.service.Model(), p.peeks)
 			p.snapshotAll()
 		case n := <-p.service.Notifications():
 			p.notify(n)
@@ -304,8 +305,9 @@ func (p *plugin) focus(sess, pane string) {
 }
 
 func (p *plugin) read(sess, pane string) {
-	if _, open := p.peeks[pane]; open {
-		togglePeek(p.peeks, herdr.Peek{PaneID: pane})
+	key := herdr.PeekKey(sess, pane)
+	if _, open := p.peeks[key]; open {
+		delete(p.peeks, key)
 		p.snapshotAll()
 		return
 	}
@@ -327,7 +329,10 @@ func (p *plugin) read(sess, pane string) {
 			p.actionErr = err.Error()
 			return
 		}
-		togglePeek(p.peeks, herdr.Peek{PaneID: pane, Text: text, Lines: lines})
+		// Capture the status at store time: a status change during the read
+		// must not prune the preview the user just opened.
+		status, _ := herdr.PaneStatus(p.service.Model(), sess, pane)
+		p.peeks[key] = herdr.Peek{Session: sess, PaneID: pane, Status: status, Text: text, Lines: lines}
 	})
 }
 
@@ -422,15 +427,6 @@ func (p *plugin) sessionInfo(name string) (herdr.SessionInfo, bool) {
 		}
 	}
 	return herdr.SessionInfo{}, false
-}
-
-// togglePeek adds a peek when the pane has none and removes it otherwise.
-func togglePeek(peeks map[string]herdr.Peek, peek herdr.Peek) {
-	if _, ok := peeks[peek.PaneID]; ok {
-		delete(peeks, peek.PaneID)
-		return
-	}
-	peeks[peek.PaneID] = peek
 }
 
 func (p *plugin) notify(n herdr.Notification) {

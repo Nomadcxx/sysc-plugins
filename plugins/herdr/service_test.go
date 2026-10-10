@@ -57,6 +57,25 @@ func (ts *testSub) emit(t *testing.T, typ string, payload map[string]any) {
 
 func (ts *testSub) close() { _ = ts.srv.Close() }
 
+func (ts *testSub) waitPeerClosed(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		ts.mu.Lock()
+		_ = ts.srv.SetWriteDeadline(time.Now().Add(25 * time.Millisecond))
+		_, err := ts.srv.Write([]byte(`{"event":"test.ignored","data":{}}` + "\n"))
+		ts.mu.Unlock()
+		if err == nil {
+			continue
+		}
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			continue
+		}
+		return
+	}
+	t.Fatal("subscription stayed open after its session stopped")
+}
+
 type harness struct {
 	t        *testing.T
 	clock    *fakeClock
@@ -451,5 +470,115 @@ func TestUpdatesChannelSignals(t *testing.T) {
 	case <-h.svc.Updates():
 	case <-time.After(time.Second):
 		t.Fatal("Updates() did not signal after SetSettings")
+	}
+}
+
+func TestPaneClosedTriggersResubscribe(t *testing.T) {
+	h := newHarness(t)
+	h.setLists(listResult{infos: []SessionInfo{demoSession()}})
+	h.setSnaps(
+		snapResult{doc: mkDoc(testPane{"p1", "working"}, testPane{"p2", "working"})},
+		snapResult{doc: mkDoc(testPane{"p1", "working"})},
+	)
+	h.start()
+	h.waitModel(hasPaneStatus("p2", StatusWorking))
+
+	sub1 := h.waitSub(1)
+	if !hasSpec(sub1.subs, "pane.agent_status_changed", "p2") {
+		t.Fatalf("first subscribe missing p2 spec: %+v", sub1.subs)
+	}
+	sub1.emit(t, "pane.closed", map[string]any{"pane_id": "p2", "workspace_id": "w1"})
+
+	sub2 := h.waitSub(2)
+	if hasSpec(sub2.subs, "pane.agent_status_changed", "p2") {
+		t.Errorf("second subscribe still has p2 spec: %+v", sub2.subs)
+	}
+	if !hasSpec(sub2.subs, "pane.agent_status_changed", "p1") {
+		t.Errorf("second subscribe missing p1 spec: %+v", sub2.subs)
+	}
+	h.waitModel(func(m *Model) bool {
+		for _, s := range m.Sessions {
+			for _, w := range s.Workspaces {
+				for _, p := range w.Panes {
+					if p.PaneID == "p2" {
+						return false
+					}
+				}
+			}
+		}
+		return true
+	})
+}
+
+func TestNextBackoff(t *testing.T) {
+	cases := []struct{ in, want time.Duration }{
+		{time.Second, 2 * time.Second},
+		{2 * time.Second, 4 * time.Second},
+		{16 * time.Second, 30 * time.Second},
+		{maxBackoff, maxBackoff},
+	}
+	for _, c := range cases {
+		if got := nextBackoff(c.in); got != c.want {
+			t.Errorf("nextBackoff(%s) = %s, want %s", c.in, got, c.want)
+		}
+	}
+}
+
+func TestStoppedSessionSkipsProbesUntilRunning(t *testing.T) {
+	h := newHarness(t)
+	stopped := SessionInfo{Name: "idle", Running: false, Socket: "/tmp/idle.sock"}
+	h.setLists(
+		listResult{infos: []SessionInfo{stopped}},
+		listResult{infos: []SessionInfo{{Name: "idle", Running: true, Socket: "/tmp/idle.sock"}}},
+	)
+	h.setSnaps(snapResult{doc: mkDoc(testPane{"p1", "working"})})
+	h.start()
+	h.waitModel(hasSessions(1))
+
+	// A stopped session must not open a socket runtime at all, even though a
+	// snapshot is available to fake.
+	time.Sleep(50 * time.Millisecond)
+	h.mu.Lock()
+	subs := len(h.subs)
+	h.mu.Unlock()
+	if subs != 0 {
+		t.Fatalf("stopped session opened %d subscriptions, want 0", subs)
+	}
+
+	h.svc.Refresh()
+	h.waitSub(1)
+	h.waitModel(hasPaneStatus("p1", StatusWorking))
+}
+
+func TestRunningSessionRuntimeStopsAndRestarts(t *testing.T) {
+	running := demoSession()
+	stopped := running
+	stopped.Running = false
+	h := newHarness(t)
+	h.setLists(
+		listResult{infos: []SessionInfo{running}},
+		listResult{infos: []SessionInfo{stopped}},
+		listResult{infos: []SessionInfo{running}},
+	)
+	h.setSnaps(snapResult{doc: mkDoc(testPane{"p1", "working"})})
+	h.start()
+	h.waitModel(hasPaneStatus("p1", StatusWorking))
+	first := h.waitSub(1)
+
+	h.svc.kickDiscovery(context.Background())
+	h.waitModel(func(m *Model) bool {
+		for _, s := range m.Sessions {
+			if s.Name == running.Name {
+				return !s.Running
+			}
+		}
+		return false
+	})
+	first.waitPeerClosed(t)
+
+	h.svc.kickDiscovery(context.Background())
+	second := h.waitSub(2)
+	if !hasSpec(second.subs, "pane.agent_status_changed", "p1") {
+		t.Fatalf("restarted subscription missing pane p1: %+v", second.subs)
 	}
 }

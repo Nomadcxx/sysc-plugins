@@ -61,10 +61,13 @@ const (
 )
 
 // sessionState is the per-session bookkeeping. All fields except refresh are
-// guarded by Service.mu.
+// guarded by Service.mu. ctx and started track the per-session runtime, which
+// runs only while the session is reported as running.
 type sessionState struct {
+	ctx      context.Context
 	info     SessionInfo
 	cancel   context.CancelFunc
+	started  bool
 	refresh  chan struct{}
 	doc      *SnapshotDoc
 	since    map[string]time.Time
@@ -95,12 +98,11 @@ type Service struct {
 	nowFn       func() time.Time
 	sleepFn     func(ctx context.Context, d time.Duration) bool
 
-	mu          sync.Mutex
-	model       Model
-	settings    Settings
-	actionError string
-	sessions    map[string]*sessionState
-	stopped     map[string][]StoppedWorkspace
+	mu       sync.Mutex
+	model    Model
+	settings Settings
+	sessions map[string]*sessionState
+	stopped  map[string][]StoppedWorkspace
 
 	updates       chan struct{}
 	notifications chan Notification
@@ -259,22 +261,6 @@ func (s *Service) Refresh() {
 	s.mu.Unlock()
 }
 
-// SetActionError stores the latest transient action error. It is cleared on the
-// next successful discovery.
-func (s *Service) SetActionError(msg string) {
-	s.mu.Lock()
-	s.actionError = msg
-	s.mu.Unlock()
-	s.signalUpdate()
-}
-
-// ActionError returns the latest transient action error, "" when none.
-func (s *Service) ActionError() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.actionError
-}
-
 // Model returns a deep copy safe for renderers to read without locking.
 func (s *Service) Model() *Model {
 	s.mu.Lock()
@@ -353,7 +339,6 @@ func (s *Service) applyDiscovery(ctx context.Context, infos []SessionInfo) {
 	s.mu.Lock()
 	s.model.HerdrMissing = false
 	s.model.DiscoveryErr = ""
-	s.actionError = ""
 
 	seen := make(map[string]bool, len(infos))
 	for _, info := range infos {
@@ -365,16 +350,31 @@ func (s *Service) applyDiscovery(ctx context.Context, infos []SessionInfo) {
 			}
 			cctx, cancel := context.WithCancel(ctx)
 			st = &sessionState{
+				ctx:      cctx,
 				info:     info,
 				cancel:   cancel,
+				started:  info.Running,
 				refresh:  make(chan struct{}, 1),
 				since:    map[string]time.Time{},
 				statuses: map[string]Status{},
 			}
 			s.sessions[info.Name] = st
-			go s.runSession(cctx, st, info.Socket)
+			// A stopped session has no socket to probe: skip the runtime until
+			// herdr reports it running.
+			if st.started {
+				go s.runSession(cctx, st, info.Socket)
+			}
 		} else {
 			st.info = info
+			switch {
+			case info.Running && !st.started:
+				st.started = true
+				st.ctx, st.cancel = context.WithCancel(ctx)
+				go s.runSession(st.ctx, st, info.Socket)
+			case !info.Running && st.started:
+				st.started = false
+				st.cancel()
+			}
 		}
 	}
 	for name, st := range s.sessions {

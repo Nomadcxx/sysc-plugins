@@ -2,8 +2,6 @@ package main
 
 import (
 	"testing"
-
-	"github.com/Nomadcxx/sysc-plugins/plugins/herdr"
 )
 
 func TestNodeActionParsing(t *testing.T) {
@@ -35,20 +33,5 @@ func TestNodeActionParsing(t *testing.T) {
 			t.Errorf("nodeAction(%q) = (%q,%q,%q), want (%q,%q,%q)",
 				c.id, kind, a1, a2, c.kind, c.arg1, c.arg2)
 		}
-	}
-}
-
-func TestTogglePeekAddsThenRemoves(t *testing.T) {
-	t.Parallel()
-	peeks := map[string]herdr.Peek{}
-	p := herdr.Peek{PaneID: "w1:p1", Text: "hello", Lines: 20}
-
-	togglePeek(peeks, p)
-	if got, ok := peeks["w1:p1"]; !ok || got.Text != "hello" {
-		t.Fatalf("after add peek = %+v, ok=%v", got, ok)
-	}
-	togglePeek(peeks, p)
-	if _, ok := peeks["w1:p1"]; ok {
-		t.Fatalf("after second toggle peek still present: %+v", peeks)
 	}
 }

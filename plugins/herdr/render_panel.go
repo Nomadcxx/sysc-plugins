@@ -16,13 +16,39 @@ const (
 	cardNodeBudget      = 1000
 	peekByteCap         = 2000
 	panelIconSize       = 16
+	panelPadding        = 8
+	panelGap            = 8
+	panelHeaderHeight   = 32
+	panelFooterHeight   = 32
+	panelBodyReserve    = 2*panelPadding + 3*panelGap + panelHeaderHeight + 1 + panelFooterHeight
+	workspaceLabelMax   = 120
 )
 
-// Peek is one expanded output preview, keyed in PanelState by pane ID.
+// Peek is one expanded output preview, keyed in PanelState by session and
+// pane ID so previews from two sessions can never collide.
 type Peek struct {
-	PaneID string
-	Text   string
-	Lines  int
+	Session string
+	PaneID  string
+	Text    string
+	Lines   int
+	Status  Status
+}
+
+// PeekKey is the PanelState map key for one pane's preview. Pane IDs repeat
+// across sessions, so the session name is part of the key.
+func PeekKey(session, paneID string) string {
+	return session + ":" + paneID
+}
+
+// PrunePeeks drops previews whose pane vanished or changed status, per the
+// spec's "cached until collapse or next status change".
+func PrunePeeks(m *Model, peeks map[string]Peek) {
+	for key, pk := range peeks {
+		st, ok := PaneStatus(m, pk.Session, pk.PaneID)
+		if !ok || st != pk.Status {
+			delete(peeks, key)
+		}
+	}
 }
 
 // PanelState is everything the panel needs to draw: the model, the settings,
@@ -43,12 +69,18 @@ func PanelTree(st PanelState, width, height int) *v1.Node {
 	if m == nil {
 		m = &Model{}
 	}
-	root := &v1.Node{Kind: v1.KindColumn, Padding: 8, Gap: 8}
+	root := &v1.Node{Kind: v1.KindColumn, Padding: panelPadding, Gap: panelGap}
 	b := &nodeBudget{used: 1, max: v1.MaxNodes}
 
 	b.add(root, panelHeader(m, st, width))
 	b.add(root, &v1.Node{Kind: v1.KindSeparator})
-	b.add(root, messageCards(m)...)
+	bodyHeight := height - panelBodyReserve
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
+	body := &v1.Node{Kind: v1.KindList, Height: bodyHeight, Gap: panelGap}
+	b.add(root, body)
+	b.add(body, messageCards(m)...)
 
 	sessions := sortedSessions(m)
 	rendered := 0
@@ -60,15 +92,15 @@ func PanelTree(st PanelState, width, height int) *v1.Node {
 		if b.used+countNodes(card) > cardNodeBudget {
 			break
 		}
-		b.add(root, card)
+		b.add(body, card)
 		rendered++
 	}
 	if omitted := len(sessions) - rendered; omitted > 0 {
-		b.add(root, moreText(omitted, "sessions"))
+		b.add(body, moreText(omitted, "sessions"))
 	}
 	b.add(root, newSessionRow(st))
 	if st.ActionError != "" {
-		b.add(root, actionErrorCard(st.ActionError))
+		b.add(body, actionErrorCard(st.ActionError))
 	}
 	return root
 }
@@ -111,7 +143,7 @@ func panelHeader(m *Model, st PanelState, width int) *v1.Node {
 		infoWidth = 80
 	}
 
-	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Height: 32, Children: []*v1.Node{
+	row := &v1.Node{Kind: v1.KindRow, Gap: 6, Height: panelHeaderHeight, Children: []*v1.Node{
 		{Kind: v1.KindIcon, Icon: barIconName, IconSize: panelIconSize},
 		{Kind: v1.KindColumn, Width: infoWidth, Children: []*v1.Node{
 			{Kind: v1.KindText, Text: "Herdr", Bold: true, Size: "title"},
@@ -237,6 +269,10 @@ func stoppedHeader(s SessionRow, st PanelState) *v1.Node {
 			Name: "Attach to " + s.Name, Role: "button", Tooltip: "Attach " + s.Name + " in terminal",
 			Events: []v1.EventKind{v1.EventActivate}},
 	}}
+	if s.Default {
+		// herdr refuses to delete the default session, so never offer it.
+		return row
+	}
 	if st.ConfirmDelete == s.Name {
 		row.Children = append(row.Children,
 			&v1.Node{Kind: v1.KindButton, ID: "confirmdelete", Icon: "delete", Width: 24, Height: 24,
@@ -265,8 +301,9 @@ func workspaceNodes(ws WorkspaceRow, sess string, st PanelState, paneBudget, wid
 		if primary == "" {
 			primary = p.Title
 		}
-		nodes := []*v1.Node{paneRow(p, sess, primary, primary != p.Title, st)}
-		if peek, ok := st.Peeks[p.PaneID]; ok {
+		peek, peekOpen := st.Peeks[PeekKey(sess, p.PaneID)]
+		nodes := []*v1.Node{paneRow(p, sess, primary, primary != p.Title, peekOpen)}
+		if peekOpen {
 			nodes = append(nodes, peekNode(peek, width))
 		}
 		return nodes, 1
@@ -279,8 +316,9 @@ func workspaceNodes(ws WorkspaceRow, sess string, st PanelState, paneBudget, wid
 		if used >= paneBudget {
 			break
 		}
-		col.Children = append(col.Children, paneRow(p, sess, p.Title, false, st))
-		if peek, ok := st.Peeks[p.PaneID]; ok {
+		peek, peekOpen := st.Peeks[PeekKey(sess, p.PaneID)]
+		col.Children = append(col.Children, paneRow(p, sess, p.Title, false, peekOpen))
+		if peekOpen {
 			col.Children = append(col.Children, peekNode(peek, width))
 		}
 		used++
@@ -301,7 +339,7 @@ func workspaceHeader(ws WorkspaceRow) *v1.Node {
 	}
 	return &v1.Node{Kind: v1.KindRow, Gap: 4, Children: []*v1.Node{
 		{Kind: v1.KindIcon, Icon: "folder-open", IconSize: panelIconSize, Tone: v1.ToneSubtle},
-		{Kind: v1.KindText, Text: ws.Label, Bold: true},
+		{Kind: v1.KindText, Text: ws.Label, Bold: true, MaxWidth: workspaceLabelMax},
 		{Kind: v1.KindText, Text: fmt.Sprintf("%d panes · %d agents", len(ws.Panes), agents), Size: "caption", Tone: v1.ToneSubtle, Tabular: true},
 		{Kind: v1.KindText, Text: StatusLabel(nil, ws.Status), Size: "caption", Tone: statusTone(ws.Status)},
 	}}
@@ -309,7 +347,7 @@ func workspaceHeader(ws WorkspaceRow) *v1.Node {
 
 // paneRow is one agent line: a focus control plus the read toggle. The
 // attention fills survive even without an icon so a blocked row still reads.
-func paneRow(p PaneRow, sess, primary string, withTitle bool, st PanelState) *v1.Node {
+func paneRow(p PaneRow, sess, primary string, withTitle, peekOpen bool) *v1.Node {
 	row := &v1.Node{Kind: v1.KindRow, Gap: 4}
 	switch p.Status {
 	case StatusBlocked:
@@ -336,9 +374,15 @@ func paneRow(p PaneRow, sess, primary string, withTitle bool, st PanelState) *v1
 	row.Children = append(row.Children, button)
 
 	if p.Readable {
+		// The same control collapses the peek, so its glyph and label flip
+		// with the toggle's state.
+		icon, name, tooltip := "visibility", "Show last output for "+p.Title, "Show last output"
+		if peekOpen {
+			icon, name, tooltip = "visibility_off", "Hide last output for "+p.Title, "Hide last output"
+		}
 		row.Children = append(row.Children, &v1.Node{Kind: v1.KindButton,
-			ID: "read:" + sess + ":" + p.PaneID, Icon: "visibility", Width: 24, Height: 24,
-			Name: "Show last output for " + p.Title, Role: "button", Tooltip: "Show last output",
+			ID: "read:" + sess + ":" + p.PaneID, Icon: icon, Width: 24, Height: 24,
+			Name: name, Role: "button", Tooltip: tooltip,
 			Events: []v1.EventKind{v1.EventActivate}})
 	}
 	if p.SinceLabel != "" {
@@ -369,7 +413,7 @@ func peekNode(peek Peek, width int) *v1.Node {
 }
 
 func newSessionRow(st PanelState) *v1.Node {
-	return &v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
+	return &v1.Node{Kind: v1.KindRow, Gap: 6, Height: panelFooterHeight, Children: []*v1.Node{
 		{Kind: v1.KindTextInput, ID: "newname", Name: "New session name", Role: "input",
 			Placeholder: "session name", SubmitOnEnter: true, Text: st.NewName,
 			Events: []v1.EventKind{v1.EventChange, v1.EventSubmit}},

@@ -97,8 +97,8 @@ func BarTreeAtWidth(m *Model, ws WidgetSettings, height, width int) *v1.Node {
 	if show {
 		if compact {
 			// The pill has no room for a padding-fit count: only include it
-			// when the digits themselves fit beside the glyph.
-			show = count > 0 && barIconSize+8*len(countText) <= width
+			// when the glyph, the button's own 4px gap and the digits fit.
+			show = count > 0 && barIconSize+4+8*len(countText) <= width
 		} else {
 			show = count > 0 || !ws.HideCountWhenZero
 		}

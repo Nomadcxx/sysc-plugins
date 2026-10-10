@@ -165,3 +165,26 @@ func TestWorstToneLadder(t *testing.T) {
 		t.Errorf("worstTone(nil) = %q", got)
 	}
 }
+
+// A two-digit count must not overrun the compact pill: the button's own 4px
+// gap is part of its width, so at 32px only the icon fits and the host must
+// still accept the bar.
+func TestCompactTwoDigitCount(t *testing.T) {
+	t.Parallel()
+	m := modelWith(runningSess("alpha", Counts{Sessions: 1, Agents: 12, Blocked: 7, Done: 5},
+		onePaneWS("work", pane("p1", "shell", StatusBlocked))))
+	if got := needsYouCount(m); got != 12 {
+		t.Fatalf("needsYouCount = %d, want 12", got)
+	}
+	bar32 := BarTreeAtWidth(m, DefaultWidgetSettings(), 32, 32)
+	checkLint(t, v1.ViewBar, bar32, 32, 32)
+	if open := bar32.Children[0]; len(open.Children) != 1 {
+		t.Fatalf("compact@32 children = %d, want the icon only", len(open.Children))
+	}
+	bar64 := BarTreeAtWidth(m, DefaultWidgetSettings(), 32, 64)
+	checkLint(t, v1.ViewBar, bar64, 64, 32)
+	open := bar64.Children[0]
+	if len(open.Children) != 2 || open.Children[1].Text != "12" {
+		t.Fatalf("compact@64 children = %+v, want icon + 12", open.Children)
+	}
+}

@@ -35,6 +35,7 @@ func herdrProtocolScenario(t *testing.T, bin string, panelW, panelH int) {
 	tmp := t.TempDir()
 	fake := startFakeHerdr(t, tmp)
 	binDir := writeFakeHerdrCLI(t, tmp, fake.sockPath, filepath.Join(tmp, "state-probe"))
+	writeFakeTerminal(t, tmp)
 	home := filepath.Join(tmp, "home")
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatal(err)
@@ -46,6 +47,8 @@ func herdrProtocolScenario(t *testing.T, bin string, panelW, panelH int) {
 	h.open("bar-1", v1.ViewBar, "bar", "herdr-1", 240, 32)
 	h.open("tip-1", v1.ViewTooltip, "bar", "herdr-1", 280, 200)
 	h.waitView("bar-1", func(n *v1.Node) bool { return findID(n, "open") != nil })
+	h.open("bar-compact", v1.ViewBar, "bar", "herdr-1", 32, 32)
+	h.waitView("bar-compact", func(n *v1.Node) bool { return findID(n, "open") != nil })
 
 	// Step 3: activating open asks the host for the panel; the host answers
 	// with a 440x560 ViewOpen, and the panel must carry every action node.
@@ -85,10 +88,60 @@ func herdrProtocolScenario(t *testing.T, bin string, panelW, panelH int) {
 		return strings.Contains(treeText(n), "hello from herdr")
 	})
 
+	// Step 4c: clicking read again collapses the preview.
+	h.click("panel-1", "read:probe:w1:p1")
+	h.waitView("panel-1", func(n *v1.Node) bool {
+		return !strings.Contains(treeText(n), "hello from herdr")
+	})
+
+	// Step 4d: a stopped non-default session offers delete only after a
+	// confirm click (cancel keeps it), and the default session never offers
+	// delete at all.
+	h.waitView("panel-1", func(n *v1.Node) bool {
+		return findID(n, "delete:old") != nil && findID(n, "delete:default") == nil
+	})
+	h.click("panel-1", "delete:old")
+	h.waitView("panel-1", func(n *v1.Node) bool {
+		return findID(n, "confirmdelete") != nil && findID(n, "canceldelete") != nil
+	})
+	h.click("panel-1", "canceldelete")
+	h.waitView("panel-1", func(n *v1.Node) bool {
+		return findID(n, "confirmdelete") == nil && findID(n, "delete:old") != nil
+	})
+	h.click("panel-1", "delete:old")
+	h.waitView("panel-1", func(n *v1.Node) bool { return findID(n, "confirmdelete") != nil })
+	h.click("panel-1", "confirmdelete")
+	waitFileContains(t, filepath.Join(tmp, "cli.log"), "session delete old --json")
+
+	// Step 4e: stop reaches the CLI.
+	h.click("panel-1", "stop:probe")
+	waitFileContains(t, filepath.Join(tmp, "cli.log"), "session stop probe --json")
+
+	// Step 4f: attach and new launch a terminal carrying the session name.
+	h.click("panel-1", "attach:probe")
+	waitFileContains(t, filepath.Join(tmp, "term.log"), "--session probe")
+	if err := h.send(&v1.InputEvent{ViewID: "panel-1", Node: "newname", Event: v1.EventChange, Text: "demo-new", Output: "DP-1"}); err != nil {
+		t.Fatal(err)
+	}
+	h.click("panel-1", "newstart")
+	waitFileContains(t, filepath.Join(tmp, "term.log"), "--session demo-new")
+
 	// Step 5: a working -> blocked push must surface as a notify call.
 	fake.trigger()
 	h.wait("a notify call", func() bool { return len(h.notifies()) > 0 })
 	notes := h.notifies()
+	h.waitView("bar-compact", func(n *v1.Node) bool {
+		button := findID(n, "open")
+		if button == nil {
+			return false
+		}
+		icon, count := false, false
+		for _, child := range button.Children {
+			icon = icon || child.Kind == v1.KindIcon
+			count = count || child.Kind == v1.KindText && child.Text == "1"
+		}
+		return icon && count
+	})
 	if !strings.Contains(notes[0].Summary, "blocked") {
 		t.Errorf("notify summary = %q, want it to name blocked", notes[0].Summary)
 	}
@@ -151,17 +204,22 @@ func buildHerdrPlugin(t *testing.T) (bin string, pluginDir string, panelW, panel
 }
 
 // writeFakeHerdrCLI installs a shell script named herdr that answers
-// `session list --json` from fabricated sessions and acknowledges every other
-// subcommand, mirroring the real CLI's JSON keys.
+// `session list --json` from fabricated sessions (probe running, default and
+// old stopped) and acknowledges every other subcommand, mirroring the real
+// CLI's JSON keys. Every invocation is appended to <dir>/cli.log so tests can
+// assert which commands the plugin issued.
 func writeFakeHerdrCLI(t *testing.T, dir, sock, sessionDir string) string {
 	t.Helper()
 	binDir := filepath.Join(dir, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	list := fmt.Sprintf(`{"sessions":[{"name":"default","default":true,"running":false,"session_dir":%q,"socket_path":%q},{"name":"probe","default":false,"running":true,"session_dir":%q,"socket_path":%q}]}`,
-		filepath.Join(dir, "state-default"), filepath.Join(dir, "default.sock"), sessionDir, sock)
+	list := fmt.Sprintf(`{"sessions":[{"name":"default","default":true,"running":false,"session_dir":%q,"socket_path":%q},{"name":"probe","default":false,"running":true,"session_dir":%q,"socket_path":%q},{"name":"old","default":false,"running":false,"session_dir":%q,"socket_path":%q}]}`,
+		filepath.Join(dir, "state-default"), filepath.Join(dir, "default.sock"),
+		sessionDir, sock,
+		filepath.Join(dir, "state-old"), filepath.Join(dir, "old.sock"))
 	script := "#!/bin/sh\n" +
+		"echo \"$@\" >> " + filepath.Join(dir, "cli.log") + "\n" +
 		"if [ \"$1\" = \"session\" ] && [ \"$2\" = \"list\" ]; then\n" +
 		"  printf '%s\\n' '" + list + "'\n" +
 		"  exit 0\n" +
@@ -172,6 +230,36 @@ func writeFakeHerdrCLI(t *testing.T, dir, sock, sessionDir string) string {
 		t.Fatal(err)
 	}
 	return binDir
+}
+
+// writeFakeTerminal installs a script named alacritty (first in the fallback
+// order) that records its argv to <dir>/term.log, so attaches and new-session
+// spawns are observable without launching a real terminal.
+func writeFakeTerminal(t *testing.T, dir string) {
+	t.Helper()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + filepath.Join(dir, "term.log") + "\n"
+	if err := os.WriteFile(filepath.Join(binDir, "alacritty"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// waitFileContains polls path until it contains want, failing with the log on
+// timeout.
+func waitFileContains(t *testing.T, path, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(path); err == nil && strings.Contains(string(b), want) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	b, _ := os.ReadFile(path)
+	t.Fatalf("%s never contained %q; log:\n%s", filepath.Base(path), want, b)
 }
 
 // fakeHerdr is a hermetic stand-in for the herdr socket server: one accept
@@ -353,7 +441,9 @@ type herdrHost struct {
 func startHerdrHost(t *testing.T, bin, pathDir, home string, panelW, panelH int) *herdrHost {
 	t.Helper()
 	cmd := exec.Command(bin)
-	cmd.Env = append(os.Environ(), "PATH="+pathDir, "HOME="+home)
+	// TERMINAL is pinned empty so attach/new resolve the fake alacritty in
+	// pathDir instead of a developer's real terminal.
+	cmd.Env = append(os.Environ(), "PATH="+pathDir, "HOME="+home, "TERMINAL=")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)

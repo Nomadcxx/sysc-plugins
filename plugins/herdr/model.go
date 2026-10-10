@@ -270,6 +270,28 @@ func sortPanes(panes []PaneRow) {
 	})
 }
 
+// PaneStatus returns the current status of one pane in a session, and whether
+// the pane exists in the model at all.
+func PaneStatus(m *Model, session, paneID string) (Status, bool) {
+	if m == nil {
+		return StatusNone, false
+	}
+	for i := range m.Sessions {
+		s := &m.Sessions[i]
+		if s.Name != session {
+			continue
+		}
+		for j := range s.Workspaces {
+			for k := range s.Workspaces[j].Panes {
+				if s.Workspaces[j].Panes[k].PaneID == paneID {
+					return s.Workspaces[j].Panes[k].Status, true
+				}
+			}
+		}
+	}
+	return StatusNone, false
+}
+
 // Sort orders sessions (default first, then name), workspaces (priority, then
 // label), and panes.
 func (m *Model) Sort() {
