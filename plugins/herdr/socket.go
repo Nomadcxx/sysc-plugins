@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -200,6 +201,20 @@ func subscribeConn(ctx context.Context, conn net.Conn, subs []SubSpec) (*Subscri
 	return s, nil
 }
 
+// canonicalEventType normalizes the two naming families the server puts on
+// one stream: global events arrive underscore-named ("pane_created") while
+// pane-scoped subscription frames already use dots ("pane.agent_status_changed").
+// Consumers work in the dotted form used by events.subscribe requests.
+func canonicalEventType(t string) string {
+	if strings.Contains(t, ".") {
+		return t
+	}
+	if i := strings.Index(t, "_"); i >= 0 {
+		return t[:i] + "." + t[i+1:]
+	}
+	return t
+}
+
 // read never writes to conn; it only pushes events until the stream ends.
 func (s *Subscription) read() {
 	defer close(s.events)
@@ -211,6 +226,7 @@ func (s *Subscription) read() {
 		if ev.Type == "" {
 			continue
 		}
+		ev.Type = canonicalEventType(ev.Type)
 		select {
 		case s.events <- ev:
 		case <-s.done:

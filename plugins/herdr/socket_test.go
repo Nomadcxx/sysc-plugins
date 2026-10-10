@@ -74,6 +74,32 @@ func TestCallOnSurfacesAPIError(t *testing.T) {
 	}
 }
 
+func TestSubscribeNormalizesGlobalEventNames(t *testing.T) {
+	// The real server delivers global events underscore-named (verified live
+	// against herdr v0.9.1) while pane-scoped frames already use dots.
+	client, server := net.Pipe()
+	go func() {
+		defer server.Close()
+		_, _ = bufio.NewReader(server).ReadString('\n')
+		_, _ = server.Write([]byte(`{"id":"c1","result":{"type":"subscription_started"}}` + "\n"))
+		_, _ = server.Write([]byte(`{"event":"pane_created","data":{"pane":{"pane_id":"w1:p2"}}}` + "\n"))
+		_, _ = server.Write([]byte(`{"event":"layout_updated","data":{}}` + "\n"))
+		_, _ = server.Write([]byte(`{"event":"pane.agent_status_changed","data":{"pane_id":"w1:p1"}}` + "\n"))
+	}()
+	sub, err := subscribeConn(context.Background(), client, []SubSpec{{Type: "pane.created"}})
+	if err != nil {
+		t.Fatalf("subscribeConn: %v", err)
+	}
+	defer sub.Close()
+	want := []string{"pane.created", "layout.updated", "pane.agent_status_changed"}
+	for _, w := range want {
+		ev, ok := sub.Next()
+		if !ok || ev.Type != w {
+			t.Fatalf("event = %+v ok=%v, want type %q", ev, ok, w)
+		}
+	}
+}
+
 func TestSubscribeStreamsEvents(t *testing.T) {
 	client, server := net.Pipe()
 
