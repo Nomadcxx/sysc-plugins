@@ -174,11 +174,16 @@ func NewService(o Options) *Service {
 }
 
 func defaultSnapshot(ctx context.Context, sock string) (*SnapshotDoc, error) {
-	var doc SnapshotDoc
-	if err := Call(ctx, sock, "session.snapshot", map[string]any{}, &doc); err != nil {
+	// The session.snapshot reply's result is an envelope
+	// {"type":"session_snapshot","snapshot":{...}} (herdr v0.9.1); the document
+	// itself is nested under "snapshot".
+	var env struct {
+		Snapshot SnapshotDoc `json:"snapshot"`
+	}
+	if err := Call(ctx, sock, "session.snapshot", map[string]any{}, &env); err != nil {
 		return nil, err
 	}
-	return &doc, nil
+	return &env.Snapshot, nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
