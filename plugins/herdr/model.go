@@ -131,6 +131,7 @@ type PaneRow struct {
 	Status      Status
 	StatusLabel string
 	Since       time.Time
+	SinceLabel  string // pre-formatted time-in-state, "" when <10s (renderer has no clock)
 	Seq         uint64
 	Session     string
 	Readable    bool
@@ -221,6 +222,9 @@ func BuildSession(info SessionInfo, doc *SnapshotDoc, stopped []StoppedWorkspace
 			}
 			if t, ok := since[p.PaneID]; ok {
 				pr.Since = t
+			}
+			if now.Sub(pr.Since) > 10*time.Second {
+				pr.SinceLabel = HumanizeSince(now, pr.Since)
 			}
 			ws.Panes = append(ws.Panes, pr)
 			if st != StatusNone {

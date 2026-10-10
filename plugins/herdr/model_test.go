@@ -253,6 +253,12 @@ func TestBuildSessionFallbacks(t *testing.T) {
 	if got := row.Workspaces[0].Panes[0].Since; !got.Equal(time.Unix(50, 0)) {
 		t.Fatalf("since from map = %v, want 50", got)
 	}
+	if got := row.Workspaces[0].Panes[0].SinceLabel; got != "50s" {
+		t.Fatalf("since label >10s = %q, want 50s", got)
+	}
+	if got := row.Workspaces[1].Panes[0].SinceLabel; got != "" {
+		t.Fatalf("since label <10s = %q, want empty", got)
+	}
 	if got := row.Workspaces[1].Panes[0].Since; !got.Equal(now) {
 		t.Fatalf("since default = %v, want now", got)
 	}
