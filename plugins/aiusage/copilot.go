@@ -30,13 +30,15 @@ type copilotCollector struct {
 
 // NewCopilot builds the Copilot collector.
 func NewCopilot(env Env) Collector {
-	return &copilotCollector{env: env, base: "https://api.github.com", gh: probeGhToken}
+	return &copilotCollector{env: env, base: "https://api.github.com"}
 }
 
 // probeGhToken asks the gh CLI for its stored token. Best-effort: any
 // failure yields empty and the environment chain takes over.
-func probeGhToken() string {
-	out, err := exec.Command("gh", "auth", "token").Output()
+func probeGhToken(ctx context.Context) string {
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(probeCtx, "gh", "auth", "token").Output()
 	if err != nil {
 		return ""
 	}
@@ -47,13 +49,16 @@ func (c *copilotCollector) ID() string { return "copilot" }
 
 // token resolves the GitHub credential: gh CLI, environment, then OpenCode.
 // Every source tried is recorded for the setup card.
-func (c *copilotCollector) token() (string, *ErrSetup) {
+func (c *copilotCollector) token(ctx context.Context) (string, *ErrSetup) {
 	tried := []string{"gh auth token"}
 	probe := c.gh
+	token := ""
 	if probe == nil {
-		probe = probeGhToken
+		token = probeGhToken(ctx)
+	} else {
+		token = probe()
 	}
-	if tok := strings.TrimSpace(probe()); tok != "" {
+	if tok := strings.TrimSpace(token); tok != "" {
 		return tok, nil
 	}
 	chain := []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}
@@ -192,7 +197,7 @@ func copilotWindow(q *copilotQuota, label, short string, reset time.Time) (Windo
 
 func (c *copilotCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 	rep := ProviderReport{ID: "copilot", Name: "Copilot", UpdatedAt: c.env.now()}
-	tok, setup := c.token()
+	tok, setup := c.token(ctx)
 	if setup != nil {
 		rep.State, rep.Err = StateNeedsSetup, setup.Error()
 		return rep, setup

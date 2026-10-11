@@ -24,6 +24,113 @@ func main() {
 	}
 }
 
+type refreshRequest struct {
+	loop             *aiusage.Loop
+	sequence         uint64
+	configGeneration uint64
+	config           aiusage.Config
+	force            bool
+	retryProviderIDs []string
+}
+
+type refreshCompletion struct {
+	sequence         uint64
+	configGeneration uint64
+	report           aiusage.Report
+	warmStart        bool
+}
+
+func queueRefresh(requests chan refreshRequest, request refreshRequest) {
+	select {
+	case requests <- request:
+		return
+	default:
+	}
+	select {
+	case pending := <-requests:
+		request.force = request.force || pending.force
+		request.retryProviderIDs = mergeRetryProviderIDs(request.retryProviderIDs, pending.retryProviderIDs)
+	default:
+	}
+	select {
+	case requests <- request:
+	default:
+	}
+}
+
+func mergeRetryProviderIDs(groups ...[]string) []string {
+	known := registry()
+	seen := make(map[string]struct{}, len(known))
+	merged := make([]string, 0, len(known))
+	for _, group := range groups {
+		for _, id := range group {
+			if _, ok := known[id]; !ok {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			merged = append(merged, id)
+		}
+	}
+	return merged
+}
+
+func runRefreshWorker(
+	ctx context.Context,
+	requests <-chan refreshRequest,
+	completions chan<- refreshCompletion,
+) {
+	var currentLoop *aiusage.Loop
+	var currentGeneration uint64
+	configured, warmed := false, false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case request := <-requests:
+			if ctx.Err() != nil || request.loop == nil {
+				continue
+			}
+			if currentLoop != request.loop {
+				currentLoop = request.loop
+				configured, warmed = false, false
+			}
+			if !configured || currentGeneration != request.configGeneration {
+				currentLoop.Reconfigure(registry(), request.config)
+				currentGeneration = request.configGeneration
+				configured = true
+			}
+			if !warmed {
+				warmed = true
+				warm := refreshCompletion{
+					sequence: request.sequence, configGeneration: request.configGeneration,
+					report: currentLoop.WarmStart(), warmStart: true,
+				}
+				select {
+				case completions <- warm:
+				case <-ctx.Done():
+					return
+				}
+			}
+			for _, id := range request.retryProviderIDs {
+				currentLoop.Force(id)
+			}
+			report := currentLoop.Round(ctx, request.force)
+			completion := refreshCompletion{
+				sequence: request.sequence, configGeneration: request.configGeneration,
+				report: report,
+			}
+			select {
+			case completions <- completion:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
 func run(in, out *os.File) error {
 	c := v1.NewClient(in, out)
 	hello, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.aiusage", Name: "AI Usage", Version: "0.1.0"}))
@@ -43,18 +150,19 @@ func run(in, out *os.File) error {
 	}
 
 	var (
-		loop     *aiusage.Loop
-		settings = newSettingsState(minor)
-		selected string
-		ledger   = aiusage.Ledger{}
+		loop               *aiusage.Loop
+		settings           = newSettingsState(minor)
+		selected           string
+		ledger             = aiusage.Ledger{}
+		report             aiusage.Report
+		loading            bool
+		settingsGeneration uint64
+		refreshSequence    uint64
 	)
 
 	ensure := func() {
 		if loop == nil {
 			loop = aiusage.NewLoop(registry(), settings.config, aiusage.Env{}, paths.cache, paths.history)
-			loop.WarmStart()
-		} else {
-			loop.Reconfigure(registry(), settings.config)
 		}
 	}
 
@@ -69,7 +177,17 @@ func run(in, out *os.File) error {
 	}
 	views := map[string]view{}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	refreshRequests := make(chan refreshRequest, 1)
+	refreshCompletions := make(chan refreshCompletion, 1)
+	refreshWorkerDone := make(chan struct{})
+	go func() {
+		defer close(refreshWorkerDone)
+		runRefreshWorker(ctx, refreshRequests, refreshCompletions)
+	}()
+	defer func() {
+		cancel()
+		<-refreshWorkerDone
+	}()
 	incoming := make(chan v1.Message, 8)
 	go func() {
 		for {
@@ -86,7 +204,8 @@ func run(in, out *os.File) error {
 		if loop == nil {
 			return
 		}
-		rep := loop.Snapshot()
+		rep := report
+		rep.Loading = loading
 		hist := loop.History(selected, 30)
 		now := time.Now()
 		for id, v := range views {
@@ -134,33 +253,18 @@ func run(in, out *os.File) error {
 		}
 	}
 
-	round := func(force bool) {
+	requestRound := func(force bool, retryProviderIDs ...string) {
 		if loop == nil {
 			return
 		}
-		loop.SetLoading(true)
-		publish() // publish after setting loading so the button sees busy
-		rep := loop.Round(ctx, force)
-		loop.SetLoading(false)
-		ac := aiusage.AlertConfig{
-			Warn: settings.config.Warn, Crit: settings.config.Crit,
-			PerProvider: settings.config.AlertPerProvider,
-			Scope:       settings.config.AlertScope,
-			Cooldown:    settings.config.AlertCooldown,
-		}
-		if settings.config.AlertsEnabled {
-			for _, n := range aiusage.CheckAlerts(rep, ac, ledger, time.Now()) {
-				urgency := v1.UrgencyNormal
-				if n.Critical {
-					urgency = v1.UrgencyCritical
-				}
-				_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: n.Summary, Body: n.Body, Urgency: urgency})
-			}
-			if raw, err := json.Marshal(ledger); err == nil {
-				_, _ = hostcall.Call(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "alerts", Value: raw})
-			}
-		}
+		refreshSequence++
+		loading = true
 		publish()
+		queueRefresh(refreshRequests, refreshRequest{
+			loop: loop, sequence: refreshSequence, configGeneration: settingsGeneration,
+			config: settings.config, force: force,
+			retryProviderIDs: mergeRetryProviderIDs(retryProviderIDs),
+		})
 	}
 
 	// The alert ledger survives restarts via plugin state.
@@ -200,19 +304,22 @@ func run(in, out *os.File) error {
 				if loop == nil {
 					ensure() // defaults are used only if no plugin settings arrived
 				}
-				if !started {
+				firstView := !started
+				if firstView {
 					started = true
 					loadLedger()
-					// Warm-start aware: floors and the cross-instance cache
-					// guard decide who fetches; a reload inside the guard
-					// serves the cache and touches no endpoint.
-					round(false)
 				}
 				views[m.ViewID] = view{
 					kind: m.View, entry: m.Entry, instance: m.Instance,
 					width: m.Width, height: m.Height, resizeTarget: m.Height,
 				}
-				publish()
+				if firstView {
+					// Warm-start and due checks run on the refresh worker. The
+					// busy snapshot reaches the new view before any collector starts.
+					requestRound(false)
+				} else {
+					publish()
+				}
 			case *v1.ViewClose:
 				closed := views[m.ViewID]
 				delete(views, m.ViewID)
@@ -261,7 +368,7 @@ func run(in, out *os.File) error {
 				case m.Node == "refresh":
 					// Manual refresh overrides cadence/backoff; the loop still
 					// defers providers inside a hard request floor.
-					round(true)
+					requestRound(true)
 				case m.Node == "export":
 					if path, err := loop.ExportCSV(""); err == nil {
 						_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{
@@ -279,35 +386,66 @@ func run(in, out *os.File) error {
 				case strings.HasPrefix(m.Node, "retry:"):
 					// Retry re-arms exactly the failed collector — the
 					// zeroed next-due makes it due, the others keep theirs.
-					loop.Force(strings.TrimPrefix(m.Node, "retry:"))
-					round(false)
+					requestRound(false, strings.TrimPrefix(m.Node, "retry:"))
 				case strings.HasPrefix(m.Node, "sel:"):
 					selected = strings.TrimPrefix(m.Node, "sel:")
 					publish()
 				}
 			case *v1.SettingsChanged:
 				if settings.apply(m, minor) {
-					ensure()
+					settingsGeneration++
 					schedule.Reset(settings.config.Refresh)
 					if started {
-						round(true)
+						requestRound(true)
 					}
 				} else if m.Scope == v1.ScopeInstance {
 					publish()
 				}
 			}
+		case completion := <-refreshCompletions:
+			if completion.configGeneration != settingsGeneration {
+				continue
+			}
+			report = completion.report
+			if completion.warmStart {
+				loading = true
+				publish()
+				continue
+			}
+			loading = completion.sequence != refreshSequence
+			if settings.config.AlertsEnabled {
+				ac := aiusage.AlertConfig{
+					Warn: settings.config.Warn, Crit: settings.config.Crit,
+					PerProvider: settings.config.AlertPerProvider,
+					Scope:       settings.config.AlertScope,
+					Cooldown:    settings.config.AlertCooldown,
+				}
+				for _, n := range aiusage.CheckAlerts(report, ac, ledger, time.Now()) {
+					urgency := v1.UrgencyNormal
+					if n.Critical {
+						urgency = v1.UrgencyCritical
+					}
+					_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{
+						Summary: n.Summary, Body: n.Body, Urgency: urgency,
+					})
+				}
+				if raw, err := json.Marshal(ledger); err == nil {
+					_, _ = hostcall.Call(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "alerts", Value: raw})
+				}
+			}
+			publish()
 		case <-clock.C:
 			gap := time.Since(lastTick)
 			lastTick = time.Now()
 			if gap > 2*time.Minute {
 				// The shell was asleep: the data is old, refresh now.
-				round(false)
+				requestRound(false)
 			} else {
 				publish() // countdowns re-render locally, never re-fetching
 			}
 		case <-schedule.C:
 			lastTick = time.Now()
-			round(false)
+			requestRound(false)
 			schedule.Reset(settings.config.Refresh)
 		}
 	}

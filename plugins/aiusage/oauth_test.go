@@ -34,6 +34,23 @@ func asSetup(err error, target **ErrSetup) bool {
 	return false
 }
 
+func TestOAuthVersionProbeHasTimeout(t *testing.T) {
+	marker := installHangingCLI(t, "claude", "CLAUDE_STARTED")
+	done := make(chan string, 1)
+	go func() { done <- probeCLIVersion("claude") }()
+	_ = waitForHangingCLI(t, marker, 2*time.Second)
+	select {
+	case version := <-done:
+		if version != "" {
+			t.Fatalf("version = %q, want empty after timed out probe", version)
+		}
+	case <-time.After(4 * time.Second):
+		killProcess(waitForHangingCLI(t, marker, time.Second))
+		<-done
+		t.Fatal("claude version probe exceeded its timeout")
+	}
+}
+
 func TestOAuthLimitsShapePreferred(t *testing.T) {
 	t.Parallel()
 

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -59,6 +60,8 @@ type Loop struct {
 	historyPath string
 
 	mu         sync.Mutex
+	snapshot   atomic.Pointer[Report]
+	history    atomic.Pointer[historySnapshot]
 	collectors map[string]Collector
 	order      []string // sorted tracked ids, so rounds are deterministic
 	nextDue    map[string]time.Time
@@ -69,7 +72,34 @@ type Loop struct {
 	last       Report
 }
 
-// NewLoop builds the loop and constructs a collector per tracked provider.
+// ponytail: defer constructors until the refresh worker first inspects or uses
+// a collector, so opening a view does not run provider setup commands.
+type deferredCollector struct {
+	build     func(Env) Collector
+	env       Env
+	once      sync.Once
+	collector Collector
+}
+
+func (c *deferredCollector) get() Collector {
+	c.once.Do(func() { c.collector = c.build(c.env) })
+	return c.collector
+}
+
+func (c *deferredCollector) ID() string { return c.get().ID() }
+
+func (c *deferredCollector) Fetch(ctx context.Context) (ProviderReport, error) {
+	return c.get().Fetch(ctx)
+}
+
+func (c *deferredCollector) Floor() time.Duration {
+	if floored, ok := c.get().(Floored); ok {
+		return floored.Floor()
+	}
+	return 0
+}
+
+// NewLoop builds the loop and defers collector construction until the first refresh.
 func NewLoop(reg Registry, cfg Config, env Env, cachePath, historyPath string) *Loop {
 	if cfg.Keys != nil {
 		env.Keys = cfg.Keys
@@ -97,8 +127,8 @@ func (l *Loop) rebuild(reg Registry) {
 		if !l.cfg.Track[id] {
 			continue
 		}
-		if new, ok := reg[id]; ok {
-			l.collectors[id] = new(l.env)
+		if build, ok := reg[id]; ok {
+			l.collectors[id] = &deferredCollector{build: build, env: l.env}
 			l.order = append(l.order, id)
 		}
 	}
@@ -123,6 +153,8 @@ func (l *Loop) WarmStart() Report {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.last = l.loadCache()
+	l.reloadHistory()
+	l.storeSnapshotLocked()
 	return l.last
 }
 
@@ -195,6 +227,7 @@ func (l *Loop) SetLoading(v bool) Report {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.last.Loading = v
+	l.storeSnapshotLocked()
 	return l.last
 }
 
@@ -208,9 +241,15 @@ func (l *Loop) Force(providerID string) {
 
 // Snapshot returns the most recent report.
 func (l *Loop) Snapshot() Report {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.last
+	if snapshot := l.snapshot.Load(); snapshot != nil {
+		return *snapshot
+	}
+	return Report{}
+}
+
+func (l *Loop) storeSnapshotLocked() {
+	snapshot := l.last
+	l.snapshot.Store(&snapshot)
 }
 
 // Round fetches every tracked provider once, serially, in sorted order.
@@ -305,7 +344,9 @@ func (l *Loop) Round(ctx context.Context, force bool) Report {
 	report := Report{Providers: providers, CapturedAt: now}
 	l.writeCache(report)
 	l.appendHistory(report)
+	l.reloadHistory()
 	l.last = report
+	l.storeSnapshotLocked()
 	return report
 }
 
@@ -376,6 +417,10 @@ type historyLine struct {
 	Provider string  `json:"provider"`
 	Window   string  `json:"window"`
 	Pct      float64 `json:"pct"`
+}
+
+type historySnapshot struct {
+	lines []historyLine
 }
 
 // appendHistory records one line per tracked window carrying a meaningful
@@ -476,16 +521,15 @@ func (l *Loop) ExportCSV(dir string) (string, error) {
 // History returns the provider's last n recorded primary-window percents,
 // oldest first — the sparkline's data.
 func (l *Loop) History(provider string, n int) []float64 {
-	raw, err := os.ReadFile(l.historyPath)
-	if err != nil {
+	if n <= 0 {
+		return nil
+	}
+	snapshot := l.history.Load()
+	if snapshot == nil {
 		return nil
 	}
 	var out []float64
-	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
-		var h historyLine
-		if json.Unmarshal([]byte(line), &h) != nil {
-			continue
-		}
+	for _, h := range snapshot.lines {
 		if h.Provider == provider && h.Window == "primary" {
 			out = append(out, h.Pct)
 		}
@@ -494,4 +538,22 @@ func (l *Loop) History(provider string, n int) []float64 {
 		out = out[len(out)-n:]
 	}
 	return out
+}
+
+// reloadHistory runs with the refresh worker; rendering reads only the
+// immutable atomic snapshot and never opens or parses the history file.
+func (l *Loop) reloadHistory() {
+	raw, err := os.ReadFile(l.historyPath)
+	if err != nil {
+		l.history.Store(&historySnapshot{})
+		return
+	}
+	snapshot := &historySnapshot{}
+	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		var h historyLine
+		if json.Unmarshal([]byte(line), &h) == nil {
+			snapshot.lines = append(snapshot.lines, h)
+		}
+	}
+	l.history.Store(snapshot)
 }

@@ -3,6 +3,7 @@ package aiusage
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,6 +30,19 @@ func (f *fakeCollector) Floor() time.Duration {
 func (f *fakeCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 	f.calls++
 	return f.rep, f.err
+}
+
+type heldCollector struct {
+	id      string
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *heldCollector) ID() string { return c.id }
+func (c *heldCollector) Fetch(context.Context) (ProviderReport, error) {
+	c.entered <- struct{}{}
+	<-c.release
+	return freshRep(c.id), nil
 }
 
 // loopEnv returns a test env whose clock the test advances through the
@@ -66,6 +80,49 @@ func freshRep(id string) ProviderReport {
 func loopPaths(t *testing.T) (string, string) {
 	dir := t.TempDir()
 	return filepath.Join(dir, "report.json"), filepath.Join(dir, "history.jsonl")
+}
+
+func TestSnapshotReturnsWhileCollectorIsHeld(t *testing.T) {
+	collector := &heldCollector{
+		id: "alpha", entered: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	cache, history := loopPaths(t)
+	reg := Registry{"alpha": func(Env) Collector { return collector }}
+	l := NewLoop(reg, testConfig(), Env{}, cache, history)
+	roundDone := make(chan Report, 1)
+	go func() { roundDone <- l.Round(t.Context(), true) }()
+	released, completed := false, false
+	defer func() {
+		if !released {
+			close(collector.release)
+		}
+		if !completed {
+			<-roundDone
+		}
+	}()
+
+	select {
+	case <-collector.entered:
+	case <-time.After(time.Second):
+		t.Fatal("collector did not reach the held fetch")
+	}
+
+	snapshotDone := make(chan Report, 1)
+	go func() { snapshotDone <- l.Snapshot() }()
+	select {
+	case <-snapshotDone:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("Snapshot waited for a held collector")
+	}
+	close(collector.release)
+	released = true
+	if report := <-roundDone; len(report.Providers) != 1 {
+		t.Fatalf("completed report has %d providers, want one", len(report.Providers))
+	}
+	completed = true
+	if report := l.Snapshot(); len(report.Providers) != 1 {
+		t.Fatalf("published snapshot has %d providers, want one", len(report.Providers))
+	}
 }
 
 func TestRoundIsSerialAndTrackedOnly(t *testing.T) {
@@ -134,18 +191,27 @@ func TestFloorSkipsWithoutChurn(t *testing.T) {
 	}
 }
 
-func TestNewLoopAppliesConfiguredKeysBeforeBuildingCollectors(t *testing.T) {
+func TestNewLoopDefersCollectorConstructionUntilRefresh(t *testing.T) {
 	cfg := testConfig()
 	cfg.Track = map[string]bool{"alpha": true}
 	cfg.Keys = map[string]string{"alpha": "pasted-key"}
 	cache, history := loopPaths(t)
 	var got string
+	builds := 0
 	reg := Registry{"alpha": func(env Env) Collector {
+		builds++
 		got = env.key("alpha")
 		return &fakeCollector{id: "alpha", rep: freshRep("alpha")}
 	}}
 
-	NewLoop(reg, cfg, Env{}, cache, history)
+	l := NewLoop(reg, cfg, Env{}, cache, history)
+	if builds != 0 {
+		t.Fatalf("constructors at NewLoop = %d, want none", builds)
+	}
+	l.Round(t.Context(), true)
+	if builds != 1 {
+		t.Fatalf("constructors after first round = %d, want one", builds)
+	}
 	if got != "pasted-key" {
 		t.Fatalf("collector key = %q, want configured key", got)
 	}
@@ -383,6 +449,21 @@ func TestHistoryRecordsAndTrims(t *testing.T) {
 	l.Round(t.Context(), true)
 	if samples := l.History("alpha", 30); len(samples) != 3 {
 		t.Fatalf("recovered round missing from history: %v", samples)
+	}
+}
+
+func TestHistoryIsLoadedDuringWarmStartAndServedFromMemory(t *testing.T) {
+	cache, history := loopPaths(t)
+	if err := os.WriteFile(history, []byte(`{"ts":1,"provider":"alpha","window":"primary","pct":42}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l := NewLoop(Registry{}, testConfig(), Env{}, cache, history)
+	l.WarmStart()
+	if err := os.Remove(history); err != nil {
+		t.Fatal(err)
+	}
+	if got := l.History("alpha", 30); len(got) != 1 || got[0] != 42 {
+		t.Fatalf("history after removing source file = %v, want [42]", got)
 	}
 }
 
