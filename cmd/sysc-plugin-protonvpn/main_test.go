@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/plugins/protonvpn"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -29,7 +31,18 @@ connect)
 disconnect)
 	: > "$PROTON_ON"
 	;;
+signout)
+	if [ -n "$PROTON_SIGNOUT_FAIL" ]; then
+		echo "signout failed" >&2
+		exit 1
+	fi
+	echo done > "$PROTON_SIGNOUT_DONE"
+	: > "$PROTON_ON"
+	;;
 status)
+	if [ -n "$PROTON_STATUS_FAIL_AFTER_SIGNOUT" ] && [ -f "$PROTON_SIGNOUT_DONE" ]; then
+		exit 1
+	fi
 	if [ -f "$PROTON_STATUS_HOLD" ]; then
 		: > "$PROTON_STATUS_STARTED"
 		while [ ! -f "$PROTON_STATUS_RELEASE" ]; do /bin/sleep 0.005; done
@@ -602,5 +615,77 @@ func TestShutdownDoesNotWaitForHeldStatus(t *testing.T) {
 		}
 	case <-time.After(50 * time.Millisecond):
 		t.Fatal("shutdown waited for the held status command")
+	}
+}
+
+func TestFailedSignoutRestoresConnectionState(t *testing.T) {
+	h := start(t)
+	p := h.openPanel()
+	h.input("p", p, "action", v1.EventActivate, "", "")
+	p = h.snapshotUntil(func(root *v1.Node) bool {
+		action := find(root, "action")
+		return action != nil && action.Text == "Disconnect" && !action.Disabled
+	})
+
+	t.Setenv("PROTON_SIGNOUT_FAIL", "1")
+	h.input("p", p, "tab:account", v1.EventActivate, "", "")
+	p = h.snapshotUntil(func(root *v1.Node) bool { return find(root, "signout") != nil })
+	h.input("p", p, "signout", v1.EventActivate, "", "")
+	p = h.snapshotUntil(func(root *v1.Node) bool { return contains(root, "exit status 1") })
+	if find(p.Root, "signout") == nil {
+		t.Fatal("failed signout cleared the signed-in account")
+	}
+
+	h.input("p", p, "tab:connections", v1.EventActivate, "", "")
+	p = h.snapshotUntil(func(root *v1.Node) bool { return find(root, "action") != nil })
+	action := find(p.Root, "action")
+	if action.Text != "Disconnect" || action.Disabled {
+		t.Fatalf("failed signout left connection action at %+v, want enabled Disconnect", action)
+	}
+}
+
+func TestSignoutStatusReadFailureEndsTransition(t *testing.T) {
+	dir := t.TempDir()
+	cliBin := filepath.Join(dir, "protonvpn")
+	if err := os.WriteFile(cliBin, []byte(fakeCLI), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PROTON_ARGS", filepath.Join(dir, "args"))
+	t.Setenv("PROTON_ON", filepath.Join(dir, "on"))
+	t.Setenv("PROTON_SIGNOUT_DONE", filepath.Join(dir, "signout-done"))
+	t.Setenv("PROTON_STATUS_FAIL_AFTER_SIGNOUT", "1")
+	if err := os.WriteFile(os.Getenv("PROTON_ON"), []byte("on"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &session{
+		hasCLI: true, cli: &protonvpn.CLI{Bin: cliBin, Timeout: time.Second},
+		machine: &protonvpn.Machine{}, async: make(chan asyncApply, 1),
+		cliJobs: make(chan cliJob, 1), polls: make(chan pollRequest, 1),
+	}
+	s.machine.SetStatus(protonvpn.Status{Phase: protonvpn.PhaseConnected, Server: "NL#1"})
+	s.machine.SetInfo(protonvpn.Info{Username: "jane@example.com"})
+	s.signOut()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		s.runCLIWorker(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-workerDone
+	}()
+
+	var apply asyncApply
+	select {
+	case apply = <-s.async:
+	case <-time.After(2 * time.Second):
+		t.Fatal("signout result was not published")
+	}
+	apply()
+	if got := s.machine.Snapshot().Phase; got != protonvpn.PhaseConnected {
+		t.Fatalf("phase after successful signout with failed status read = %v, want connected", got)
 	}
 }

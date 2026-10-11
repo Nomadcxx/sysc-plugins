@@ -782,17 +782,22 @@ func (s *session) signOut() {
 	statusGeneration := s.statusGeneration
 	s.infoGeneration++
 	infoGeneration := s.infoGeneration
-	s.machine.SetInfo(protonvpn.Info{})
+	previous := s.machine.Snapshot()
 	s.machine.StartDisconnect()
 	if !s.enqueueCLI(func(runCtx context.Context) asyncApply {
 		_, _, err := s.cli.Run(runCtx, "signout")
 		if err != nil {
 			return func() bool {
+				before := s.machine.Snapshot()
 				previousErr := s.signInErr
+				if statusGeneration == s.statusGeneration {
+					s.machine.SetStatus(previous.Status)
+					s.machine.SetIP(previous.IP)
+				}
 				if infoGeneration == s.infoGeneration {
 					s.signInErr = err.Error()
 				}
-				return previousErr != s.signInErr
+				return before != s.machine.Snapshot() || previousErr != s.signInErr
 			}
 		}
 		status, statusErr := s.cli.Status(runCtx)
@@ -800,12 +805,19 @@ func (s *session) signOut() {
 		return func() bool {
 			before := s.machine.Snapshot()
 			previousErr := s.signInErr
-			if statusGeneration == s.statusGeneration && statusErr == nil {
-				s.machine.SetStatus(status)
+			if statusGeneration == s.statusGeneration {
+				if statusErr == nil {
+					s.machine.SetStatus(status)
+				} else {
+					s.machine.SetStatus(previous.Status)
+					s.machine.SetIP(previous.IP)
+				}
 			}
 			if infoGeneration == s.infoGeneration {
 				if infoErr == nil {
 					s.machine.SetInfo(info)
+				} else {
+					s.machine.SetInfo(previous.Info)
 				}
 				s.signInErr = ""
 			}
