@@ -202,11 +202,7 @@ func (s *Source) directory(ctx context.Context, id string) string {
 	return dir
 }
 
-func (s *Source) Running(ctx context.Context) (map[string]time.Time, error) {
-	games, err := s.List(ctx)
-	if err != nil {
-		return nil, err
-	}
+func (s *Source) Running(ctx context.Context, games []source.Game) (map[string]time.Time, error) {
 	byDir := map[string]string{}
 	byName := map[string]string{}
 	var dirs, names []string
@@ -220,11 +216,7 @@ func (s *Source) Running(ctx context.Context) (map[string]time.Time, error) {
 	}
 	// Lutris's wrapper is the signal for any game Lutris started; the
 	// directory match covers one started some other way.
-	wrappers, err := running.ScanWrappers(names, s.procRoot)
-	if err != nil {
-		return nil, err
-	}
-	matches, err := running.Scan(dirs, s.procRoot)
+	matches, wrappers, err := running.ScanGames(ctx, dirs, names, s.procRoot)
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -94,6 +95,12 @@ type session struct {
 	pollC       <-chan time.Time
 	pollEvery   time.Duration
 
+	refreshJobs       chan refreshJob
+	refreshDone       chan refreshResult
+	refreshGeneration uint64
+	refreshRequestID  uint64
+	refreshing        bool
+
 	coverDirty map[string]bool
 	coverJobs  chan coverJob
 	coverDone  chan coverDone
@@ -105,6 +112,28 @@ type coverJob struct {
 
 type coverDone struct {
 	gameID, path string
+}
+
+type refreshJob struct {
+	generation, requestID uint64
+	src                   source.Source
+	scan                  bool
+}
+
+type refreshStage uint8
+
+const (
+	refreshLibrary refreshStage = iota + 1
+	refreshRunning
+)
+
+type refreshResult struct {
+	generation, requestID uint64
+	stage                 refreshStage
+	games                 []source.Game
+	running               map[string]time.Time
+	err                   error
+	done                  bool
 }
 
 func runPlugin(in io.Reader, out io.Writer, env environment) error {
@@ -122,6 +151,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 		machine: panel.NewMachine(), failed: map[string]bool{}, cacheDir: cacheDir,
 		sessions:   store.Log{},
 		coverDirty: map[string]bool{}, coverJobs: make(chan coverJob, 16), coverDone: make(chan coverDone, 16),
+		refreshJobs: make(chan refreshJob, 1), refreshDone: make(chan refreshResult, 2),
 	}
 	if s.env.fetchGrid == nil {
 		s.env.fetchGrid = defaultFetchGrid
@@ -135,6 +165,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go s.coverWorker(ctx)
+	go s.refreshWorker(ctx)
 	incoming := make(chan v1.Message, 8)
 	go func() {
 		for {
@@ -147,7 +178,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 		}
 	}()
 	s.restore(ctx)
-	s.refresh(ctx)
+	s.requestRefresh(false)
 	s.setPoll(5 * time.Second)
 
 	for {
@@ -155,18 +186,22 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 		case <-ctx.Done():
 			return nil
 		case <-s.pollC:
-			s.tick(ctx)
+			s.tick()
 		case res := <-s.coverDone:
 			s.applyCover(res)
 			s.snapshotAll()
+		case res := <-s.refreshDone:
+			if s.applyRefresh(ctx, res) {
+				s.snapshotAll()
+			}
 		case msg := <-incoming:
 			switch m := msg.(type) {
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
 				s.views[m.ViewID] = view{kind: m.View, width: m.Width}
-				s.refresh(ctx)
-				s.scan(ctx)
+				s.requestRefresh(true)
+				s.setPoll(s.desiredPoll())
 				s.snapshot(m.ViewID)
 			case *v1.ViewClose:
 				delete(s.views, m.ViewID)
@@ -181,17 +216,18 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 				s.snapshotAll()
 			case *v1.SettingsChanged:
 				s.settings.apply(m.Values)
+				s.refreshGeneration++
 				if !s.settings.sourceLutris {
 					s.src, s.running = nil, nil
+					s.missing = true
 				} else if s.src == nil {
 					s.openLutris()
 				}
-				s.refresh(ctx)
 				if s.settings.pollRunning == "off" {
 					s.running = nil
-				} else {
-					s.scan(ctx)
 				}
+				s.requestRefresh(true)
+				s.setPoll(s.desiredPoll())
 				s.snapshotAll()
 			}
 		}
@@ -224,26 +260,119 @@ func (s *session) openLutris() {
 	s.src, s.missing = src, false
 }
 
-func (s *session) refresh(ctx context.Context) {
+// requestRefresh keeps one active worker and one replaceable queued request.
+func (s *session) requestRefresh(showProgress bool) {
 	if s.src == nil {
-		s.missing = true
+		s.refreshing = false
+		select {
+		case <-s.refreshJobs:
+		default:
+		}
 		return
 	}
-	games, err := s.src.List(ctx)
-	s.missing = err != nil
-	if err == nil {
-		s.games = games
+	s.refreshRequestID++
+	job := refreshJob{
+		generation: s.refreshGeneration,
+		requestID:  s.refreshRequestID,
+		src:        s.src,
+		scan:       s.settings.pollRunning != "off",
+	}
+	s.refreshing = s.refreshing || showProgress
+	select {
+	case s.refreshJobs <- job:
+	default:
+		select {
+		case <-s.refreshJobs:
+		default:
+		}
+		s.refreshJobs <- job
 	}
 }
 
-// scan updates running detection and feeds the launch machine; it also
-// adopts processes that were already running (Lutris launched them).
-func (s *session) scan(ctx context.Context) {
-	if s.src == nil || s.settings.pollRunning == "off" || s.missing {
-		return
+func (s *session) refreshWorker(ctx context.Context) {
+	publish := func(result refreshResult) bool {
+		select {
+		case s.refreshDone <- result:
+			return true
+		case <-ctx.Done():
+			return false
+		}
 	}
-	running, err := s.src.Running(ctx)
-	if err != nil {
+	for {
+		var job refreshJob
+		select {
+		case <-ctx.Done():
+			return
+		case job = <-s.refreshJobs:
+		}
+		games, err := job.src.List(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if !publish(refreshResult{
+			generation: job.generation,
+			requestID:  job.requestID,
+			stage:      refreshLibrary,
+			games:      games,
+			err:        err,
+			done:       err != nil || !job.scan,
+		}) {
+			return
+		}
+		if err != nil || !job.scan {
+			continue
+		}
+		running, err := job.src.Running(ctx, games)
+		if ctx.Err() != nil {
+			return
+		}
+		if !publish(refreshResult{
+			generation: job.generation,
+			requestID:  job.requestID,
+			stage:      refreshRunning,
+			running:    running,
+			err:        err,
+			done:       true,
+		}) {
+			return
+		}
+	}
+}
+
+func (s *session) applyRefresh(ctx context.Context, result refreshResult) bool {
+	if result.generation != s.refreshGeneration {
+		return false
+	}
+	changed := false
+	switch result.stage {
+	case refreshLibrary:
+		if result.err == nil {
+			changed = s.missing || !slices.Equal(s.games, result.games)
+			s.games = result.games
+			s.missing = false
+		} else if len(s.games) == 0 && !s.missing {
+			s.missing = true
+			changed = true
+		}
+	case refreshRunning:
+		if result.err == nil {
+			changed = true
+			s.scan(ctx, result.running)
+		}
+	}
+	if result.done && result.requestID == s.refreshRequestID {
+		if s.refreshing {
+			s.refreshing = false
+			changed = true
+		}
+	}
+	return changed
+}
+
+// scan applies running detection on the event-loop owner. It also adopts
+// processes that Lutris launched and updates persisted session accounting.
+func (s *session) scan(ctx context.Context, running map[string]time.Time) {
+	if s.src == nil || s.settings.pollRunning == "off" || s.missing {
 		return
 	}
 	s.running = running
@@ -331,10 +460,8 @@ func (s *session) setPoll(d time.Duration) {
 	}
 }
 
-func (s *session) tick(ctx context.Context) {
-	s.refresh(ctx)
-	s.scan(ctx)
-	s.snapshotAll()
+func (s *session) tick() {
+	s.requestRefresh(false)
 }
 
 func (s *session) name(id string) string {
@@ -420,7 +547,7 @@ func (s *session) panelState() panel.State {
 		Now: s.env.now(), All: s.games, Prefs: s.prefs, Query: s.query,
 		Selected: s.selected, Running: s.running, Launching: launching,
 		Failed: s.failed, Sessions: s.sessions, HideUnavailable: s.settings.hideUnavailable,
-		CacheDir: s.cacheDir, LibraryMissing: s.missing,
+		CacheDir: s.cacheDir, LibraryMissing: s.missing, Refreshing: s.refreshing,
 	}
 }
 

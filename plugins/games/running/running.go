@@ -4,6 +4,7 @@ package running
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -25,23 +26,46 @@ type Match struct {
 // ponytail: argv match — a false positive needs a process naming the game dir
 // in argv; upgrade path is exe-path + ppid checks per runner.
 func Scan(gameDirs []string, procRoot string) (map[string]Match, error) {
+	byDir, _, err := ScanGames(context.Background(), gameDirs, nil, procRoot)
+	return byDir, err
+}
+
+// ScanGames finds directory and Lutris wrapper matches from the same /proc
+// traversal, using one cmdline read per process.
+func ScanGames(ctx context.Context, gameDirs, names []string, procRoot string) (map[string]Match, map[string]Match, error) {
 	pending := make(map[string]bool, len(gameDirs))
 	for _, d := range gameDirs {
 		if d != "" {
 			pending[d] = true
 		}
 	}
-	out := map[string]Match{}
-	err := eachProc(procRoot, func(m Match, args [][]byte) bool {
+	byName := make(map[string]bool, len(names))
+	for _, name := range names {
+		if name != "" {
+			byName[name] = true
+		}
+	}
+	dirs := map[string]Match{}
+	wrapperMatches := map[string]Match{}
+	if len(pending) == 0 && len(byName) == 0 {
+		return dirs, wrapperMatches, nil
+	}
+	err := eachProc(ctx, procRoot, func(m Match, args [][]byte) bool {
+		if len(byName) > 0 {
+			if name, ok := wrapperTitle(args); ok && byName[name] {
+				wrapperMatches[name] = m
+				delete(byName, name)
+			}
+		}
 		for dir := range pending {
 			if matchesDir(args, dir) {
-				out[dir] = m
+				dirs[dir] = m
 				delete(pending, dir)
 			}
 		}
-		return len(pending) > 0
+		return len(pending) > 0 || len(byName) > 0
 	})
-	return out, err
+	return dirs, wrapperMatches, err
 }
 
 // wrapperPrefix is the title lutris-wrapper gives itself:
@@ -53,21 +77,8 @@ const wrapperPrefix = "lutris-wrapper: "
 // Lutris counts the game as running, whatever the runner, so it finds Wine
 // and Steam games whose argv never names the install directory.
 func ScanWrappers(names []string, procRoot string) (map[string]Match, error) {
-	pending := make(map[string]bool, len(names))
-	for _, n := range names {
-		if n != "" {
-			pending[n] = true
-		}
-	}
-	out := map[string]Match{}
-	err := eachProc(procRoot, func(m Match, args [][]byte) bool {
-		if name, ok := wrapperTitle(args); ok && pending[name] {
-			out[name] = m
-			delete(pending, name)
-		}
-		return len(pending) > 0
-	})
-	return out, err
+	_, wrappers, err := ScanGames(context.Background(), nil, names, procRoot)
+	return wrappers, err
 }
 
 // wrapperTitle reads the game name off a lutris-wrapper process: the
@@ -88,7 +99,7 @@ func wrapperTitle(args [][]byte) (string, bool) {
 
 // eachProc calls fn with every live process's argv and start time until fn
 // returns false. The start time is the /proc entry's mtime.
-func eachProc(procRoot string, fn func(Match, [][]byte) bool) error {
+func eachProc(ctx context.Context, procRoot string, fn func(Match, [][]byte) bool) error {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -97,6 +108,9 @@ func eachProc(procRoot string, fn func(Match, [][]byte) bool) error {
 		return err
 	}
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
 			continue

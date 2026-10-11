@@ -33,5 +33,5 @@ type Source interface {
 	List(ctx context.Context) ([]Game, error)
 	Launch(ctx context.Context, g Game) error
 	Stop(ctx context.Context, g Game) error
-	Running(ctx context.Context) (map[string]time.Time, error) // keyed by Game.ID
+	Running(ctx context.Context, games []Game) (map[string]time.Time, error) // uses this List snapshot; keyed by Game.ID
 }

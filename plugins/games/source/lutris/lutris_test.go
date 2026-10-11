@@ -152,7 +152,8 @@ func TestRunningAndStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	running, err := src.Running(context.Background())
+	games := mustList(t, src)
+	running, err := src.Running(context.Background(), games)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +161,7 @@ func TestRunningAndStop(t *testing.T) {
 		t.Fatalf("want 1 running, got %v", running)
 	}
 	var hades source.Game
-	for _, g := range mustList(t, src) {
+	for _, g := range games {
 		if g.Name == "Hades" {
 			hades = g
 		}
@@ -326,12 +327,13 @@ func TestWrapperDetectsAndStopsADirectorylessGame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	running, err := src.Running(context.Background())
+	games := mustList(t, src)
+	running, err := src.Running(context.Background(), games)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var np source.Game
-	for _, g := range mustList(t, src) {
+	for _, g := range games {
 		if g.Name == "Never Played" {
 			np = g
 		}

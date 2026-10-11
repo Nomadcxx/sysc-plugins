@@ -65,6 +65,7 @@ type State struct {
 	HideUnavailable bool
 	CacheDir        string
 	LibraryMissing  bool
+	Refreshing      bool
 }
 
 // Visible returns the filtered, sorted, capped games for the current
@@ -133,11 +134,17 @@ func BuildTree(s State) *v1.Node {
 
 	list := &v1.Node{Kind: v1.KindList, ID: "game-list", Key: "game-list",
 		Width: listWidth, Height: bodyHeight, Gap: cardGap}
+	if s.Refreshing {
+		progress := subtle("Refreshing Lutris library…")
+		progress.ID = "library-refreshing"
+		list.Children = append(list.Children, progress)
+	}
 	all := matched(s)
 	games := capCards(all)
 	switch {
 	case s.LibraryMissing:
 		list.Children = append(list.Children, subtle("Lutris library not found"))
+	case len(games) == 0 && s.Refreshing:
 	case len(games) == 0:
 		list.Children = append(list.Children, subtle(emptyListText(s)))
 	default:

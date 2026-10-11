@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -63,13 +65,14 @@ func makeFixture(t *testing.T) (dbPath, procRoot string) {
 }
 
 type harness struct {
-	t       *testing.T
-	host    io.WriteCloser
-	lines   chan []byte
-	done    chan error
-	ran     chan []string
-	stopped bool
-	fetch   func(ctx context.Context, key, slug, dir string) string
+	t        *testing.T
+	host     io.WriteCloser
+	lines    chan []byte
+	done     chan error
+	ran      chan []string
+	procRoot string
+	stopped  bool
+	fetch    func(ctx context.Context, key, slug, dir string) string
 }
 
 func start(t *testing.T) *harness {
@@ -77,7 +80,7 @@ func start(t *testing.T) *harness {
 	dbPath, procRoot := makeFixture(t)
 	input, host := io.Pipe()
 	plugin, output := io.Pipe()
-	h := &harness{t: t, host: host, lines: make(chan []byte, 64), done: make(chan error, 1), ran: make(chan []string, 8)}
+	h := &harness{t: t, host: host, lines: make(chan []byte, 64), done: make(chan error, 1), ran: make(chan []string, 8), procRoot: procRoot}
 	ran := h.ran
 	env := environment{
 		now: time.Now, // fake /proc dir is born "now", so elapsed = 0m
@@ -162,19 +165,81 @@ func (h *harness) pump(want func(line []byte) bool) []byte {
 	}
 }
 
+func (h *harness) snapshotWithin(timeout time.Duration, want func(v1.ViewSnapshot) bool) []byte {
+	h.t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case line := <-h.lines:
+			switch messageType(line) {
+			case v1.TypeViewSnapshot:
+				if snap := snapshotOf(line); want(snap) {
+					return line
+				}
+			case v1.TypeHostCall:
+				var call v1.HostCall
+				if json.Unmarshal(line, &call) == nil {
+					h.replyTo(call.ID)
+				}
+			}
+		case <-timer.C:
+			return nil
+		}
+	}
+}
+
+func (h *harness) settleHostCalls(timeout time.Duration) {
+	h.t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case line := <-h.lines:
+			if messageType(line) == v1.TypeHostCall {
+				var call v1.HostCall
+				if json.Unmarshal(line, &call) == nil {
+					h.replyTo(call.ID)
+				}
+			}
+		case <-timer.C:
+			return
+		}
+	}
+}
+
 func (h *harness) stop() {
 	if h.stopped {
 		return
 	}
 	h.stopped = true
 	h.send(v1.HostShutdown{Type: "host.shutdown"})
-	select {
-	case err := <-h.done:
-		if err != nil {
-			h.t.Fatal(err)
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case err := <-h.done:
+			if err != nil {
+				h.t.Fatal(err)
+			}
+			return
+		case line, ok := <-h.lines:
+			if !ok {
+				err := <-h.done
+				if err != nil {
+					h.t.Fatal(err)
+				}
+				return
+			}
+			if messageType(line) == v1.TypeHostCall {
+				var call v1.HostCall
+				if json.Unmarshal(line, &call) == nil {
+					h.replyTo(call.ID)
+				}
+			}
+		case <-timer.C:
+			h.t.Fatal("plugin did not stop")
 		}
-	case <-time.After(2 * time.Second):
-		h.t.Fatal("plugin did not stop")
 	}
 }
 
@@ -214,7 +279,8 @@ func TestBarShowsRunningGame(t *testing.T) {
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "b", View: v1.ViewBar, Entry: "bar", Output: "DP-1", Width: 240})
 	line := h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "b" && find(s.Root, "bar") != nil
+		pill := find(s.Root, "bar")
+		return s.ViewID == "b" && pill != nil && pill.Text == "Hades · 0m"
 	})
 	pill := find(snapshotOf(line).Root, "bar")
 	if pill.Kind != v1.KindButton || pill.Key != "bar" {
@@ -235,11 +301,13 @@ func TestBarWidthsRemainPerView(t *testing.T) {
 	if got := find(snapshotOf(sideLine).Root, "bar").Text; got != "" {
 		t.Fatalf("side bar text = %q", got)
 	}
+	h.nextCall(v1.CallStateSet)
 
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "wide", View: v1.ViewBar, Entry: "bar", Output: "DP-1", Width: 240})
 	wideLine := h.pump(func(line []byte) bool {
 		s := snapshotOf(line)
-		return s.ViewID == "wide" && find(s.Root, "bar") != nil
+		pill := find(s.Root, "bar")
+		return s.ViewID == "wide" && pill != nil && pill.Text == "Hades · 0m"
 	})
 	if got := find(snapshotOf(wideLine).Root, "bar").Text; got != "Hades · 0m" {
 		t.Fatalf("horizontal bar text = %q", got)
@@ -251,7 +319,7 @@ func TestTooltipViewLaysOut(t *testing.T) {
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "t", View: v1.ViewTooltip, Entry: "bar", Output: "DP-1"})
 	line := h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "t"
+		return s.ViewID == "t" && bytes.Contains(l, []byte("Hades"))
 	})
 	snap := snapshotOf(line)
 	if err := v1.Validate(snap.Root, v1.ViewTooltip); err != nil {
@@ -328,6 +396,7 @@ func TestSearchAndLaunch(t *testing.T) {
 		s := snapshotOf(l)
 		return s.ViewID == "p" && find(s.Root, "card-2") != nil && find(s.Root, "card-1") == nil
 	})
+	h.settleHostCalls(100 * time.Millisecond)
 	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:launch-2", Event: v1.EventActivate})
 	select {
 	case got := <-h.ran:
@@ -411,7 +480,10 @@ func (h *harness) nextCall(kind v1.CallKind) json.RawMessage {
 func TestBarRightClickOpensSwitcher(t *testing.T) {
 	h := start(t)
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "b", View: v1.ViewBar, Entry: "bar", Output: "DP-1"})
-	h.pump(func(l []byte) bool { return find(snapshotOf(l).Root, "bar") != nil })
+	h.pump(func(l []byte) bool {
+		pill := find(snapshotOf(l).Root, "bar")
+		return pill != nil && pill.Text == "Hades · 0m"
+	})
 
 	h.send(v1.InputEvent{Type: "input.event", ViewID: "b", Node: "bar", Event: v1.EventPointer, Button: v1.ButtonSecondary})
 	params := h.nextCall(v1.CallSurfaceOpen)
@@ -506,6 +578,108 @@ func TestCoverQueueIsAsyncAndCoalesced(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("covers never appeared: beta=%v hades=%v", seenBeta, seenHades)
 		}
+	}
+}
+
+func TestViewOpenAndInputStayResponsiveDuringHeldScan(t *testing.T) {
+	var stopWriter chan struct{}
+	var writerDone chan struct{}
+	t.Cleanup(func() {
+		if stopWriter != nil {
+			close(stopWriter)
+			<-writerDone
+		}
+	})
+	h := start(t)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "cached", View: v1.ViewPanel, Entry: "panel"})
+	h.pump(func(line []byte) bool {
+		snap := snapshotOf(line)
+		return snap.ViewID == "cached" && find(snap.Root, "card-1") != nil
+	})
+	h.nextCall(v1.CallStateSet)
+
+	procDir := filepath.Join(h.procRoot, "4242")
+	cmdline := filepath.Join(procDir, "cmdline")
+	if err := os.Remove(cmdline); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(cmdline, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	readerReady := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	stopWriter = make(chan struct{})
+	writerDone = make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		var readyOnce sync.Once
+		for {
+			select {
+			case <-stopWriter:
+				return
+			default:
+			}
+			f, err := os.OpenFile(cmdline, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+			if err != nil {
+				select {
+				case <-stopWriter:
+					return
+				case <-time.After(time.Millisecond):
+					continue
+				}
+			}
+			readyOnce.Do(func() { close(readerReady) })
+			select {
+			case <-release:
+			case <-stopWriter:
+				_ = f.Close()
+				return
+			}
+			_, _ = f.Write([]byte("wine\x00/Games/Hades/Hades\x00"))
+			_ = f.Close()
+		}
+	}()
+
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "during-scan", View: v1.ViewPanel, Entry: "panel"})
+	select {
+	case <-readerReady:
+	case <-time.After(time.Second):
+		t.Fatal("process scan never reached held cmdline")
+	}
+	line := h.snapshotWithin(50*time.Millisecond, func(snap v1.ViewSnapshot) bool {
+		return snap.ViewID == "during-scan"
+	})
+	if line == nil {
+		t.Fatal("ViewOpen waited for the blocked process scan")
+	}
+	if find(snapshotOf(line).Root, "card-1") == nil {
+		t.Fatal("ViewOpen did not use the cached game list")
+	}
+	if find(snapshotOf(line).Root, "library-refreshing") == nil {
+		t.Fatal("ViewOpen did not publish refresh progress")
+	}
+
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "during-scan", Node: "during-scan:search", Event: v1.EventChange, Text: "beta"})
+	h.send(v1.ViewResync{Type: "view.resync", ViewID: "during-scan"})
+	line = h.snapshotWithin(50*time.Millisecond, func(snap v1.ViewSnapshot) bool {
+		search := find(snap.Root, "search")
+		return snap.ViewID == "during-scan" && search != nil && search.Text == "beta"
+	})
+	if line == nil {
+		t.Fatal("input was held behind the blocked process scan")
+	}
+	if find(snapshotOf(line).Root, "card-2") == nil || find(snapshotOf(line).Root, "card-1") != nil {
+		t.Fatalf("search snapshot did not apply beta filter: %s", line)
+	}
+
+	h.send(v1.ViewClose{Type: "view.close", ViewID: "during-scan"})
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "after-close", View: v1.ViewBar, Entry: "bar", Width: 240})
+	if line := h.snapshotWithin(50*time.Millisecond, func(snap v1.ViewSnapshot) bool {
+		return snap.ViewID == "after-close"
+	}); line == nil {
+		t.Fatal("ViewClose and the next ViewOpen waited for the blocked process scan")
 	}
 }
 

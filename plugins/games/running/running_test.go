@@ -1,6 +1,7 @@
 package running
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,23 @@ func fakeProc(t *testing.T, entries map[string]string) string {
 		}
 	}
 	return root
+}
+
+func TestScanGamesMatchesDirectoriesAndWrappersTogether(t *testing.T) {
+	root := fakeProc(t, map[string]string{
+		"1234": "lutris-wrapper: Hades\x00",
+		"1235": "/Games/Beta/start.sh\x00",
+	})
+	dirs, wrappers, err := ScanGames(context.Background(), []string{"/Games/Beta"}, []string{"Hades"}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dirs["/Games/Beta"].PID; got != 1235 {
+		t.Fatalf("directory match PID = %d, want 1235", got)
+	}
+	if got := wrappers["Hades"].PID; got != 1234 {
+		t.Fatalf("wrapper match PID = %d, want 1234", got)
+	}
 }
 
 func TestScanMatchesByDirectory(t *testing.T) {
