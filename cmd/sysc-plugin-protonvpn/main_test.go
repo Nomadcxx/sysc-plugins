@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/plugins/protonvpn"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -29,7 +31,22 @@ connect)
 disconnect)
 	: > "$PROTON_ON"
 	;;
+signout)
+	if [ -n "$PROTON_SIGNOUT_FAIL" ]; then
+		echo "signout failed" >&2
+		exit 1
+	fi
+	echo done > "$PROTON_SIGNOUT_DONE"
+	: > "$PROTON_ON"
+	;;
 status)
+	if [ -n "$PROTON_STATUS_FAIL_AFTER_SIGNOUT" ] && [ -f "$PROTON_SIGNOUT_DONE" ]; then
+		exit 1
+	fi
+	if [ -f "$PROTON_STATUS_HOLD" ]; then
+		: > "$PROTON_STATUS_STARTED"
+		while [ ! -f "$PROTON_STATUS_RELEASE" ]; do /bin/sleep 0.005; done
+	fi
 	if [ -s "$PROTON_ON" ]; then
 		printf 'Status: connected\nServer: NL#1 in Netherlands\nLoad: 10%%\nProtocol: wireguard\n'
 	else
@@ -49,16 +66,25 @@ exit 0
 `
 
 type harness struct {
-	t      *testing.T
-	host   io.WriteCloser
-	hostMu sync.Mutex
-	msgs   chan []byte
-	calls  chan v1.HostCall
-	done   chan error
-	env    environment
+	t             *testing.T
+	host          io.WriteCloser
+	hostMu        sync.Mutex
+	msgs          chan []byte
+	calls         chan v1.HostCall
+	done          chan error
+	env           environment
+	statusHold    string
+	statusStarted string
+	statusRelease string
+	shutdownSent  bool
+	stopped       bool
 }
 
 func start(t *testing.T) *harness {
+	return startWithHeldStatus(t, false)
+}
+
+func startWithHeldStatus(t *testing.T, hold bool) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "protonvpn")
@@ -70,6 +96,17 @@ func start(t *testing.T) *harness {
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_DATA_DIRS", "")
 	t.Setenv("PATH", filepath.Join(dir, "empty"))
+	statusHold := filepath.Join(dir, "hold-status")
+	statusStarted := filepath.Join(dir, "status-started")
+	statusRelease := filepath.Join(dir, "status-release")
+	t.Setenv("PROTON_STATUS_HOLD", statusHold)
+	t.Setenv("PROTON_STATUS_STARTED", statusStarted)
+	t.Setenv("PROTON_STATUS_RELEASE", statusRelease)
+	if hold {
+		if err := os.WriteFile(statusHold, []byte("hold"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	env := environment{
 		now: time.Now, callTimeout: 2 * time.Second,
@@ -88,9 +125,10 @@ func start(t *testing.T) *harness {
 	pluginW, output := io.Pipe()
 	h := &harness{
 		t: t, host: host, env: env,
-		msgs:  make(chan []byte, 64),
-		calls: make(chan v1.HostCall, 64),
-		done:  make(chan error, 1),
+		msgs:       make(chan []byte, 64),
+		calls:      make(chan v1.HostCall, 64),
+		done:       make(chan error, 1),
+		statusHold: statusHold, statusStarted: statusStarted, statusRelease: statusRelease,
 	}
 	go func() {
 		err := runPlugin(in, output, env)
@@ -118,6 +156,12 @@ func start(t *testing.T) *harness {
 		t.Fatalf("first message = %s", got)
 	}
 	t.Cleanup(h.stop)
+	if !hold {
+		// Let the startup refresh settle before view revisions become part of
+		// unrelated input assertions below.
+		h.awaitArgs("config list\n")
+		time.Sleep(50 * time.Millisecond)
+	}
 	return h
 }
 
@@ -158,6 +202,35 @@ func (h *harness) nextWithin(d time.Duration) []byte {
 	case <-time.After(d):
 		h.t.Fatal("timed out waiting for plugin output")
 		return nil
+	}
+}
+
+func (h *harness) nextSnapshotWithin(d time.Duration) v1.ViewSnapshot {
+	h.t.Helper()
+	line := h.nextWithin(d)
+	var snap v1.ViewSnapshot
+	if messageType(line) != v1.TypeViewSnapshot || json.Unmarshal(line, &snap) != nil {
+		h.t.Fatalf("expected view snapshot, got %s", line)
+	}
+	return snap
+}
+
+func (h *harness) waitForStatusBlocked(d time.Duration) {
+	h.t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(h.statusStarted); err == nil {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	h.t.Fatal("status command did not reach the blocking point")
+}
+
+func (h *harness) releaseStatus() {
+	h.t.Helper()
+	if err := os.WriteFile(h.statusRelease, []byte("release"), 0o600); err != nil {
+		h.t.Fatal(err)
 	}
 }
 
@@ -219,9 +292,19 @@ func (h *harness) awaitArgs(want string) {
 }
 
 func (h *harness) stop() {
-	h.send(v1.HostShutdown{Type: "host.shutdown"})
+	if h.stopped {
+		return
+	}
+	if h.statusRelease != "" {
+		_ = os.WriteFile(h.statusRelease, []byte("release"), 0o600)
+	}
+	if !h.shutdownSent {
+		h.send(v1.HostShutdown{Type: "host.shutdown"})
+		h.shutdownSent = true
+	}
 	select {
 	case err := <-h.done:
+		h.stopped = true
 		if err != nil {
 			h.t.Errorf("runPlugin: %v", err)
 		}
@@ -446,4 +529,163 @@ func TestNotifyOnConnect(t *testing.T) {
 		})
 	})
 	_ = notify
+}
+
+func TestHeldStatusDoesNotBlockInputOrOverwriteNewConnect(t *testing.T) {
+	h := startWithHeldStatus(t, true)
+	h.waitForStatusBlocked(2 * time.Second)
+
+	started := time.Now()
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel", Width: 460, Height: 580})
+	p := h.nextSnapshotWithin(50 * time.Millisecond)
+	if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
+		t.Fatalf("ViewOpen took %v with status held", elapsed)
+	}
+
+	started = time.Now()
+	h.input("p", p, "action", v1.EventActivate, "", "")
+	connecting := h.nextSnapshotWithin(50 * time.Millisecond)
+	if action := find(connecting.Root, "action"); action == nil || action.Text != "Cancel" {
+		t.Fatalf("held status blocked connect input or transition feedback: action=%+v", action)
+	}
+	if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
+		t.Fatalf("connect input took %v with status held", elapsed)
+	}
+	args, err := os.ReadFile(os.Getenv("PROTON_ARGS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(args), "connect\n") {
+		t.Fatal("connect command overlapped the held status command")
+	}
+
+	h.releaseStatus()
+	connected := false
+	deadline := time.After(5 * time.Second)
+	for !connected {
+		select {
+		case line := <-h.msgs:
+			var snap v1.ViewSnapshot
+			if messageType(line) != v1.TypeViewSnapshot || json.Unmarshal(line, &snap) != nil {
+				continue
+			}
+			action := find(snap.Root, "action")
+			if action == nil {
+				continue
+			}
+			if action.Text == "Connect" {
+				t.Fatal("stale pre-connect status overwrote the connecting state")
+			}
+			connected = action.Text == "Disconnect"
+		case <-deadline:
+			t.Fatal("connect did not complete after releasing status")
+		}
+	}
+
+	args, err = os.ReadFile(os.Getenv("PROTON_ARGS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := count(strings.Split(strings.TrimSpace(string(args)), "\n"), "connect"); got != 1 {
+		t.Fatalf("got %d connect commands, want one", got)
+	}
+}
+
+func TestShutdownDoesNotWaitForHeldStatus(t *testing.T) {
+	h := startWithHeldStatus(t, true)
+	h.waitForStatusBlocked(2 * time.Second)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel", Width: 460, Height: 580})
+	_ = h.nextSnapshotWithin(50 * time.Millisecond)
+	h.send(v1.ViewClose{Type: "view.close", ViewID: "p"})
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel", Width: 460, Height: 580})
+	if snap := h.nextSnapshotWithin(50 * time.Millisecond); snap.Revision != 1 {
+		t.Fatalf("reopened view revision = %d, want 1 after ViewClose", snap.Revision)
+	}
+	started := time.Now()
+	h.send(v1.HostShutdown{Type: "host.shutdown"})
+	h.shutdownSent = true
+	select {
+	case err := <-h.done:
+		h.stopped = true
+		if err != nil {
+			t.Fatalf("runPlugin: %v", err)
+		}
+		if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
+			t.Fatalf("shutdown took %v with status held", elapsed)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("shutdown waited for the held status command")
+	}
+}
+
+func TestFailedSignoutRestoresConnectionState(t *testing.T) {
+	h := start(t)
+	p := h.openPanel()
+	h.input("p", p, "action", v1.EventActivate, "", "")
+	p = h.snapshotUntil(func(root *v1.Node) bool {
+		action := find(root, "action")
+		return action != nil && action.Text == "Disconnect" && !action.Disabled
+	})
+
+	t.Setenv("PROTON_SIGNOUT_FAIL", "1")
+	h.input("p", p, "tab:account", v1.EventActivate, "", "")
+	p = h.snapshotUntil(func(root *v1.Node) bool { return find(root, "signout") != nil })
+	h.input("p", p, "signout", v1.EventActivate, "", "")
+	p = h.snapshotUntil(func(root *v1.Node) bool { return contains(root, "exit status 1") })
+	if find(p.Root, "signout") == nil {
+		t.Fatal("failed signout cleared the signed-in account")
+	}
+
+	h.input("p", p, "tab:connections", v1.EventActivate, "", "")
+	p = h.snapshotUntil(func(root *v1.Node) bool { return find(root, "action") != nil })
+	action := find(p.Root, "action")
+	if action.Text != "Disconnect" || action.Disabled {
+		t.Fatalf("failed signout left connection action at %+v, want enabled Disconnect", action)
+	}
+}
+
+func TestSignoutStatusReadFailureEndsTransition(t *testing.T) {
+	dir := t.TempDir()
+	cliBin := filepath.Join(dir, "protonvpn")
+	if err := os.WriteFile(cliBin, []byte(fakeCLI), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PROTON_ARGS", filepath.Join(dir, "args"))
+	t.Setenv("PROTON_ON", filepath.Join(dir, "on"))
+	t.Setenv("PROTON_SIGNOUT_DONE", filepath.Join(dir, "signout-done"))
+	t.Setenv("PROTON_STATUS_FAIL_AFTER_SIGNOUT", "1")
+	if err := os.WriteFile(os.Getenv("PROTON_ON"), []byte("on"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &session{
+		hasCLI: true, cli: &protonvpn.CLI{Bin: cliBin, Timeout: time.Second},
+		machine: &protonvpn.Machine{}, async: make(chan asyncApply, 1),
+		cliJobs: make(chan cliJob, 1), polls: make(chan pollRequest, 1),
+	}
+	s.machine.SetStatus(protonvpn.Status{Phase: protonvpn.PhaseConnected, Server: "NL#1"})
+	s.machine.SetInfo(protonvpn.Info{Username: "jane@example.com"})
+	s.signOut()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		s.runCLIWorker(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-workerDone
+	}()
+
+	var apply asyncApply
+	select {
+	case apply = <-s.async:
+	case <-time.After(2 * time.Second):
+		t.Fatal("signout result was not published")
+	}
+	apply()
+	if got := s.machine.Snapshot().Phase; got != protonvpn.PhaseConnected {
+		t.Fatalf("phase after successful signout with failed status read = %v, want connected", got)
+	}
 }
