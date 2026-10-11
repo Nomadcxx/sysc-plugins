@@ -89,6 +89,17 @@ type view struct {
 	width int
 }
 
+type asyncApply func() bool
+type cliJob func(context.Context) asyncApply
+
+type pollRequest struct {
+	status, info, config                               bool
+	statusGeneration, infoGeneration, configGeneration uint64
+}
+
+// ponytail: eight queued CLI jobs cap shutdown backlog; increase from measured input bursts instead of spawning more workers.
+const cliJobQueueSize = 8
+
 type session struct {
 	env      environment
 	client   *v1.Client
@@ -99,7 +110,13 @@ type session struct {
 	cli     *protonvpn.CLI
 	// async carries closures from background work back onto the loop, the
 	// only place allowed to touch the machine.
-	async chan func()
+	async   chan asyncApply
+	cliJobs chan cliJob
+	polls   chan pollRequest
+
+	statusGeneration, infoGeneration, configGeneration uint64
+	linkCheckPending                                   bool
+	connectCancel                                      context.CancelFunc
 
 	countries   []protonvpn.Country
 	tab         string
@@ -147,11 +164,21 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 		env: env, client: c, settings: defaultSettings(), views: map[string]view{},
 		machine: &protonvpn.Machine{},
 		cli:     &protonvpn.CLI{Bin: env.cliBin, Timeout: 10 * time.Second},
-		async:   make(chan func(), 8),
+		async:   make(chan asyncApply, 8),
+		cliJobs: make(chan cliJob, cliJobQueueSize),
+		polls:   make(chan pollRequest, 1),
 		tab:     "connections",
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		s.runCLIWorker(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-workerDone
+	}()
 	incoming := make(chan v1.Message, 8)
 	go func() {
 		for {
@@ -203,16 +230,119 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 				s.snapshotAll()
 			}
 		case f := <-s.async:
-			f()
-			s.notifyTransitions(ctx)
-			s.snapshotAll()
+			if f() {
+				s.notifyTransitions(ctx)
+				s.snapshotAll()
+			}
 		case now := <-ticker.C:
 			s.tick(ctx, now)
 		}
 	}
 }
 
-// startup probes the environment, restores the tab, and takes the first
+func (s *session) enqueueCLI(job cliJob) bool {
+	select {
+	case s.cliJobs <- job:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *session) requestPoll(status, info, config bool) {
+	if !s.hasCLI || (!status && !info && !config) {
+		return
+	}
+	req := pollRequest{
+		status: status, info: info, config: config,
+		statusGeneration: s.statusGeneration,
+		infoGeneration:   s.infoGeneration,
+		configGeneration: s.configGeneration,
+	}
+	select {
+	case s.polls <- req:
+		return
+	default:
+	}
+	select {
+	case pending := <-s.polls:
+		req.status = req.status || pending.status
+		req.info = req.info || pending.info
+		req.config = req.config || pending.config
+	default:
+	}
+	select {
+	case s.polls <- req:
+	default:
+	}
+}
+
+func (s *session) runCLIWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		select {
+		case job := <-s.cliJobs:
+			s.postAsync(ctx, job(ctx))
+			continue
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-s.cliJobs:
+			s.postAsync(ctx, job(ctx))
+		case req := <-s.polls:
+			s.runPoll(ctx, req)
+		}
+	}
+}
+
+func (s *session) runPoll(ctx context.Context, req pollRequest) {
+	var status protonvpn.Status
+	var statusErr error
+	if req.status {
+		status, statusErr = s.cli.Status(ctx)
+	}
+	var info protonvpn.Info
+	var infoErr error
+	if req.info {
+		info, infoErr = s.cli.Info(ctx)
+	}
+	var config protonvpn.Config
+	var configErr error
+	if req.config {
+		config, configErr = s.cli.Config(ctx)
+	}
+	s.postAsync(ctx, func() bool {
+		before := s.machine.Snapshot()
+		if req.status && statusErr == nil && req.statusGeneration == s.statusGeneration {
+			s.machine.SetStatus(status)
+		}
+		if req.info && infoErr == nil && req.infoGeneration == s.infoGeneration {
+			s.machine.SetInfo(info)
+		}
+		if req.config && configErr == nil && req.configGeneration == s.configGeneration {
+			s.machine.SetConfig(config)
+		}
+		return before != s.machine.Snapshot()
+	})
+}
+
+func (s *session) postAsync(ctx context.Context, apply asyncApply) {
+	if apply == nil {
+		return
+	}
+	select {
+	case s.async <- apply:
+	case <-ctx.Done():
+	}
+}
+
+// startup probes the environment, restores the tab, and queues the first
 // readings. Without the CLI everything past the probe is skipped; the panel
 // banner explains the rest.
 func (s *session) startup(ctx context.Context) {
@@ -223,9 +353,7 @@ func (s *session) startup(ctx context.Context) {
 	s.restoreTab(ctx)
 	s.loadServers()
 	if s.hasCLI {
-		s.pollStatus(ctx)
-		s.pollInfo(ctx)
-		s.pollConfig(ctx)
+		s.requestPoll(true, true, true)
 		s.lastPhase = s.machine.Snapshot().Phase
 	}
 }
@@ -294,7 +422,7 @@ func (s *session) tick(ctx context.Context, now time.Time) {
 	}
 	if now.Sub(s.lastStatus) >= interval {
 		s.lastStatus = now
-		s.pollStatus(ctx)
+		s.requestPoll(true, false, false)
 		if s.machine.TransitionExpired() {
 			s.machine.Fail("Timeout")
 		}
@@ -308,7 +436,7 @@ func (s *session) tick(ctx context.Context, now time.Time) {
 		}
 		if now.Sub(s.lastLink) >= 2*time.Second {
 			s.lastLink = now
-			s.checkLink(ctx)
+			s.checkLink()
 		}
 		if snap.Config.PortForwarding && now.Sub(s.lastNATMP) >= 45*time.Second {
 			s.lastNATMP = now
@@ -342,20 +470,33 @@ func (s *session) sampleTraffic() {
 
 // checkLink drops the interface claim when NetworkManager no longer reports
 // the tunnel, then forces an immediate status poll to reconcile.
-func (s *session) checkLink(ctx context.Context) {
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(probeCtx, "nmcli", "-t", "-f", "NAME,TYPE,DEVICE,STATE",
-		"connection", "show", "--active").Output()
-	if err != nil {
-		return // no NetworkManager or it is busy: say nothing
-	}
-	if strings.Contains(string(out), "proton0") {
+func (s *session) checkLink() {
+	if s.linkCheckPending {
 		return
 	}
-	if s.machine.Snapshot().Interface != "" {
-		s.machine.SetInterface("")
-		s.lastStatus = time.Time{}
+	s.linkCheckPending = true
+	generation := s.statusGeneration
+	if !s.enqueueCLI(func(ctx context.Context) asyncApply {
+		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		out, err := exec.CommandContext(probeCtx, "nmcli", "-t", "-f", "NAME,TYPE,DEVICE,STATE",
+			"connection", "show", "--active").Output()
+		cancel()
+		connected := err == nil && strings.Contains(string(out), "proton0")
+		return func() bool {
+			s.linkCheckPending = false
+			if err != nil || generation != s.statusGeneration || connected {
+				return false // no NetworkManager or it is busy: say nothing
+			}
+			before := s.machine.Snapshot()
+			if before.Interface != "" {
+				s.machine.SetInterface("")
+				s.lastStatus = time.Time{}
+				s.requestPoll(true, false, false)
+			}
+			return before != s.machine.Snapshot()
+		}
+	}) {
+		s.linkCheckPending = false
 	}
 }
 
@@ -365,36 +506,15 @@ func (s *session) requestPortMapping() {
 		defer cancel()
 		n := protonvpn.NATPMP{}
 		port, err := n.RequestPort(ctx)
-		s.async <- func() {
+		s.postAsync(ctx, func() bool {
 			if err == nil && port != 0 {
+				before := s.machine.Snapshot().Port
 				s.machine.SetPort(port)
+				return before != port
 			}
-		}
+			return false
+		})
 	}()
-}
-
-func (s *session) pollStatus(ctx context.Context) {
-	st, err := s.cli.Status(ctx)
-	if err != nil {
-		return
-	}
-	s.machine.SetStatus(st)
-}
-
-func (s *session) pollInfo(ctx context.Context) {
-	info, err := s.cli.Info(ctx)
-	if err != nil {
-		return
-	}
-	s.machine.SetInfo(info)
-}
-
-func (s *session) pollConfig(ctx context.Context) {
-	cfg, err := s.cli.Config(ctx)
-	if err != nil {
-		return
-	}
-	s.machine.SetConfig(cfg)
 }
 
 // notifyTransitions fires the desktop notifications the settings ask for
@@ -465,13 +585,13 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	case strings.HasPrefix(node, "server-connect:"):
 		s.connect(ctx, strings.TrimPrefix(node, "server-connect:"))
 	case node == "ks":
-		s.setConfig(ctx, "kill-switch", map[bool]string{true: "off", false: "standard"}[s.machine.Snapshot().Config.KillSwitch != "off"])
+		s.setConfig("kill-switch", map[bool]string{true: "off", false: "standard"}[s.machine.Snapshot().Config.KillSwitch != "off"])
 	case strings.HasPrefix(node, "ns:"):
 		if level := strings.TrimPrefix(node, "ns:"); protonvpn.ValidNetShield(level) {
-			s.setConfig(ctx, "netshield", level)
+			s.setConfig("netshield", level)
 		}
 	case node == "pf":
-		s.setConfig(ctx, "port-forwarding", map[bool]string{true: "off", false: "on"}[s.machine.Snapshot().Config.PortForwarding])
+		s.setConfig("port-forwarding", map[bool]string{true: "off", false: "on"}[s.machine.Snapshot().Config.PortForwarding])
 	case node == "copy-port":
 		if port := s.machine.Snapshot().Port; port != 0 {
 			_, _ = s.call(ctx, v1.CallClipboardWrite, v1.ClipboardWriteParams{Text: strconv.Itoa(port)})
@@ -481,12 +601,9 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	case node == "signin":
 		s.spawnSignIn()
 	case node == "signout":
-		s.signOut(ctx)
+		s.signOut()
 	case node == "refresh":
-		s.pollStatus(ctx)
-		s.pollInfo(ctx)
-		s.pollConfig(ctx)
-		s.notifyTransitions(ctx)
+		s.requestPoll(true, true, true)
 	case strings.HasPrefix(node, "tab:"):
 		s.tab = strings.TrimPrefix(node, "tab:")
 		s.expanded, s.query, s.page = "", "", 0
@@ -521,55 +638,120 @@ func (s *session) quickAction(ctx context.Context) {
 	}
 }
 
-// connect marks the transition, then runs the blocking CLI call off-loop;
-// the result closure lands back on the loop, the only machine writer.
-func (s *session) connect(_ context.Context, target string) {
-	if !s.hasCLI {
+// connect marks the transition, then queues the CLI call for the serial worker.
+func (s *session) connect(ctx context.Context, target string) {
+	if !s.hasCLI || strings.HasPrefix(target, "-") {
 		return
 	}
+	phase := s.machine.Snapshot().Phase
+	if phase == protonvpn.PhaseConnecting || phase == protonvpn.PhaseDisconnecting {
+		return
+	}
+	s.statusGeneration++
+	generation := s.statusGeneration
+	connectCtx, cancel := context.WithCancel(ctx)
+	s.connectCancel = cancel
 	s.machine.StartConnect()
-	go func() {
-		runCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	if !s.enqueueCLI(func(context.Context) asyncApply {
 		defer cancel()
+		if connectCtx.Err() != nil {
+			return func() bool { return false }
+		}
+		runCtx, timeoutCancel := context.WithTimeout(connectCtx, 60*time.Second)
+		defer timeoutCancel()
 		out, errOut, err := s.cli.Connect(runCtx, target)
-		s.async <- func() {
+		return func() bool {
+			if generation != s.statusGeneration {
+				return false
+			}
+			s.connectCancel = nil
+			before := s.machine.Snapshot()
 			if err != nil {
 				s.machine.Fail(protonvpn.ErrorDetail(errOut))
-				return
+				return before != s.machine.Snapshot()
 			}
 			if ip := protonvpn.ParseConnectIP(out); ip != "" {
 				s.machine.SetIP(ip)
 			}
-			s.pollStatus(context.Background())
+			s.requestPoll(true, false, false)
+			return before != s.machine.Snapshot()
 		}
-	}()
+	}) {
+		cancel()
+		s.connectCancel = nil
+		s.machine.Fail("VPN is busy")
+	}
 }
 
 func (s *session) disconnect(ctx context.Context) {
 	if !s.hasCLI {
 		return
 	}
-	s.machine.StartDisconnect()
-	go func() {
-		runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_, errOut, err := s.cli.Disconnect(runCtx)
-		s.async <- func() {
-			if err != nil {
-				s.machine.Fail(protonvpn.ErrorDetail(errOut))
-				return
-			}
-			s.pollStatus(context.Background())
-		}
-	}()
-}
-
-func (s *session) setConfig(ctx context.Context, key, value string) {
-	if _, _, err := s.cli.Run(ctx, "config", "set", key, value); err != nil {
-		s.fileErr = err.Error()
+	if s.machine.Snapshot().Phase == protonvpn.PhaseDisconnecting || s.machine.Snapshot().Phase == protonvpn.PhaseDisconnected {
 		return
 	}
-	s.pollConfig(ctx)
+	if s.connectCancel != nil {
+		s.connectCancel()
+		s.connectCancel = nil
+	}
+	s.statusGeneration++
+	generation := s.statusGeneration
+	disconnectCtx, cancel := context.WithCancel(ctx)
+	s.machine.StartDisconnect()
+	if !s.enqueueCLI(func(context.Context) asyncApply {
+		defer cancel()
+		runCtx, timeoutCancel := context.WithTimeout(disconnectCtx, 30*time.Second)
+		defer timeoutCancel()
+		_, errOut, err := s.cli.Disconnect(runCtx)
+		return func() bool {
+			if generation != s.statusGeneration {
+				return false
+			}
+			before := s.machine.Snapshot()
+			if err != nil {
+				s.machine.Fail(protonvpn.ErrorDetail(errOut))
+				return before != s.machine.Snapshot()
+			}
+			s.requestPoll(true, false, false)
+			return false
+		}
+	}) {
+		cancel()
+		s.machine.Fail("VPN is busy")
+	}
+}
+
+func (s *session) setConfig(key, value string) {
+	s.configGeneration++
+	generation := s.configGeneration
+	if !s.enqueueCLI(func(ctx context.Context) asyncApply {
+		_, _, err := s.cli.Run(ctx, "config", "set", key, value)
+		var config protonvpn.Config
+		var configErr error
+		if err == nil {
+			config, configErr = s.cli.Config(ctx)
+		}
+		return func() bool {
+			if generation != s.configGeneration {
+				return false
+			}
+			before := s.machine.Snapshot()
+			previousErr := s.fileErr
+			if err != nil {
+				s.fileErr = err.Error()
+				return before != s.machine.Snapshot() || previousErr != s.fileErr
+			}
+			if configErr != nil {
+				s.fileErr = configErr.Error()
+				return before != s.machine.Snapshot() || previousErr != s.fileErr
+			}
+			s.fileErr = ""
+			s.machine.SetConfig(config)
+			return before != s.machine.Snapshot() || previousErr != s.fileErr
+		}
+	}) {
+		s.fileErr = "VPN is busy"
+	}
 }
 
 func (s *session) spawnSignIn() {
@@ -588,19 +770,51 @@ func (s *session) spawnSignIn() {
 	s.signInErr = fmt.Sprintf("No terminal found; run: %s signin %s", s.env.cliBin, s.userDraft)
 }
 
-func (s *session) signOut(ctx context.Context) {
-	if _, _, err := s.cli.Run(ctx, "signout"); err != nil {
-		s.signInErr = err.Error()
+func (s *session) signOut() {
+	if !s.hasCLI || s.machine.Snapshot().Phase == protonvpn.PhaseDisconnecting {
 		return
 	}
+	if s.connectCancel != nil {
+		s.connectCancel()
+		s.connectCancel = nil
+	}
+	s.statusGeneration++
+	statusGeneration := s.statusGeneration
+	s.infoGeneration++
+	infoGeneration := s.infoGeneration
 	s.machine.SetInfo(protonvpn.Info{})
 	s.machine.StartDisconnect()
-	go func() {
-		s.async <- func() {
-			s.pollStatus(context.Background())
-			s.pollInfo(context.Background())
+	if !s.enqueueCLI(func(runCtx context.Context) asyncApply {
+		_, _, err := s.cli.Run(runCtx, "signout")
+		if err != nil {
+			return func() bool {
+				previousErr := s.signInErr
+				if infoGeneration == s.infoGeneration {
+					s.signInErr = err.Error()
+				}
+				return previousErr != s.signInErr
+			}
 		}
-	}()
+		status, statusErr := s.cli.Status(runCtx)
+		info, infoErr := s.cli.Info(runCtx)
+		return func() bool {
+			before := s.machine.Snapshot()
+			previousErr := s.signInErr
+			if statusGeneration == s.statusGeneration && statusErr == nil {
+				s.machine.SetStatus(status)
+			}
+			if infoGeneration == s.infoGeneration {
+				if infoErr == nil {
+					s.machine.SetInfo(info)
+				}
+				s.signInErr = ""
+			}
+			return before != s.machine.Snapshot() || previousErr != s.signInErr
+		}
+	}) {
+		s.signInErr = "VPN is busy"
+		s.machine.Fail(s.signInErr)
+	}
 }
 
 func (s *session) tree(v view) *v1.Node {
