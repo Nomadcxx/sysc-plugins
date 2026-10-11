@@ -25,3 +25,9 @@ func Call(ctx context.Context, c *v1.Client, kind v1.CallKind, params any) (v1.H
 	defer cancel()
 	return c.Call(ctx, kind, params)
 }
+
+// Async makes a best-effort host call without waiting on its reply. The SDK
+// encoder serializes this write with snapshots sent by the event loop.
+func Async(ctx context.Context, c *v1.Client, kind v1.CallKind, params any) {
+	go func() { _, _ = Call(ctx, c, kind, params) }()
+}

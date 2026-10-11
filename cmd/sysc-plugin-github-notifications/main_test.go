@@ -131,26 +131,33 @@ func TestBarClicksOpenGitHubPanel(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			var calls []*v1.HostCall
-			deadline := time.NewTimer(300 * time.Millisecond)
-			defer deadline.Stop()
-		collect:
-			for {
-				select {
-				case call := <-panelCalls:
-					calls = append(calls, call)
-					if err := send(&v1.HostReply{ID: call.ID, OK: true, Result: json.RawMessage(`null`)}); err != nil {
-						t.Fatal(err)
-					}
-				case <-deadline.C:
-					break collect
-				}
+			var call *v1.HostCall
+			select {
+			case call = <-panelCalls:
+			case <-time.After(2 * time.Second):
+				t.Fatal("bar click did not call panel.open")
 			}
-			if len(calls) != 1 {
-				t.Fatalf("bar click made %d panel.open calls, want exactly one", len(calls))
+			if err := send(&v1.ViewOpen{ViewID: "canary", View: v1.ViewBar, Entry: "bar"}); err != nil {
+				t.Fatal(err)
+			}
+			var canary *v1.ViewSnapshot
+			select {
+			case canary = <-snapshots:
+			case <-time.After(250 * time.Millisecond):
+			}
+			if err := send(&v1.HostReply{ID: call.ID, OK: true, Result: json.RawMessage(`null`)}); err != nil {
+				t.Fatal(err)
+			}
+			if canary == nil {
+				select {
+				case <-snapshots: // Let the old blocking implementation drain before failing.
+				case <-time.After(2 * time.Second):
+					t.Fatal("canary view did not open after the panel.open reply")
+				}
+				t.Fatal("opening a view waited for the panel.open reply")
 			}
 			var got v1.PanelParams
-			if err := json.Unmarshal(calls[0].Params, &got); err != nil {
+			if err := json.Unmarshal(call.Params, &got); err != nil {
 				t.Fatal(err)
 			}
 			want := v1.PanelParams{Entry: "panel", Output: "DP-1", Generation: 7, Instance: instance}

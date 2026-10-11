@@ -42,8 +42,13 @@ func runClock(in io.Reader, out io.Writer, now func() time.Time) error {
 	views := map[string]view{}
 	showWhenIdle := true
 	playSound := true
+	stateChanged := false
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	saves := hostcall.NewStateSaver(ctx, c)
+	defer func() {
+		cancel()
+		saves.Flush(time.Second)
+	}()
 
 	ticks := time.NewTicker(time.Second)
 	defer ticks.Stop()
@@ -56,10 +61,22 @@ func runClock(in io.Reader, out io.Writer, now func() time.Time) error {
 				cancel()
 				return
 			}
-			incoming <- msg
+			select {
+			case incoming <- msg:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
-	restore(ctx, c, tm)
+	restoreResults := make(chan timer.Snapshot, 1)
+	go func() {
+		if snap, ok := restore(ctx, c); ok {
+			select {
+			case restoreResults <- snap:
+			case <-ctx.Done():
+			}
+		}
+	}()
 
 	publish := func() {
 		// One read for the whole frame: the bar and the panel have to agree
@@ -82,45 +99,53 @@ func runClock(in io.Reader, out io.Writer, now func() time.Time) error {
 		}
 	}
 
-	handleInput := func(ctx context.Context, c *v1.Client, tm *timer.Session, m *v1.InputEvent) {
+	handleInput := func(ctx context.Context, c *v1.Client, tm *timer.Session, m *v1.InputEvent) bool {
 		switch m.Node {
 		case "open":
 			// A click on the fired timer clears it; the user does not want
 			// another session just yet.
 			if tm.Fired() {
 				tm.Reset()
-				save(ctx, c, tm)
-				return
+				save(saves, tm)
+				return true
 			}
-			_, _ = hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+			hostcall.Async(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 		case "close":
-			_, _ = hostcall.Call(ctx, c, v1.CallPanelClose, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+			hostcall.Async(ctx, c, v1.CallPanelClose, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 		case "start":
 			// The panel stays open. It carries the ring, the phase pills and
 			// the transport, so closing it on start takes the controls away
 			// at the moment they start mattering -- and the shell's own open
 			// call is a toggle, which a close issued from here races.
 			tm.Start()
-			save(ctx, c, tm)
+			save(saves, tm)
+			return true
 		case "pause":
 			tm.Pause()
-			save(ctx, c, tm)
+			save(saves, tm)
+			return true
 		case "reset":
 			tm.Reset()
-			save(ctx, c, tm)
+			save(saves, tm)
+			return true
 		case "skip":
 			tm.Skip()
-			save(ctx, c, tm)
+			save(saves, tm)
+			return true
 		case "mode-work":
 			tm.SetMode(timer.ModeWork)
-			save(ctx, c, tm)
+			save(saves, tm)
+			return true
 		case "mode-short":
 			tm.SetMode(timer.ModeShort)
-			save(ctx, c, tm)
+			save(saves, tm)
+			return true
 		case "mode-long":
 			tm.SetMode(timer.ModeLong)
-			save(ctx, c, tm)
+			save(saves, tm)
+			return true
 		}
+		return false
 	}
 
 	minutes := func(raw any) time.Duration {
@@ -141,7 +166,7 @@ func runClock(in io.Reader, out io.Writer, now func() time.Time) error {
 				// Start stored this phase's deadline. The roll stays in
 				// memory until it is saved, and a restart would complete
 				// the finished phase again.
-				save(ctx, c, tm)
+				save(saves, tm)
 				body := "Break over — back to work"
 				sound := timer.SoundBreakDone
 				if prev == timer.ModeWork {
@@ -154,9 +179,14 @@ func runClock(in io.Reader, out io.Writer, now func() time.Time) error {
 				if playSound {
 					timer.Play(sound)
 				}
-				_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "Pomodoro", Body: body, Urgency: v1.UrgencyNormal})
+				hostcall.Async(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "Pomodoro", Body: body, Urgency: v1.UrgencyNormal})
 			}
 			if tm.Running() || done {
+				publish()
+			}
+		case snap := <-restoreResults:
+			if !stateChanged {
+				tm.RestoreSnapshot(snap)
 				publish()
 			}
 		case msg := <-incoming:
@@ -169,7 +199,9 @@ func runClock(in io.Reader, out io.Writer, now func() time.Time) error {
 			case *v1.ViewClose:
 				delete(views, m.ViewID)
 			case *v1.InputEvent:
-				handleInput(ctx, c, tm, m)
+				if handleInput(ctx, c, tm, m) {
+					stateChanged = true
+				}
 				publish()
 			case *v1.SettingsChanged:
 				changed := false
@@ -228,26 +260,26 @@ func runClock(in io.Reader, out io.Writer, now func() time.Time) error {
 	}
 }
 
-func save(ctx context.Context, c *v1.Client, tm *timer.Session) {
+func save(saves *hostcall.StateSaver, tm *timer.Session) {
 	raw, err := json.Marshal(tm.Snapshot())
 	if err != nil {
 		return
 	}
-	_, _ = hostcall.Call(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "session", Value: raw})
+	saves.Save("session", raw)
 }
 
-func restore(ctx context.Context, c *v1.Client, tm *timer.Session) {
+func restore(ctx context.Context, c *v1.Client) (timer.Snapshot, bool) {
 	reply, err := hostcall.Call(ctx, c, v1.CallStateGet, v1.StateGetParams{Key: "session"})
 	if err != nil || !reply.OK {
-		return
+		return timer.Snapshot{}, false
 	}
 	var result v1.StateGetResult
 	if err := json.Unmarshal(reply.Result, &result); err != nil || !result.Found {
-		return
+		return timer.Snapshot{}, false
 	}
 	var snap timer.Snapshot
 	if err := json.Unmarshal(result.Value, &snap); err != nil {
-		return
+		return timer.Snapshot{}, false
 	}
-	tm.RestoreSnapshot(snap)
+	return snap, true
 }

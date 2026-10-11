@@ -52,16 +52,21 @@ func runPlugin(in io.Reader, out io.Writer, gh githubnotifications.GH, opener fu
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	coordinator := githubnotifications.NewCoordinator(ctx)
+	saves := hostcall.NewStateSaver(ctx, c)
 	defer func() {
 		cancel()
 		coordinator.Close()
+		saves.Flush(time.Second)
 	}()
 
 	session := githubnotifications.NewSession(gh, defaultPage)
 	views := map[string]panelView{}
 	settings := pluginSettings{interval: 120 * time.Second}
 	refreshing := false
+	cacheLoaded := false
+	pendingRefresh := false
 	toastUnread := make(chan bool, 64)
+	cacheResults := make(chan json.RawMessage, 1)
 
 	incoming := make(chan v1.Message, 16)
 	go func() {
@@ -79,17 +84,22 @@ func runPlugin(in io.Reader, out io.Writer, gh githubnotifications.GH, opener fu
 		}
 	}()
 
-	if reply, err := hostcall.Call(ctx, c, v1.CallStateGet, v1.StateGetParams{Key: stateCacheKey}); err == nil && reply.OK {
-		var result v1.StateGetResult
-		if json.Unmarshal(reply.Result, &result) == nil && result.Found {
-			session.RestoreCache(result.Value)
+	go func() {
+		var cached json.RawMessage
+		if reply, err := hostcall.Call(ctx, c, v1.CallStateGet, v1.StateGetParams{Key: stateCacheKey}); err == nil && reply.OK {
+			var result v1.StateGetResult
+			if json.Unmarshal(reply.Result, &result) == nil && result.Found {
+				cached = append(json.RawMessage(nil), result.Value...)
+			}
 		}
-	}
+		select {
+		case cacheResults <- cached:
+		case <-ctx.Done():
+		}
+	}()
 
 	saveCache := func() {
-		callCtx, stop := context.WithTimeout(ctx, 5*time.Second)
-		defer stop()
-		_, _ = c.Call(callCtx, v1.CallStateSet, v1.StateSetParams{Key: stateCacheKey, Value: session.Cache()})
+		saves.Save(stateCacheKey, session.Cache())
 	}
 
 	publish := func() {
@@ -139,17 +149,20 @@ func runPlugin(in io.Reader, out io.Writer, gh githubnotifications.GH, opener fu
 		refreshing = coordinator.Refreshing()
 		if <-toastUnread {
 			inbox := session.Inbox()
-			callCtx, stop := context.WithTimeout(ctx, 5*time.Second)
-			_, _ = c.Call(callCtx, v1.CallNotify, v1.NotifyParams{
+			hostcall.Async(ctx, c, v1.CallNotify, v1.NotifyParams{
 				Summary: "GitHub", Body: unreadText(len(inbox.Items), inbox.HasMore), Urgency: v1.UrgencyNormal,
 			})
-			stop()
 		}
 		saveCache()
 		publish()
 	}
 	requestRefresh := func() {
 		refreshing = true
+		if !cacheLoaded {
+			pendingRefresh = true
+			publish()
+			return
+		}
 		coordinator.RequestRefresh(refreshRun, refreshComplete)
 		publish()
 	}
@@ -191,6 +204,17 @@ func runPlugin(in io.Reader, out io.Writer, gh githubnotifications.GH, opener fu
 			if complete != nil {
 				complete()
 			}
+		case cached := <-cacheResults:
+			if len(cached) > 0 {
+				session.RestoreCache(cached)
+			}
+			cacheLoaded = true
+			if pendingRefresh {
+				pendingRefresh = false
+				requestRefresh()
+			} else {
+				publish()
+			}
 		case ack := <-progress:
 			publish()
 			close(ack)
@@ -218,11 +242,9 @@ func runPlugin(in io.Reader, out io.Writer, gh githubnotifications.GH, opener fu
 					primary := msg.Event == v1.EventActivate
 					secondary := msg.Event == v1.EventPointer && msg.Button == v1.ButtonSecondary
 					if msg.Node == "open" && (primary || secondary) {
-						callCtx, stop := context.WithTimeout(ctx, 5*time.Second)
-						_, _ = c.Call(callCtx, v1.CallPanelOpen, v1.PanelParams{
+						hostcall.Async(ctx, c, v1.CallPanelOpen, v1.PanelParams{
 							Entry: "panel", Output: msg.Output, Generation: msg.Generation, Instance: view.instance,
 						})
-						stop()
 					}
 					continue
 				}

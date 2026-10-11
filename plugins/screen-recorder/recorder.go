@@ -56,6 +56,7 @@ type command struct {
 	kind   int
 	output string
 	own    Ownership
+	done   chan struct{}
 	cfg    Config
 }
 
@@ -150,9 +151,13 @@ func (r *Recorder) Updates() <-chan Snapshot { return r.updates }
 func (r *Recorder) ToggleRecord(output string) { r.send(command{kind: cmdRecord, output: output}) }
 func (r *Recorder) ToggleReplay(output string) { r.send(command{kind: cmdReplay, output: output}) }
 func (r *Recorder) SaveReplay()                { r.send(command{kind: cmdSave}) }
-func (r *Recorder) Recover(own Ownership)      { r.send(command{kind: cmdRecover, own: own}) }
-func (r *Recorder) Retry()                     { r.send(command{kind: cmdRetry}) }
-func (r *Recorder) Reconfigure(cfg Config)     { r.send(command{kind: cmdReconfig, cfg: cfg}) }
+func (r *Recorder) Recover(own Ownership) <-chan struct{} {
+	done := make(chan struct{})
+	r.send(command{kind: cmdRecover, own: own, done: done})
+	return done
+}
+func (r *Recorder) Retry()                 { r.send(command{kind: cmdRetry}) }
+func (r *Recorder) Reconfigure(cfg Config) { r.send(command{kind: cmdReconfig, cfg: cfg}) }
 
 func (r *Recorder) Close() {
 	r.mu.Lock()
@@ -196,6 +201,9 @@ func (r *Recorder) loop() {
 				r.drain()
 			}
 			r.handle(c)
+			if c.done != nil {
+				close(c.done)
+			}
 		}
 	}
 }

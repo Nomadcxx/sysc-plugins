@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	"github.com/Nomadcxx/sysc-plugins/plugins/notes"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -104,6 +106,246 @@ func TestStickyAndPanelShareOneDocument(t *testing.T) {
 	sess.Tick()
 	if snap := sess.Snap(); snap.Body != "from sticky" {
 		t.Fatalf("panel sees %q", snap.Body)
+	}
+}
+
+func TestPanelOpenReturnsWhileHostReplyIsHeld(t *testing.T) {
+	originalDefault := hostcall.Default
+	hostcall.Default = 5 * time.Second
+	defer func() { hostcall.Default = originalDefault }()
+
+	toPlugin, hostOut := io.Pipe()
+	hostIn, pluginOut := io.Pipe()
+	defer toPlugin.Close()
+	defer hostOut.Close()
+	defer hostIn.Close()
+	defer pluginOut.Close()
+	c := v1.NewClient(toPlugin, pluginOut)
+	calls := make(chan *v1.HostCall, 1)
+	go func() {
+		msg, err := v1.NewDecoder(hostIn, v1.ToHost).Decode()
+		if err == nil {
+			if call, ok := msg.(*v1.HostCall); ok {
+				calls <- call
+			}
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sess, _ := newSessionForTest(t)
+	results := make(chan notesActionResult, 1)
+	done := make(chan struct{})
+	go func() {
+		handlePanel(ctx, c, sess, &v1.InputEvent{Node: "open"}, nil, nil, results)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("panel open waited for the host reply")
+	}
+	select {
+	case call := <-calls:
+		if call.Call != v1.CallPanelOpen {
+			t.Fatalf("call = %q, want panel.open", call.Call)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("panel.open was not sent")
+	}
+}
+
+func TestClipboardImportReturnsWhileHostReplyIsHeld(t *testing.T) {
+	toPlugin, hostOut := io.Pipe()
+	hostIn, pluginOut := io.Pipe()
+	defer toPlugin.Close()
+	defer hostOut.Close()
+	defer hostIn.Close()
+	defer pluginOut.Close()
+	c := v1.NewClient(toPlugin, pluginOut)
+	go func() {
+		for {
+			if _, err := c.Recv(); err != nil {
+				return
+			}
+		}
+	}()
+	calls := make(chan *v1.HostCall, 1)
+	go func() {
+		msg, err := v1.NewDecoder(hostIn, v1.ToHost).Decode()
+		if err == nil {
+			if call, ok := msg.(*v1.HostCall); ok {
+				calls <- call
+			}
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sess, _ := newSessionForTest(t)
+	results := make(chan notesActionResult, 1)
+	done := make(chan struct{})
+	go func() {
+		handlePanel(ctx, c, sess, &v1.InputEvent{Node: "clipboard-import"}, nil, nil, results)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("clipboard import waited for the host reply")
+	}
+	var call *v1.HostCall
+	select {
+	case call = <-calls:
+		if call.Call != v1.CallClipboardRead {
+			t.Fatalf("call = %q, want clipboard.read", call.Call)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("clipboard.read was not sent")
+	}
+	if err := v1.NewEncoder(hostOut).Encode(&v1.HostReply{ID: call.ID, OK: true, Result: json.RawMessage(`{"text":"from clipboard"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-results:
+		if result.kind != "clipboard-import" || result.err != nil || result.clipboard.Text != "from clipboard" {
+			t.Fatalf("clipboard result = %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("clipboard reply was not returned to the owner")
+	}
+}
+
+func TestStickyPinReturnsWhileStateReplyIsHeld(t *testing.T) {
+	toPlugin, hostOut := io.Pipe()
+	hostIn, pluginOut := io.Pipe()
+	defer toPlugin.Close()
+	defer hostOut.Close()
+	defer hostIn.Close()
+	defer pluginOut.Close()
+	c := v1.NewClient(toPlugin, pluginOut)
+	jobs := make(chan notesIOJob, 1)
+	submit := func(job notesIOJob) error { jobs <- job; return nil }
+	sess, _ := newSessionForTest(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		handleSticky(ctx, c, sess, &v1.InputEvent{ViewID: "sticky", Node: "surface-pin"},
+			view{kind: v1.ViewFloating, name: "a.md", output: "DP-1"}, map[string]view{}, map[string]bool{}, submit)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("surface-pin waited for state.get")
+	}
+
+	workerDone := make(chan struct{})
+	go func() {
+		_ = (<-jobs)(ctx)
+		close(workerDone)
+	}()
+	callCh := make(chan *v1.HostCall, 1)
+	go func() {
+		msg, err := v1.NewDecoder(hostIn, v1.ToHost).Decode()
+		if err == nil {
+			if call, ok := msg.(*v1.HostCall); ok {
+				callCh <- call
+			}
+		}
+	}()
+	select {
+	case call := <-callCh:
+		if call.Call != v1.CallStateGet {
+			t.Fatalf("first sticky pin call = %q, want state.get", call.Call)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sticky pin did not start its state read")
+	}
+	select {
+	case <-workerDone:
+		t.Fatal("worker unexpectedly finished without a host reply")
+	default:
+	}
+	cancel()
+	select {
+	case <-workerDone:
+	case <-time.After(time.Second):
+		t.Fatal("canceled sticky pin worker did not stop")
+	}
+}
+
+func TestActionWorkerDrainsAcceptedJobOnShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	jobs := make(chan notesIOJob, 1)
+	results := make(chan notesActionResult)
+	done := startNotesActionWorker(ctx, jobs, results)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	completed := make(chan struct{})
+	jobs <- func(context.Context) notesActionResult {
+		close(started)
+		<-release
+		close(completed)
+		return notesActionResult{}
+	}
+	<-started
+	stopped := make(chan struct{})
+	go func() {
+		drainNotesActionWorker(jobs, results, done, cancel)
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("shutdown returned while an accepted host action was still running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finish after the accepted action completed")
+	}
+	select {
+	case <-completed:
+	default:
+		t.Fatal("accepted action was not completed before shutdown")
+	}
+}
+
+func TestDeleteQueueFullKeepsTheNoteOnDisk(t *testing.T) {
+	sess, dir := newSessionForTest(t)
+	path := filepath.Join(dir, "a.md")
+	if err := os.WriteFile(path, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Select("a.md"); err != nil {
+		t.Fatal(err)
+	}
+	sess.ProposeDelete("a.md")
+	queueFull := errors.New("Notes is busy; try again")
+	jobs := make(chan notesIOJob, 1)
+	jobs <- func(context.Context) notesActionResult { return notesActionResult{} }
+	submit := func(job notesIOJob) error {
+		select {
+		case jobs <- job:
+			return nil
+		default:
+			return queueFull
+		}
+	}
+	err := submitNotesDelete(submit, sess.ConfirmDeleteName, func(context.Context, string) notesActionResult {
+		t.Fatal("delete cleanup ran even though the queue was full")
+		return notesActionResult{}
+	})
+	if !errors.Is(err, queueFull) {
+		t.Fatalf("delete error = %v, want queue-full error", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("note was deleted before cleanup could be queued: %v", err)
+	}
+	if got := sess.Snap().PendingDelete; got != "a.md" {
+		t.Fatalf("pending delete = %q, want it retained for retry", got)
 	}
 }
 

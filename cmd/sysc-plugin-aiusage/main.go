@@ -40,6 +40,18 @@ type refreshCompletion struct {
 	warmStart        bool
 }
 
+type panelResizeResult struct {
+	viewID string
+	target int
+	reply  v1.HostReply
+	err    error
+}
+
+type panelActionResult struct {
+	action string
+	err    error
+}
+
 func queueRefresh(requests chan refreshRequest, request refreshRequest) {
 	select {
 	case requests <- request:
@@ -167,18 +179,27 @@ func run(in, out *os.File) error {
 	}
 
 	type view struct {
-		kind         v1.ViewKind
-		entry        string
-		rev          uint64
-		instance     string
-		width        int
-		height       int
-		resizeTarget int
+		kind          v1.ViewKind
+		entry         string
+		rev           uint64
+		instance      string
+		width         int
+		height        int
+		resizeTarget  int
+		resizePending int
 	}
 	views := map[string]view{}
 	ctx, cancel := context.WithCancel(context.Background())
+	saves := hostcall.NewStateSaver(ctx, c)
 	refreshRequests := make(chan refreshRequest, 1)
 	refreshCompletions := make(chan refreshCompletion, 1)
+	resizeResults := make(chan panelResizeResult, 8)
+	panelResults := make(chan panelActionResult, 8)
+	ledgerResults := make(chan json.RawMessage, 1)
+	ledgerLoaded := false
+	pendingRound := false
+	pendingForce := false
+	var pendingRetryIDs []string
 	refreshWorkerDone := make(chan struct{})
 	go func() {
 		defer close(refreshWorkerDone)
@@ -187,6 +208,7 @@ func run(in, out *os.File) error {
 	defer func() {
 		cancel()
 		<-refreshWorkerDone
+		saves.Flush(time.Second)
 	}()
 	incoming := make(chan v1.Message, 8)
 	go func() {
@@ -223,24 +245,18 @@ func run(in, out *os.File) error {
 					break
 				}
 				wantHeight := aiusage.PanelPreferredSurfaceHeight(rep, settings.config, minor, now)
-				if v.height > 0 && v.width >= 64 && wantHeight != v.resizeTarget {
-					callCtx, stop := context.WithTimeout(ctx, 2*time.Second)
-					reply, err := c.Call(callCtx, v1.CallPanelResize,
-						v1.PanelResizeParams{Width: v.width, Height: wantHeight})
-					stop()
-					if err == nil && reply.OK {
-						// ponytail: legacy hosts return null, so keep the bounded
-						// ViewOpen viewport and let the panes scroll; fitted-size
-						// replies enable growth on current hosts.
-						var size struct {
-							Width  int `json:"width"`
-							Height int `json:"height"`
+				if v.height > 0 && v.width >= 64 && wantHeight != v.resizeTarget && v.resizePending == 0 {
+					v.resizePending = wantHeight
+					go func(viewID string, width, target int) {
+						callCtx, stop := context.WithTimeout(ctx, 2*time.Second)
+						reply, err := c.Call(callCtx, v1.CallPanelResize,
+							v1.PanelResizeParams{Width: width, Height: target})
+						stop()
+						select {
+						case resizeResults <- panelResizeResult{viewID: viewID, target: target, reply: reply, err: err}:
+						case <-ctx.Done():
 						}
-						if json.Unmarshal(reply.Result, &size) == nil && size.Height >= 64 {
-							v.height = size.Height
-						}
-						v.resizeTarget = wantHeight
-					}
+					}(id, v.width, wantHeight)
 				}
 				if v.height <= 0 {
 					v.height = wantHeight
@@ -257,6 +273,14 @@ func run(in, out *os.File) error {
 		if loop == nil {
 			return
 		}
+		if !ledgerLoaded {
+			pendingRound = true
+			pendingForce = pendingForce || force
+			pendingRetryIDs = mergeRetryProviderIDs(pendingRetryIDs, retryProviderIDs)
+			loading = true
+			publish()
+			return
+		}
 		refreshSequence++
 		loading = true
 		publish()
@@ -267,21 +291,24 @@ func run(in, out *os.File) error {
 		})
 	}
 
-	// The alert ledger survives restarts via plugin state.
+	// The alert ledger survives restarts via plugin state. The read runs off
+	// the owner loop, and refresh waits so an early alert cannot overwrite it.
 	loadLedger := func() {
-		callCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		reply, err := c.Call(callCtx, v1.CallStateGet, v1.StateGetParams{Key: "alerts"})
-		if err != nil || !reply.OK || len(reply.Result) == 0 {
-			return
-		}
-		var result v1.StateGetResult
-		if json.Unmarshal(reply.Result, &result) == nil && result.Found {
-			var led aiusage.Ledger
-			if json.Unmarshal(result.Value, &led) == nil {
-				ledger = led
+		go func() {
+			callCtx, stop := context.WithTimeout(ctx, 2*time.Second)
+			defer stop()
+			var raw json.RawMessage
+			if reply, err := c.Call(callCtx, v1.CallStateGet, v1.StateGetParams{Key: "alerts"}); err == nil && reply.OK && len(reply.Result) > 0 {
+				var result v1.StateGetResult
+				if json.Unmarshal(reply.Result, &result) == nil && result.Found {
+					raw = append(json.RawMessage(nil), result.Value...)
+				}
 			}
-		}
+			select {
+			case ledgerResults <- raw:
+			case <-ctx.Done():
+			}
+		}()
 	}
 
 	// The clock drives wake-from-suspend detection and countdown re-renders.
@@ -347,36 +374,45 @@ func run(in, out *os.File) error {
 				}
 				switch {
 				case m.Node == "open":
-					_, _ = hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+					hostcall.Async(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 				case m.Node == "settings" || m.Node == "back":
 					source := views[m.ViewID]
-					switchErr := switchPanel(ctx, c.Call, m.Node, v1.PanelParams{
+					params := v1.PanelParams{
 						Entry: source.entry, Output: m.Output,
 						Generation: m.Generation, Instance: source.instance,
-					})
-					if switchErr != nil {
-						fmt.Fprintf(os.Stderr, "aiusage: panel action %q failed: %v\n", m.Node, switchErr)
 					}
+					go func(action string) {
+						err := switchPanel(ctx, c.Call, action, params)
+						select {
+						case panelResults <- panelActionResult{action: action, err: err}:
+						case <-ctx.Done():
+						}
+					}(m.Node)
 				case m.Node == "close":
 					source := views[m.ViewID]
-					if err := closePanel(ctx, c.Call, v1.PanelParams{
+					params := v1.PanelParams{
 						Entry: source.entry, Output: m.Output,
 						Generation: m.Generation, Instance: source.instance,
-					}); err != nil {
-						fmt.Fprintf(os.Stderr, "aiusage: close settings popup failed: %v\n", err)
 					}
+					go func() {
+						err := closePanel(ctx, c.Call, params)
+						select {
+						case panelResults <- panelActionResult{action: "close", err: err}:
+						case <-ctx.Done():
+						}
+					}()
 				case m.Node == "refresh":
 					// Manual refresh overrides cadence/backoff; the loop still
 					// defers providers inside a hard request floor.
 					requestRound(true)
 				case m.Node == "export":
 					if path, err := loop.ExportCSV(""); err == nil {
-						_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{
+						hostcall.Async(ctx, c, v1.CallNotify, v1.NotifyParams{
 							Summary: "Usage history exported",
 							Body:    path,
 						})
 					} else {
-						_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{
+						hostcall.Async(ctx, c, v1.CallNotify, v1.NotifyParams{
 							Summary: "Export failed", Body: err.Error(), Urgency: v1.UrgencyCritical})
 					}
 				case strings.HasPrefix(m.Node, "peak:"):
@@ -425,15 +461,63 @@ func run(in, out *os.File) error {
 					if n.Critical {
 						urgency = v1.UrgencyCritical
 					}
-					_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{
+					hostcall.Async(ctx, c, v1.CallNotify, v1.NotifyParams{
 						Summary: n.Summary, Body: n.Body, Urgency: urgency,
 					})
 				}
 				if raw, err := json.Marshal(ledger); err == nil {
-					_, _ = hostcall.Call(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "alerts", Value: raw})
+					saves.Save("alerts", raw)
 				}
 			}
 			publish()
+		case result := <-resizeResults:
+			v, ok := views[result.viewID]
+			if !ok || v.resizePending != result.target {
+				continue
+			}
+			v.resizePending = 0
+			if result.err == nil && result.reply.OK {
+				// ponytail: legacy hosts return null, so keep the bounded
+				// ViewOpen viewport and let the panes scroll; fitted-size replies
+				// enable growth on current hosts.
+				var size struct {
+					Width  int `json:"width"`
+					Height int `json:"height"`
+				}
+				if json.Unmarshal(result.reply.Result, &size) == nil && size.Height >= 64 {
+					v.height = size.Height
+				}
+				v.resizeTarget = result.target
+				views[result.viewID] = v
+				publish()
+			} else {
+				views[result.viewID] = v
+			}
+		case raw := <-ledgerResults:
+			if len(raw) > 0 {
+				var led aiusage.Ledger
+				if json.Unmarshal(raw, &led) == nil {
+					ledger = led
+				}
+			}
+			ledgerLoaded = true
+			if pendingRound {
+				force, retries := pendingForce, pendingRetryIDs
+				pendingRound, pendingForce, pendingRetryIDs = false, false, nil
+				requestRound(force, retries...)
+			} else {
+				loading = false
+				publish()
+			}
+		case result := <-panelResults:
+			if result.err == nil {
+				continue
+			}
+			if result.action == "close" {
+				fmt.Fprintf(os.Stderr, "aiusage: close settings popup failed: %v\n", result.err)
+			} else {
+				fmt.Fprintf(os.Stderr, "aiusage: panel action %q failed: %v\n", result.action, result.err)
+			}
 		case <-clock.C:
 			gap := time.Since(lastTick)
 			lastTick = time.Now()

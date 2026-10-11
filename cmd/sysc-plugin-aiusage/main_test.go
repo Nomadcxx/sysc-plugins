@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	"github.com/Nomadcxx/sysc-plugins/plugins/aiusage"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -27,11 +28,22 @@ type pluginHarness struct {
 	mu      sync.Mutex
 	msgs    chan v1.Message
 	done    chan error
+	reply   func(*v1.HostCall) *v1.HostReply
 	stopped bool
 	closed  bool
 }
 
 func startPluginHarness(t *testing.T) *pluginHarness {
+	return startPluginHarnessWithReply(t, func(call *v1.HostCall) *v1.HostReply {
+		result := json.RawMessage(`{}`)
+		if call.Call == v1.CallStateGet {
+			result = json.RawMessage(`{"found":false}`)
+		}
+		return &v1.HostReply{ID: call.ID, OK: true, Result: result}
+	})
+}
+
+func startPluginHarnessWithReply(t *testing.T, reply func(*v1.HostCall) *v1.HostReply) *pluginHarness {
 	t.Helper()
 	in, host, err := os.Pipe()
 	if err != nil {
@@ -46,6 +58,7 @@ func startPluginHarness(t *testing.T) *pluginHarness {
 	h := &pluginHarness{
 		t: t, in: in, host: host, reader: reader, out: out,
 		encoder: v1.NewEncoder(host), msgs: make(chan v1.Message, 32), done: make(chan error, 1),
+		reply: reply,
 	}
 	go func() {
 		err := run(in, out)
@@ -61,11 +74,11 @@ func startPluginHarness(t *testing.T) *pluginHarness {
 				return
 			}
 			if call, ok := m.(*v1.HostCall); ok {
-				result := json.RawMessage(`{}`)
-				if call.Call == v1.CallStateGet {
-					result = json.RawMessage(`{"found":false}`)
+				if h.reply != nil {
+					if reply := h.reply(call); reply != nil {
+						_ = h.write(reply)
+					}
 				}
-				_ = h.write(&v1.HostReply{ID: call.ID, OK: true, Result: result})
 			}
 			h.msgs <- m
 		}
@@ -78,6 +91,66 @@ func startPluginHarness(t *testing.T) *pluginHarness {
 	}
 	t.Cleanup(h.stop)
 	return h
+}
+
+func TestPanelOpenDoesNotBlockInputLoopOnHostReply(t *testing.T) {
+	originalDefault := hostcall.Default
+	hostcall.Default = 400 * time.Millisecond
+	defer func() { hostcall.Default = originalDefault }()
+
+	panelCalls := make(chan *v1.HostCall, 1)
+	h := startPluginHarnessWithReply(t, func(call *v1.HostCall) *v1.HostReply {
+		if call.Call == v1.CallPanelOpen {
+			panelCalls <- call
+			return nil
+		}
+		result := json.RawMessage(`{}`)
+		if call.Call == v1.CallStateGet {
+			result = json.RawMessage(`{"found":false}`)
+		}
+		return &v1.HostReply{ID: call.ID, OK: true, Result: result}
+	})
+	h.send(&v1.ViewOpen{ViewID: "bar", View: v1.ViewBar, Entry: "bar", Instance: "placement-1"})
+	bar := h.nextSnapshot("bar", time.Second)
+	h.send(&v1.InputEvent{ViewID: "bar", Revision: bar.Revision, Node: "open", Event: v1.EventActivate})
+	select {
+	case <-panelCalls:
+	case <-time.After(time.Second):
+		t.Fatal("bar click did not call panel.open")
+	}
+
+	h.send(&v1.ViewOpen{ViewID: "canary", View: v1.ViewBar, Entry: "bar"})
+	deadline := time.NewTimer(50 * time.Millisecond)
+	defer deadline.Stop()
+	for {
+		select {
+		case msg := <-h.msgs:
+			if snapshot, ok := msg.(*v1.ViewSnapshot); ok && snapshot.ViewID == "canary" {
+				return
+			}
+		case <-deadline.C:
+			t.Fatal("opening a view waited for the panel.open reply")
+		}
+	}
+}
+
+func TestAlertLedgerReadDoesNotBlockViewProcessing(t *testing.T) {
+	stateGets := make(chan struct{}, 1)
+	h := startPluginHarnessWithReply(t, func(call *v1.HostCall) *v1.HostReply {
+		if call.Call == v1.CallStateGet {
+			stateGets <- struct{}{}
+			return nil // Hold the reply while views continue through the owner loop.
+		}
+		return &v1.HostReply{ID: call.ID, OK: true, Result: json.RawMessage(`{}`)}
+	})
+	h.send(&v1.ViewOpen{ViewID: "first", View: v1.ViewBar, Entry: "bar"})
+	select {
+	case <-stateGets:
+	case <-time.After(time.Second):
+		t.Fatal("first view did not request the alert ledger")
+	}
+	h.send(&v1.ViewOpen{ViewID: "canary", View: v1.ViewBar, Entry: "bar"})
+	h.nextSnapshot("canary", 100*time.Millisecond)
 }
 
 func (h *pluginHarness) write(m v1.Message) error {
@@ -168,6 +241,18 @@ func TestPanelActionsRunOncePerClick(t *testing.T) {
 			}
 		}
 	}
+	waitPanelCall := func() {
+		t.Helper()
+		deadline := time.Now().Add(time.Second)
+		for len(calls) == 0 && time.Until(deadline) > 0 {
+			switch m := h.next(time.Until(deadline)).(type) {
+			case *v1.HostCall:
+				if m.Call == v1.CallPanelOpen || m.Call == v1.CallPanelClose {
+					calls = append(calls, *m)
+				}
+			}
+		}
+	}
 	h.send(&v1.ViewOpen{ViewID: "bar", View: v1.ViewBar, Entry: "bar", Instance: "placement-1"})
 	waitView("bar")
 	for _, step := range []struct {
@@ -187,6 +272,7 @@ func TestPanelActionsRunOncePerClick(t *testing.T) {
 		// A later view is a processing barrier, without a sleep or an idle timeout.
 		h.send(&v1.ViewOpen{ViewID: "barrier", View: v1.ViewBar, Entry: "bar"})
 		waitView("barrier")
+		waitPanelCall()
 		h.send(&v1.ViewClose{ViewID: "barrier"})
 		if len(calls) != 1 || calls[0].Call != step.kind {
 			t.Fatalf("%s click made %d panel calls: %+v", step.node, len(calls), calls)

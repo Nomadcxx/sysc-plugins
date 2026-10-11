@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
@@ -39,6 +40,11 @@ type recentImageResult struct {
 	err      error
 }
 
+type filesBrowseResult struct {
+	event kdeconnect.Event
+	err   error
+}
+
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
 	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.kdeconnect", Name: "Phone Connect", Version: "0.1.0"})); err != nil {
@@ -58,12 +64,22 @@ func run(in *os.File, out *os.File) error {
 	ui := uiState{}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	saves := hostcall.NewStateSaver(ctx, c)
+	defer func() {
+		cancel()
+		saves.Flush(time.Second)
+	}()
 
 	// The reader must run before any host call: a Call blocks until its
 	// reply is decoded, so without the reader it would deadlock here.
 	incoming := make(chan v1.Message, 8)
 	recentImageResults := make(chan recentImageResult, 8)
+	filesBrowseResults := make(chan filesBrowseResult, 8)
+	selectionResults := make(chan string, 1)
+	selectionChanged := false
+	selectionLoaded := false
+	selectedDevice := ""
+	var pendingSelectionInputs []*v1.InputEvent
 	var lastAvailable *bool
 	busy := false
 	go func() {
@@ -73,15 +89,20 @@ func run(in *os.File, out *os.File) error {
 				cancel()
 				return
 			}
-			incoming <- msg
+			select {
+			case incoming <- msg:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
-	// Restore the saved device choice before any view can render, so the
-	// first snapshot already carries it.
-	if saved := restoreSelection(ctx, c); saved != "" {
-		svc.SetSelected(saved)
-	}
+	go func() {
+		select {
+		case selectionResults <- restoreSelection(ctx, c):
+		case <-ctx.Done():
+		}
+	}()
 
 	// publish pushes the current snapshot into every open view. A non-nil
 	// delta patches the panel views instead of resending them; a patch the
@@ -105,6 +126,22 @@ func run(in *os.File, out *os.File) error {
 				root = kdeconnect.PanelTreeForState(snap, settings, ui.composer, ui.drafts, ui.switcherOpen)
 			}
 			_ = c.Snapshot(id, v.rev, root)
+		}
+	}
+	processInput := func(m *v1.InputEvent) {
+		previousComposer := ui.composer
+		if strings.HasPrefix(m.Node, "select-") {
+			selectionChanged = true
+			selectedDevice = strings.TrimPrefix(m.Node, "select-")
+		}
+		actionSnap := snap
+		actionSnap.SelectedID = selectedActionDevice(actionSnap, selectedDevice)
+		if handleInput(ctx, c, svc, m, &ui, actionSnap, &busy, recentImageResults, saves) {
+			publish(nil)
+		}
+		if node, ok := composerFocus(previousComposer, ui.composer); ok {
+			// Best-effort: the composer can close before the host answers, and a gone node refuses the focus.
+			hostcall.Async(ctx, c, v1.CallViewFocus, v1.ViewFocusParams{View: m.ViewID, Node: node})
 		}
 	}
 
@@ -135,6 +172,17 @@ func run(in *os.File, out *os.File) error {
 				lastAvailable = &available
 			}
 			publish(delta)
+		case saved := <-selectionResults:
+			selectionLoaded = true
+			if saved != "" && !selectionChanged {
+				selectedDevice = saved
+				svc.SetSelected(saved)
+			}
+			queued := pendingSelectionInputs
+			pendingSelectionInputs = nil
+			for _, input := range queued {
+				processInput(input)
+			}
 		case msg := <-incoming:
 			switch m := msg.(type) {
 			case *v1.HostShutdown:
@@ -153,15 +201,13 @@ func run(in *os.File, out *os.File) error {
 			case *v1.ViewResync:
 				publish(nil)
 			case *v1.InputEvent:
-				prev := ui.composer
-				if handleInput(ctx, c, svc, m, &ui, snap, &busy, recentImageResults) {
-					publish(nil)
+				if !selectionLoaded && !(m.Node == "open" && m.Event == v1.EventActivate) {
+					if len(pendingSelectionInputs) < 32 {
+						pendingSelectionInputs = append(pendingSelectionInputs, m)
+					}
+					continue
 				}
-				if node, ok := composerFocus(prev, ui.composer); ok {
-					// Best-effort: the composer can close before the host
-					// answers, and a gone node refuses the focus.
-					_, _ = hostcall.Call(ctx, c, v1.CallViewFocus, v1.ViewFocusParams{View: m.ViewID, Node: node})
-				}
+				processInput(m)
 			case *v1.SettingsChanged:
 				settings = settingsFrom(m.Values)
 				svc.Reconfigure(settings)
@@ -169,13 +215,23 @@ func run(in *os.File, out *os.File) error {
 			}
 		case e := <-svc.Events():
 			if params, ok := filesBrowseParams(e); ok {
-				if _, err := hostcall.Call(ctx, c, v1.CallFilesBrowse, params); err != nil {
-					e.Err = err
-					e.Message = "Failed to open the file browser"
-					e.Detail = err.Error()
-				}
+				go func() {
+					_, err := hostcall.Call(ctx, c, v1.CallFilesBrowse, params)
+					select {
+					case filesBrowseResults <- filesBrowseResult{event: e, err: err}:
+					case <-ctx.Done():
+					}
+				}()
+				continue
 			}
 			notify(ctx, c, e)
+		case result := <-filesBrowseResults:
+			if result.err != nil {
+				result.event.Err = result.err
+				result.event.Message = "Failed to open the file browser"
+				result.event.Detail = result.err.Error()
+			}
+			notify(ctx, c, result.event)
 		case result := <-recentImageResults:
 			finishRecentImageAction(ctx, c, svc, result)
 		}
@@ -234,7 +290,7 @@ func pairingAction(node, selected string) (kdeconnect.Action, bool) {
 // handleInput routes one input event. It reports whether the panel tree
 // changed and needs a republish — toggles, sends, and composer typing (the
 // send gating moves with the draft) do.
-func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *v1.InputEvent, ui *uiState, snap kdeconnect.Snapshot, busy *bool, recentImageResults chan<- recentImageResult) bool {
+func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *v1.InputEvent, ui *uiState, snap kdeconnect.Snapshot, busy *bool, recentImageResults chan<- recentImageResult, saves *hostcall.StateSaver) bool {
 	device := snap.SelectedID
 	pairing, isPairing := pairingAction(m.Node, device)
 	switch {
@@ -242,7 +298,7 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 		if m.Event != v1.EventActivate {
 			return false
 		}
-		_, _ = hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
+		hostcall.Async(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Instance: m.ViewID})
 	case m.Node == "device-switcher":
 		if m.Event != v1.EventActivate {
 			return false
@@ -262,7 +318,7 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 	case strings.HasPrefix(m.Node, "select-"):
 		id := strings.TrimPrefix(m.Node, "select-")
 		svc.SetSelected(id)
-		saveSelection(ctx, c, id)
+		saveSelection(saves, id)
 	case m.Node == "pair":
 		// The selected device's request card; the per-card buttons use the
 		// prefixed forms below.
@@ -354,6 +410,24 @@ func handleInput(ctx context.Context, c *v1.Client, svc *kdeconnect.Service, m *
 	return false
 }
 
+func selectedActionDevice(snap kdeconnect.Snapshot, preferred string) string {
+	if preferred == "" {
+		return snap.SelectedID
+	}
+	for _, device := range snap.Devices {
+		if device.ID == preferred {
+			if device.Paired && device.Reachable {
+				return preferred
+			}
+			return snap.SelectedID
+		}
+	}
+	if !snap.Available {
+		return preferred
+	}
+	return snap.SelectedID
+}
+
 func startRecentImageAction(ctx context.Context, results chan<- recentImageResult, result recentImageResult, stage func(kdeconnect.RecentImage) (string, error)) {
 	go func() {
 		result.path, result.err = stage(result.image)
@@ -435,7 +509,7 @@ func notify(ctx context.Context, c *v1.Client, e kdeconnect.Event) {
 	if e.Err != nil {
 		p.Urgency = v1.UrgencyCritical
 	}
-	_, _ = hostcall.Call(ctx, c, v1.CallNotify, p)
+	hostcall.Async(ctx, c, v1.CallNotify, p)
 }
 
 // filesBrowseParams is the host files.browse call a successful Files action
@@ -466,12 +540,12 @@ func restoreSelection(ctx context.Context, c *v1.Client) string {
 
 // saveSelection writes the device choice the user picked. Auto-selection
 // never writes: the saved choice is the user's alone.
-func saveSelection(ctx context.Context, c *v1.Client, id string) {
+func saveSelection(saves *hostcall.StateSaver, id string) {
 	raw, err := json.Marshal(id)
 	if err != nil {
 		return
 	}
-	_, _ = hostcall.Call(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "selected_device_id", Value: raw})
+	saves.Save("selected_device_id", raw)
 }
 
 func settingsFrom(values map[string]any) kdeconnect.Settings {

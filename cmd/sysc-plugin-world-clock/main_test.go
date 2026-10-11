@@ -34,9 +34,13 @@ func start(t *testing.T, stored *v1.StateGetResult) *harness {
 		result = *stored
 	}
 	raw, _ := json.Marshal(result)
-	return startWith(t, nil, func(call v1.HostCall) v1.HostReply {
+	h := startWith(t, nil, func(call v1.HostCall) v1.HostReply {
 		return v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: raw}
 	})
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "__state-ready", View: v1.ViewPanel, Entry: "panel"})
+	h.snapshotWhere(func(root *v1.Node) bool { return !contains(root, "Loading zones") })
+	h.send(v1.ViewClose{Type: "view.close", ViewID: "__state-ready"})
+	return h
 }
 
 // startWith runs the plugin with env adjusted by tweak and answers its first
@@ -72,7 +76,9 @@ func startWith(t *testing.T, tweak func(*environment), getReply func(v1.HostCall
 	if got := h.next(); messageType(got) != "plugin.hello" {
 		t.Fatalf("first message = %s", got)
 	}
-	h.send(getReply(h.nextCall(v1.CallStateGet)))
+	if reply := getReply(h.nextCall(v1.CallStateGet)); reply.Type != "" {
+		h.send(reply)
+	}
 	t.Cleanup(h.stop)
 	return h
 }
@@ -254,6 +260,103 @@ func TestBarOpenOnlyActivatesOnRelease(t *testing.T) {
 	h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true})
 }
 
+func TestPanelOpenReplyDoesNotBlockInputLoop(t *testing.T) {
+	h := startWith(t, func(env *environment) { env.callTimeout = 400 * time.Millisecond }, func(call v1.HostCall) v1.HostReply {
+		return v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: json.RawMessage(`{"found":false}`)}
+	})
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "bar", View: v1.ViewBar, Entry: "bar"})
+	bar := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "open") != nil })
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "bar", Revision: bar.Revision, Node: "open", Event: v1.EventActivate})
+	h.nextCall(v1.CallPanelOpen) // Hold the reply while the next view opens.
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "canary", View: v1.ViewBar, Entry: "bar"})
+
+	deadline := time.NewTimer(50 * time.Millisecond)
+	defer deadline.Stop()
+	for {
+		select {
+		case line := <-h.lines:
+			var snapshot v1.ViewSnapshot
+			if messageType(line) == v1.TypeViewSnapshot && json.Unmarshal(line, &snapshot) == nil && snapshot.ViewID == "canary" {
+				return
+			}
+		case <-deadline.C:
+			t.Fatal("view processing waited for the panel.open reply")
+		}
+	}
+}
+
+func TestStartupStateReadDoesNotBlockViews(t *testing.T) {
+	h := startWith(t, nil, func(v1.HostCall) v1.HostReply { return v1.HostReply{} })
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "canary", View: v1.ViewPanel, Entry: "panel"})
+	deadline := time.NewTimer(100 * time.Millisecond)
+	defer deadline.Stop()
+	for {
+		select {
+		case line := <-h.lines:
+			var snapshot v1.ViewSnapshot
+			if messageType(line) == v1.TypeViewSnapshot && json.Unmarshal(line, &snapshot) == nil && snapshot.ViewID == "canary" {
+				if find(snapshot.Root, "drag:Asia/Tokyo") != nil {
+					t.Fatal("unrestored default zones were shown as saved state")
+				}
+				if !contains(snapshot.Root, "Loading zones") {
+					t.Fatal("view opened without showing that saved zones are loading")
+				}
+				return
+			}
+		case <-deadline.C:
+			t.Fatal("view processing waited for the startup state.get reply")
+		}
+	}
+}
+
+func TestQueuedAddUsesInputOrderWhileStartupReadIsHeld(t *testing.T) {
+	var stateRead v1.HostCall
+	h := startWith(t, nil, func(call v1.HostCall) v1.HostReply {
+		stateRead = call
+		return v1.HostReply{}
+	})
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "search", Event: v1.EventChange, Text: "syd"})
+	searching := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "pick:Australia/Sydney") != nil })
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: searching.Revision, Node: "add", Event: v1.EventActivate})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: searching.Revision, Node: "search", Event: v1.EventChange, Text: "bermuda"})
+	h.snapshotWhere(func(n *v1.Node) bool { return find(n, "pick:Atlantic/Bermuda") != nil })
+
+	loaded, _ := json.Marshal(v1.StateGetResult{Found: true, Value: json.RawMessage(`[]`)})
+	h.send(v1.HostReply{Type: "host.reply", ID: stateRead.ID, OK: true, Result: loaded})
+	set := h.nextCall(v1.CallStateSet)
+	var params v1.StateSetParams
+	_ = json.Unmarshal(set.Params, &params)
+	if !strings.Contains(string(params.Value), `"id":"Australia/Sydney"`) || strings.Contains(string(params.Value), `"id":"Atlantic/Bermuda"`) {
+		t.Fatalf("queued Add saved a later search value: %s", params.Value)
+	}
+	h.send(v1.HostReply{Type: "host.reply", ID: set.ID, OK: true})
+}
+
+func TestStateSaveReplyDoesNotBlockInputLoop(t *testing.T) {
+	h := startWith(t, func(env *environment) { env.callTimeout = 400 * time.Millisecond }, func(call v1.HostCall) v1.HostReply {
+		return v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: json.RawMessage(`{"found":false}`)}
+	})
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "bar:UTC", Event: v1.EventActivate})
+	h.nextCall(v1.CallStateSet) // Keep the state.set reply pending.
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "canary", View: v1.ViewBar, Entry: "bar"})
+
+	deadline := time.NewTimer(50 * time.Millisecond)
+	defer deadline.Stop()
+	for {
+		select {
+		case line := <-h.lines:
+			var snapshot v1.ViewSnapshot
+			if messageType(line) == v1.TypeViewSnapshot && json.Unmarshal(line, &snapshot) == nil && snapshot.ViewID == "canary" {
+				return
+			}
+		case <-deadline.C:
+			t.Fatal("view processing waited for the state.set reply")
+		}
+	}
+}
+
 func TestSubmitDuplicateShowsError(t *testing.T) {
 	h := start(t, nil)
 	p := h.openPanel()
@@ -347,6 +450,9 @@ func TestSaveAndAddErrorsBothRenderInOrderAndFit(t *testing.T) {
 func TestStoredEmptyListStaysEmpty(t *testing.T) {
 	h := start(t, &v1.StateGetResult{Found: true, Value: json.RawMessage(`[]`)})
 	p := h.openPanel()
+	if !contains(p.Root, "No zones yet. Search for a city above.") {
+		p = h.snapshotWhere(func(n *v1.Node) bool { return contains(n, "No zones yet. Search for a city above.") })
+	}
 	if !contains(p.Root, "No zones yet. Search for a city above.") {
 		t.Fatal("empty list was reseeded")
 	}

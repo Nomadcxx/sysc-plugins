@@ -15,24 +15,36 @@ import (
 // timerHost is the shell side of one plugin process: it answers state and
 // notify calls and keeps every session snapshot the plugin writes.
 type timerHost struct {
-	t        *testing.T
-	enc      *v1.Encoder
-	mu       sync.Mutex
-	saves    chan timer.Snapshot
-	restored chan struct{}
-	done     chan error
+	t            *testing.T
+	enc          *v1.Encoder
+	mu           sync.Mutex
+	saves        chan timer.Snapshot
+	restored     chan struct{}
+	panelOpened  chan struct{}
+	snapshots    chan *v1.ViewSnapshot
+	restoreValue *timer.Snapshot
+	restoreGate  <-chan struct{}
+	done         chan error
 }
 
 func startTimerPlugin(t *testing.T, now func() time.Time) *timerHost {
+	return startTimerPluginWithRestore(t, now, nil, nil)
+}
+
+func startTimerPluginWithRestore(t *testing.T, now func() time.Time, restoreValue *timer.Snapshot, restoreGate <-chan struct{}) *timerHost {
 	t.Helper()
 	toPlugin, hostOut := io.Pipe()
 	hostIn, pluginOut := io.Pipe()
 	h := &timerHost{
-		t:        t,
-		enc:      v1.NewEncoder(hostOut),
-		saves:    make(chan timer.Snapshot, 8),
-		restored: make(chan struct{}, 1),
-		done:     make(chan error, 1),
+		t:            t,
+		enc:          v1.NewEncoder(hostOut),
+		saves:        make(chan timer.Snapshot, 8),
+		restored:     make(chan struct{}, 1),
+		panelOpened:  make(chan struct{}, 1),
+		snapshots:    make(chan *v1.ViewSnapshot, 16),
+		restoreValue: restoreValue,
+		restoreGate:  restoreGate,
+		done:         make(chan error, 1),
 	}
 	go func() {
 		h.done <- runClock(toPlugin, pluginOut, now)
@@ -81,12 +93,23 @@ func (h *timerHost) read(r io.Reader) {
 		}
 		call, ok := msg.(*v1.HostCall)
 		if !ok {
+			if snap, ok := msg.(*v1.ViewSnapshot); ok {
+				select {
+				case h.snapshots <- snap:
+				default:
+				}
+			}
 			continue
 		}
 		var result json.RawMessage
 		switch call.Call {
 		case v1.CallStateGet:
-			result, _ = json.Marshal(v1.StateGetResult{Found: false})
+			state := v1.StateGetResult{Found: false}
+			if h.restoreValue != nil {
+				state.Found = true
+				state.Value, _ = json.Marshal(h.restoreValue)
+			}
+			result, _ = json.Marshal(state)
 			select {
 			case h.restored <- struct{}{}:
 			default:
@@ -98,9 +121,69 @@ func (h *timerHost) read(r io.Reader) {
 				json.Unmarshal(params.Value, &snap) == nil {
 				h.saves <- snap
 			}
+		case v1.CallPanelOpen:
+			select {
+			case h.panelOpened <- struct{}{}:
+			default:
+			}
 		}
-		_ = h.send(&v1.HostReply{ID: call.ID, OK: true, Result: result})
+		reply := &v1.HostReply{ID: call.ID, OK: true, Result: result}
+		if call.Call == v1.CallStateGet && h.restoreGate != nil {
+			go func() {
+				<-h.restoreGate
+				_ = h.send(reply)
+			}()
+			continue
+		}
+		_ = h.send(reply)
 	}
+}
+
+func TestPanelOpenDoesNotSuppressSessionRestore(t *testing.T) {
+	want := timer.Snapshot{Mode: timer.ModeLong, Completed: 3}
+	restoreGate := make(chan struct{})
+	h := startTimerPluginWithRestore(t, time.Now, &want, restoreGate)
+	if err := h.send(&v1.ViewOpen{ViewID: "panel", View: v1.ViewPanel, Width: 360}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.send(&v1.InputEvent{ViewID: "panel", Node: "open", Event: v1.EventActivate}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-h.panelOpened:
+	case <-time.After(time.Second):
+		t.Fatal("panel open was not handled while state restore was delayed")
+	}
+	close(restoreGate)
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case snap := <-h.snapshots:
+			if snap.ViewID == "panel" && findTimerNode(snap.Root, "mode-long") != nil {
+				node := findTimerNode(snap.Root, "mode-long")
+				if node.Fill == "accent" {
+					return
+				}
+			}
+		case <-deadline:
+			t.Fatal("saved long-break session was not restored after panel open")
+		}
+	}
+}
+
+func findTimerNode(root *v1.Node, id string) *v1.Node {
+	if root == nil {
+		return nil
+	}
+	if root.ID == id {
+		return root
+	}
+	for _, child := range root.Children {
+		if found := findTimerNode(child, id); found != nil {
+			return found
+		}
+	}
+	return nil
 }
 
 func (h *timerHost) nextSave(what string) timer.Snapshot {
@@ -196,7 +279,7 @@ func TestTickSavesTheRolledPhase(t *testing.T) {
 
 func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
 	orig := hostcall.Default
-	hostcall.Default = 400 * time.Millisecond
+	hostcall.Default = 5 * time.Second
 	defer func() { hostcall.Default = orig }()
 
 	toPlugin, hostOut := io.Pipe()
@@ -267,16 +350,23 @@ func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
 		t.Fatal("plugin never reached the state.set call")
 	}
 
+	burstSent := make(chan struct{})
 	go func() {
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 64; i++ {
 			_ = send(&v1.InputEvent{Node: "noop", Event: v1.EventActivate})
 		}
 		_ = send(&v1.ViewOpen{ViewID: "bar-after", View: v1.ViewBar, Width: 200})
+		close(burstSent)
 	}()
 
 	select {
+	case <-burstSent:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("plugin stopped receiving input behind a held host call")
+	}
+	select {
 	case <-snapshotted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(50 * time.Millisecond):
 		t.Fatal("plugin is wedged: it never rendered the view opened after the input burst")
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	minidocker "github.com/Nomadcxx/sysc-plugins/plugins/mini-docker"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -298,6 +299,123 @@ func TestRefreshClickDoesNotBlockMainLoop(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("run did not exit after host.shutdown")
+	}
+}
+
+func TestPanelOpenDoesNotWedgeBehindFullInputQueue(t *testing.T) {
+	originalDefault := hostcall.Default
+	hostcall.Default = 750 * time.Millisecond
+	defer func() { hostcall.Default = originalDefault }()
+
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inR.Close()
+	defer outR.Close()
+
+	h := host{w: bufio.NewWriter(inW)}
+	h.send(&v1.HostHello{
+		Type:      v1.TypeHostHello,
+		Supported: []v1.Version{{Major: 1, Minor: 4}},
+		Plugin:    v1.Identity{ID: "org.sysc.mini-docker", Name: "Mini Docker", Version: "0.4.0"},
+		Limits:    v1.DefaultLimits,
+	})
+	newSession = func() *minidocker.Session { return minidocker.NewSession(fakeCLI{}) }
+	defer func() { newSession = func() *minidocker.Session { return minidocker.NewSession(minidocker.CLI{}) } }()
+
+	pluginHello := make(chan struct{}, 1)
+	snapshots := make(chan string, 4)
+	panelCalls := make(chan *v1.HostCall, 1)
+	go func() {
+		dec := v1.NewDecoder(outR, v1.ToHost)
+		for {
+			msg, err := dec.Decode()
+			if err != nil {
+				return
+			}
+			switch msg := msg.(type) {
+			case *v1.PluginHello:
+				pluginHello <- struct{}{}
+			case *v1.ViewSnapshot:
+				if msg.ViewID == "canary" {
+					select {
+					case snapshots <- msg.ViewID:
+					default:
+					}
+				} else if msg.ViewID == "bar" {
+					select {
+					case snapshots <- msg.ViewID:
+					default:
+					}
+				}
+			case *v1.HostCall:
+				if msg.Call == v1.CallPanelOpen {
+					panelCalls <- msg
+				}
+			}
+		}
+	}()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- run(inR, outW) }()
+	select {
+	case <-pluginHello:
+	case <-time.After(2 * time.Second):
+		t.Fatal("plugin handshake timed out")
+	}
+
+	var pendingCallID string
+	defer func() {
+		if pendingCallID != "" {
+			h.send(&v1.HostReply{ID: pendingCallID, OK: true, Result: json.RawMessage(`null`)})
+		}
+		h.send(&v1.HostShutdown{Type: v1.TypeHostShutdown})
+		_ = inW.Close()
+		_ = outW.Close()
+		select {
+		case <-errCh:
+		case <-time.After(3 * time.Second):
+			t.Error("run did not stop after host.shutdown")
+		}
+	}()
+
+	h.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "bar", View: v1.ViewBar, Entry: "bar"})
+	select {
+	case <-snapshots:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bar snapshot timed out")
+	}
+	h.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "bar", Revision: 1, Node: "open", Event: v1.EventActivate})
+	var panelCall *v1.HostCall
+	select {
+	case panelCall = <-panelCalls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bar click did not call panel.open")
+	}
+	pendingCallID = panelCall.ID
+
+	// Fill the bounded incoming queue before the delayed reply. The reply then
+	// sits behind these messages until the event loop keeps making progress.
+	for i := 0; i < 20; i++ {
+		h.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Values: map[string]any{}})
+	}
+	h.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "canary", View: v1.ViewBar, Entry: "bar"})
+
+	gotCanary := false
+	select {
+	case <-snapshots:
+		gotCanary = true
+	case <-time.After(300 * time.Millisecond):
+	}
+	h.send(&v1.HostReply{ID: panelCall.ID, OK: true, Result: json.RawMessage(`null`)})
+	pendingCallID = ""
+	if !gotCanary {
+		t.Fatal("panel.open reply was delayed behind a full input queue")
 	}
 }
 

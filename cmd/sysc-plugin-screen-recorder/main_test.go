@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	"github.com/Nomadcxx/sysc-plugins/plugins/screen-recorder"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -254,21 +255,219 @@ func TestPluginStopsRunningReplay(t *testing.T) {
 	}
 }
 
+func TestOutputContextCallDoesNotBlockInputQueue(t *testing.T) {
+	orig := hostcall.Default
+	hostcall.Default = 400 * time.Millisecond
+	defer func() { hostcall.Default = orig }()
+
+	toPluginR, hostOutW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostInR, pluginOutW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = toPluginR.Close()
+		_ = hostOutW.Close()
+		_ = hostInR.Close()
+		_ = pluginOutW.Close()
+	})
+
+	var sendMu sync.Mutex
+	enc := v1.NewEncoder(hostOutW)
+	send := func(m v1.Message) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		return enc.Encode(m)
+	}
+	held := make(chan *v1.HostCall, 1)
+	snapshots := make(chan string, 16)
+	done := make(chan error, 1)
+	go func() {
+		done <- run(toPluginR, pluginOutW, recorder.Options{LookPath: func(string) (string, error) {
+			return "", os.ErrNotExist
+		}})
+	}()
+	go func() {
+		dec := v1.NewDecoder(hostInR, v1.ToHost)
+		for {
+			msg, err := dec.Decode()
+			if err != nil {
+				return
+			}
+			switch m := msg.(type) {
+			case *v1.HostCall:
+				if m.Call == v1.CallOutputContext {
+					held <- m
+					continue
+				}
+				reply := &v1.HostReply{ID: m.ID, OK: true}
+				if m.Call == v1.CallStateGet {
+					reply.Result, _ = json.Marshal(v1.StateGetResult{Found: false})
+				}
+				_ = send(reply)
+			case *v1.ViewSnapshot:
+				snapshots <- m.ViewID
+			}
+		}
+	}()
+	if err := send(&v1.HostHello{
+		Supported:    []v1.Version{{Major: v1.ProtocolMajor, Minor: v1.ProtocolMinor}},
+		Plugin:       v1.Identity{ID: "org.sysc.screen-recorder", Name: "Screen Recorder", Version: "1.0.0"},
+		Capabilities: []string{"notifications", "settings", "state"}, Limits: v1.DefaultLimits,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitSnapshot := func(id string, timeout time.Duration) bool {
+		t.Helper()
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		for {
+			select {
+			case got := <-snapshots:
+				if got == id {
+					return true
+				}
+			case <-timer.C:
+				return false
+			}
+		}
+	}
+	if err := send(&v1.ViewOpen{ViewID: "bar-before", View: v1.ViewBar, Output: "DP-1", Width: 120}); err != nil {
+		t.Fatal(err)
+	}
+	if !waitSnapshot("bar-before", time.Second) {
+		t.Fatal("plugin did not enter its input loop")
+	}
+	if err := send(&v1.InputEvent{ViewID: "bar-before", Node: "toggle", Event: v1.EventActivate}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-held:
+	case <-time.After(time.Second):
+		t.Fatal("plugin did not request the output context")
+	}
+	go func() {
+		for i := 0; i < 64; i++ {
+			_ = send(&v1.InputEvent{Node: "noop", Event: v1.EventActivate, Output: "DP-1"})
+		}
+		_ = send(&v1.ViewOpen{ViewID: "bar-after", View: v1.ViewBar, Output: "DP-1", Width: 120})
+	}()
+	responsive := waitSnapshot("bar-after", 50*time.Millisecond)
+	// The output-context reply stays held. On the broken implementation its
+	// bounded timeout releases the event loop so shutdown can finish.
+	_ = send(&v1.HostShutdown{})
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("plugin did not exit after host.shutdown")
+	}
+	if !responsive {
+		t.Fatal("plugin stopped processing input while output context was pending")
+	}
+}
+
+func TestViewOpenDoesNotOverwriteOwnershipBeforeRestore(t *testing.T) {
+	h, stateReads, stateReadReplies := startPluginWithHeldStateGet(t, recorder.Options{
+		LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+	}, &recorder.Ownership{PID: 2147483647, Exe: "/fake/recorder", Args: []string{"recorder", "-o", "/tmp/recovery.mp4"}})
+
+	var stateRead *v1.HostCall
+	select {
+	case stateRead = <-stateReads:
+	case <-time.After(time.Second):
+		t.Fatal("plugin did not request saved ownership")
+	}
+	h.open("bar-a", v1.ViewBar, "DP-1")
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
+
+	time.Sleep(60 * time.Millisecond)
+	h.mu.Lock()
+	stateSetCount := len(h.stateSets)
+	h.mu.Unlock()
+	if stateSetCount != 0 {
+		t.Fatalf("plugin wrote ownership %d times before the recovery read replied", stateSetCount)
+	}
+
+	value, _ := json.Marshal(h.stale)
+	result, _ := json.Marshal(v1.StateGetResult{Found: true, Value: value})
+	stateReadReplies <- &v1.HostReply{ID: stateRead.ID, OK: true, Result: result}
+}
+
+func TestPanelOpenDoesNotSuppressOwnershipRestore(t *testing.T) {
+	stale := &recorder.Ownership{PID: 2147483647, Exe: "/fake/recorder", Args: []string{"recorder", "-o", "/tmp/recovery.mp4"}}
+	h, stateReads, stateReadReplies := startPluginWithHeldStateGet(t, recorder.Options{
+		Exe:      os.Args[0],
+		LookPath: func(string) (string, error) { return os.Args[0], nil },
+		Env:      append(os.Environ(), "SYSC_FAKE_RECORDER=1", "SYSC_FAKE_BEHAVIOR=hang"),
+		StopWait: 250 * time.Millisecond,
+	}, stale)
+
+	var stateRead *v1.HostCall
+	select {
+	case stateRead = <-stateReads:
+	case <-time.After(time.Second):
+		t.Fatal("plugin did not request saved ownership")
+	}
+	h.open("bar-a", v1.ViewBar, "DP-1")
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
+	if err := h.send(&v1.InputEvent{
+		ViewID: "bar-a", Node: "toggle", Event: v1.EventPointer,
+		Button: v1.ButtonSecondary, Output: "DP-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitPanelOpen()
+
+	value, _ := json.Marshal(stale)
+	result, _ := json.Marshal(v1.StateGetResult{Found: true, Value: value})
+	stateReadReplies <- &v1.HostReply{ID: stateRead.ID, OK: true, Result: result}
+	h.waitOwnership(func(own recorder.Ownership) bool { return own.PID == 0 })
+}
+
+func TestUnavailableBackendCanRecoverExistingRecorder(t *testing.T) {
+	stale := &recorder.Ownership{PID: 2147483647, Exe: "/fake/recorder", Args: []string{"recorder", "-o", "/tmp/recovery.mp4"}}
+	h, stateReads, stateReadReplies := startPluginWithHeldStateGet(t, recorder.Options{
+		LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+		Scan: func() ([]recorder.ProcInfo, error) {
+			return []recorder.ProcInfo{{PID: stale.PID, Exe: stale.Exe, Args: stale.Args}}, nil
+		},
+	}, stale)
+
+	var stateRead *v1.HostCall
+	select {
+	case stateRead = <-stateReads:
+	case <-time.After(time.Second):
+		t.Fatal("plugin did not request saved ownership")
+	}
+	h.open("panel-a", v1.ViewPanel, "DP-1")
+	h.wait("panel-a", func(n *v1.Node) bool { return strings.Contains(treeText(n), "unavailable") })
+
+	value, _ := json.Marshal(stale)
+	result, _ := json.Marshal(v1.StateGetResult{Found: true, Value: value})
+	stateReadReplies <- &v1.HostReply{ID: stateRead.ID, OK: true, Result: result}
+	h.wait("panel-a", func(n *v1.Node) bool { return strings.Contains(treeText(n), "Recording") })
+}
+
 type pluginHost struct {
-	t         *testing.T
-	dir       string
-	enc       *v1.Encoder
-	dec       *v1.Decoder
-	fromHost  *io.PipeWriter
-	stale     *recorder.Ownership
-	mu        sync.Mutex
-	roots     map[string]*v1.Node
-	notify    []v1.NotifyParams
-	panels    []v1.PanelParams
-	stateSets []v1.StateSetParams
-	wake      chan struct{}
-	done      chan struct{}
-	snapCount atomic.Int32
+	t                *testing.T
+	dir              string
+	enc              *v1.Encoder
+	dec              *v1.Decoder
+	fromHost         *io.PipeWriter
+	stale            *recorder.Ownership
+	mu               sync.Mutex
+	roots            map[string]*v1.Node
+	notify           []v1.NotifyParams
+	panels           []v1.PanelParams
+	stateSets        []v1.StateSetParams
+	stateReads       chan *v1.HostCall
+	stateReadReplies chan *v1.HostReply
+	wake             chan struct{}
+	done             chan struct{}
+	snapCount        atomic.Int32
 }
 
 func startPlugin(t *testing.T, opt recorder.Options) *pluginHost {
@@ -276,13 +475,24 @@ func startPlugin(t *testing.T, opt recorder.Options) *pluginHost {
 }
 
 func startPluginWith(t *testing.T, opt recorder.Options, stale *recorder.Ownership) *pluginHost {
+	return startPluginWithStateRead(t, opt, stale, nil, nil)
+}
+
+func startPluginWithHeldStateGet(t *testing.T, opt recorder.Options, stale *recorder.Ownership) (*pluginHost, <-chan *v1.HostCall, chan<- *v1.HostReply) {
+	stateReads := make(chan *v1.HostCall, 1)
+	stateReadReplies := make(chan *v1.HostReply, 1)
+	h := startPluginWithStateRead(t, opt, stale, stateReads, stateReadReplies)
+	return h, stateReads, stateReadReplies
+}
+
+func startPluginWithStateRead(t *testing.T, opt recorder.Options, stale *recorder.Ownership, stateReads chan *v1.HostCall, stateReadReplies chan *v1.HostReply) *pluginHost {
 	t.Helper()
 	toPlugin, fromHost := io.Pipe()
 	toHost, fromPlugin := io.Pipe()
 	h := &pluginHost{
 		t: t, dir: t.TempDir(),
 		enc: v1.NewEncoder(fromHost), dec: v1.NewDecoder(toHost, v1.ToHost),
-		fromHost: fromHost, stale: stale,
+		fromHost: fromHost, stale: stale, stateReads: stateReads, stateReadReplies: stateReadReplies,
 		roots: make(map[string]*v1.Node), wake: make(chan struct{}, 8), done: make(chan struct{}),
 	}
 	go func() {
@@ -336,6 +546,18 @@ func startPluginWith(t *testing.T, opt recorder.Options, stale *recorder.Ownersh
 					raw, _ := json.Marshal(v1.OutputContextResult{Output: "DP-1", Generation: 1})
 					reply.Result = raw
 				case v1.CallStateGet:
+					if h.stateReads != nil {
+						h.stateReads <- m
+						go func(id string) {
+							select {
+							case stateReply := <-h.stateReadReplies:
+								stateReply.ID = id
+								_ = h.send(stateReply)
+							case <-h.done:
+							}
+						}(m.ID)
+						continue
+					}
 					if h.stale != nil {
 						value, _ := json.Marshal(h.stale)
 						raw, _ := json.Marshal(v1.StateGetResult{Found: true, Value: value})

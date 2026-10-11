@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"sync"
 	"testing"
@@ -43,6 +44,23 @@ func TestSettingsFromFallsBackToDefaults(t *testing.T) {
 	}
 }
 
+func TestPendingSavedSelectionTargetsTheRestoredDevice(t *testing.T) {
+	snap := kdeconnect.Snapshot{
+		Available: true, SelectedID: "default",
+		Devices: []kdeconnect.Device{
+			{ID: "default", Paired: true, Reachable: true},
+			{ID: "saved", Paired: true, Reachable: true},
+		},
+	}
+	if got := selectedActionDevice(snap, "saved"); got != "saved" {
+		t.Fatalf("selected action device = %q, want saved", got)
+	}
+	snap.Devices[1].Reachable = false
+	if got := selectedActionDevice(snap, "saved"); got != "default" {
+		t.Fatalf("unreachable saved action device = %q, want current fallback", got)
+	}
+}
+
 func TestShareKindFor(t *testing.T) {
 	t.Parallel()
 	if got := shareKindFor("https://example.com"); got != kdeconnect.ActionShareURL {
@@ -59,13 +77,14 @@ func TestShareKindFor(t *testing.T) {
 func TestOpenOnlyRespondsToActivation(t *testing.T) {
 	t.Parallel()
 	call := func(event v1.EventKind) (v1.HostCall, bool) {
-		var out bytes.Buffer
-		c := v1.NewClient(bytes.NewReader(nil), &out)
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		defer cancel()
+		outR, outW := io.Pipe()
+		defer outR.Close()
+		defer outW.Close()
+		c := v1.NewClient(bytes.NewReader(nil), outW)
+		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
 		go func() {
-			handleInput(ctx, c, nil, &v1.InputEvent{Node: "open", Event: event}, nil, kdeconnect.Snapshot{}, new(bool), nil)
+			handleInput(ctx, c, nil, &v1.InputEvent{Node: "open", Event: event}, nil, kdeconnect.Snapshot{}, new(bool), nil, nil)
 			close(done)
 		}()
 		select {
@@ -73,18 +92,28 @@ func TestOpenOnlyRespondsToActivation(t *testing.T) {
 		case <-time.After(100 * time.Millisecond):
 			t.Fatal("open input did not return")
 		}
-		if out.Len() == 0 {
+		if event != v1.EventActivate {
+			cancel()
 			return v1.HostCall{}, false
 		}
-		msg, err := v1.NewDecoder(bytes.NewReader(out.Bytes()), v1.ToHost).Decode()
-		if err != nil {
-			t.Fatalf("decode host call: %v", err)
+		decoded := make(chan *v1.HostCall, 1)
+		go func() {
+			msg, err := v1.NewDecoder(outR, v1.ToHost).Decode()
+			if err == nil {
+				if hc, ok := msg.(*v1.HostCall); ok {
+					decoded <- hc
+				}
+			}
+		}()
+		select {
+		case hc := <-decoded:
+			cancel()
+			return *hc, true
+		case <-time.After(time.Second):
+			cancel()
+			t.Fatal("activation did not open the panel")
+			return v1.HostCall{}, false
 		}
-		hc, ok := msg.(*v1.HostCall)
-		if !ok {
-			t.Fatalf("message = %T, want host call", msg)
-		}
-		return *hc, true
 	}
 
 	if _, ok := call(v1.EventPointer); ok {
@@ -108,14 +137,14 @@ func TestDeviceSwitcherActivationTogglesPanelState(t *testing.T) {
 	ui := uiState{}
 	busy := false
 	msg := &v1.InputEvent{Node: "device-switcher", Event: v1.EventActivate}
-	if !handleInput(context.Background(), nil, nil, msg, &ui, kdeconnect.Snapshot{}, &busy, nil) || !ui.switcherOpen {
+	if !handleInput(context.Background(), nil, nil, msg, &ui, kdeconnect.Snapshot{}, &busy, nil, nil) || !ui.switcherOpen {
 		t.Fatal("activating the device switcher did not open it")
 	}
-	if !handleInput(context.Background(), nil, nil, msg, &ui, kdeconnect.Snapshot{}, &busy, nil) || ui.switcherOpen {
+	if !handleInput(context.Background(), nil, nil, msg, &ui, kdeconnect.Snapshot{}, &busy, nil, nil) || ui.switcherOpen {
 		t.Fatal("activating the device switcher did not close it")
 	}
 	msg.Event = v1.EventPointer
-	if handleInput(context.Background(), nil, nil, msg, &ui, kdeconnect.Snapshot{}, &busy, nil) || ui.switcherOpen {
+	if handleInput(context.Background(), nil, nil, msg, &ui, kdeconnect.Snapshot{}, &busy, nil, nil) || ui.switcherOpen {
 		t.Fatal("pointer input changed the device switcher")
 	}
 }
@@ -287,7 +316,7 @@ func TestPairingCardButtonsRouteToTheirOwnAction(t *testing.T) {
 
 func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
 	orig := hostcall.Default
-	hostcall.Default = 400 * time.Millisecond
+	hostcall.Default = 5 * time.Second
 	defer func() { hostcall.Default = orig }()
 
 	toPluginR, hostOutW, err := os.Pipe()
@@ -365,7 +394,7 @@ func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
 	}
 
 	go func() {
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 64; i++ {
 			_ = send(&v1.InputEvent{Node: "sms-body", Event: v1.EventChange})
 		}
 		_ = send(&v1.ViewOpen{ViewID: "bar-after", View: v1.ViewBar, Width: 200})
@@ -373,7 +402,7 @@ func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
 
 	select {
 	case <-snapshotted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(50 * time.Millisecond):
 		t.Fatal("plugin is wedged: it never rendered the view opened after the input burst")
 	}
 }

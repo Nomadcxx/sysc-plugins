@@ -50,6 +50,95 @@ type pinnedSurface struct {
 	Output string `json:"output"`
 }
 
+type notesActionResult struct {
+	kind      string
+	clipboard v1.ClipboardReadResult
+	err       error
+	token     string
+	viewID    string
+	sticky    view
+	opened    []notesOpenedSticky
+	removed   []string
+	pins      []pinnedSurface
+	pinsReady bool
+	target    notesRestoreTarget
+	color     string
+	pinned    bool
+}
+
+type notesOpenedSticky struct {
+	viewID string
+	view   view
+}
+
+type notesRestoreTarget struct {
+	output     string
+	generation uint32
+}
+
+type notesIOJob func(context.Context) notesActionResult
+type notesSubmit func(notesIOJob) error
+
+type notesDeleteCommit struct {
+	name string
+	err  error
+}
+
+// ponytail: cap shutdown at one host-call deadline; stronger guarantees for queued host writes need durable storage, not unbounded process exit.
+const notesActionDrainTimeout = 5 * time.Second
+
+func startNotesActionWorker(ctx context.Context, jobs <-chan notesIOJob, results chan<- notesActionResult) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for job := range jobs {
+			if ctx.Err() != nil {
+				return
+			}
+			result := job(ctx)
+			select {
+			case results <- result:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return done
+}
+
+func drainNotesActionWorker(jobs chan notesIOJob, results <-chan notesActionResult, done <-chan struct{}, cancel context.CancelFunc) {
+	close(jobs)
+	defer cancel()
+	timer := time.NewTimer(notesActionDrainTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-results:
+		case <-timer.C:
+			return
+		}
+	}
+}
+
+func submitNotesDelete(submit notesSubmit, commit func() (string, error), action func(context.Context, string) notesActionResult) error {
+	committed := make(chan notesDeleteCommit, 1)
+	if err := submit(func(ctx context.Context) notesActionResult {
+		result := <-committed
+		if result.err != nil {
+			return notesActionResult{kind: "delete-note"}
+		}
+		return action(ctx, result.name)
+	}); err != nil {
+		return err
+	}
+	result := notesDeleteCommit{}
+	result.name, result.err = commit()
+	committed <- result
+	return result.err
+}
+
 // publisher remembers the last tree sent to each view, so the 1s tick only
 // sends a view whose content changed.
 type publisher map[string][sha256.Size]byte
@@ -96,6 +185,92 @@ func cascade(views map[string]view, output string) (x, y, slot int) {
 	return stickyOriginX + step, stickyOriginY + step, slot
 }
 
+func readPins(ctx context.Context, c *v1.Client) ([]pinnedSurface, error) {
+	var pins []pinnedSurface
+	if _, err := getState(ctx, c, pinnedStateKey, &pins); err != nil {
+		return nil, err
+	}
+	return normalizePins(pins), nil
+}
+
+func openStickyHost(ctx context.Context, c *v1.Client, name, title, output string, generation uint32, x, y, slot int, pins []pinnedSurface) (string, view, error) {
+	color := "sun"
+	if _, err := getState(ctx, c, colorStateBase+notes.Token(name), &color); err != nil {
+		return "", view{}, err
+	}
+	key, err := stickyKey(ctx, c, name)
+	if err != nil {
+		return "", view{}, err
+	}
+	params := v1.SurfaceOpenParams{Key: key, Title: title, Output: output, Generation: generation, X: x, Y: y, Width: stickyWidth, Height: stickyHeight}
+	var result v1.SurfaceResult
+	if err := call(ctx, c, v1.CallSurfaceOpen, params, &result); err != nil {
+		return "", view{}, err
+	}
+	if result.ViewID == "" {
+		return "", view{}, errors.New("notes: shell did not return a sticky view")
+	}
+	color = validColor(color)
+	pinned := isPinned(pins, name, output)
+	v := view{kind: v1.ViewFloating, name: name, color: color, pinned: pinned, output: output, generation: generation, slot: slot, hasSlot: true}
+	return result.ViewID, v, call(ctx, c, v1.CallSurfacePin, v1.SurfacePinParams{View: result.ViewID, Pinned: pinned}, nil)
+}
+
+func resolveSticky(ctx context.Context, c *v1.Client, entry, output string, generation uint32, known []view) (view, error) {
+	pins, err := readPins(ctx, c)
+	if err != nil {
+		return view{}, err
+	}
+	candidates := make([]view, 0, len(pins)+len(known))
+	for _, pin := range pins {
+		candidates = append(candidates, view{kind: v1.ViewFloating, name: pin.Name, output: pin.Output, pinned: true})
+	}
+	candidates = append(candidates, known...)
+	for _, candidate := range candidates {
+		if candidate.kind != v1.ViewFloating || candidate.name == "" {
+			continue
+		}
+		key, err := stickyKey(ctx, c, candidate.name)
+		if err != nil {
+			return view{}, err
+		}
+		if key != entry {
+			continue
+		}
+		color := candidate.color
+		if color == "" {
+			color = "sun"
+			if _, err := getState(ctx, c, colorStateBase+notes.Token(candidate.name), &color); err != nil {
+				return view{}, err
+			}
+		}
+		candidate.color = validColor(color)
+		candidate.output, candidate.generation = output, generation
+		candidate.pinned = isPinned(pins, candidate.name, output)
+		return candidate, nil
+	}
+	return view{}, errors.New("notes: could not identify a restored sticky note")
+}
+
+func pinSticky(ctx context.Context, c *v1.Client, id string, current view) ([]pinnedSurface, bool, error) {
+	pins, err := readPins(ctx, c)
+	if err != nil {
+		return nil, false, err
+	}
+	on := !isPinned(pins, current.name, current.output)
+	updated := setPinned(pins, current.name, current.output, on)
+	if err := setState(ctx, c, pinnedStateKey, updated); err != nil {
+		return pins, false, err
+	}
+	if err := call(ctx, c, v1.CallSurfacePin, v1.SurfacePinParams{View: id, Pinned: on}, nil); err != nil {
+		if rollbackErr := setState(ctx, c, pinnedStateKey, pins); rollbackErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore saved pin state: %w", rollbackErr))
+		}
+		return pins, false, err
+	}
+	return updated, on, nil
+}
+
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {
 		os.Exit(1)
@@ -117,12 +292,16 @@ func run(in *os.File, out *os.File) error {
 		return sess
 	}
 	views := map[string]view{}
+	closedViews := map[string]bool{}
 	pub := publisher{}
 	var pins []pinnedSurface
 	pinsLoaded := false
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
 	incoming := make(chan v1.Message, 8)
+	// ponytail: cap queued host and filesystem jobs at 32; overflow is visible and retried on the next output view open.
+	actionJobs := make(chan notesIOJob, 32)
+	actionResults := make(chan notesActionResult, 32)
 	go func() {
 		for {
 			msg, err := c.Recv()
@@ -137,19 +316,26 @@ func run(in *os.File, out *os.File) error {
 			}
 		}
 	}()
+	actionWorkerDone := startNotesActionWorker(workerCtx, actionJobs, actionResults)
+	defer func() {
+		cancel()
+		drainNotesActionWorker(actionJobs, actionResults, actionWorkerDone, cancelWorker)
+		if sess != nil {
+			_ = sess.Close()
+		}
+	}()
 	ticks := time.NewTicker(time.Second)
 	defer ticks.Stop()
 
-	loadPins := func() error {
-		if pinsLoaded {
+	submit := func(job notesIOJob) error {
+		select {
+		case actionJobs <- job:
 			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return errors.New("Notes is busy; try again")
 		}
-		if _, err := getState(ctx, c, pinnedStateKey, &pins); err != nil {
-			return err
-		}
-		pins = normalizePins(pins)
-		pinsLoaded = true
-		return nil
 	}
 
 	snapshot := func() {
@@ -173,6 +359,9 @@ func run(in *os.File, out *os.File) error {
 				count, last := sess.Stats()
 				tree = notes.TooltipTree(count, last, library().Now)
 			case v1.ViewFloating:
+				if v.name == "" {
+					continue
+				}
 				doc, err := sess.Document(v.name)
 				if err != nil {
 					sess.Notify("Could not open sticky note: " + err.Error())
@@ -200,6 +389,8 @@ func run(in *os.File, out *os.File) error {
 		return false
 	}
 
+	pendingOpen := map[string]view{}
+	var openSequence uint64
 	openSticky := func(name, output string, generation uint32) error {
 		if output == "" || generation == 0 {
 			return errors.New("notes: output identity is unavailable for a sticky note")
@@ -209,90 +400,179 @@ func run(in *os.File, out *os.File) error {
 		if err != nil {
 			return err
 		}
-		// A sticky on a blank note is a reason to keep it.
 		s.Keep(name)
-		if err := loadPins(); err != nil {
+		occupied := make(map[string]view, len(views)+len(pendingOpen))
+		for id, v := range views {
+			occupied[id] = v
+		}
+		for token, v := range pendingOpen {
+			occupied["pending:"+token] = v
+		}
+		x, y, slot := cascade(occupied, output)
+		openSequence++
+		token := fmt.Sprintf("%d", openSequence)
+		pendingOpen[token] = view{kind: v1.ViewFloating, name: name, output: output, slot: slot, hasSlot: true}
+		if err := submit(func(workCtx context.Context) notesActionResult {
+			pins, err := readPins(workCtx, c)
+			if err != nil {
+				return notesActionResult{kind: "sticky-open", token: token, err: err}
+			}
+			id, sticky, err := openStickyHost(workCtx, c, name, notes.DisplayTitle(name, doc.Body), output, generation, x, y, slot, pins)
+			return notesActionResult{kind: "sticky-open", token: token, viewID: id, sticky: sticky, pins: pins, pinsReady: true, err: err}
+		}); err != nil {
+			delete(pendingOpen, token)
 			return err
 		}
-		color := "sun"
-		if _, err := getState(ctx, c, colorStateBase+notes.Token(name), &color); err != nil {
-			return err
-		}
-		color = validColor(color)
-		x, y, slot := cascade(views, output)
-		key, err := stickyKey(ctx, c, name)
-		if err != nil {
-			return err
-		}
-		params := v1.SurfaceOpenParams{
-			Key: key, Title: notes.DisplayTitle(name, doc.Body),
-			Output: output, Generation: generation, X: x, Y: y, Width: stickyWidth, Height: stickyHeight,
-		}
-		var result v1.SurfaceResult
-		if err := call(ctx, c, v1.CallSurfaceOpen, params, &result); err != nil {
-			return err
-		}
-		if result.ViewID == "" {
-			return errors.New("notes: shell did not return a sticky view")
-		}
-		pinned := isPinned(pins, name, output)
-		views[result.ViewID] = view{kind: v1.ViewFloating, name: name, color: color, pinned: pinned, output: output, generation: generation, slot: slot, hasSlot: true}
-		return call(ctx, c, v1.CallSurfacePin, v1.SurfacePinParams{View: result.ViewID, Pinned: pinned}, nil)
+		return nil
 	}
 
-	// afterRename points a renamed note's stickies at the new name, carries
-	// its colour and pins over, and reopens the stickies so their title bars
-	// follow.
-	afterRename := func(oldName, newName string) {
-		retargetStickies(views, oldName, newName)
-		if err := migrateNoteState(ctx, c, oldName, newName, &pins, loadPins); err != nil {
-			sess.Notify("Could not move sticky settings to the new name: " + err.Error())
+	restorePending := map[string]bool{}
+	pendingPins := map[string]bool{}
+	targetKey := func(target notesRestoreTarget) string {
+		return fmt.Sprintf("%s:%d", target.output, target.generation)
+	}
+	queueRestoredPins := func(target notesRestoreTarget, saved []pinnedSurface) {
+		if target.output == "" || target.generation == 0 {
 			return
 		}
-		var reopen []string
-		for id, v := range views {
-			if v.kind == v1.ViewFloating && v.name == newName {
-				reopen = append(reopen, id)
-			}
-		}
-		for _, id := range reopen {
-			v := views[id]
-			if err := call(ctx, c, v1.CallSurfaceClose, v1.SurfaceCloseParams{View: id}, nil); err != nil {
-				sess.Notify(err.Error())
+		for _, pin := range saved {
+			if pin.Output != target.output {
 				continue
 			}
-			delete(views, id)
-			pub.forget(id)
-			if err := openSticky(newName, v.output, v.generation); err != nil {
-				sess.Notify(err.Error())
+			alreadyOpen := false
+			for _, v := range views {
+				if v.kind == v1.ViewFloating && v.name == pin.Name && v.output == pin.Output {
+					alreadyOpen = true
+					break
+				}
+			}
+			for _, v := range pendingOpen {
+				if v.name == pin.Name && v.output == pin.Output {
+					alreadyOpen = true
+					break
+				}
+			}
+			if !alreadyOpen {
+				if err := openSticky(pin.Name, target.output, target.generation); err != nil {
+					ensure().Notify("Could not restore " + pin.Name + ": " + err.Error())
+				}
 			}
 		}
 	}
-
 	restorePins := func(output string, generation uint32) {
+		target := notesRestoreTarget{output: output, generation: generation}
 		if output == "" || generation == 0 {
 			return
 		}
-		if err := loadPins(); err != nil {
-			ensure().Notify("Could not restore sticky notes: " + err.Error())
+		if pinsLoaded {
+			queueRestoredPins(target, pins)
 			return
 		}
-		for _, pin := range pins {
-			if pin.Output != output {
-				continue
-			}
-			if err := openSticky(pin.Name, output, generation); err != nil {
-				ensure().Notify("Could not restore " + pin.Name + ": " + err.Error())
+		key := targetKey(target)
+		if restorePending[key] {
+			return
+		}
+		restorePending[key] = true
+		if err := submit(func(workCtx context.Context) notesActionResult {
+			saved, err := readPins(workCtx, c)
+			return notesActionResult{kind: "restore-pins", target: target, pins: saved, pinsReady: err == nil, err: err}
+		}); err != nil {
+			delete(restorePending, key)
+			ensure().Notify("Could not restore sticky notes: " + err.Error())
+		}
+	}
+
+	// Rename state and surface calls share the ordered host worker. The owner
+	// retargets note edits immediately, then applies only completed host results.
+	afterRename := func(oldName, newName string) {
+		retargetStickies(views, oldName, newName)
+		type renamedSticky struct {
+			id string
+			v  view
+		}
+		var reopen []renamedSticky
+		for id, v := range views {
+			if v.kind == v1.ViewFloating && v.name == newName {
+				reopen = append(reopen, renamedSticky{id: id, v: v})
 			}
 		}
+		doc, docErr := sess.Document(newName)
+		if err := submit(func(workCtx context.Context) notesActionResult {
+			var workerPins []pinnedSurface
+			pinsReady := false
+			loadWorkerPins := func() error {
+				if pinsReady {
+					return nil
+				}
+				var err error
+				workerPins, err = readPins(workCtx, c)
+				pinsReady = err == nil
+				return err
+			}
+			if err := migrateNoteState(workCtx, c, oldName, newName, &workerPins, loadWorkerPins); err != nil {
+				return notesActionResult{kind: "rename", pins: workerPins, pinsReady: pinsReady, err: err}
+			}
+			result := notesActionResult{kind: "rename", pins: workerPins, pinsReady: pinsReady}
+			if docErr != nil {
+				result.err = docErr
+				return result
+			}
+			for _, item := range reopen {
+				if err := call(workCtx, c, v1.CallSurfaceClose, v1.SurfaceCloseParams{View: item.id}, nil); err != nil {
+					result.err = errors.Join(result.err, err)
+					continue
+				}
+				result.removed = append(result.removed, item.id)
+				x, y := stickyOriginX, stickyOriginY
+				slot := item.v.slot
+				if item.v.hasSlot {
+					x += slot * stickyStep
+					y += slot * stickyStep
+				}
+				id, opened, err := openStickyHost(workCtx, c, newName, notes.DisplayTitle(newName, doc.Body), item.v.output, item.v.generation, x, y, slot, workerPins)
+				if id != "" {
+					result.opened = append(result.opened, notesOpenedSticky{viewID: id, view: opened})
+				}
+				result.err = errors.Join(result.err, err)
+			}
+			return result
+		}); err != nil {
+			sess.Notify("Could not move sticky settings to the new name: " + err.Error())
+		}
+	}
+	closeNote := func() error {
+		workerViews := make(map[string]view, len(views))
+		viewIDs := make([]string, 0, len(views))
+		for id, v := range views {
+			workerViews[id] = v
+			viewIDs = append(viewIDs, id)
+		}
+		workerPins := append([]pinnedSurface(nil), pins...)
+		pinsReady := pinsLoaded
+		return submitNotesDelete(submit, sess.ConfirmDeleteName, func(workCtx context.Context, name string) notesActionResult {
+			loadWorkerPins := func() error {
+				if pinsReady {
+					return nil
+				}
+				var err error
+				workerPins, err = readPins(workCtx, c)
+				pinsReady = err == nil
+				return err
+			}
+			err := closeDeleted(workCtx, c, name, workerViews, &workerPins, loadWorkerPins)
+			result := notesActionResult{kind: "delete-note", pins: workerPins, pinsReady: pinsReady, err: err}
+			for _, id := range viewIDs {
+				if _, stillOpen := workerViews[id]; !stillOpen {
+					result.removed = append(result.removed, id)
+				}
+			}
+			return result
+		})
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			if sess != nil {
-				_ = sess.Close()
-			}
 			return nil
 		case <-ticks.C:
 			if sess != nil && editableOpen() {
@@ -302,47 +582,41 @@ func run(in *os.File, out *os.File) error {
 		case msg := <-incoming:
 			switch m := msg.(type) {
 			case *v1.HostShutdown:
-				if sess != nil {
-					_ = sess.Close()
-				}
 				return nil
 			case *v1.ViewOpen:
 				ensure()
+				delete(closedViews, m.ViewID)
 				v := view{kind: m.View, output: m.Output, generation: m.Generation}
 				if old, ok := views[m.ViewID]; ok {
-					v.slot, v.hasSlot = old.slot, old.hasSlot
+					v = old
+					v.kind, v.output, v.generation = m.View, m.Output, m.Generation
 				}
 				if m.View == v1.ViewFloating {
-					if err := loadPins(); err != nil {
-						sess.Notify("Could not load sticky note state: " + err.Error())
-					} else {
-						for _, pin := range pins {
-							if key, err := stickyKey(ctx, c, pin.Name); err == nil && key == m.Entry {
-								v.name, v.pinned = pin.Name, isPinned(pins, pin.Name, m.Output)
-								break
-							}
-						}
-					}
-					if v.name == "" {
-						for _, candidate := range views {
-							if candidate.kind != v1.ViewFloating {
-								continue
-							}
-							if key, err := stickyKey(ctx, c, candidate.name); err == nil && key == m.Entry {
-								v.name, v.color, v.pinned = candidate.name, candidate.color, candidate.pinned
-								break
-							}
-						}
-					}
-					if v.name == "" {
-						sess.Notify("Could not identify a restored sticky note")
+					if v.name != "" {
+						views[m.ViewID] = v
+						pub.forget(m.ViewID)
+						snapshot()
 						continue
 					}
-					if v.color == "" {
-						v.color = "sun"
-						_, _ = getState(ctx, c, colorStateBase+notes.Token(v.name), &v.color)
-						v.color = validColor(v.color)
+					known := make([]view, 0, len(views))
+					for _, candidate := range views {
+						if candidate.kind == v1.ViewFloating && candidate.name != "" {
+							known = append(known, candidate)
+						}
 					}
+					for _, candidate := range pendingOpen {
+						known = append(known, candidate)
+					}
+					if err := submit(func(workCtx context.Context) notesActionResult {
+						resolved, err := resolveSticky(workCtx, c, m.Entry, m.Output, m.Generation, known)
+						return notesActionResult{kind: "resolve-sticky", viewID: m.ViewID, sticky: resolved, err: err}
+					}); err != nil {
+						sess.Notify("Could not load sticky note state: " + err.Error())
+					}
+					views[m.ViewID] = v
+					pub.forget(m.ViewID)
+					snapshot()
+					continue
 				}
 				views[m.ViewID] = v
 				pub.forget(m.ViewID)
@@ -352,8 +626,10 @@ func run(in *os.File, out *os.File) error {
 					snapshot()
 				}
 			case *v1.ViewClose:
+				closedViews[m.ViewID] = true
+				delete(pendingPins, m.ViewID)
 				if v, ok := views[m.ViewID]; ok {
-					if v.kind == v1.ViewFloating {
+					if v.kind == v1.ViewFloating && v.name != "" {
 						if err := sess.FlushNote(v.name); err != nil {
 							sess.ReportNoteError(v.name, "Save failed while closing sticky: "+err.Error())
 						}
@@ -379,9 +655,9 @@ func run(in *os.File, out *os.File) error {
 			case *v1.InputEvent:
 				ensure()
 				if v, ok := views[m.ViewID]; ok && v.kind == v1.ViewFloating {
-					handleSticky(ctx, c, sess, m, v, views, &pins, loadPins)
+					handleSticky(ctx, c, sess, m, v, views, pendingPins, submit)
 				} else {
-					handlePanel(ctx, c, sess, m, openSticky, views, &pins, loadPins)
+					handlePanel(ctx, c, sess, m, openSticky, closeNote, actionResults)
 				}
 				if from, to, ok := sess.TakeRename(); ok {
 					afterRename(from, to)
@@ -391,11 +667,104 @@ func run(in *os.File, out *os.File) error {
 				sess = applySettings(sess, m.Values)
 				snapshot()
 			}
+		case result := <-actionResults:
+			switch result.kind {
+			case "open":
+				if result.err != nil {
+					ensure().Notify(result.err.Error())
+				}
+			case "clipboard-import":
+				if result.err != nil {
+					ensure().Notify(result.err.Error())
+				} else if strings.TrimSpace(result.clipboard.Text) == "" {
+					ensure().Notify("The clipboard has no plain text")
+				} else if _, err := ensure().CreateWithBody(result.clipboard.Text); err != nil {
+					ensure().Notify(err.Error())
+				}
+			case "restore-pins":
+				delete(restorePending, targetKey(result.target))
+				if result.err != nil {
+					ensure().Notify("Could not restore sticky notes: " + result.err.Error())
+				} else {
+					pins, pinsLoaded = result.pins, true
+					queueRestoredPins(result.target, pins)
+				}
+			case "sticky-open":
+				delete(pendingOpen, result.token)
+				if result.pinsReady {
+					pins, pinsLoaded = result.pins, true
+				}
+				if result.viewID != "" && !closedViews[result.viewID] {
+					views[result.viewID] = result.sticky
+					pub.forget(result.viewID)
+				}
+				if result.err != nil {
+					ensure().Notify(result.err.Error())
+				}
+			case "resolve-sticky":
+				if result.err != nil {
+					delete(views, result.viewID)
+					pub.forget(result.viewID)
+					ensure().Notify(result.err.Error())
+				} else if _, exists := views[result.viewID]; exists {
+					views[result.viewID] = result.sticky
+				}
+			case "sticky-color":
+				if result.err != nil {
+					if v, ok := views[result.viewID]; ok {
+						sess.ReportNoteError(v.name, result.err.Error())
+					}
+				} else if v, ok := views[result.viewID]; ok && v.name == result.sticky.name {
+					v.color = result.color
+					views[result.viewID] = v
+				}
+			case "sticky-pin":
+				delete(pendingPins, result.viewID)
+				if result.err != nil {
+					if v, ok := views[result.viewID]; ok {
+						sess.ReportNoteError(v.name, result.err.Error())
+					}
+				} else {
+					pins, pinsLoaded = result.pins, true
+					if v, ok := views[result.viewID]; ok && v.name == result.sticky.name {
+						v.pinned = result.pinned
+						views[result.viewID] = v
+					}
+				}
+			case "sticky-close":
+				if result.err != nil {
+					if v, ok := views[result.viewID]; ok {
+						sess.ReportNoteError(v.name, result.err.Error())
+					}
+				}
+			case "delete-note", "rename":
+				for _, id := range result.removed {
+					delete(views, id)
+					pub.forget(id)
+				}
+				for _, opened := range result.opened {
+					if !closedViews[opened.viewID] {
+						views[opened.viewID] = opened.view
+						pub.forget(opened.viewID)
+					}
+				}
+				if result.pinsReady {
+					pins, pinsLoaded = result.pins, true
+				}
+				if result.err != nil {
+					if result.kind == "rename" {
+						sess.Notify("Could not move sticky settings to the new name: " + result.err.Error())
+					} else {
+						sess.Notify(result.err.Error())
+					}
+				}
+			}
+			snapshot()
 		}
 	}
 }
 
-func handlePanel(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.InputEvent, openSticky func(string, string, uint32) error, views map[string]view, pins *[]pinnedSurface, loadPins func() error) {
+func handlePanel(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.InputEvent, openSticky func(string, string, uint32) error, closeNote func() error, results chan<- notesActionResult) {
 	fail := func(err error) {
 		if err != nil {
 			sess.Notify(err.Error())
@@ -407,8 +776,14 @@ func handlePanel(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.I
 	sel := snap.Selected
 	switch {
 	case m.Node == "open":
-		_, err := hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
-		fail(err)
+		params := v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID}
+		go func() {
+			_, err := hostcall.Call(ctx, c, v1.CallPanelOpen, params)
+			select {
+			case results <- notesActionResult{kind: "open", err: err}:
+			case <-ctx.Done():
+			}
+		}()
 	case m.Node == "omnibox" && m.Event == v1.EventSubmit:
 		failName(sess.SubmitQuery())
 	case m.Node == "omnibox":
@@ -416,14 +791,14 @@ func handlePanel(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.I
 	case m.Node == "new":
 		failName(sess.CreateFromQuery())
 	case m.Node == "clipboard-import":
-		var result v1.ClipboardReadResult
-		if err := call(ctx, c, v1.CallClipboardRead, v1.ClipboardReadParams{}, &result); err != nil {
-			fail(err)
-		} else if strings.TrimSpace(result.Text) == "" {
-			sess.Notify("The clipboard has no plain text")
-		} else {
-			failName(sess.CreateWithBody(result.Text))
-		}
+		go func() {
+			var clipboard v1.ClipboardReadResult
+			err := call(ctx, c, v1.CallClipboardRead, v1.ClipboardReadParams{}, &clipboard)
+			select {
+			case results <- notesActionResult{kind: "clipboard-import", clipboard: clipboard, err: err}:
+			case <-ctx.Done():
+			}
+		}()
 	case m.Node == "launcher-capture":
 		if strings.TrimSpace(m.Text) != "" {
 			failName(sess.CreateWithBody(m.Text))
@@ -450,11 +825,7 @@ func handlePanel(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.I
 	case m.Node == "cancel":
 		sess.CancelPending()
 	case m.Node == "confirm-delete":
-		name, err := sess.ConfirmDeleteName()
-		fail(err)
-		if err == nil {
-			fail(closeDeleted(ctx, c, name, views, pins, loadPins))
-		}
+		fail(closeNote())
 	case m.Node == "reload":
 		fail(sess.Reload())
 	case m.Node == "keep":
@@ -472,7 +843,7 @@ func handlePanel(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.I
 	}
 }
 
-func handleSticky(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.InputEvent, v view, views map[string]view, pins *[]pinnedSurface, loadPins func() error) {
+func handleSticky(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.InputEvent, v view, views map[string]view, pendingPins map[string]bool, submit notesSubmit) {
 	fail := func(err error) {
 		if err != nil {
 			sess.ReportNoteError(v.name, err.Error())
@@ -490,39 +861,34 @@ func handleSticky(ctx context.Context, c *v1.Client, sess *notes.Session, m *v1.
 		if color != parts[2] {
 			return
 		}
-		if err := setState(ctx, c, colorStateBase+notes.Token(v.name), color); err != nil {
+		if err := submit(func(workCtx context.Context) notesActionResult {
+			err := setState(workCtx, c, colorStateBase+notes.Token(v.name), color)
+			return notesActionResult{kind: "sticky-color", viewID: m.ViewID, sticky: v, color: color, err: err}
+		}); err != nil {
 			fail(err)
-			return
 		}
-		v.color = color
-		views[m.ViewID] = v
 	case m.Node == "surface-pin":
-		if err := loadPins(); err != nil {
-			fail(err)
+		if pendingPins[m.ViewID] {
 			return
 		}
-		on := !v.pinned
-		updated := setPinned(*pins, v.name, v.output, on)
-		if err := setState(ctx, c, pinnedStateKey, updated); err != nil {
+		pendingPins[m.ViewID] = true
+		if err := submit(func(workCtx context.Context) notesActionResult {
+			updated, on, err := pinSticky(workCtx, c, m.ViewID, v)
+			return notesActionResult{kind: "sticky-pin", viewID: m.ViewID, sticky: v, pins: updated, pinsReady: err == nil, pinned: on, err: err}
+		}); err != nil {
+			delete(pendingPins, m.ViewID)
 			fail(err)
-			return
 		}
-		if err := call(ctx, c, v1.CallSurfacePin, v1.SurfacePinParams{View: m.ViewID, Pinned: on}, nil); err != nil {
-			if rollbackErr := setState(ctx, c, pinnedStateKey, *pins); rollbackErr != nil {
-				err = errors.Join(err, fmt.Errorf("restore saved pin state: %w", rollbackErr))
-			}
-			fail(err)
-			return
-		}
-		*pins = updated
-		v.pinned = on
-		views[m.ViewID] = v
 	case m.Node == "surface-close":
 		if err := sess.FlushNote(v.name); err != nil {
 			fail(err)
 			return
 		}
-		fail(call(ctx, c, v1.CallSurfaceClose, v1.SurfaceCloseParams{View: m.ViewID}, nil))
+		if err := submit(func(workCtx context.Context) notesActionResult {
+			return notesActionResult{kind: "sticky-close", viewID: m.ViewID, err: call(workCtx, c, v1.CallSurfaceClose, v1.SurfaceCloseParams{View: m.ViewID}, nil)}
+		}); err != nil {
+			fail(err)
+		}
 	}
 }
 

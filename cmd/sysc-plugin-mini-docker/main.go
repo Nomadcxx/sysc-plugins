@@ -59,10 +59,9 @@ func run(in *os.File, out *os.File) error {
 		interval time.Duration
 	}{interval: 5 * time.Second}
 
-	// mu guards views, rendered-tree digests, and settings. sendMu serializes
-	// every encoder write, including host.call, across the main loop and poller.
+	// mu guards views, rendered-tree digests, and settings. The client encoder
+	// serializes snapshots from the main loop and poller.
 	var mu sync.Mutex
-	var sendMu sync.Mutex
 
 	incoming := make(chan v1.Message, 8)
 	go func() {
@@ -107,9 +106,7 @@ func run(in *os.File, out *os.File) error {
 				continue
 			}
 			revision := current.rev + 1
-			sendMu.Lock()
 			err = c.Snapshot(id, revision, root)
-			sendMu.Unlock()
 			if err == nil {
 				current.rev = revision
 				views[id] = current
@@ -239,11 +236,9 @@ func run(in *os.File, out *os.File) error {
 				}
 				switch {
 				case msg.Node == "open" && current.kind == v1.ViewBar:
-					sendMu.Lock()
-					_, _ = hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{
+					hostcall.Async(ctx, c, v1.CallPanelOpen, v1.PanelParams{
 						Entry: "panel", Output: msg.Output, Generation: msg.Generation, Instance: current.instance,
 					})
-					sendMu.Unlock()
 				case msg.Node == "refresh" && current.kind == v1.ViewPanel:
 					queueRefresh(refreshRequest{containers: true, active: true})
 				case current.kind == v1.ViewPanel && (msg.Node == "page:previous" || msg.Node == "page:next"):

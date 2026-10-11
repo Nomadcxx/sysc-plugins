@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
@@ -38,8 +39,25 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 	}
 	views := map[string]view{}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	saves := hostcall.NewStateSaver(ctx, c)
+	defer func() {
+		cancel()
+		saves.Flush(time.Second)
+	}()
 	incoming := make(chan v1.Message, 8)
+	type input struct {
+		event              *v1.InputEvent
+		mode               recorder.Mode
+		open, record, stop bool
+		replay, save       bool
+	}
+	type outputContext struct {
+		input  input
+		output string
+	}
+	outputContexts := make(chan outputContext, 8)
+	notifyErrors := make(chan error, 4)
+	restoreResults := make(chan recorder.Ownership, 1)
 	go func() {
 		for {
 			msg, err := c.Recv()
@@ -47,13 +65,37 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 				cancel()
 				return
 			}
-			incoming <- msg
+			select {
+			case incoming <- msg:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
-	restore(ctx, c, rec)
+	go func() {
+		if own, ok := restore(ctx, c); ok {
+			select {
+			case restoreResults <- own:
+			case <-ctx.Done():
+			}
+		}
+	}()
 	last := rec.Snapshot()
+	lastSavedOwnership := rec.Ownership()
 	notified := ""
+	stateTouched := false
+	recoveryPending := false
+	recoveryResults := make(chan struct{}, 1)
+	saveChangedOwnership := func() {
+		own := rec.Ownership()
+		if own.PID == lastSavedOwnership.PID && own.Exe == lastSavedOwnership.Exe && slices.Equal(own.Args, lastSavedOwnership.Args) {
+			return
+		}
+		lastSavedOwnership = own
+		raw, _ := json.Marshal(own)
+		saves.Save("ownership", raw)
+	}
 
 	publish := func() {
 		last = rec.Snapshot()
@@ -77,15 +119,67 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 		}
 		if last.Mode == recorder.Failed && last.Err != notified {
 			notified = last.Err
-			if _, err := hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "Screen Recorder", Body: notifyBody(last.Err, last.Logs), Urgency: v1.UrgencyNormal}); err != nil {
-				fmt.Fprintln(os.Stderr, "sysc-plugin-screen-recorder: notify:", err)
-			}
+			params := v1.NotifyParams{Summary: "Screen Recorder", Body: notifyBody(last.Err, last.Logs), Urgency: v1.UrgencyNormal}
+			go func() {
+				if _, err := hostcall.Call(ctx, c, v1.CallNotify, params); err != nil {
+					select {
+					case notifyErrors <- err:
+					case <-ctx.Done():
+					}
+				}
+			}()
 		}
 		if last.Artifact != "" && last.Artifact != notified && last.Mode == recorder.Idle {
 			notified = last.Artifact
-			_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "Recording saved", Body: last.Artifact, Urgency: v1.UrgencyNormal})
+			hostcall.Async(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "Recording saved", Body: last.Artifact, Urgency: v1.UrgencyNormal})
 		}
-		saveOwnership(ctx, c, rec)
+		if !recoveryPending {
+			saveChangedOwnership()
+		}
+	}
+	processInput := func(in input, output string) {
+		if in.open {
+			hostcall.Async(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: output, Instance: in.event.ViewID})
+		}
+		if in.record || in.stop {
+			rec.ToggleRecord(output)
+		}
+		if in.replay {
+			rec.ToggleReplay(output)
+		}
+		if in.save {
+			rec.SaveReplay()
+		}
+	}
+	var pending []input
+	outputPending := false
+	startInput := func(in input) {
+		if in.event.Output != "" {
+			processInput(in, in.event.Output)
+			return
+		}
+		outputPending = true
+		go func() {
+			reply, err := hostcall.Call(ctx, c, v1.CallOutputContext, v1.OutputContextParams{Generation: in.event.Generation})
+			output := ""
+			if err == nil && reply.OK {
+				var got v1.OutputContextResult
+				if json.Unmarshal(reply.Result, &got) == nil {
+					output = got.Output
+				}
+			}
+			select {
+			case outputContexts <- outputContext{input: in, output: output}:
+			case <-ctx.Done():
+			}
+		}()
+	}
+	resumeInputs := func() {
+		for len(pending) > 0 && !outputPending {
+			in := pending[0]
+			pending = pending[1:]
+			startInput(in)
+		}
 	}
 
 	ticks := time.NewTicker(time.Second)
@@ -95,6 +189,33 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case err := <-notifyErrors:
+			fmt.Fprintln(os.Stderr, "sysc-plugin-screen-recorder: notify:", err)
+		case result := <-outputContexts:
+			outputPending = false
+			processInput(result.input, result.output)
+			resumeInputs()
+		case own := <-restoreResults:
+			mode := rec.Snapshot().Mode
+			if !stateTouched && (mode == recorder.Idle || mode == recorder.Unavailable) {
+				lastSavedOwnership = own
+				recoveryPending = true
+				done := rec.Recover(own)
+				go func() {
+					select {
+					case <-done:
+					case <-ctx.Done():
+						return
+					}
+					select {
+					case recoveryResults <- struct{}{}:
+					case <-ctx.Done():
+					}
+				}()
+			}
+		case <-recoveryResults:
+			recoveryPending = false
+			saveChangedOwnership()
 		case <-ticks.C:
 			if last.Mode != recorder.Idle {
 				publish()
@@ -120,27 +241,15 @@ func run(in io.Reader, out io.Writer, opt recorder.Options) error {
 				}
 				publish()
 			case *v1.InputEvent:
-				output := m.Output
-				if output == "" {
-					reply, err := hostcall.Call(ctx, c, v1.CallOutputContext, v1.OutputContextParams{Generation: m.Generation})
-					if err == nil && reply.OK {
-						var got v1.OutputContextResult
-						_ = json.Unmarshal(reply.Result, &got)
-						output = got.Output
-					}
+				in := input{event: m, mode: last.Mode}
+				in.open, in.record, in.stop, in.replay, in.save = recorder.HandleInput(m, in.mode)
+				if in.record || in.stop || in.replay || in.save {
+					stateTouched = true
 				}
-				open, record, stop, replay, save := recorder.HandleInput(m, last.Mode)
-				if open {
-					_, _ = hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: output, Instance: m.ViewID})
-				}
-				if record || stop {
-					rec.ToggleRecord(output)
-				}
-				if replay {
-					rec.ToggleReplay(output)
-				}
-				if save {
-					rec.SaveReplay()
+				if outputPending {
+					pending = append(pending, in)
+				} else {
+					startInput(in)
 				}
 			case *v1.SettingsChanged:
 				next, err := recorder.ParseConfig(m.Values)
@@ -167,24 +276,18 @@ func notifyBody(errText, logs string) string {
 	return body[:maxNotifyBody-len(marker)] + marker
 }
 
-func restore(ctx context.Context, c *v1.Client, rec *recorder.Recorder) {
+func restore(ctx context.Context, c *v1.Client) (recorder.Ownership, bool) {
 	reply, err := hostcall.Call(ctx, c, v1.CallStateGet, v1.StateGetParams{Key: "ownership"})
 	if err != nil || !reply.OK {
-		return
+		return recorder.Ownership{}, false
 	}
 	var got v1.StateGetResult
 	if err := json.Unmarshal(reply.Result, &got); err != nil || !got.Found {
-		return
+		return recorder.Ownership{}, false
 	}
 	var own recorder.Ownership
 	if err := json.Unmarshal(got.Value, &own); err != nil || own.PID == 0 {
-		return
+		return recorder.Ownership{}, false
 	}
-	rec.Recover(own)
-}
-
-func saveOwnership(ctx context.Context, c *v1.Client, rec *recorder.Recorder) {
-	own := rec.Ownership()
-	raw, _ := json.Marshal(own)
-	_, _ = hostcall.Call(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "ownership", Value: raw})
+	return own, true
 }

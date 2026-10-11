@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	worldclock "github.com/Nomadcxx/sysc-plugins/plugins/world-clock"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -93,8 +94,16 @@ type session struct {
 	// searchFloor is, per panel view, the first revision carrying the current
 	// search reseed. A search event from an older revision was typed into a
 	// buffer the reseed has since cleared.
-	searchFloor map[string]uint64
-	floorGen    map[string]uint64
+	searchFloor  map[string]uint64
+	floorGen     map[string]uint64
+	saves        *hostcall.StateSaver
+	saveResults  chan hostcall.StateWriteResult
+	saveRevision uint64
+}
+
+type zonesLoadResult struct {
+	reply v1.HostReply
+	err   error
 }
 
 func runPlugin(in io.Reader, out io.Writer, env environment) error {
@@ -105,7 +114,12 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	s := &session{env: env, client: c, store: worldclock.NewStore(), settings: defaultSettings(), views: map[string]view{},
 		searchFloor: map[string]uint64{}, floorGen: map[string]uint64{}}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	s.saveResults = make(chan hostcall.StateWriteResult, 8)
+	s.saves = hostcall.NewStateSaverWithTimeout(ctx, c, env.callTimeout)
+	defer func() {
+		cancel()
+		s.saves.Flush(time.Second)
+	}()
 	incoming := make(chan v1.Message, 8)
 	go func() {
 		for {
@@ -114,10 +128,34 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 				cancel()
 				return
 			}
-			incoming <- msg
+			select {
+			case incoming <- msg:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
-	s.restore(ctx)
+	loadRequests := make(chan struct{}, 1)
+	loadResults := make(chan zonesLoadResult, 1)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-loadRequests:
+				reply, err := s.call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "zones"})
+				select {
+				case loadResults <- zonesLoadResult{reply: reply, err: err}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	loadRequests <- struct{}{}
+	loadingZones := true
+	s.addErr = "Loading zones"
+	var pendingInputs []*v1.InputEvent
 	s.lastMinute = env.now().Truncate(time.Minute)
 
 	minute := time.NewTicker(wallCheck)
@@ -149,6 +187,48 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 		case <-cycleC:
 			s.cycle++
 			s.patchBars()
+		case result := <-s.saveResults:
+			if result.Key != "zones" || result.Revision != s.saveRevision {
+				continue
+			}
+			err := result.Err
+			if err == nil && !result.Reply.OK {
+				err = errors.New(result.Reply.Error)
+			}
+			if err != nil {
+				s.saveErr = "Couldn't save zones"
+			} else {
+				s.saveErr = ""
+			}
+			s.snapshotAll()
+		case result := <-loadResults:
+			loadingZones = false
+			loaded, changed := s.restoreResult(result.reply, result.err)
+			if !loaded {
+				s.addErr = "Couldn't load zones"
+				s.snapshotAll()
+				continue
+			}
+			wasLoading := s.addErr == "Loading zones"
+			if s.addErr == "Couldn't load zones" || s.addErr == "Loading zones" {
+				s.addErr = ""
+			}
+			queued := pendingInputs
+			pendingInputs = nil
+			published := false
+			for _, input := range queued {
+				if input.ViewID != "" {
+					if _, open := s.views[input.ViewID]; !open {
+						continue
+					}
+				}
+				s.handle(ctx, input)
+				s.snapshotAll()
+				published = true
+			}
+			if !published && (changed || wasLoading) {
+				s.snapshotAll()
+			}
 		case msg := <-incoming:
 			switch m := msg.(type) {
 			case *v1.HostShutdown:
@@ -165,6 +245,33 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 					s.snapshot(m.ViewID)
 				}
 			case *v1.InputEvent:
+				if !s.loaded {
+					if m.Node == "open" && m.Event == v1.EventActivate {
+						s.handle(ctx, m)
+						continue
+					}
+					if len(pendingInputs) == 32 {
+						s.addErr = "Still loading saved zones; try that change again"
+						s.snapshotAll()
+						continue
+					}
+					pendingInputs = append(pendingInputs, m)
+					// Keep search feedback live while replaying the same event later
+					// in order with the deferred state-changing inputs.
+					if m.Node == "search" && m.Event != v1.EventSubmit {
+						s.handle(ctx, m)
+					}
+					s.addErr = "Loading zones"
+					if !loadingZones {
+						loadingZones = true
+						select {
+						case loadRequests <- struct{}{}:
+						default:
+						}
+					}
+					s.snapshotAll()
+					continue
+				}
 				s.handle(ctx, m)
 				s.snapshotAll()
 			case *v1.SettingsChanged:
@@ -186,52 +293,42 @@ func (s *session) call(ctx context.Context, kind v1.CallKind, params any) (v1.Ho
 	return s.client.Call(ctx, kind, params)
 }
 
-func (s *session) restore(ctx context.Context) {
-	reply, err := s.call(ctx, v1.CallStateGet, v1.StateGetParams{Key: "zones"})
+func (s *session) restoreResult(reply v1.HostReply, err error) (bool, bool) {
 	if err != nil || !reply.OK {
-		return
+		return false, false
 	}
 	s.loaded = true
 	var result v1.StateGetResult
 	if json.Unmarshal(reply.Result, &result) != nil || !result.Found {
-		return
+		return true, false
 	}
 	// An undecodable value keeps the defaults in memory; nothing is written
 	// until the user changes something, so the stored value is not clobbered.
 	if zones, err := worldclock.Decode(result.Value); err == nil {
 		s.store.Load(zones)
+		return true, true
 	}
+	return true, false
 }
 
-// ensureLoaded retries a failed startup read before a change is applied, so
-// the change lands on the user's list rather than on the defaults.
-func (s *session) ensureLoaded(ctx context.Context) {
-	if !s.loaded {
-		s.restore(ctx)
-	}
-}
-
-func (s *session) save(ctx context.Context) {
+func (s *session) save() {
 	if !s.loaded {
 		s.saveErr = "Couldn't load zones"
 		return
 	}
 	raw, err := worldclock.Encode(s.store.Zones())
-	if err == nil {
-		var reply v1.HostReply
-		reply, err = s.call(ctx, v1.CallStateSet, v1.StateSetParams{Key: "zones", Value: raw})
-		if err == nil && !reply.OK {
-			err = errors.New(reply.Error)
-		}
-	}
 	if err != nil {
 		s.saveErr = "Couldn't save zones"
 		return
 	}
 	s.saveErr = ""
+	s.saveRevision = s.saves.SaveTracked("zones", raw, s.saveResults)
 }
 
 func (s *session) readings() []worldclock.Reading {
+	if !s.loaded {
+		return nil
+	}
 	return s.store.Readings(s.env.now(), s.env.local, s.settings.hour24)
 }
 
@@ -376,31 +473,29 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	id := node[strings.Index(node, ":")+1:]
 	switch {
 	case node == "open" && m.Event == v1.EventActivate:
-		_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
+		hostcall.Async(ctx, s.client, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
 	case node == "search":
 		if m.Revision < s.searchFloor[m.ViewID] {
 			return
 		}
 		s.query, s.addErr = m.Text, ""
 		if m.Event == v1.EventSubmit {
-			s.addTop(ctx)
+			s.addTop()
 		}
 	case node == "add":
-		s.addTop(ctx)
+		s.addTop()
 	case strings.HasPrefix(node, "pick:"):
-		s.addPick(ctx, id)
+		s.addPick(id)
 	case strings.HasPrefix(node, "drop:") && m.Event == v1.EventDrop:
-		s.ensureLoaded(ctx)
 		before := s.store.Zones()
 		if at, err := strconv.Atoi(id); err == nil && s.store.Reorder(m.Text, at) {
 			s.resetCycleIfBarChanged(before)
-			s.save(ctx)
+			s.save()
 		}
 	case strings.HasPrefix(node, "bar:"):
-		s.ensureLoaded(ctx)
 		if s.store.ToggleBar(id) {
 			s.cycle = 0
-			s.save(ctx)
+			s.save()
 		}
 	case strings.HasPrefix(node, "edit:"):
 		s.store.StartRename(id)
@@ -409,25 +504,24 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	case strings.HasPrefix(node, "label:"):
 		s.renameDraft = m.Text
 		if m.Event == v1.EventSubmit {
-			s.commitRename(ctx)
+			s.commitRename()
 		}
 	case node == "rename-ok":
-		s.commitRename(ctx)
+		s.commitRename()
 	case node == "rename-cancel", node == "del-cancel":
 		s.store.CancelEdit()
 	case strings.HasPrefix(node, "del:"):
 		s.store.ProposeDelete(id)
 	case node == "del-ok":
-		s.ensureLoaded(ctx)
 		before := s.store.Zones()
 		if s.store.ConfirmDelete() {
 			s.resetCycleIfBarChanged(before)
-			s.save(ctx)
+			s.save()
 		}
 	}
 }
 
-func (s *session) addTop(ctx context.Context) {
+func (s *session) addTop() {
 	q := strings.TrimSpace(s.query)
 	if q == "" {
 		return
@@ -439,25 +533,24 @@ func (s *session) addTop(ctx context.Context) {
 	}
 	for _, m := range matches {
 		if !s.store.Has(m.ID) {
-			s.add(ctx, m)
+			s.add(m)
 			return
 		}
 	}
 	s.addErr = matches[0].City + " is already in the list"
 }
 
-func (s *session) addPick(ctx context.Context, id string) {
+func (s *session) addPick(id string) {
 	for _, m := range s.env.index.Search(s.query, maxSuggestions*2) {
 		if m.ID == id {
-			s.add(ctx, m)
+			s.add(m)
 			return
 		}
 	}
-	s.add(ctx, worldclock.Match{ID: id, City: worldclock.ShortLabel(id)})
+	s.add(worldclock.Match{ID: id, City: worldclock.ShortLabel(id)})
 }
 
-func (s *session) add(ctx context.Context, m worldclock.Match) {
-	s.ensureLoaded(ctx)
+func (s *session) add(m worldclock.Match) {
 	before := s.store.Zones()
 	label := ""
 	if m.Alias {
@@ -472,7 +565,7 @@ func (s *session) add(ctx context.Context, m worldclock.Match) {
 		s.resetCycleIfBarChanged(before)
 		s.query, s.addErr = "", ""
 		s.queryReseed++
-		s.save(ctx)
+		s.save()
 	}
 }
 
@@ -491,9 +584,8 @@ func (s *session) resetCycleIfBarChanged(before []worldclock.Zone) {
 	}
 }
 
-func (s *session) commitRename(ctx context.Context) {
-	s.ensureLoaded(ctx)
+func (s *session) commitRename() {
 	if id := s.store.Renaming(); id != "" && s.store.Rename(id, s.renameDraft) {
-		s.save(ctx)
+		s.save()
 	}
 }
