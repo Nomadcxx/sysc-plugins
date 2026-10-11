@@ -334,7 +334,9 @@ var claudeVersionOnce struct {
 // endpoint expects. Best-effort: any failure keeps the literal fallback.
 func probeCLIVersion(command string) string {
 	claudeVersionOnce.once.Do(func() {
-		out, err := exec.Command(command, "--version").Output()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, command, "--version").Output()
 		if err != nil {
 			return
 		}

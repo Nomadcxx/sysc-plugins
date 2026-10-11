@@ -1,10 +1,12 @@
 package aiusage
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +32,45 @@ func writeOpenCodeCopilotAuth(t *testing.T, home, access string) {
 	}
 	if err := os.WriteFile(path, []byte(`{"github-copilot":{"type":"oauth","access":"`+access+`","refresh":"do-not-use-refresh","expires":1}}`), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func installHangingCLI(t *testing.T, name, startedEnv string) string {
+	t.Helper()
+	bin := t.TempDir()
+	marker := filepath.Join(bin, "started")
+	cli := filepath.Join(bin, name)
+	script := "#!/bin/sh\necho $$ > \"$" + startedEnv + "\"\nexec /bin/sleep 30\n"
+	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv(startedEnv, marker)
+	return marker
+}
+
+func waitForHangingCLI(t *testing.T, marker string, timeout time.Duration) int {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		raw, err := os.ReadFile(marker)
+		if err == nil {
+			pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if err != nil {
+				t.Fatalf("CLI pid marker %q: %v", raw, err)
+			}
+			return pid
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("CLI probe did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func killProcess(pid int) {
+	if process, err := os.FindProcess(pid); err == nil {
+		_ = process.Kill()
 	}
 }
 
@@ -480,6 +521,58 @@ func TestCopilotMissingTokenIsSetup(t *testing.T) {
 	}
 	if rep.State != StateNeedsSetup {
 		t.Fatalf("state = %v", rep.State)
+	}
+}
+
+func TestCopilotAuthProbeStopsWhenContextIsCanceled(t *testing.T) {
+	marker := installHangingCLI(t, "gh", "GH_STARTED")
+	c := &copilotCollector{
+		env:  directEnv(t.TempDir(), func(string) string { return "" }, nil),
+		base: "https://unused.invalid",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Fetch(ctx)
+		done <- err
+	}()
+	_ = waitForHangingCLI(t, marker, 2*time.Second)
+	cancel()
+	select {
+	case err := <-done:
+		var setup *ErrSetup
+		if !asSetup(err, &setup) {
+			t.Fatalf("fetch err = %v, want setup error after canceled auth probe", err)
+		}
+	case <-time.After(time.Second):
+		killProcess(waitForHangingCLI(t, marker, time.Second))
+		<-done
+		t.Fatal("gh auth token continued after cancellation")
+	}
+}
+
+func TestCopilotAuthProbeHasTimeout(t *testing.T) {
+	marker := installHangingCLI(t, "gh", "GH_STARTED")
+	c := &copilotCollector{
+		env:  directEnv(t.TempDir(), func(string) string { return "" }, nil),
+		base: "https://unused.invalid",
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Fetch(context.Background())
+		done <- err
+	}()
+	_ = waitForHangingCLI(t, marker, 2*time.Second)
+	select {
+	case err := <-done:
+		var setup *ErrSetup
+		if !asSetup(err, &setup) {
+			t.Fatalf("fetch err = %v, want setup error after timed out auth probe", err)
+		}
+	case <-time.After(4 * time.Second):
+		killProcess(waitForHangingCLI(t, marker, time.Second))
+		<-done
+		t.Fatal("gh auth token exceeded its timeout")
 	}
 }
 
