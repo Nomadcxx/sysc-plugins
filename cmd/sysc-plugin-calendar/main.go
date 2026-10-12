@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	"github.com/Nomadcxx/sysc-plugins/plugins/calendar"
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -27,6 +28,8 @@ var defaultCalendarQuery calendarQuery = calendar.QueryEDS
 type openedView struct {
 	kind       v1.ViewKind
 	revision   uint64
+	session    uint64
+	inputEpoch uint64
 	width      int
 	instance   string
 	output     string
@@ -41,6 +44,27 @@ type refreshResult struct {
 	data   calendar.EDSResult
 	ranges []calendarRange
 	err    error
+}
+
+type hostActionFeedback uint8
+
+const (
+	feedbackPanelOpen hostActionFeedback = iota
+	feedbackClipboardWrite
+	feedbackOpenURL
+)
+
+type hostActionRequest struct {
+	viewID   string
+	view     openedView
+	kind     v1.CallKind
+	params   any
+	feedback hostActionFeedback
+}
+
+type hostActionResult struct {
+	request hostActionRequest
+	err     error
 }
 
 // lockedWriter makes each message write atomic. v1.Encoder has no lock of
@@ -80,9 +104,38 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 	var sources []calendar.CalendarSource
 	status := calendar.LoadStatus{Loading: true}
 	var coverage []calendarRange
+	var hiddenSaveRevision uint64
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	stateSaver := hostcall.NewStateSaver(ctx, c)
+	stateResults := make(chan hostcall.StateWriteResult, 16)
+	actionRequests := make(chan hostActionRequest, 16)
+	actionResults := make(chan hostActionResult, 16)
+	actionDone := make(chan struct{})
+	go func() {
+		defer close(actionDone)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case request := <-actionRequests:
+				if ctx.Err() != nil {
+					return
+				}
+				_, err := hostCall(ctx, c, request.kind, request.params)
+				select {
+				case actionResults <- hostActionResult{request: request, err: err}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	defer func() {
+		cancel()
+		<-actionDone
+		stateSaver.Flush(time.Second)
+	}()
 	incoming := make(chan v1.Message, 16)
 	receiveError := make(chan error, 1)
 	go func() {
@@ -134,6 +187,7 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 	}()
 
 	var lastClockKey, lastMinuteKey string
+	var nextViewSession uint64
 	//lint:ignore S1021 publishOne recurses, so it needs the declared-then-assigned form.
 	var publishOne func(string) error
 	publishOne = func(id string) error {
@@ -165,11 +219,19 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 		// ponytail: best-effort snapshot publish; the next publish retries, so
 		// a failed state.set (or a shutdown cancelling it) must never be fatal.
 		if raw, marshalErr := json.Marshal(calendar.BuildControlCenterSnapshot(visibleEvents(model.Events(), hidden), len(sources), now())); marshalErr == nil {
-			_, _ = hostCall(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "control_center", Value: raw})
+			stateSaver.Save("control_center", raw)
 		}
 		lastClockKey = clockKey(visibleEvents(model.Events(), hidden), now())
 		lastMinuteKey = now().Format("200601021504")
 		return nil
+	}
+	submitHostAction := func(request hostActionRequest) bool {
+		select {
+		case actionRequests <- request:
+			return true
+		default:
+			return false
+		}
 	}
 	publishClocks := func() error {
 		for id, view := range views {
@@ -298,12 +360,55 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 			if err := publishAll(); err != nil {
 				return err
 			}
+		case result := <-actionResults:
+			current, ok := views[result.request.viewID]
+			if !ok || current.session != result.request.view.session || current.inputEpoch != result.request.view.inputEpoch {
+				continue
+			}
+			switch result.request.feedback {
+			case feedbackPanelOpen:
+				if result.err != nil {
+					status.ActionError = "Calendar panel could not be opened: " + truncateText(result.err.Error(), 256)
+					_ = c.Send(&v1.PluginStatus{State: v1.StatusError, Message: status.ActionError})
+				}
+				continue
+			case feedbackClipboardWrite:
+				if result.err != nil {
+					status.ActionError = "Clipboard write failed: " + truncateText(result.err.Error(), 256)
+				} else {
+					status.ActionError, status.Notice = "", "Event details copied"
+				}
+			case feedbackOpenURL:
+				if result.err != nil {
+					status.ActionError = "Meeting link could not be opened: " + truncateText(result.err.Error(), 256)
+				} else {
+					status.ActionError, status.Notice = "", "Opening meeting link…"
+				}
+			}
+			if err := publishAll(); err != nil {
+				return err
+			}
+		case result := <-stateResults:
+			if result.Key != "hidden_calendars" || result.Revision != hiddenSaveRevision {
+				continue
+			}
+			if result.Err != nil {
+				status.ActionError = "Calendar filter could not be saved: " + truncateText(result.Err.Error(), 256)
+			} else if !result.Reply.OK {
+				status.ActionError = "Calendar filter could not be saved: " + truncateText(result.Reply.Error, 256)
+			} else {
+				continue
+			}
+			if err := publishAll(); err != nil {
+				return err
+			}
 		case message := <-incoming:
 			switch message := message.(type) {
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
-				views[message.ViewID] = openedView{kind: message.View, width: message.Width, instance: message.Instance, output: message.Output, generation: message.Generation}
+				nextViewSession++
+				views[message.ViewID] = openedView{kind: message.View, width: message.Width, instance: message.Instance, output: message.Output, generation: message.Generation, session: nextViewSession}
 				if message.View == v1.ViewPanel {
 					requestRefresh(false)
 				}
@@ -323,13 +428,20 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 				if !ok || view.revision != message.Revision {
 					continue
 				}
+				view.inputEpoch++
+				views[message.ViewID] = view
 				if view.kind == v1.ViewBar {
 					if message.Event != v1.EventActivate {
 						continue
 					}
 					if message.Node == "calendar-open" {
-						if _, err := hostCall(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Instance: view.instance, Output: view.output, Generation: view.generation}); err != nil {
-							status.ActionError = "Calendar panel could not be opened: " + truncateText(err.Error(), 256)
+						request := hostActionRequest{
+							viewID: message.ViewID, view: view, kind: v1.CallPanelOpen,
+							params:   v1.PanelParams{Entry: "panel", Instance: view.instance, Output: view.output, Generation: view.generation},
+							feedback: feedbackPanelOpen,
+						}
+						if !submitHostAction(request) {
+							status.ActionError = "Calendar panel could not be opened: host action queue is full"
 							_ = c.Send(&v1.PluginStatus{State: v1.StatusError, Message: status.ActionError})
 						}
 					}
@@ -370,8 +482,11 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 							if !hidden[source.ID] {
 								delete(hidden, source.ID)
 							}
-							if stateErr := saveHiddenCalendars(ctx, c, hidden); stateErr != nil {
+							value, stateErr := hiddenCalendarsValue(hidden)
+							if stateErr != nil {
 								status.ActionError = "Calendar filter could not be saved: " + truncateText(stateErr.Error(), 256)
+							} else {
+								hiddenSaveRevision = stateSaver.SaveTracked("hidden_calendars", value, stateResults)
 							}
 							break
 						}
@@ -391,19 +506,23 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 					panel := model.Panel(message.ViewID)
 					if event, ok := findEvent(model.Events(), panel.SelectedEventID); ok {
 						text := copyEventSummary(event, panel.Date.Location())
-						if _, callErr := hostCall(ctx, c, v1.CallClipboardWrite, v1.ClipboardWriteParams{Text: text}); callErr != nil {
-							status.ActionError = "Clipboard write failed: " + truncateText(callErr.Error(), 256)
-						} else {
-							status.ActionError, status.Notice = "", "Event details copied"
+						request := hostActionRequest{
+							viewID: message.ViewID, view: view, kind: v1.CallClipboardWrite,
+							params: v1.ClipboardWriteParams{Text: text}, feedback: feedbackClipboardWrite,
+						}
+						if !submitHostAction(request) {
+							status.ActionError = "Clipboard write failed: host action queue is full"
 						}
 					}
 				case message.Node == "action-join":
 					panel := model.Panel(message.ViewID)
 					if event, ok := findEvent(model.Events(), panel.SelectedEventID); ok && calendar.SafeHTTPURL(event.URL) {
-						if _, callErr := hostCall(ctx, c, v1.CallOpenURL, v1.OpenURLParams{URL: event.URL}); callErr != nil {
-							status.ActionError = "Meeting link could not be opened: " + truncateText(callErr.Error(), 256)
-						} else {
-							status.ActionError, status.Notice = "", "Opening meeting link…"
+						request := hostActionRequest{
+							viewID: message.ViewID, view: view, kind: v1.CallOpenURL,
+							params: v1.OpenURLParams{URL: event.URL}, feedback: feedbackOpenURL,
+						}
+						if !submitHostAction(request) {
+							status.ActionError = "Meeting link could not be opened: host action queue is full"
 						}
 					}
 				}
@@ -461,7 +580,7 @@ func loadHiddenCalendars(ctx context.Context, client *v1.Client) ([]string, erro
 	return ids, nil
 }
 
-func saveHiddenCalendars(ctx context.Context, client *v1.Client, hidden map[string]bool) error {
+func hiddenCalendarsValue(hidden map[string]bool) (json.RawMessage, error) {
 	ids := make([]string, 0, len(hidden))
 	for id, value := range hidden {
 		if value && len(id) > 0 && len(id) <= 256 {
@@ -473,11 +592,7 @@ func saveHiddenCalendars(ctx context.Context, client *v1.Client, hidden map[stri
 		ids = ids[:128]
 	}
 	raw, err := json.Marshal(ids)
-	if err != nil {
-		return err
-	}
-	_, err = hostCall(ctx, client, v1.CallStateSet, v1.StateSetParams{Key: "hidden_calendars", Value: raw})
-	return err
+	return json.RawMessage(raw), err
 }
 
 func queryRanges(now time.Time, panels []calendar.PanelState, weekStart string, coverage []calendarRange, force bool) []calendarRange {
