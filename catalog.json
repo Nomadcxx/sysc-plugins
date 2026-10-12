@@ -40,7 +40,7 @@
       "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/aiusage-v0.1.0",
       "name_i18n": {
         "es": "Uso de IA",
-        "pt": "Uso di IA",
+        "pt": "Uso de IA",
         "ja": "AI 使用量",
         "ko": "AI 사용량",
         "ru": "Использование ИИ"
@@ -201,8 +201,8 @@
         "ru": "Вера"
       },
       "description_i18n": {
-        "es": "Horarios de oración y fecha hiyri, con cálculo ajustable",
-        "pt": "Horários de oração e data hijri, com cálculo ajustável",
+        "es": "Horarios de oración y fecha del calendario de la Hégira, con cálculo ajustable",
+        "pt": "Horários de oração e data do calendário islâmico, com cálculo ajustável",
         "ja": "礼拝時刻とヒジュラ暦日付、計算方式調整可",
         "ko": "기도 시간과 히즈리 달력 날짜, 계산법 조절 가능",
         "ru": "Время намаза и дата по хиджре, настраиваемый расчёт"
@@ -677,10 +677,10 @@
         "ru": "Заметки"
       },
       "description_i18n": {
-        "es": "Notas en Markdown y notas adhesibles pastel para tu carpeta de Obsidian, con un campo para buscar o iniciar una nota.",
-        "pt": "Notas Markdown e notas adesivas pastel para sua pasta do Obsidian, com um campo para buscar ou iniciar uma nota.",
-        "ja": "Obsidian フォルダ用の Markdown メモとパステル色の付ぞむ。1つの入力欄で検索も新規作成もできます。",
-        "ko": "Obsidian 포데를용 Markdown 메모와 파스텔 색 메모지. 입력창 하나에서 검색하거나 새 메모를 시작합니다.",
+        "es": "Notas en Markdown y notas adhesivas en tonos pastel para tu carpeta de Obsidian, con un campo para buscar o iniciar una nota.",
+        "pt": "Notas em Markdown e notas adesivas em tons pastel para sua pasta do Obsidian, com um campo para buscar ou iniciar uma nota.",
+        "ja": "Obsidian フォルダ用の Markdown メモとパステルカラーの付箋。1つの入力欄で検索も新規作成もできます。",
+        "ko": "Obsidian 폴더용 Markdown 메모와 파스텔 색 메모지. 입력창 하나에서 검색하거나 새 메모를 시작합니다.",
         "ru": "Заметки в Markdown и пастельные стикеры для папки Obsidian — одно поле для поиска или новой заметки."
       }
     },
@@ -1031,7 +1031,7 @@
         "ru": "Мировые часы"
       },
       "description_i18n": {
-        "es": "Elige ciudades y ver su hora en vivo en la barra",
+        "es": "Elige ciudades y consulta su hora en vivo en la barra",
         "pt": "Escolha cidades e veja a hora ao vivo na barra",
         "ja": "都市を選んでバーにライブ時刻表示",
         "ko": "도시를 선택하면 바에 현지 시각 실시간 표시",
