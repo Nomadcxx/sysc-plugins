@@ -134,6 +134,7 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 	defer func() {
 		cancel()
 		<-actionDone
+		stateSaver.Flush(time.Second)
 	}()
 	incoming := make(chan v1.Message, 16)
 	receiveError := make(chan error, 1)

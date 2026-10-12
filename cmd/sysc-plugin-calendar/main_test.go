@@ -291,6 +291,131 @@ func TestCalendarHostCallDoesNotBlockLaterInputOrShutdown(t *testing.T) {
 	}
 }
 
+func TestCalendarShutdownFlushesPendingHiddenCalendarPreference(t *testing.T) {
+	const timeout = time.Second
+	now := time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC)
+	input, host := io.Pipe()
+	plugin, output := io.Pipe()
+	hostOut := &lockedWriter{w: host}
+	finished := make(chan error, 1)
+	queryCalls := 0 // The refresh worker is serial; keep a possible view-triggered refresh pending.
+	go func() {
+		finished <- runPlugin(input, output, func() time.Time { return now }, func(ctx context.Context, _, _ time.Time) (calendar.EDSResult, error) {
+			queryCalls++
+			if queryCalls > 1 {
+				<-ctx.Done()
+				return calendar.EDSResult{}, ctx.Err()
+			}
+			return calendar.EDSResult{Available: true, Calendars: []calendar.CalendarSource{{ID: "work", Name: "Work", Color: "#0a7bde"}}}, nil
+		})
+	}()
+	ended := false
+	t.Cleanup(func() {
+		if !ended {
+			_ = sendHostJSONNoFail(hostOut, v1.HostShutdown{Type: "host.shutdown"})
+		}
+		_ = host.Close()
+		_ = input.Close()
+		if !ended {
+			select {
+			case <-finished:
+			case <-time.After(2 * time.Second):
+				t.Error("calendar process did not stop during cleanup")
+			}
+		}
+		_ = output.Close()
+	})
+
+	stamped := make(chan []byte, 64)
+	go func() {
+		for scanner := bufio.NewScanner(plugin); scanner.Scan(); {
+			stamped <- append([]byte(nil), scanner.Bytes()...)
+		}
+		close(stamped)
+	}()
+	type hiddenWrite struct {
+		call   v1.HostCall
+		params v1.StateSetParams
+	}
+	hiddenWrites := make(chan hiddenWrite, 2)
+	lines := make(chan []byte, 64)
+	go func() {
+		hiddenCalls := 0
+		for line := range stamped {
+			var call v1.HostCall
+			if json.Unmarshal(line, &call) == nil && call.Type == v1.TypeHostCall {
+				switch call.Call {
+				case v1.CallStateGet:
+					result, _ := json.Marshal(v1.StateGetResult{Found: false})
+					_ = sendHostJSONNoFail(hostOut, v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: result})
+					continue
+				case v1.CallStateSet:
+					var params v1.StateSetParams
+					if err := json.Unmarshal(call.Params, &params); err == nil && params.Key == "hidden_calendars" {
+						hiddenCalls++
+						hiddenWrites <- hiddenWrite{call: call, params: params}
+						if hiddenCalls == 1 {
+							continue // Hold the first save until shutdown cancels its worker.
+						}
+					}
+					_ = sendHostJSONNoFail(hostOut, v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: json.RawMessage(`{}`)})
+					continue
+				}
+			}
+			lines <- line
+		}
+		close(lines)
+	}()
+
+	sendHostJSON(t, hostOut, map[string]any{"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 8}}, "capabilities": []string{"panels", "state"}})
+	if got := nextPluginLineWithin(t, lines, timeout); messageType(got) != "plugin.hello" {
+		t.Fatalf("first plugin message = %s", got)
+	}
+	sendHostJSON(t, hostOut, v1.ViewOpen{Type: "view.open", ViewID: "calendar-panel", View: v1.ViewPanel, Entry: "panel", Width: calendar.PanelWidth, Height: calendar.PanelHeight})
+	toggleID := calendar.CalendarToggleNodeID("work")
+	deadline := time.Now().Add(timeout)
+	var panel v1.ViewSnapshot
+	for {
+		panel = nextViewSnapshotWithin(t, lines, "calendar-panel", time.Until(deadline))
+		if findWireNode(panel.Root, toggleID) != nil {
+			break
+		}
+		if time.Until(deadline) <= 0 {
+			t.Fatal("calendar toggle did not appear")
+		}
+	}
+	sendHostJSON(t, hostOut, v1.InputEvent{Type: "input.event", ViewID: panel.ViewID, Revision: panel.Revision, Node: toggleID, Event: v1.EventActivate})
+	var first hiddenWrite
+	select {
+	case first = <-hiddenWrites:
+	case <-time.After(timeout):
+		t.Fatal("calendar visibility preference was not saved")
+	}
+	if string(first.params.Value) != `["work"]` {
+		t.Fatalf("first hidden-calendar value = %s, want [\"work\"]", first.params.Value)
+	}
+
+	sendHostJSON(t, hostOut, v1.HostShutdown{Type: "host.shutdown"})
+	var flushed hiddenWrite
+	select {
+	case flushed = <-hiddenWrites:
+	case <-time.After(timeout):
+		t.Fatal("shutdown did not retry the pending hidden-calendar preference")
+	}
+	if string(flushed.params.Value) != string(first.params.Value) {
+		t.Fatalf("flushed hidden-calendar value = %s, want %s", flushed.params.Value, first.params.Value)
+	}
+	select {
+	case err := <-finished:
+		ended = true
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(timeout):
+		t.Fatal("calendar process did not stop after the flushed preference reply")
+	}
+}
+
 func nextPluginLineWithin(t *testing.T, lines <-chan []byte, timeout time.Duration) []byte {
 	t.Helper()
 	timer := time.NewTimer(timeout)
