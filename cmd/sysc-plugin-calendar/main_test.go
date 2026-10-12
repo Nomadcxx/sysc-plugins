@@ -187,14 +187,157 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 	_ = output.Close()
 }
 
+func TestCalendarHostCallDoesNotBlockLaterInputOrShutdown(t *testing.T) {
+	const responsivenessBudget = 100 * time.Millisecond
+	const startupBudget = 2 * time.Second
+	now := time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC)
+	input, host := io.Pipe()
+	plugin, output := io.Pipe()
+	hostOut := &lockedWriter{w: host}
+	finished := make(chan error, 1)
+	go func() {
+		finished <- runPlugin(input, output, func() time.Time { return now }, func(ctx context.Context, _, _ time.Time) (calendar.EDSResult, error) {
+			<-ctx.Done()
+			return calendar.EDSResult{}, ctx.Err()
+		})
+	}()
+	var heldCallID string
+	ended := false
+	t.Cleanup(func() {
+		if !ended {
+			if heldCallID != "" {
+				data, _ := json.Marshal(v1.HostReply{Type: "host.reply", ID: heldCallID, OK: true, Result: json.RawMessage(`{}`)})
+				_, _ = hostOut.Write(append(data, '\n'))
+			}
+			_ = sendHostJSONNoFail(hostOut, v1.HostShutdown{Type: "host.shutdown"})
+		}
+		_ = host.Close()
+		_ = input.Close()
+		_ = output.Close()
+		if !ended {
+			select {
+			case <-finished:
+			case <-time.After(2 * time.Second):
+				t.Error("calendar process did not stop during cleanup")
+			}
+		}
+	})
+
+	stamped := make(chan []byte, 32)
+	go func() {
+		for scanner := bufio.NewScanner(plugin); scanner.Scan(); {
+			stamped <- append([]byte(nil), scanner.Bytes()...)
+		}
+		close(stamped)
+	}()
+	lines := make(chan []byte, 32)
+	go func() {
+		for line := range stamped {
+			var call v1.HostCall
+			if json.Unmarshal(line, &call) == nil && call.Type == v1.TypeHostCall && (call.Call == v1.CallStateGet || call.Call == v1.CallStateSet) {
+				var result json.RawMessage = json.RawMessage(`{}`)
+				if call.Call == v1.CallStateGet {
+					result, _ = json.Marshal(v1.StateGetResult{Found: false})
+				}
+				data, _ := json.Marshal(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: result})
+				_, _ = hostOut.Write(append(data, '\n'))
+				continue
+			}
+			lines <- line
+		}
+		close(lines)
+	}()
+
+	sendHostJSON(t, hostOut, map[string]any{"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 8}}, "capabilities": []string{"panels", "state"}})
+	if got := nextPluginLineWithin(t, lines, startupBudget); messageType(got) != "plugin.hello" {
+		t.Fatalf("first plugin message = %s", got)
+	}
+	sendHostJSON(t, hostOut, v1.ViewOpen{Type: "view.open", ViewID: "calendar-bar", View: v1.ViewBar, Width: 240, Instance: "bar-instance", Output: "DP-1", Generation: 7})
+	bar := nextViewSnapshotWithin(t, lines, "calendar-bar", startupBudget)
+	sendHostJSON(t, hostOut, v1.InputEvent{Type: "input.event", ViewID: bar.ViewID, Revision: bar.Revision, Node: "calendar-open", Event: v1.EventActivate})
+	line := nextPluginLineWithin(t, lines, responsivenessBudget)
+	var call v1.HostCall
+	if err := json.Unmarshal(line, &call); err != nil || call.Call != v1.CallPanelOpen {
+		t.Fatalf("calendar-open host call = %s, err=%v", line, err)
+	}
+	heldCallID = call.ID
+	var panelParams v1.PanelParams
+	if err := json.Unmarshal(call.Params, &panelParams); err != nil || panelParams.Instance != "bar-instance" || panelParams.Output != "DP-1" || panelParams.Generation != 7 {
+		t.Fatalf("panel-open params = %+v, err=%v", panelParams, err)
+	}
+
+	sendHostJSON(t, hostOut, v1.ViewOpen{Type: "view.open", ViewID: "calendar-panel", View: v1.ViewPanel, Entry: "panel", Width: calendar.PanelWidth, Height: calendar.PanelHeight})
+	panel := nextViewSnapshotWithin(t, lines, "calendar-panel", responsivenessBudget)
+	title := findWireNode(panel.Root, "cal-title")
+	if title == nil {
+		t.Fatal("calendar panel omitted its title")
+	}
+	sendHostJSON(t, hostOut, v1.InputEvent{Type: "input.event", ViewID: panel.ViewID, Revision: panel.Revision, Node: "cal-next", Event: v1.EventActivate})
+	updated := nextViewSnapshotWithin(t, lines, "calendar-panel", responsivenessBudget)
+	updatedTitle := findWireNode(updated.Root, "cal-title")
+	if updated.Revision <= panel.Revision || updatedTitle == nil || updatedTitle.Text == title.Text {
+		t.Fatalf("later input did not update the panel: before=%q after=%v", title.Text, updatedTitle)
+	}
+
+	sendHostJSON(t, hostOut, v1.HostShutdown{Type: "host.shutdown"})
+	select {
+	case err := <-finished:
+		ended = true
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(responsivenessBudget):
+		t.Fatal("shutdown waited for the held panel.open reply")
+	}
+}
+
+func nextPluginLineWithin(t *testing.T, lines <-chan []byte, timeout time.Duration) []byte {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case line, ok := <-lines:
+		if !ok {
+			t.Fatal("plugin output closed unexpectedly")
+		}
+		return line
+	case <-timer.C:
+		t.Fatal("timed out waiting for plugin output")
+		return nil
+	}
+}
+
+func nextViewSnapshotWithin(t *testing.T, lines <-chan []byte, viewID string, timeout time.Duration) v1.ViewSnapshot {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Until(deadline) > 0 {
+		line := nextPluginLineWithin(t, lines, time.Until(deadline))
+		var snapshot v1.ViewSnapshot
+		if json.Unmarshal(line, &snapshot) == nil && snapshot.Type == v1.TypeViewSnapshot && snapshot.ViewID == viewID {
+			return snapshot
+		}
+	}
+	t.Fatalf("timed out waiting for snapshot %s", viewID)
+	return v1.ViewSnapshot{}
+}
+
+func sendHostJSONNoFail(writer io.Writer, message any) error {
+	data, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
+	_, err = writer.Write(append(data, '\n'))
+	return err
+}
+
 func activateForHostCall(t *testing.T, host io.Writer, lines <-chan []byte, current v1.ViewSnapshot, node string, event v1.EventKind, want v1.CallKind) v1.HostCall {
 	t.Helper()
-	for attempts := 0; attempts < 10; attempts++ {
-		input := v1.InputEvent{Type: "input.event", ViewID: current.ViewID, Revision: current.Revision, Node: node, Event: event}
-		if event == v1.EventShortcut {
-			input.Key = "c"
-		}
-		sendHostJSON(t, host, input)
+	input := v1.InputEvent{Type: "input.event", ViewID: current.ViewID, Revision: current.Revision, Node: node, Event: event}
+	if event == v1.EventShortcut {
+		input.Key = "c"
+	}
+	sendHostJSON(t, host, input)
+	for {
 		line := nextPluginLine(t, lines)
 		var call v1.HostCall
 		if err := json.Unmarshal(line, &call); err == nil && call.Type == v1.TypeHostCall {
@@ -203,12 +346,7 @@ func activateForHostCall(t *testing.T, host io.Writer, lines <-chan []byte, curr
 			}
 			return call
 		}
-		if err := json.Unmarshal(line, &current); err != nil || current.Type != v1.TypeViewSnapshot || findWireNode(current.Root, node) == nil {
-			t.Fatalf("%s produced neither its host call nor a current view: %s", node, line)
-		}
 	}
-	t.Fatalf("%s did not produce host call %q", node, want)
-	return v1.HostCall{}
 }
 
 func waitProcessSnapshot(t *testing.T, lines <-chan []byte, viewID, text string) v1.ViewSnapshot {
