@@ -959,3 +959,40 @@ func TestUpdateOfAnOlderTagNeedsNoThumbnail(t *testing.T) {
 		t.Errorf("screenshot changed: %+v -> %+v", before.Screenshot, after.Screenshot)
 	}
 }
+
+func TestUpdatePreservesTranslatedVariants(t *testing.T) {
+	root := newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
+	dist := t.TempDir()
+	writeDistArchive(t, dist, "org.sysc.timer", "1.0.0", "amd64", "v1")
+	if err := updateCatalog(root, defaultRepo, "timer-v1.0.0", dist, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(root, "catalog.json")
+	entries := readCatalogFile(t, path).Entries
+	for i := range entries {
+		if entries[i].ID == "org.sysc.timer" {
+			entries[i].NameI18n = map[string]string{"es": "Temporizador", "ja": "タイマー"}
+			entries[i].DescriptionI18n = map[string]string{"es": "Temporizador pomodoro.", "ja": "ポモドーロ・タイマー。"}
+		}
+	}
+	if err := writeCatalog(path, entries); err != nil {
+		t.Fatal(err)
+	}
+
+	// A tagged release rebuilds the row from the archive, manifest and
+	// catalog-meta.json. The hand-maintained translations must survive it.
+	bumpManifestVersion(t, root, "timer", "1.1.0")
+	writeDistArchive(t, dist, "org.sysc.timer", "1.1.0", "amd64", "v2")
+	if err := updateCatalog(root, defaultRepo, "timer-v1.1.0", dist, time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+
+	e := entryByID(t, readCatalogFile(t, path), "org.sysc.timer")
+	if e.NameI18n["es"] != "Temporizador" || e.NameI18n["ja"] != "タイマー" {
+		t.Errorf("name_i18n = %v, want the seeded translations", e.NameI18n)
+	}
+	if e.DescriptionI18n["es"] != "Temporizador pomodoro." || e.DescriptionI18n["ja"] != "ポモドーロ・タイマー。" {
+		t.Errorf("description_i18n = %v, want the seeded translations", e.DescriptionI18n)
+	}
+}
