@@ -438,13 +438,9 @@ func (l *Loop) appendHistory(r Report) {
 			if !w.HasPercent || w.WindowMinutes <= 0 {
 				continue
 			}
-			identity := ""
-			if w.Identity != w.Key {
-				identity = w.Identity
-			}
 			line, err := json.Marshal(historyLine{
 				TS: r.CapturedAt.Unix(), Provider: p.ID, Window: w.Key,
-				Identity: identity, WindowMinutes: w.WindowMinutes, Pct: w.UsedPercent,
+				Identity: w.Identity, WindowMinutes: w.WindowMinutes, Pct: w.UsedPercent,
 			})
 			if err != nil {
 				continue
@@ -517,10 +513,12 @@ func (l *Loop) ExportCSV(dir string) (string, error) {
 			continue // a bad line drops one record, not the export
 		}
 		window := h.Window
-		if h.Identity != "" && h.Identity != h.Window {
+		if h.Identity != "" {
 			window = h.Identity
-			if label, _ := LabelForMinutes(h.WindowMinutes); label != "" {
-				window = label
+			if h.Identity == quotaIdentity(h.WindowMinutes) {
+				if label, _ := LabelForMinutes(h.WindowMinutes); label != "" {
+					window = label
+				}
 			}
 		}
 		b.WriteString(fmt.Sprintf("%s,%d,%s,%s,%v\n",
