@@ -1,9 +1,14 @@
 package aiusage
 
 import (
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"reflect"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestKimiUsagesMap(t *testing.T) {
@@ -39,6 +44,23 @@ func TestKimiUsagesMap(t *testing.T) {
 	s := rep.Windows[1]
 	if s.Key != "secondary" || s.Label != "Weekly" || s.UsedPercent != 25 {
 		t.Errorf("secondary = %+v", s)
+	}
+}
+
+func TestKimiMonthlyOnlyKeepsStableIdentity(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"usages":{"limit_month_total":{"used_ratio":0.5}}}`))
+	}))
+	defer srv.Close()
+	c := &kimiCollector{env: directEnv(t.TempDir(), nil, map[string]string{"kimi": "k1"}), base: srv.URL}
+	rep, err := c.Fetch(t.Context())
+	if err != nil || len(rep.Windows) != 1 {
+		t.Fatalf("windows=%+v err=%v", rep.Windows, err)
+	}
+	w := rep.Windows[0]
+	if w.Key != "primary" || w.Identity != "tertiary" || w.WindowMinutes != 43200 {
+		t.Fatalf("monthly window = %+v, want primary display and stable monthly identity", w)
 	}
 }
 
@@ -114,11 +136,28 @@ func TestZAIQuota(t *testing.T) {
 		t.Fatalf("windows = %+v", rep.Windows)
 	}
 	p := rep.Windows[0]
-	if p.Key != "primary" || p.WindowMinutes != 300 || p.UsedPercent != 60 || p.DisplayValue != "600000 / 1000000" {
+	if p.Key != "primary" || p.Identity != "TOKENS_LIMIT:300" || p.WindowMinutes != 300 || p.UsedPercent != 60 || p.DisplayValue != "600000 / 1000000" {
 		t.Errorf("primary = %+v", p)
 	}
-	if rep.Windows[1].Key != "secondary" || rep.Windows[1].WindowMinutes != 10080 || rep.Windows[1].UsedPercent != 10 {
+	if rep.Windows[1].Key != "secondary" || rep.Windows[1].Identity != "CREDIT_LIMIT:10080" || rep.Windows[1].WindowMinutes != 10080 || rep.Windows[1].UsedPercent != 10 {
 		t.Errorf("secondary = %+v", rep.Windows[1])
+	}
+}
+
+func TestZAISparseLongWindowKeepsStableIdentity(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"code":200,"data":{"limits":[{"type":"CREDIT_LIMIT","unit":6,"number":1,"percentage":10}]}}`))
+	}))
+	defer srv.Close()
+	c := &zaiCollector{env: directEnv(t.TempDir(), nil, map[string]string{"zai": "z1"}), base: srv.URL}
+	rep, err := c.Fetch(t.Context())
+	if err != nil || len(rep.Windows) != 1 {
+		t.Fatalf("windows=%+v err=%v", rep.Windows, err)
+	}
+	w := rep.Windows[0]
+	if w.Key != "primary" || w.Identity != "CREDIT_LIMIT:10080" || w.WindowMinutes != 10080 {
+		t.Fatalf("weekly window = %+v, want primary display and stable weekly identity", w)
 	}
 }
 
@@ -179,9 +218,10 @@ func TestAlibabaTokenPlan(t *testing.T) {
 		gotCookie = r.Header.Get("Cookie")
 		_ = r.ParseForm()
 		form = r.FormValue("product") + "|" + r.FormValue("action") + "|" + r.FormValue("region")
-		_, _ = w.Write([]byte(`{"data":{"successResponse":{
+		_, _ = w.Write([]byte(alibabaTestEnvelope(`{
 			"per5HourPercentage":0.25,"per5HourResetTime":1790000000000,
-			"per1WeekPercentage":50,"per1MonthPercentage":"0.1"}}}`))
+			"per1WeekPercentage":0.5,"per1WeekResetTime":1790000000000,
+			"per1MonthPercentage":0.1,"per1MonthResetTime":1790000000000}`)))
 	}))
 	defer srv.Close()
 	c := &alibabaCollector{env: directEnv(t.TempDir(), nil, map[string]string{"alibaba": "login_a=1; cna=2"}), base: srv.URL}
@@ -211,6 +251,150 @@ func TestAlibabaTokenPlan(t *testing.T) {
 	}
 	if rep.Windows[0].ResetsAt.IsZero() {
 		t.Error("primary reset time missing")
+	}
+}
+
+func alibabaTestEnvelope(quota string) string {
+	return `{"successResponse":true,"data":{"success":true,"DataV2":{"data":{"success":true,"data":` + quota + `}}}}`
+}
+
+func TestAlibabaMonthlyOnlyTokenPlan(t *testing.T) {
+	t.Parallel()
+	const resetMillis = int64(1793116800000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(alibabaTestEnvelope(`{"per1MonthPercentage":0.8291326937774272,"per1MonthResetTime":1793116800000}`)))
+	}))
+	defer srv.Close()
+	c := &alibabaCollector{env: directEnv(t.TempDir(), nil, map[string]string{"alibaba": "session=fixture"}), base: srv.URL}
+	rep, err := c.Fetch(t.Context())
+	if err != nil || rep.State != StateFresh {
+		t.Fatalf("state=%v windows=%+v err=%v", rep.State, rep.Windows, err)
+	}
+	if len(rep.Windows) != 1 {
+		t.Fatalf("windows = %+v, want the single monthly quota", rep.Windows)
+	}
+	window := rep.Windows[0]
+	if window.Key != "primary" || window.WindowMinutes != 43200 {
+		t.Errorf("window identity = %q/%d minutes, want primary/monthly", window.Key, window.WindowMinutes)
+	}
+	if window.Identity != "tertiary" {
+		t.Errorf("stable identity = %q, want tertiary", window.Identity)
+	}
+	if !window.HasPercent || math.Abs(window.UsedPercent-82.91326937774272) > 1e-9 {
+		t.Errorf("used percent = %v (has=%t), want 82.91326937774272%%", window.UsedPercent, window.HasPercent)
+	}
+	if got := window.ResetsAt.UnixMilli(); got != resetMillis {
+		t.Errorf("reset = %d, want %d", got, resetMillis)
+	}
+}
+
+func TestAlibabaSparseWindowsKeepHistoryAndAlertIdentity(t *testing.T) {
+	const reset5h = int64(1793116800000)
+	const resetMonth = int64(1794000000000)
+	bodies := []string{
+		alibabaTestEnvelope(`{"per5HourPercentage":0.25,"per5HourResetTime":1793116800000,"per1WeekPercentage":0.1,"per1MonthPercentage":0.1,"per1MonthResetTime":1794000000000}`),
+		alibabaTestEnvelope(`{"per1MonthPercentage":0.9,"per1MonthResetTime":1794000000000}`),
+		alibabaTestEnvelope(`{"per5HourPercentage":0.3,"per5HourResetTime":1793116800000,"per1WeekPercentage":0.1,"per1MonthPercentage":0.1,"per1MonthResetTime":1794000000000}`),
+	}
+	var poll atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(bodies[poll.Add(1)-1]))
+	}))
+	defer srv.Close()
+	c := &alibabaCollector{env: directEnv(t.TempDir(), nil, map[string]string{"alibaba": "session=fixture"}), base: srv.URL}
+	_, history := loopPaths(t)
+	l := NewLoop(Registry{}, testConfig(), Env{}, filepath.Join(t.TempDir(), "cache.json"), history)
+	ledger := Ledger{}
+	alertCfg := AlertConfig{Warn: 20, Crit: 95, Cooldown: 24 * time.Hour}
+	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	wantNotices := []int{1, 1, 0}
+	wantHistory := [][]float64{{25}, {10, 90}, {25, 30}}
+	for i := range bodies {
+		rep, err := c.Fetch(t.Context())
+		if err != nil {
+			t.Fatalf("poll %d: %v", i+1, err)
+		}
+		notices := CheckAlerts(Report{Providers: []ProviderReport{rep}}, alertCfg, ledger, now.Add(time.Duration(i)*time.Minute))
+		if len(notices) != wantNotices[i] {
+			t.Errorf("poll %d notices = %d, want %d", i+1, len(notices), wantNotices[i])
+		}
+		if i == 1 && ledger["alibaba:tertiary:1"].ResetsAt != resetMonth/1000 {
+			t.Fatalf("monthly alert record = %+v, want reset %d", ledger["alibaba:tertiary:1"], resetMonth/1000)
+		}
+		l.appendHistory(Report{CapturedAt: now.Add(time.Duration(i) * time.Minute), Providers: []ProviderReport{rep}})
+		l.reloadHistory()
+		if got := l.History("alibaba", 30); !reflect.DeepEqual(got, wantHistory[i]) {
+			t.Errorf("poll %d history = %v, want %v", i+1, got, wantHistory[i])
+		}
+	}
+	if ledger["alibaba:primary:1"].ResetsAt != reset5h/1000 {
+		t.Fatalf("5h alert record = %+v, want reset %d", ledger["alibaba:primary:1"], reset5h/1000)
+	}
+}
+
+func TestAlibabaTokenPlanPercentageIsFractionalRatio(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  float64
+		valid bool
+	}{
+		{name: "zero", value: "0", want: 0, valid: true},
+		{name: "fraction", value: "0.5", want: 50, valid: true},
+		{name: "one", value: "1", want: 100, valid: true},
+		{name: "over one", value: "1.01"},
+		{name: "negative", value: "-0.01"},
+		{name: "not finite", value: `"NaN"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := alibabaTestEnvelope(`{"per1MonthPercentage":` + tc.value + `}`)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			c := &alibabaCollector{env: directEnv(t.TempDir(), nil, map[string]string{"alibaba": "session=fixture"}), base: srv.URL}
+			rep, err := c.Fetch(t.Context())
+			if !tc.valid {
+				if err == nil || rep.State != StateFault || len(rep.Windows) != 0 {
+					t.Fatalf("invalid ratio accepted: state=%v windows=%+v", rep.State, rep.Windows)
+				}
+				if tc.name == "over one" && rep.Err != "the token-plan response contained an invalid quota ratio; expected values in [0,1]" {
+					t.Errorf("invalid-ratio error = %q", rep.Err)
+				}
+				return
+			}
+			if err != nil || rep.State != StateFresh || len(rep.Windows) != 1 {
+				t.Fatalf("state=%v windows=%+v err=%v", rep.State, rep.Windows, err)
+			}
+			if got := rep.Windows[0].UsedPercent; got != tc.want {
+				t.Errorf("used percent = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAlibabaRejectsUnsuccessfulOrMisplacedQuota(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, body string }{
+		{"outer gateway", `{"successResponse":false,"data":{"success":true,"DataV2":{"data":{"success":true,"data":{"per5HourPercentage":0.5}}}}}`},
+		{"Bailian gateway", `{"successResponse":true,"data":{"success":false,"DataV2":{"data":{"success":true,"data":{"per5HourPercentage":0.5}}}}}`},
+		{"quota service", `{"successResponse":true,"data":{"success":true,"DataV2":{"data":{"success":false,"data":{"per5HourPercentage":0.5}}}}}`},
+		{"unrelated nested metadata", `{"metadata":{"per5HourPercentage":0.5}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			c := &alibabaCollector{env: directEnv(t.TempDir(), nil, map[string]string{"alibaba": "session=fixture"}), base: srv.URL}
+			rep, err := c.Fetch(t.Context())
+			if err == nil || rep.State != StateFault || len(rep.Windows) != 0 {
+				t.Fatalf("invalid envelope accepted: state=%v windows=%+v", rep.State, rep.Windows)
+			}
+		})
 	}
 }
 

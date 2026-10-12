@@ -413,10 +413,12 @@ func (l *Loop) writeCache(r Report) {
 
 // historyLine is one recorded sample.
 type historyLine struct {
-	TS       int64   `json:"ts"`
-	Provider string  `json:"provider"`
-	Window   string  `json:"window"`
-	Pct      float64 `json:"pct"`
+	TS            int64   `json:"ts"`
+	Provider      string  `json:"provider"`
+	Window        string  `json:"window"`
+	Identity      string  `json:"identity,omitempty"`
+	WindowMinutes int     `json:"window_minutes,omitempty"`
+	Pct           float64 `json:"pct"`
 }
 
 type historySnapshot struct {
@@ -437,7 +439,8 @@ func (l *Loop) appendHistory(r Report) {
 				continue
 			}
 			line, err := json.Marshal(historyLine{
-				TS: r.CapturedAt.Unix(), Provider: p.ID, Window: w.Key, Pct: w.UsedPercent,
+				TS: r.CapturedAt.Unix(), Provider: p.ID, Window: w.Key,
+				Identity: w.Identity, WindowMinutes: w.WindowMinutes, Pct: w.UsedPercent,
 			})
 			if err != nil {
 				continue
@@ -509,8 +512,17 @@ func (l *Loop) ExportCSV(dir string) (string, error) {
 		if json.Unmarshal([]byte(line), &h) != nil || h.Provider == "" {
 			continue // a bad line drops one record, not the export
 		}
+		window := h.Window
+		if h.Identity != "" {
+			window = h.Identity
+			if h.Identity == quotaIdentity(h.WindowMinutes) {
+				if label, _ := LabelForMinutes(h.WindowMinutes); label != "" {
+					window = label
+				}
+			}
+		}
 		b.WriteString(fmt.Sprintf("%s,%d,%s,%s,%v\n",
-			time.Unix(h.TS, 0).UTC().Format(time.RFC3339), h.TS, h.Provider, h.Window, h.Pct))
+			time.Unix(h.TS, 0).UTC().Format(time.RFC3339), h.TS, h.Provider, window, h.Pct))
 	}
 	if err := os.WriteFile(out, []byte(b.String()), 0o600); err != nil {
 		return "", err
@@ -528,9 +540,20 @@ func (l *Loop) History(provider string, n int) []float64 {
 	if snapshot == nil {
 		return nil
 	}
+	identity, found := "", false
+	for i := len(snapshot.lines) - 1; i >= 0; i-- {
+		h := snapshot.lines[i]
+		if h.Provider == provider && h.Window == "primary" {
+			identity, found = h.stableIdentity(), true
+			break
+		}
+	}
+	if !found {
+		return nil
+	}
 	var out []float64
 	for _, h := range snapshot.lines {
-		if h.Provider == provider && h.Window == "primary" {
+		if h.Provider == provider && h.stableIdentity() == identity {
 			out = append(out, h.Pct)
 		}
 	}
@@ -538,6 +561,13 @@ func (l *Loop) History(provider string, n int) []float64 {
 		out = out[len(out)-n:]
 	}
 	return out
+}
+
+func (h historyLine) stableIdentity() string {
+	if h.Identity != "" {
+		return h.Identity
+	}
+	return h.Window
 }
 
 // reloadHistory runs with the refresh worker; rendering reads only the

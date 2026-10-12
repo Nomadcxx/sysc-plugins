@@ -580,10 +580,16 @@ func TestExportCSV(t *testing.T) {
 	t.Parallel()
 
 	env, _ := loopEnv()
-	fc := &fakeCollector{id: "alpha", rep: freshRep("alpha")}
-	cache, history := loopPaths(t)
-	l := NewLoop(testRegistry(fc), testConfig(), env, cache, history)
-	l.Round(t.Context(), false)
+	_, history := loopPaths(t)
+	l := NewLoop(Registry{}, testConfig(), env, "", history)
+	appendSample := func(at time.Time, provider string, window Window) {
+		l.appendHistory(Report{CapturedAt: at, Providers: []ProviderReport{{
+			ID: provider, State: StateFresh, Windows: []Window{window},
+		}}})
+	}
+	appendSample(base, "alpha", Window{Key: "primary", Identity: "tertiary", HasPercent: true, UsedPercent: 40, WindowMinutes: 43200})
+	appendSample(base.Add(time.Minute), "alpha", Window{Key: "tertiary", Identity: "tertiary", HasPercent: true, UsedPercent: 41, WindowMinutes: 43200})
+	appendSample(base.Add(2*time.Minute), "zai", Window{Key: "primary", Identity: "TOKENS_LIMIT:300", HasPercent: true, UsedPercent: 60, WindowMinutes: 300})
 
 	outDir := t.TempDir()
 	path, err := l.ExportCSV(outDir)
@@ -595,11 +601,14 @@ func TestExportCSV(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], "timestamp_iso,") {
+	if len(lines) != 4 || !strings.HasPrefix(lines[0], "timestamp_iso,") {
 		t.Fatalf("csv = %q", lines)
 	}
-	if !strings.Contains(lines[1], "alpha,primary,40") {
-		t.Fatalf("csv row = %q", lines[1])
+	if !strings.Contains(lines[1], "alpha,Monthly,40") || !strings.Contains(lines[2], "alpha,Monthly,41") {
+		t.Fatalf("monthly csv rows = %q", lines[1:3])
+	}
+	if !strings.Contains(lines[3], "zai,TOKENS_LIMIT:300,60") {
+		t.Fatalf("Z.AI csv row = %q", lines[3])
 	}
 
 	// A torn history line drops one record instead of aborting.
@@ -613,5 +622,8 @@ func TestExportCSV(t *testing.T) {
 	raw, _ = os.ReadFile(path)
 	if got := strings.Count(string(raw), "\n"); got != 2 {
 		t.Fatalf("loss-resilient export = %d lines, want header + the one valid record", got)
+	}
+	if !strings.Contains(string(raw), "alpha,primary,10") {
+		t.Fatalf("legacy history row did not retain its window name: %q", raw)
 	}
 }

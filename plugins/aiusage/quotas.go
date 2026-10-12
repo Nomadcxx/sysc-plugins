@@ -216,6 +216,7 @@ func (c *kimiCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 		}
 		w := wins[m]
 		w.Key = slot[i]
+		w.Identity = quotaIdentity(m)
 		rep.Windows = append(rep.Windows, w)
 	}
 	if name, ok := kimiLevels[out.User.Membership.Level]; ok {
@@ -343,10 +344,11 @@ func (c *zaiCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 	// unit → minutes multiplier, per the monitor API's enum.
 	mult := map[int]int{1: 1440, 3: 60, 5: 1, 6: 10080}
 	type lane struct {
-		minutes int
-		percent float64
-		disp    string
-		resets  time.Time
+		identity string
+		minutes  int
+		percent  float64
+		disp     string
+		resets   time.Time
 	}
 	var lanes []lane
 	for _, l := range out.Data.Limits {
@@ -372,7 +374,8 @@ func (c *zaiCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 				disp = formatAmount(used) + " / " + formatAmount(*l.Usage)
 			}
 		}
-		w := lane{minutes: l.Number * m, percent: percent, disp: disp}
+		minutes := l.Number * m
+		w := lane{identity: fmt.Sprintf("%s:%d", l.Type, minutes), minutes: minutes, percent: percent, disp: disp}
 		if l.NextReset > 0 {
 			w.resets = time.UnixMilli(l.NextReset).UTC()
 		}
@@ -392,6 +395,7 @@ func (c *zaiCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 	}
 	set := func(i int, key string) Window {
 		w := windowFromPercent(key, lanes[i].minutes, lanes[i].percent, lanes[i].resets)
+		w.Identity = lanes[i].identity
 		w.DisplayValue = lanes[i].disp
 		return w
 	}
@@ -583,71 +587,82 @@ func (c *alibabaCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 		rep.State, rep.Err = StateFault, Scrub(faultMessage(err))
 		return rep, err
 	}
-	var body any
+	var body struct {
+		SuccessResponse *bool `json:"successResponse"`
+		Data            struct {
+			Success         *bool           `json:"success"`
+			SuccessResponse json.RawMessage `json:"successResponse"`
+			DataV2          struct {
+				Data struct {
+					Success *bool          `json:"success"`
+					Data    map[string]any `json:"data"`
+				} `json:"data"`
+			} `json:"DataV2"` // The gateway uses this capitalized key.
+		} `json:"data"`
+	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
 		rep.State, rep.Err = StateFault, Scrub(err.Error())
 		return rep, err
 	}
-	node := findJSONObject(body, func(m map[string]any) bool {
-		_, ok := m["per5HourPercentage"]
-		return ok
-	})
-	// A login redirect or expired cookie answers with an envelope but no
-	// quota map — say so, do not guess.
-	if node == nil {
+	var login struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(body.Data.SuccessResponse, &login) == nil && login.Code == "ConsoleNeedLogin" {
 		msg := "the console returned no token-plan quota (is the cookie still valid?)"
 		rep.State, rep.Err = StateFault, msg
 		return rep, errors.New(msg)
 	}
+	if body.SuccessResponse == nil || !*body.SuccessResponse {
+		msg := "the Alibaba console gateway returned an unsuccessful response"
+		rep.State, rep.Err = StateFault, msg
+		return rep, errors.New(msg)
+	}
+	if body.Data.Success == nil || !*body.Data.Success {
+		msg := "the Alibaba console gateway request was unsuccessful"
+		rep.State, rep.Err = StateFault, msg
+		return rep, errors.New(msg)
+	}
+	if body.Data.DataV2.Data.Success == nil || !*body.Data.DataV2.Data.Success {
+		msg := "the Alibaba token-plan quota request was unsuccessful"
+		rep.State, rep.Err = StateFault, msg
+		return rep, errors.New(msg)
+	}
+	node := body.Data.DataV2.Data.Data
+	invalidRatio := false
 	specs := []struct {
-		slot    string
 		minutes int
 		pctKey  string
 	}{
-		{"primary", 300, "per5HourPercentage"},
-		{"secondary", 10080, "per1WeekPercentage"},
-		{"tertiary", 43200, "per1MonthPercentage"},
+		{300, "per5HourPercentage"},
+		{10080, "per1WeekPercentage"},
+		{43200, "per1MonthPercentage"},
 	}
+	// ponytail: rank only returned windows so a lone monthly quota remains the primary display window.
+	slots := [...]string{"primary", "secondary", "tertiary"}
 	for _, s := range specs {
-		v, ok := flexAnyNum(node[s.pctKey])
-		if !ok {
+		raw, present := node[s.pctKey]
+		if !present {
 			continue
 		}
-		if v <= 1 {
-			v *= 100 // ratios arrive as 0..1
+		v, ok := flexAnyNum(raw)
+		if !ok || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1 {
+			invalidRatio = true
+			continue
 		}
+		v *= 100 // Bailian CLI's Token Plan renderer treats API percentages as ratios in [0, 1].
 		resetKey := strings.Replace(s.pctKey, "Percentage", "ResetTime", 1)
-		rep.Windows = append(rep.Windows, windowFromPercent(s.slot, s.minutes, v, flexTime(node[resetKey])))
+		w := windowFromPercent(slots[len(rep.Windows)], s.minutes, v, flexTime(node[resetKey]))
+		w.Identity = quotaIdentity(s.minutes)
+		rep.Windows = append(rep.Windows, w)
 	}
 	if len(rep.Windows) == 0 {
-		msg := "the token-plan quota map carried no percentages"
+		msg := "the token-plan response contained no supported quota windows"
+		if invalidRatio {
+			msg = "the token-plan response contained an invalid quota ratio; expected values in [0,1]"
+		}
 		rep.State, rep.Err = StateFault, msg
 		return rep, errors.New(msg)
 	}
 	rep.State = StateFresh
 	return rep, nil
-}
-
-// findJSONObject depth-first searches decoded JSON for the first map
-// satisfying pred. The console nests payloads under data / successResponse
-// differently per gateway, so paths are searched, not assumed.
-func findJSONObject(v any, pred func(map[string]any) bool) map[string]any {
-	switch t := v.(type) {
-	case map[string]any:
-		if pred(t) {
-			return t
-		}
-		for _, c := range t {
-			if r := findJSONObject(c, pred); r != nil {
-				return r
-			}
-		}
-	case []any:
-		for _, c := range t {
-			if r := findJSONObject(c, pred); r != nil {
-				return r
-			}
-		}
-	}
-	return nil
 }

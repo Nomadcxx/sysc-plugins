@@ -36,6 +36,7 @@ const (
 // fabricated UsedPercent.
 type Window struct {
 	Key              string // "primary" | "secondary" | "tertiary"
+	Identity         string `json:"Identity,omitempty"` // stable key for persisted state when Key is ranked per response
 	Label            string // "Session" - "Weekly" - provider wording
 	ShortLabel       string // "5h" - "Wk" - "Mo"
 	UsedPercent      float64
@@ -44,6 +45,28 @@ type Window struct {
 	ResetsAt         time.Time
 	ResetDescription string
 	DisplayValue     string
+}
+
+func (w Window) stableKey() string {
+	if w.Identity != "" {
+		return w.Identity
+	}
+	return w.Key
+}
+
+// quotaIdentity preserves the old slot keys for common durations while
+// keeping sparse or uncommon duration windows distinct across polls.
+func quotaIdentity(minutes int) string {
+	switch minutes {
+	case 300:
+		return "primary"
+	case 10080:
+		return "secondary"
+	case 43200:
+		return "tertiary"
+	default:
+		return fmt.Sprintf("minutes:%d", minutes)
+	}
 }
 
 // ProviderReport is one provider's normalized snapshot.
