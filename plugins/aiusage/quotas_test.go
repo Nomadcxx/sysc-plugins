@@ -1,8 +1,12 @@
 package aiusage
 
 import (
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -179,9 +183,10 @@ func TestAlibabaTokenPlan(t *testing.T) {
 		gotCookie = r.Header.Get("Cookie")
 		_ = r.ParseForm()
 		form = r.FormValue("product") + "|" + r.FormValue("action") + "|" + r.FormValue("region")
-		_, _ = w.Write([]byte(`{"data":{"successResponse":{
+		_, _ = w.Write([]byte(alibabaTestEnvelope(`{
 			"per5HourPercentage":0.25,"per5HourResetTime":1790000000000,
-			"per1WeekPercentage":50,"per1MonthPercentage":"0.1"}}}`))
+			"per1WeekPercentage":0.5,"per1WeekResetTime":1790000000000,
+			"per1MonthPercentage":0.1,"per1MonthResetTime":1790000000000}`)))
 	}))
 	defer srv.Close()
 	c := &alibabaCollector{env: directEnv(t.TempDir(), nil, map[string]string{"alibaba": "login_a=1; cna=2"}), base: srv.URL}
@@ -211,6 +216,143 @@ func TestAlibabaTokenPlan(t *testing.T) {
 	}
 	if rep.Windows[0].ResetsAt.IsZero() {
 		t.Error("primary reset time missing")
+	}
+}
+
+func alibabaTestEnvelope(quota string) string {
+	return `{"successResponse":true,"data":{"success":true,"DataV2":{"data":{"success":true,"data":` + quota + `}}}}`
+}
+
+func TestAlibabaMonthlyOnlyTokenPlan(t *testing.T) {
+	t.Parallel()
+	const resetMillis = int64(1793116800000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(alibabaTestEnvelope(`{"per1MonthPercentage":0.8291326937774272,"per1MonthResetTime":1793116800000}`)))
+	}))
+	defer srv.Close()
+	c := &alibabaCollector{env: directEnv(t.TempDir(), nil, map[string]string{"alibaba": "session=fixture"}), base: srv.URL}
+	rep, err := c.Fetch(t.Context())
+	if err != nil || rep.State != StateFresh {
+		t.Fatalf("state=%v windows=%+v err=%v", rep.State, rep.Windows, err)
+	}
+	if len(rep.Windows) != 1 {
+		t.Fatalf("windows = %+v, want the single monthly quota", rep.Windows)
+	}
+	window := rep.Windows[0]
+	if window.Key != "primary" || window.WindowMinutes != 43200 {
+		t.Errorf("window identity = %q/%d minutes, want primary/monthly", window.Key, window.WindowMinutes)
+	}
+	if !window.HasPercent || math.Abs(window.UsedPercent-82.91326937774272) > 1e-9 {
+		t.Errorf("used percent = %v (has=%t), want 82.91326937774272%%", window.UsedPercent, window.HasPercent)
+	}
+	if got := window.ResetsAt.UnixMilli(); got != resetMillis {
+		t.Errorf("reset = %d, want %d", got, resetMillis)
+	}
+}
+
+func TestAlibabaTokenPlanPercentageIsFractionalRatio(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  float64
+		valid bool
+	}{
+		{name: "zero", value: "0", want: 0, valid: true},
+		{name: "fraction", value: "0.5", want: 50, valid: true},
+		{name: "one", value: "1", want: 100, valid: true},
+		{name: "over one", value: "1.01"},
+		{name: "negative", value: "-0.01"},
+		{name: "not finite", value: `"NaN"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body := alibabaTestEnvelope(`{"per1MonthPercentage":` + tc.value + `}`)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			c := &alibabaCollector{env: directEnv(t.TempDir(), nil, map[string]string{"alibaba": "session=fixture"}), base: srv.URL}
+			rep, err := c.Fetch(t.Context())
+			if !tc.valid {
+				if err == nil || rep.State != StateFault || len(rep.Windows) != 0 {
+					t.Fatalf("invalid ratio accepted: state=%v windows=%+v", rep.State, rep.Windows)
+				}
+				return
+			}
+			if err != nil || rep.State != StateFresh || len(rep.Windows) != 1 {
+				t.Fatalf("state=%v windows=%+v err=%v", rep.State, rep.Windows, err)
+			}
+			if got := rep.Windows[0].UsedPercent; got != tc.want {
+				t.Errorf("used percent = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAlibabaLiveTokenPlan(t *testing.T) {
+	if os.Getenv("SYSC_AIUSAGE_ALIBABA_LIVE") != "1" {
+		t.Skip("set SYSC_AIUSAGE_ALIBABA_LIVE=1 to use the local .env cookie")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal("home directory unavailable")
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".env"))
+	if err != nil {
+		t.Fatal("could not read the local .env file")
+	}
+	var cookie string
+	for _, line := range strings.Split(string(raw), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(key), "export "))
+		if key != "ALIBABA_TOKEN_PLAN_COOKIE" {
+			continue
+		}
+		cookie = strings.TrimSpace(value)
+		if len(cookie) >= 2 && cookie[0] == cookie[len(cookie)-1] && (cookie[0] == '\'' || cookie[0] == '"') {
+			cookie = cookie[1 : len(cookie)-1]
+		}
+		break
+	}
+	if cookie == "" || strings.ContainsAny(cookie, "\r\n") {
+		t.Fatal("local Alibaba cookie missing or malformed")
+	}
+	rep, err := NewAlibaba(Env{Keys: map[string]string{"alibaba": cookie}}).Fetch(t.Context())
+	if err != nil || rep.State != StateFresh {
+		t.Fatalf("live collector failed: state=%v err-type=%T", rep.State, err)
+	}
+	for _, window := range rep.Windows {
+		if window.Key == "primary" && window.WindowMinutes == 43200 && window.HasPercent && !window.ResetsAt.IsZero() {
+			return
+		}
+	}
+	t.Fatal("live report did not include a monthly quota and reset")
+}
+
+func TestAlibabaRejectsUnsuccessfulOrMisplacedQuota(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, body string }{
+		{"outer gateway", `{"successResponse":false,"data":{"success":true,"DataV2":{"data":{"success":true,"data":{"per5HourPercentage":0.5}}}}}`},
+		{"Bailian gateway", `{"successResponse":true,"data":{"success":false,"DataV2":{"data":{"success":true,"data":{"per5HourPercentage":0.5}}}}}`},
+		{"quota service", `{"successResponse":true,"data":{"success":true,"DataV2":{"data":{"success":false,"data":{"per5HourPercentage":0.5}}}}}`},
+		{"unrelated nested metadata", `{"metadata":{"per5HourPercentage":0.5}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			c := &alibabaCollector{env: directEnv(t.TempDir(), nil, map[string]string{"alibaba": "session=fixture"}), base: srv.URL}
+			rep, err := c.Fetch(t.Context())
+			if err == nil || rep.State != StateFault || len(rep.Windows) != 0 {
+				t.Fatalf("invalid envelope accepted: state=%v windows=%+v", rep.State, rep.Windows)
+			}
+		})
 	}
 }
 
