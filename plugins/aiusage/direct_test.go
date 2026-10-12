@@ -581,6 +581,8 @@ func TestExportCSV(t *testing.T) {
 
 	env, _ := loopEnv()
 	fc := &fakeCollector{id: "alpha", rep: freshRep("alpha")}
+	fc.rep.Windows[0].WindowMinutes = 43200
+	fc.rep.Windows[0].Identity = "tertiary"
 	cache, history := loopPaths(t)
 	l := NewLoop(testRegistry(fc), testConfig(), env, cache, history)
 	l.Round(t.Context(), false)
@@ -598,7 +600,7 @@ func TestExportCSV(t *testing.T) {
 	if len(lines) != 2 || !strings.HasPrefix(lines[0], "timestamp_iso,") {
 		t.Fatalf("csv = %q", lines)
 	}
-	if !strings.Contains(lines[1], "alpha,primary,40") {
+	if !strings.Contains(lines[1], "alpha,Monthly,40") {
 		t.Fatalf("csv row = %q", lines[1])
 	}
 

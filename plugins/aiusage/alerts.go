@@ -34,7 +34,7 @@ type AlertRec struct {
 	FiredAt  int64 `json:"fired_at"`
 }
 
-// Ledger is the persisted dedupe state, keyed "provider:window:level".
+// Ledger is the persisted dedupe state, keyed "provider:stable-window:level".
 type Ledger map[string]AlertRec
 
 // Notice is one notification the caller delivers.
@@ -106,7 +106,7 @@ func CheckAlerts(r Report, ac AlertConfig, led Ledger, now time.Time) []Notice {
 				{levelCritical, crit, "critical"},
 				{levelDepleted, depletedThreshold, "depleted"},
 			} {
-				key := alertKey(p.ID, w.Key, lvl.level)
+				key := alertKey(p.ID, w.stableKey(), lvl.level)
 				switch {
 				case w.UsedPercent < float64(lvl.threshold-hysteresis):
 					delete(led, key) // re-arm on a meaningful fall

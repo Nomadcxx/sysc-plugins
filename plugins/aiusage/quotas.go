@@ -216,6 +216,7 @@ func (c *kimiCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 		}
 		w := wins[m]
 		w.Key = slot[i]
+		w.Identity = quotaIdentity(m)
 		rep.Windows = append(rep.Windows, w)
 	}
 	if name, ok := kimiLevels[out.User.Membership.Level]; ok {
@@ -343,10 +344,11 @@ func (c *zaiCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 	// unit → minutes multiplier, per the monitor API's enum.
 	mult := map[int]int{1: 1440, 3: 60, 5: 1, 6: 10080}
 	type lane struct {
-		minutes int
-		percent float64
-		disp    string
-		resets  time.Time
+		identity string
+		minutes  int
+		percent  float64
+		disp     string
+		resets   time.Time
 	}
 	var lanes []lane
 	for _, l := range out.Data.Limits {
@@ -372,7 +374,8 @@ func (c *zaiCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 				disp = formatAmount(used) + " / " + formatAmount(*l.Usage)
 			}
 		}
-		w := lane{minutes: l.Number * m, percent: percent, disp: disp}
+		minutes := l.Number * m
+		w := lane{identity: fmt.Sprintf("%s:%d", l.Type, minutes), minutes: minutes, percent: percent, disp: disp}
 		if l.NextReset > 0 {
 			w.resets = time.UnixMilli(l.NextReset).UTC()
 		}
@@ -392,6 +395,7 @@ func (c *zaiCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 	}
 	set := func(i int, key string) Window {
 		w := windowFromPercent(key, lanes[i].minutes, lanes[i].percent, lanes[i].resets)
+		w.Identity = lanes[i].identity
 		w.DisplayValue = lanes[i].disp
 		return w
 	}
@@ -593,7 +597,7 @@ func (c *alibabaCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 					Success *bool          `json:"success"`
 					Data    map[string]any `json:"data"`
 				} `json:"data"`
-			} `json:"DataV2"`
+			} `json:"DataV2"` // The gateway uses this capitalized key.
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
@@ -624,6 +628,7 @@ func (c *alibabaCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 		return rep, errors.New(msg)
 	}
 	node := body.Data.DataV2.Data.Data
+	invalidRatio := false
 	specs := []struct {
 		minutes int
 		pctKey  string
@@ -632,19 +637,29 @@ func (c *alibabaCollector) Fetch(ctx context.Context) (ProviderReport, error) {
 		{10080, "per1WeekPercentage"},
 		{43200, "per1MonthPercentage"},
 	}
-	// ponytail: rank only returned windows so a lone monthly quota remains the primary history/alert window.
+	// ponytail: rank only returned windows so a lone monthly quota remains the primary display window.
 	slots := [...]string{"primary", "secondary", "tertiary"}
 	for _, s := range specs {
-		v, ok := flexAnyNum(node[s.pctKey])
+		raw, present := node[s.pctKey]
+		if !present {
+			continue
+		}
+		v, ok := flexAnyNum(raw)
 		if !ok || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1 {
+			invalidRatio = true
 			continue
 		}
 		v *= 100 // Bailian CLI's Token Plan renderer treats API percentages as ratios in [0, 1].
 		resetKey := strings.Replace(s.pctKey, "Percentage", "ResetTime", 1)
-		rep.Windows = append(rep.Windows, windowFromPercent(slots[len(rep.Windows)], s.minutes, v, flexTime(node[resetKey])))
+		w := windowFromPercent(slots[len(rep.Windows)], s.minutes, v, flexTime(node[resetKey]))
+		w.Identity = quotaIdentity(s.minutes)
+		rep.Windows = append(rep.Windows, w)
 	}
 	if len(rep.Windows) == 0 {
 		msg := "the token-plan response contained no supported quota windows"
+		if invalidRatio {
+			msg = "the token-plan response contained an invalid quota ratio; expected values in [0,1]"
+		}
 		rep.State, rep.Err = StateFault, msg
 		return rep, errors.New(msg)
 	}
