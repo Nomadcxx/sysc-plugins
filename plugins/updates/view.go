@@ -151,6 +151,7 @@ func panelActions() *v1.Node {
 func panelGroup(name string, updates []Update, source Source) *v1.Node {
 	group := &v1.Node{Kind: v1.KindColumn, ID: "updates-group-" + string(source), Gap: 2}
 	group.Children = append(group.Children, &v1.Node{Kind: v1.KindText, Text: name, Bold: true, Tone: v1.ToneSubtle})
+	seenIDs := make(map[string]struct{})
 	total := 0
 	for _, update := range updates {
 		if update.Source != source {
@@ -158,7 +159,16 @@ func panelGroup(name string, updates []Update, source Source) *v1.Node {
 		}
 		total++
 		if total <= maxPanelUpdatesPerSource {
-			group.Children = append(group.Children, updateRow(update))
+			row := updateRow(update)
+			for occurrence := 1; ; occurrence++ {
+				id := updateRowID(update, occurrence)
+				if _, duplicate := seenIDs[id]; !duplicate {
+					row.ID = id
+					seenIDs[id] = struct{}{}
+					break
+				}
+			}
+			group.Children = append(group.Children, row)
 		}
 	}
 	if total > maxPanelUpdatesPerSource {
@@ -181,12 +191,15 @@ func updateRow(update Update) *v1.Node {
 	if update.Core {
 		children = append(children, &v1.Node{Kind: v1.KindText, Text: "core", Tone: v1.ToneAccent})
 	}
-	return &v1.Node{Kind: v1.KindRow, ID: updateRowID(update), Gap: 8, Height: 20, Children: children}
+	return &v1.Node{Kind: v1.KindRow, ID: updateRowID(update, 1), Gap: 8, Height: 20, Children: children}
 }
 
-func updateRowID(update Update) string {
+func updateRowID(update Update, occurrence int) string {
 	prefix := "updates-row-" + string(update.Source) + "-"
 	name := update.Name
+	if occurrence > 1 {
+		name += "-" + strconv.Itoa(occurrence)
+	}
 	maxNameBytes := v1.MaxIdentBytes - len(prefix)
 	if len(name) > maxNameBytes {
 		hash := sha256.Sum256([]byte(name))

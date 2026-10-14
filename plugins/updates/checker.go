@@ -102,29 +102,59 @@ func CheckAUR(ctx context.Context, run Runner, helper string) ([]Update, error) 
 func CheckFlatpak(ctx context.Context, run Runner) ([]Update, error) {
 	ctx, cancel := context.WithTimeout(ctx, FlatpakTimeout)
 	defer cancel()
-	stdout, stderr, exit, err := run(ctx, "flatpak", "remote-ls", "--updates", "--columns=application,version")
+	stdout, stderr, exit, err := run(ctx, "flatpak", "remote-ls", "--updates", "--columns=ref,version")
 	if err != nil {
 		return nil, fmt.Errorf("flatpak: %w", err)
 	}
 	if exit != 0 {
 		return nil, fmt.Errorf("flatpak: %s", failureReason(stderr, exit))
 	}
-	var out []Update
+	type pendingRef struct {
+		id, arch, branch, version string
+	}
+	var refs []pendingRef
+	seen := make(map[string]struct{})
 	for _, line := range strings.Split(string(stdout), "\n") {
 		columns := strings.SplitN(line, "\t", 2)
-		name := strings.TrimSpace(columns[0])
+		ref := strings.TrimSpace(columns[0])
 		version := ""
 		if len(columns) == 2 {
 			version = strings.TrimSpace(columns[1])
-		} else if fields := strings.Fields(name); len(fields) > 1 {
-			name, version = fields[0], fields[1]
+		} else if fields := strings.Fields(ref); len(fields) > 1 {
+			ref, version = fields[0], fields[1]
 		}
-		if name == "" || !strings.Contains(name, ".") {
+		id, arch, branch, ok := parseFlatpakRef(ref)
+		if !ok {
 			continue
 		}
-		out = append(out, Update{Name: name, New: version, Source: SourceFlatpak})
+		if _, duplicate := seen[ref]; duplicate {
+			continue
+		}
+		seen[ref] = struct{}{}
+		refs = append(refs, pendingRef{id: id, arch: arch, branch: branch, version: version})
+	}
+
+	counts := make(map[string]int, len(refs))
+	for _, ref := range refs {
+		counts[ref.id]++
+	}
+	out := make([]Update, 0, len(refs))
+	for _, ref := range refs {
+		name := ref.id
+		if counts[ref.id] > 1 {
+			name += " (" + ref.arch + ", " + ref.branch + ")"
+		}
+		out = append(out, Update{Name: name, New: ref.version, Source: SourceFlatpak})
 	}
 	return out, nil
+}
+
+func parseFlatpakRef(ref string) (id, arch, branch string, ok bool) {
+	parts := strings.Split(ref, "/")
+	if len(parts) != 4 || (parts[0] != "app" && parts[0] != "runtime") || !strings.Contains(parts[1], ".") || parts[2] == "" || parts[3] == "" {
+		return "", "", "", false
+	}
+	return parts[1], parts[2], parts[3], true
 }
 
 // parseArrowLines reads the `name old -> new` listing both checkupdates and

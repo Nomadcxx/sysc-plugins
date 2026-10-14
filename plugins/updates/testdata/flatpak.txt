@@ -1,2 +1,2 @@
-org.mozilla.firefox 143.0.2
-com.spotify.Client 1.2.63.394.g9aa800a8
+app/org.mozilla.firefox/x86_64/stable	143.0.2
+app/com.spotify.Client/x86_64/stable	1.2.63.394.g9aa800a8

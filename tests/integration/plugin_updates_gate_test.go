@@ -47,7 +47,7 @@ func runGateFakeUpdates() int {
 			}
 		}
 	case "flatpak":
-		_, _ = os.Stdout.WriteString("org.mozilla.firefox 143.0.2\n")
+		_, _ = os.Stdout.WriteString("app/org.mozilla.firefox/x86_64/stable\t143.0.2\n")
 	case "xdg-terminal-exec":
 		if release := os.Getenv("SYSC_FAKE_UPDATES_TERMINAL_RELEASE"); release != "" {
 			deadline := time.Now().Add(10 * time.Second)

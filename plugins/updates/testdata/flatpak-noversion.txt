@@ -1,4 +1,4 @@
-org.gnome.Platform	
-org.freedesktop.Platform.GL.default	
-org.gnome.Platform.Locale	
-com.example.App	1.2
+runtime/org.gnome.Platform/x86_64/47
+runtime/org.freedesktop.Platform.GL.default/x86_64/24.08
+runtime/org.gnome.Platform.Locale/x86_64/47
+app/com.example.App/x86_64/stable	1.2
