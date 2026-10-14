@@ -1,6 +1,7 @@
 package updates
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +109,82 @@ func TestPanelListsRunRefreshAndNewsNodes(t *testing.T) {
 		if !found {
 			t.Errorf("panel is missing node %q (have %v)", want, ids)
 		}
+	}
+}
+
+func TestPanelBoundsLargeUpdateLists(t *testing.T) {
+	const visiblePerSource = 100
+	sources := []Source{SourceRepo, SourceAUR, SourceFlatpak}
+	cases := []struct {
+		name   string
+		counts [3]int
+	}{
+		{name: "one source exceeds child limit", counts: [3]int{400, 0, 0}},
+		{name: "all sources exceed node limit", counts: [3]int{250, 250, 250}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var updates []Update
+			for i, source := range sources {
+				for n := 0; n < tc.counts[i]; n++ {
+					updates = append(updates, Update{
+						Name: fmt.Sprintf("%s-%04d", source, n), Source: source, Core: true,
+					})
+				}
+			}
+			state := State{
+				Updates: updates, Checking: true, CheckErr: "database is locked",
+				RepoMissing: true, AURMissing: true, FlatpakMissing: true,
+				RebootNeeded: true, RebootDetail: "restart required",
+				CheckedAt: time.Now(),
+			}
+			root := PanelTree(state, time.Now(), "terminal unavailable")
+			if err := v1.Validate(root, v1.ViewPanel); err != nil {
+				t.Fatalf("large update list produced an invalid panel: %v", err)
+			}
+
+			groups := make(map[Source]*v1.Node)
+			var walk func(*v1.Node)
+			walk = func(node *v1.Node) {
+				for _, source := range sources {
+					if node.ID == "updates-group-"+string(source) {
+						groups[source] = node
+					}
+				}
+				for _, child := range node.Children {
+					walk(child)
+				}
+			}
+			walk(root)
+
+			for i, source := range sources {
+				total := tc.counts[i]
+				if total == 0 {
+					continue
+				}
+				group := groups[source]
+				if group == nil {
+					t.Fatalf("missing %s update group", source)
+				}
+				if len(group.Children) > v1.MaxChildren {
+					t.Fatalf("%s group has %d children, limit is %d", source, len(group.Children), v1.MaxChildren)
+				}
+				visible := total
+				if visible > visiblePerSource {
+					visible = visiblePerSource
+					if got, want := group.Children[len(group.Children)-1].Text, fmt.Sprintf("%d more updates", total-visible); got != want {
+						t.Errorf("%s overflow label = %q, want %q", source, got, want)
+					}
+				}
+				childRows := len(group.Children) - 1
+				if total > visiblePerSource {
+					childRows-- // trailing summary row
+				}
+				if childRows != visible {
+					t.Errorf("%s visible rows = %d, want %d", source, childRows, visible)
+				}
+			}
+		})
 	}
 }
 

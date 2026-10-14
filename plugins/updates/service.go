@@ -63,6 +63,7 @@ type Service struct {
 	cfg            Config
 	state          State
 	checking       bool
+	checkAgain     bool
 	lastNotifyDay  string
 	rebootNotified bool
 }
@@ -131,12 +132,13 @@ func (s *Service) PersistedState() []byte {
 	return data
 }
 
-// Check runs every enabled backend and returns the resulting state. A
-// failure keeps the previous list and records the reason; one check runs at
-// a time, so a second caller while one is in flight gets the current state.
+// Check runs every enabled backend and returns the resulting state. A failure
+// keeps the previous list and records the reason. Concurrent requests coalesce
+// into one rerun with the latest configuration.
 func (s *Service) Check(ctx context.Context) State {
 	s.mu.Lock()
 	if s.checking {
+		s.checkAgain = true
 		state := s.stateLocked()
 		s.mu.Unlock()
 		return state
@@ -146,30 +148,41 @@ func (s *Service) Check(ctx context.Context) State {
 	cfg := s.cfg
 	s.mu.Unlock()
 
-	updates, missing, err := s.checkAll(ctx, cfg)
-	needed, detail := s.reboot()
+	for {
+		updates, missing, err := s.checkAll(ctx, cfg)
+		needed, detail := s.reboot()
 
-	s.mu.Lock()
-	s.checking = false
-	s.state.Checking = false
-	s.state.RepoMissing = missing.repo
-	s.state.AURMissing = missing.aur
-	s.state.FlatpakMissing = missing.flatpak
-	if err != nil {
-		s.state.CheckErr = err.Error()
-	} else {
-		s.state.Updates = updates
-		s.state.CheckedAt = s.now()
-		s.state.CheckErr = ""
+		s.mu.Lock()
+		s.state.RepoMissing = missing.repo
+		s.state.AURMissing = missing.aur
+		s.state.FlatpakMissing = missing.flatpak
+		if err != nil {
+			s.state.CheckErr = err.Error()
+		} else {
+			s.state.Updates = updates
+			s.state.CheckedAt = s.now()
+			s.state.CheckErr = ""
+		}
+		s.state.RebootNeeded = needed
+		s.state.RebootDetail = detail
+		if !needed {
+			s.rebootNotified = false
+		}
+
+		if s.checkAgain && ctx.Err() == nil {
+			s.checkAgain = false
+			cfg = s.cfg
+			s.mu.Unlock()
+			continue
+		}
+
+		s.checkAgain = false
+		s.checking = false
+		s.state.Checking = false
+		state := s.stateLocked()
+		s.mu.Unlock()
+		return state
 	}
-	s.state.RebootNeeded = needed
-	s.state.RebootDetail = detail
-	if !needed {
-		s.rebootNotified = false
-	}
-	state := s.stateLocked()
-	s.mu.Unlock()
-	return state
 }
 
 type missingTools struct {

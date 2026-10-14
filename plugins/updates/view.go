@@ -10,6 +10,10 @@ import (
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
+// ponytail: cap each source at 100 rows so the 1,024-node protocol ceiling
+// leaves room for row labels and panel controls; use paging to raise this.
+const maxPanelUpdatesPerSource = 100
+
 // BarTree renders the bar: a download glyph, the pending count, and a dot
 // when a reboot is waiting.
 func BarTree(state State, hideWhenZero bool) *v1.Node {
@@ -147,11 +151,20 @@ func panelActions() *v1.Node {
 func panelGroup(name string, updates []Update, source Source) *v1.Node {
 	group := &v1.Node{Kind: v1.KindColumn, ID: "updates-group-" + string(source), Gap: 2}
 	group.Children = append(group.Children, &v1.Node{Kind: v1.KindText, Text: name, Bold: true, Tone: v1.ToneSubtle})
+	total := 0
 	for _, update := range updates {
 		if update.Source != source {
 			continue
 		}
-		group.Children = append(group.Children, updateRow(update))
+		total++
+		if total <= maxPanelUpdatesPerSource {
+			group.Children = append(group.Children, updateRow(update))
+		}
+	}
+	if total > maxPanelUpdatesPerSource {
+		group.Children = append(group.Children, &v1.Node{
+			Kind: v1.KindText, Text: fmt.Sprintf("%d more updates", total-maxPanelUpdatesPerSource), Tone: v1.ToneSubtle,
+		})
 	}
 	return group
 }
