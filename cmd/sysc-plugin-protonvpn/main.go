@@ -100,6 +100,11 @@ type pollRequest struct {
 // ponytail: eight queued CLI jobs cap shutdown backlog; increase from measured input bursts instead of spawning more workers.
 const cliJobQueueSize = 8
 
+// disconnectedPollFloor is the status cadence while the tunnel is absent and
+// the phase is stable. protonvpn status is a ~1.5s Python CLI; polling it at
+// refresh_seconds burned ~30% of a core to re-read "Disconnected" (#159).
+const disconnectedPollFloor = 30 * time.Second
+
 type session struct {
 	env      environment
 	client   *v1.Client
@@ -132,6 +137,10 @@ type session struct {
 	signInErr   string
 	fileErr     string
 
+	// tunnelUp reports whether the tunnel interface exists. Tests stub it;
+	// production stats /sys directly.
+	tunnelUp func() bool
+
 	lastPhase   protonvpn.Phase
 	lastStatus  time.Time
 	lastTraffic time.Time
@@ -162,12 +171,13 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	}
 	s := &session{
 		env: env, client: c, settings: defaultSettings(), views: map[string]view{},
-		machine: &protonvpn.Machine{},
-		cli:     &protonvpn.CLI{Bin: env.cliBin, Timeout: 10 * time.Second},
-		async:   make(chan asyncApply, 8),
-		cliJobs: make(chan cliJob, cliJobQueueSize),
-		polls:   make(chan pollRequest, 1),
-		tab:     "connections",
+		machine:  &protonvpn.Machine{},
+		cli:      &protonvpn.CLI{Bin: env.cliBin, Timeout: 10 * time.Second},
+		async:    make(chan asyncApply, 8),
+		cliJobs:  make(chan cliJob, cliJobQueueSize),
+		polls:    make(chan pollRequest, 1),
+		tunnelUp: tunnelPresent,
+		tab:      "connections",
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workerDone := make(chan struct{})
@@ -419,6 +429,10 @@ func (s *session) tick(ctx context.Context, now time.Time) {
 	interval := time.Duration(s.settings.refreshSeconds) * time.Second
 	if transitioning {
 		interval = time.Second
+	} else if !s.tunnelUp() {
+		// The phase cannot change on its own while proton0 is absent, so a
+		// slow floor only has to notice an externally initiated connect.
+		interval = disconnectedPollFloor
 	}
 	if now.Sub(s.lastStatus) >= interval {
 		s.lastStatus = now
@@ -440,7 +454,7 @@ func (s *session) tick(ctx context.Context, now time.Time) {
 		}
 		if snap.Config.PortForwarding && now.Sub(s.lastNATMP) >= 45*time.Second {
 			s.lastNATMP = now
-			s.requestPortMapping()
+			s.requestPortMapping(ctx)
 		}
 	}
 	snap = s.machine.Snapshot()
@@ -448,6 +462,13 @@ func (s *session) tick(ctx context.Context, now time.Time) {
 		s.notifyTransitions(ctx)
 		s.snapshotAll()
 	}
+}
+
+// tunnelPresent stats the tunnel interface directly, the same /sys path
+// sampleTraffic reads; a stat cannot wedge like the CLI can.
+func tunnelPresent() bool {
+	_, err := os.Stat(filepath.Join("/sys/class/net", "proton0"))
+	return err == nil
 }
 
 func (s *session) sampleTraffic() {
@@ -500,9 +521,11 @@ func (s *session) checkLink() {
 	}
 }
 
-func (s *session) requestPortMapping() {
+func (s *session) requestPortMapping(parent context.Context) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Derived from the session context, so shutdown aborts the call
+		// instead of a detached 5s goroutine (#159).
+		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 		defer cancel()
 		n := protonvpn.NATPMP{}
 		port, err := n.RequestPort(ctx)
