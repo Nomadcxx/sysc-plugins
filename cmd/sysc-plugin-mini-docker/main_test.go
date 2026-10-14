@@ -303,9 +303,8 @@ func TestRefreshClickDoesNotBlockMainLoop(t *testing.T) {
 }
 
 func TestPanelOpenDoesNotWedgeBehindFullInputQueue(t *testing.T) {
-	originalDefault := hostcall.Default
-	hostcall.Default = 750 * time.Millisecond
-	defer func() { hostcall.Default = originalDefault }()
+	restoreTimeout := hostcall.SetTimeout(750 * time.Millisecond)
+	defer restoreTimeout()
 
 	inR, inW, err := os.Pipe()
 	if err != nil {

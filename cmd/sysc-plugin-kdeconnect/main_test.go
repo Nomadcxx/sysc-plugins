@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	"github.com/Nomadcxx/sysc-plugins/plugins/kdeconnect"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -315,10 +314,6 @@ func TestPairingCardButtonsRouteToTheirOwnAction(t *testing.T) {
 }
 
 func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
-	orig := hostcall.Default
-	hostcall.Default = 5 * time.Second
-	defer func() { hostcall.Default = orig }()
-
 	toPluginR, hostOutW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -327,12 +322,23 @@ func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer toPluginR.Close()
-	defer hostOutW.Close()
-	defer hostInR.Close()
-	defer pluginOutW.Close()
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		_ = toPluginR.Close()
+		_ = hostOutW.Close()
+		_ = hostInR.Close()
+		_ = pluginOutW.Close()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("run did not exit after the host pipes closed")
+		}
+	})
 
-	go func() { _ = run(toPluginR, pluginOutW) }()
+	go func() {
+		defer close(done)
+		_ = run(toPluginR, pluginOutW)
+	}()
 
 	var sendMu sync.Mutex
 	send := func(m v1.Message) error {

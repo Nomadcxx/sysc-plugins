@@ -16,9 +16,8 @@ import (
 )
 
 func TestCallTimesOutWhenReplyNeverArrives(t *testing.T) {
-	orig := Default
-	Default = 100 * time.Millisecond
-	defer func() { Default = orig }()
+	restore := SetTimeout(100 * time.Millisecond)
+	defer restore()
 
 	// The host side of the pipe never delivers a reply; the writer is a plain
 	// buffer so the request encoding itself cannot block.
@@ -37,7 +36,7 @@ func TestCallTimesOutWhenReplyNeverArrives(t *testing.T) {
 		t.Fatalf("Call error = %v, want context.DeadlineExceeded", err)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("Call took %s, want about %s", elapsed, Default)
+		t.Fatalf("Call took %s, want about %s", elapsed, Timeout())
 	}
 }
 

@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	"github.com/Nomadcxx/sysc-plugins/plugins/notes"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -110,10 +109,6 @@ func TestStickyAndPanelShareOneDocument(t *testing.T) {
 }
 
 func TestPanelOpenReturnsWhileHostReplyIsHeld(t *testing.T) {
-	originalDefault := hostcall.Default
-	hostcall.Default = 5 * time.Second
-	defer func() { hostcall.Default = originalDefault }()
-
 	toPlugin, hostOut := io.Pipe()
 	hostIn, pluginOut := io.Pipe()
 	defer toPlugin.Close()

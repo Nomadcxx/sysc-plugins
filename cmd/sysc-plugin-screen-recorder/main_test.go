@@ -256,9 +256,7 @@ func TestPluginStopsRunningReplay(t *testing.T) {
 }
 
 func TestOutputContextCallDoesNotBlockInputQueue(t *testing.T) {
-	orig := hostcall.Default
-	hostcall.Default = 400 * time.Millisecond
-	defer func() { hostcall.Default = orig }()
+	restoreTimeout := hostcall.SetTimeout(400 * time.Millisecond)
 
 	toPluginR, hostOutW, err := os.Pipe()
 	if err != nil {
@@ -268,11 +266,18 @@ func TestOutputContextCallDoesNotBlockInputQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	done := make(chan struct{})
 	t.Cleanup(func() {
 		_ = toPluginR.Close()
 		_ = hostOutW.Close()
 		_ = hostInR.Close()
 		_ = pluginOutW.Close()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("run did not exit after the host pipes closed")
+		}
+		restoreTimeout()
 	})
 
 	var sendMu sync.Mutex
@@ -284,9 +289,9 @@ func TestOutputContextCallDoesNotBlockInputQueue(t *testing.T) {
 	}
 	held := make(chan *v1.HostCall, 1)
 	snapshots := make(chan string, 16)
-	done := make(chan error, 1)
 	go func() {
-		done <- run(toPluginR, pluginOutW, recorder.Options{LookPath: func(string) (string, error) {
+		defer close(done)
+		_ = run(toPluginR, pluginOutW, recorder.Options{LookPath: func(string) (string, error) {
 			return "", os.ErrNotExist
 		}})
 	}()

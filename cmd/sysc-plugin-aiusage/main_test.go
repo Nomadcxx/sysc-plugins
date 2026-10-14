@@ -94,9 +94,8 @@ func startPluginHarnessWithReply(t *testing.T, reply func(*v1.HostCall) *v1.Host
 }
 
 func TestPanelOpenDoesNotBlockInputLoopOnHostReply(t *testing.T) {
-	originalDefault := hostcall.Default
-	hostcall.Default = 400 * time.Millisecond
-	defer func() { hostcall.Default = originalDefault }()
+	restoreTimeout := hostcall.SetTimeout(400 * time.Millisecond)
+	t.Cleanup(restoreTimeout)
 
 	panelCalls := make(chan *v1.HostCall, 1)
 	h := startPluginHarnessWithReply(t, func(call *v1.HostCall) *v1.HostReply {

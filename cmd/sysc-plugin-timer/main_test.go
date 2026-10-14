@@ -279,12 +279,23 @@ func TestTickSavesTheRolledPhase(t *testing.T) {
 func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
 	toPlugin, hostOut := io.Pipe()
 	hostIn, pluginOut := io.Pipe()
-	defer toPlugin.Close()
-	defer hostOut.Close()
-	defer hostIn.Close()
-	defer pluginOut.Close()
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		_ = toPlugin.Close()
+		_ = hostOut.Close()
+		_ = hostIn.Close()
+		_ = pluginOut.Close()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("runClock did not exit after the host pipes closed")
+		}
+	})
 
-	go func() { _ = runClock(toPlugin, pluginOut, time.Now) }()
+	go func() {
+		defer close(done)
+		_ = runClock(toPlugin, pluginOut, time.Now)
+	}()
 
 	var sendMu sync.Mutex
 	send := func(m v1.Message) error {
