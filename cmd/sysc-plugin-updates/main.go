@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -228,18 +229,34 @@ func run(in *os.File, out *os.File) error {
 			publish("")
 			return
 		}
+		completionDir, err := os.MkdirTemp("", "sysc-updates-")
+		if err != nil {
+			finishUpdate()
+			setRunHint("Couldn't prepare update tracking: " + err.Error())
+			publish("")
+			return
+		}
+		completionDir, err = filepath.Abs(completionDir)
+		if err != nil {
+			_ = os.RemoveAll(completionDir)
+			finishUpdate()
+			setRunHint("Couldn't prepare update tracking: " + err.Error())
+			publish("")
+			return
+		}
 		setRunHint("")
-		script := command + `; status=$?; echo; read -r -p "Done (exit $status). Press Enter to close. " _`
+		script := terminalUpdateScript(command, completionDir)
 		args := append(append([]string{}, prefix...), "sh", "-c", script)
 		cmd := exec.Command(bin, args...)
 		if err := cmd.Start(); err != nil {
+			_ = os.RemoveAll(completionDir)
 			finishUpdate()
 			setRunHint("Couldn't start " + bin + ": " + err.Error())
 			publish("")
 			return
 		}
 		publish("")
-		go waitForTerminal(cmd, checkNow, finishUpdate)
+		go waitForTerminal(cmd, completionDir, checkNow, finishUpdate)
 	}
 
 	reply, err := hostcall.Call(ctx, c, v1.CallStateGet, v1.StateGetParams{Key: "last"})
@@ -399,30 +416,40 @@ const (
 // waitForTerminal re-checks after the upgrade settles, so an update run in a
 // terminal that hands off to a server cannot leave the badge on the
 // pre-update count until the next interval.
-func waitForTerminal(cmd *exec.Cmd, onUpdate, onExit func()) {
-	done := make(chan struct{})
+func terminalUpdateScript(command, completionDir string) string {
+	return `completion_dir=` + shellQuote(completionDir) + `; : > "$completion_dir/started"; sh -c ` + shellQuote(command) + `; status=$?; : > "$completion_dir/done"; echo; read -r -p "Done (exit $status). Press Enter to close. " _`
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func waitForTerminal(cmd *exec.Cmd, completionDir string, onUpdate, onExit func()) {
+	defer os.RemoveAll(completionDir)
+	launcherDone := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
-		close(done)
+		close(launcherDone)
 	}()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	waitForTerminalWith(done, pacmanLogMtime, pacmanLocked, ticker.C, time.Now, onUpdate, onExit)
+	started := func() bool { _, err := os.Stat(filepath.Join(completionDir, "started")); return err == nil }
+	completed := func() bool { _, err := os.Stat(filepath.Join(completionDir, "done")); return err == nil }
+	waitForTerminalWith(launcherDone, started, completed, pacmanLogMtime, pacmanLocked, ticker.C, time.Now, onUpdate, onExit)
 }
 
-// waitForTerminalWith refreshes once per settled episode: activity in the log
-// or the lock, then quiet. onExit releases the run guard once the run looks
-// over, at the first settled episode after the terminal exited, or when
-// nothing ever moved and launcherGrace passed (a cancel at the prompt, or a
-// custom update command that never touches pacman). The watcher keeps polling
-// until the budget so a later phase still refreshes the badge.
-func waitForTerminalWith(done <-chan struct{}, mtime func() time.Time, locked func() bool, ticks <-chan time.Time, now func() time.Time, onUpdate, onExit func()) {
+// waitForTerminalWith refreshes once per settled pacman episode. It releases
+// the run guard after the terminal's command marker proves the command
+// finished, after an exited launcher failed to start within launcherGrace,
+// or when the bounded wait expires. AUR helpers can leave long gaps between
+// pacman phases.
+func waitForTerminalWith(launcherDone <-chan struct{}, commandStarted, commandDone func() bool, mtime func() time.Time, locked func() bool, ticks <-chan time.Time, now func() time.Time, onUpdate, onExit func()) {
 	start := now()
 	lastMtime := mtime()
 	lastActivity := start
 	active := false
-	exited := false
-	var exitedAt time.Time
+	launcherExited := false
+	var launcherExitedAt time.Time
 	refreshed := false
 	released := false
 	release := func() {
@@ -433,31 +460,50 @@ func waitForTerminalWith(done <-chan struct{}, mtime func() time.Time, locked fu
 	}
 	for {
 		select {
-		case <-done:
-			exited, exitedAt, done = true, now(), nil
+		case <-launcherDone:
+			launcherExited, launcherExitedAt, launcherDone = true, now(), nil
 		case <-ticks:
 		}
 		if m := mtime(); !m.IsZero() && m != lastMtime {
 			lastMtime, lastActivity, active, refreshed = m, now(), true, false
 		}
-		if locked() {
+		isLocked := locked()
+		if isLocked {
 			lastActivity, active, refreshed = now(), true, false
 		}
 		quiet := now().Sub(lastActivity) >= settleWindow
-		idle := exited && !active && now().Sub(exitedAt) >= launcherGrace
+		started := commandStarted()
+		completed := commandDone()
+		idle := launcherExited && !started && !active && now().Sub(launcherExitedAt) >= launcherGrace
+		update := false
 		if (active && quiet || idle) && !refreshed {
 			refreshed = true
-			onUpdate()
+			update = true
 		}
-		if idle || (exited && quiet && refreshed) {
+		if completed && !isLocked && (!active || quiet) {
+			onUpdate()
+			release()
+			return
+		}
+		if idle {
+			if update {
+				onUpdate()
+				update = false
+			}
 			release()
 		}
 		if now().Sub(start) >= updateWaitBudget {
-			if !refreshed {
+			if !refreshed && !update {
+				update = true
+			}
+			if update {
 				onUpdate()
 			}
 			release()
 			return
+		}
+		if update {
+			onUpdate()
 		}
 	}
 }
