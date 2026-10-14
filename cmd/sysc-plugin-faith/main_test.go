@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/plugins/faith"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -145,6 +146,27 @@ func (h *fakeHost) waitFor(what string, ok func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	h.t.Fatalf("timed out waiting for %s", what)
+}
+
+func (h *fakeHost) waitForWithin(what string, limit time.Duration, ok func() bool) bool {
+	h.t.Helper()
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		h.mu.Lock()
+		good := ok()
+		h.mu.Unlock()
+		if good {
+			return true
+		}
+		select {
+		case <-timer.C:
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 func treeText(n *v1.Node) string {
@@ -363,4 +385,85 @@ func TestSettingsChangeTheBar(t *testing.T) {
 		r := h.roots["bar-1"]
 		return r != nil && len(r.Children) == 2
 	})
+}
+
+func TestTranslationLoadsOffInputLoopAndDropsStaleSelection(t *testing.T) {
+	started := make(chan string, 2)
+	releaseWEB, releaseKJV := make(chan struct{}), make(chan struct{})
+	var webOnce, kjvOnce sync.Once
+	unlockWEB := func() { webOnce.Do(func() { close(releaseWEB) }) }
+	unlockKJV := func() { kjvOnce.Do(func() { close(releaseKJV) }) }
+	defer unlockWEB()
+	defer unlockKJV()
+
+	opt := offline()
+	opt.LoadBible = func(id string) (*faith.Bible, error) {
+		started <- id
+		switch id {
+		case "WEB":
+			<-releaseWEB
+		case "KJV":
+			<-releaseKJV
+		}
+		return faith.LoadBible(id)
+	}
+	h := startPlugin(t, nil, opt)
+	h.open("panel-1", v1.ViewPanel)
+	h.waitFor("the initial panel", func() bool { return headerRef(h.roots["panel-1"]) != "" })
+	h.mu.Lock()
+	initialRef := headerRef(h.roots["panel-1"])
+	h.mu.Unlock()
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: map[string]any{"translation": "WEB"}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case id := <-started:
+		if id != "WEB" {
+			t.Fatalf("first load = %s, want WEB", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WEB load did not start")
+	}
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: map[string]any{"translation": "KJV"}}); err != nil {
+		t.Fatal(err)
+	}
+	h.input("panel-1", "next", v1.EventActivate, "")
+	if !h.waitForWithin("input while translation load is held", 100*time.Millisecond, func() bool {
+		return headerRef(h.roots["panel-1"]) != initialRef
+	}) {
+		t.Fatal("panel input waited for the held translation load")
+	}
+	h.mu.Lock()
+	visibleTranslation := h.roots["panel-1"].Children[0].Children[1].Text
+	h.mu.Unlock()
+	if got := visibleTranslation; got != "BSB" {
+		t.Fatalf("visible translation before load completion = %q, want BSB", got)
+	}
+
+	unlockWEB()
+	select {
+	case id := <-started:
+		if id != "KJV" {
+			t.Fatalf("second load = %s, want newest selection KJV", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("KJV load did not start")
+	}
+	h.mu.Lock()
+	visibleTranslation = h.roots["panel-1"].Children[0].Children[1].Text
+	h.mu.Unlock()
+	if got := visibleTranslation; got != "BSB" {
+		t.Fatalf("stale WEB result changed visible translation to %q", got)
+	}
+	unlockKJV()
+	h.waitFor("the newest translation", func() bool {
+		root := h.roots["panel-1"]
+		return root != nil && root.Children[0].Children[1].Text == "KJV"
+	})
+	h.mu.Lock()
+	currentRef := headerRef(h.roots["panel-1"])
+	h.mu.Unlock()
+	if got := currentRef; got == initialRef {
+		t.Fatal("the panel input was lost during translation loading")
+	}
 }

@@ -63,6 +63,17 @@ func TestLoadBibleDecompressesOnce(t *testing.T) {
 	}
 }
 
+func TestLoadBibleRetainsOnlyTheCurrentTranslation(t *testing.T) {
+	for _, id := range []string{"BSB", "WEB", "KJV"} {
+		mustBible(t, id)
+	}
+	biblesMu.Lock()
+	defer biblesMu.Unlock()
+	if len(bibles) != 1 || bibles["KJV"] == nil {
+		t.Fatalf("cached translations = %d, want only KJV", len(bibles))
+	}
+}
+
 func TestTextJoinsARange(t *testing.T) {
 	b := mustBible(t, "BSB")
 	got, ok := b.Text(mustRef(t, "ROM 8:38-39"))

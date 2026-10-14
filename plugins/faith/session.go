@@ -26,6 +26,11 @@ type (
 	}
 	// SaveStateEffect asks for Persisted to be written to host state.
 	SaveStateEffect struct{}
+	// LoadTranslationEffect moves bundled corpus decoding off the input owner.
+	LoadTranslationEffect struct {
+		ID  string
+		Gen uint64
+	}
 )
 
 // Effect is one of the effect types above.
@@ -52,9 +57,10 @@ type Session struct {
 	lastRefresh time.Time
 	lastDay     string
 
-	commentary CommentaryStatus
-	note       string
-	noteGen    uint64
+	commentary     CommentaryStatus
+	note           string
+	noteGen        uint64
+	translationGen uint64
 }
 
 // NewSession starts on a verse chosen by the settings' verse mode.
@@ -290,16 +296,8 @@ func (s *Session) ApplySettings(values map[string]any, now time.Time) []Effect {
 	s.settings.Apply(values)
 	var effects []Effect
 	if s.settings.Translation != old.Translation {
-		if b, err := LoadBible(s.settings.Translation); err == nil {
-			s.bible = b
-			if r, ok := s.resolve(s.ref); ok {
-				s.ref = r
-			} else {
-				s.pick(now)
-			}
-		} else {
-			s.settings.Translation = old.Translation
-		}
+		s.translationGen++
+		effects = append(effects, LoadTranslationEffect{ID: s.settings.Translation, Gen: s.translationGen})
 	}
 	if s.settings.VerseMode != old.VerseMode {
 		s.pick(now)
@@ -311,6 +309,30 @@ func (s *Session) ApplySettings(values map[string]any, now time.Time) []Effect {
 	}
 	s.lastRefresh = now
 	return effects
+}
+
+// TranslationLoaded applies only the newest completed load. Until then the
+// current Bible remains available to input and view rendering.
+func (s *Session) TranslationLoaded(gen uint64, id string, bible *Bible, err error, now time.Time) ([]Effect, bool) {
+	if gen != s.translationGen || id != s.settings.Translation {
+		return nil, false
+	}
+	if err != nil || bible == nil || bible.ID != id {
+		s.settings.Translation = s.bible.ID
+		return nil, true
+	}
+	oldRef := s.ref
+	s.bible = bible
+	if r, ok := s.resolve(s.ref); ok {
+		s.ref = r
+	} else {
+		s.pick(now)
+	}
+	s.lastRefresh = now
+	if s.ref != oldRef {
+		return s.moved(now), true
+	}
+	return nil, true
 }
 
 // Views.

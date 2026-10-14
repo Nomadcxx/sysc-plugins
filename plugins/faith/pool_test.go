@@ -14,6 +14,10 @@ func TestPoolFollowsTheCurationRules(t *testing.T) {
 	if len(p) != 365 {
 		t.Fatalf("pool has %d entries, want 365", len(p))
 	}
+	bibles := make(map[string]*Bible, len(Translations))
+	for _, id := range Translations {
+		bibles[id] = mustBible(t, id)
+	}
 	seen := map[string]bool{}
 	perBook := map[string]int{}
 	for _, r := range p {
@@ -26,7 +30,7 @@ func TestPoolFollowsTheCurationRules(t *testing.T) {
 			t.Fatalf("%s is longer than four verses", r.Key())
 		}
 		for _, id := range Translations {
-			b := mustBible(t, id)
+			b := bibles[id]
 			for v := r.Verse; v <= r.Last(); v++ {
 				if !b.Has(r.Book, r.Chapter, v) {
 					t.Fatalf("%s: %s lacks verse %d", r.Key(), id, v)

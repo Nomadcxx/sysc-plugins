@@ -162,19 +162,23 @@ func TestDailyModeChangesAtMidnight(t *testing.T) {
 func TestSettingsChangesApply(t *testing.T) {
 	s := newSession(t, nil)
 	s.ref = mustRef(t, "LUK 17:35")
-	s.ApplySettings(map[string]any{"translation": "WEB", "prayer_seconds": float64(500), "show_reference": true, "verse_mode": "bogus"}, t0)
+	e := s.ApplySettings(map[string]any{"translation": "WEB", "prayer_seconds": float64(500), "show_reference": true, "verse_mode": "bogus"}, t0)
 	st := s.Settings()
 	if st.Translation != "WEB" || st.PrayerSeconds != 300 || !st.ShowReference || st.VerseMode != ModePool {
 		t.Fatalf("settings = %+v", st)
 	}
-	if s.bible.ID != "WEB" || s.ref.Key() != "LUK 17:35" {
-		t.Fatalf("bible %s ref %s", s.bible.ID, s.ref.Key())
+	loads := effectsOf[LoadTranslationEffect](e)
+	if len(loads) != 1 || loads[0].ID != "WEB" || s.bible.ID != "BSB" || s.ref.Key() != "LUK 17:35" {
+		t.Fatalf("load effects %v, active bible %s, ref %s", loads, s.bible.ID, s.ref.Key())
+	}
+	if effects, current := s.TranslationLoaded(loads[0].Gen, "WEB", mustBible(t, "WEB"), nil, t0); !current || len(effects) != 0 || s.bible.ID != "WEB" {
+		t.Fatalf("load completion current=%v effects=%v active bible=%s", current, effects, s.bible.ID)
 	}
 	s.ApplySettings(map[string]any{"translation": "NIV"}, t0)
 	if s.Settings().Translation != "WEB" {
 		t.Fatal("accepted an unbundled translation")
 	}
-	e := s.ApplySettings(map[string]any{"verse_mode": "bible"}, t0)
+	e = s.ApplySettings(map[string]any{"verse_mode": "bible"}, t0)
 	if len(effectsOf[SaveStateEffect](e)) != 1 {
 		t.Fatalf("a mode change gave %v", e)
 	}
