@@ -20,11 +20,12 @@ import (
 // options are the process's seams for tests.
 type options struct {
 	// APIBase overrides the commentary API; SYSC_FAITH_API_BASE sets it.
-	APIBase string
-	CanRead bool
-	OpenURL func(string)
-	Now     func() time.Time
-	Tick    time.Duration
+	APIBase   string
+	CanRead   bool
+	OpenURL   func(string)
+	Now       func() time.Time
+	Tick      time.Duration
+	LoadBible func(string) (*faith.Bible, error)
 }
 
 func main() {
@@ -64,6 +65,12 @@ type commentaryResult struct {
 	text  string
 	found bool
 	err   error
+}
+
+type translationResult struct {
+	request faith.LoadTranslationEffect
+	bible   *faith.Bible
+	err     error
 }
 
 type view struct {
@@ -114,6 +121,27 @@ func run(in io.Reader, out io.Writer, opt options) error {
 
 	commentary := faith.NewCommentary(opt.APIBase)
 	results := make(chan commentaryResult, 8)
+	translations := make(chan faith.LoadTranslationEffect, 1)
+	translationResults := make(chan translationResult, 1)
+	loadBible := opt.LoadBible
+	if loadBible == nil {
+		loadBible = faith.LoadBible
+	}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case request := <-translations:
+				bible, err := loadBible(request.ID)
+				select {
+				case translationResults <- translationResult{request: request, bible: bible, err: err}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
 	saves := newSaver(ctx, c)
 
 	views := map[string]*view{}
@@ -159,6 +187,19 @@ func run(in io.Reader, out io.Writer, opt options) error {
 				}()
 			case faith.SaveStateEffect:
 				saves.put(sess.Persisted())
+			case faith.LoadTranslationEffect:
+				select {
+				case translations <- e:
+				default:
+					select {
+					case <-translations:
+					default:
+					}
+					select {
+					case translations <- e:
+					case <-ctx.Done():
+					}
+				}
 			}
 		}
 	}
@@ -171,6 +212,15 @@ func run(in io.Reader, out io.Writer, opt options) error {
 			return nil
 		case r := <-results:
 			if sess.CommentaryResult(r.gen, r.text, r.found, r.err) {
+				publish()
+			}
+		case r := <-translationResults:
+			effects, current := sess.TranslationLoaded(r.request.Gen, r.request.ID, r.bible, r.err, opt.Now())
+			if current {
+				if r.err != nil {
+					fmt.Fprintf(os.Stderr, "sysc-plugin-faith: load %s: %v\n", r.request.ID, r.err)
+				}
+				perform(effects)
 				publish()
 			}
 		case <-ticker.C:

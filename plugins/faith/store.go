@@ -67,6 +67,7 @@ func LoadBible(id string) (*Bible, error) {
 		return nil, err
 	}
 	loads++
+	clear(bibles)
 	bibles[id] = b
 	return b, nil
 }
