@@ -279,7 +279,7 @@ func main() {
 
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
-	hello, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.2.0"}))
+	hello, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.notes", Name: "Notes", Version: "1.2.1"}))
 	if err != nil {
 		return err
 	}

@@ -20,7 +20,7 @@ import (
 
 // fallbackVersion backs the handshake when the manifest is unreadable (go
 // run, tests); TestHandshakeFallbackMatchesManifest pins it to the manifest.
-const fallbackVersion = "0.4.0"
+const fallbackVersion = "0.4.1"
 
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {

@@ -18,7 +18,7 @@ func TestRunWallpaperFlowAndResync(t *testing.T) {
 	runner := newCommandRunner()
 	host := startCommandHost(t, runner)
 	hello := host.hello()
-	if hello.Plugin != (v1.Identity{ID: "org.sysc.wallpaper-depth", Name: "Wallpaper Depth", Version: "1.0.0"}) {
+	if hello.Plugin != (v1.Identity{ID: "org.sysc.wallpaper-depth", Name: "Wallpaper Depth", Version: "1.0.1"}) {
 		t.Fatalf("plugin identity = %+v", hello.Plugin)
 	}
 	if !slices.Contains(hello.Capabilities, "wallpaper") {
@@ -283,7 +283,7 @@ func startCommandHost(t *testing.T, runner wallpaperdepth.Runner) *commandHost {
 	}()
 	h.send(t, &v1.HostHello{
 		Type: v1.TypeHostHello, Supported: []v1.Version{{Major: 1, Minor: 7}},
-		Plugin:       v1.Identity{ID: "org.sysc.wallpaper-depth", Name: "Wallpaper Depth", Version: "1.0.0"},
+		Plugin:       v1.Identity{ID: "org.sysc.wallpaper-depth", Name: "Wallpaper Depth", Version: "1.0.1"},
 		Capabilities: []string{"panels", "settings", "state", "wallpaper"}, Limits: v1.DefaultLimits,
 	})
 	waitCommand(t, func() bool { return h.hello() != nil })

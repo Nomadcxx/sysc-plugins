@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/HugoSmits86/nativewebp v1.3.0
-	github.com/Nomadcxx/sysc-shell v0.1.1-0.20261011183802-0df5bc94d71f
+	github.com/Nomadcxx/sysc-shell v0.2.0
 	github.com/godbus/dbus/v5 v5.2.2
 	golang.org/x/image v0.46.0
 	golang.org/x/sys v0.48.0

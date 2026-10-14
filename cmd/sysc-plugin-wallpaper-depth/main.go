@@ -42,7 +42,7 @@ func run(in *os.File, out *os.File) error {
 func runWith(in io.Reader, out io.Writer, runner wallpaperdepth.Runner) error {
 	rawClient := v1.NewClient(in, out)
 	hello, err := rawClient.Handshake(identity.FromManifest(v1.Identity{
-		ID: "org.sysc.wallpaper-depth", Name: "Wallpaper Depth", Version: "1.0.0",
+		ID: "org.sysc.wallpaper-depth", Name: "Wallpaper Depth", Version: "1.0.1",
 	}))
 	if err != nil {
 		return err

@@ -32,8 +32,8 @@ func TestManifestContract(t *testing.T) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Version != "1.0.0" {
-		t.Errorf("version = %q, want 1.0.0", manifest.Version)
+	if manifest.Version != "1.0.1" {
+		t.Errorf("version = %q, want 1.0.1", manifest.Version)
 	}
 	if manifest.Protocol.Major != 1 || manifest.Protocol.Minor != 7 {
 		t.Errorf("protocol = %d.%d, want 1.7", manifest.Protocol.Major, manifest.Protocol.Minor)

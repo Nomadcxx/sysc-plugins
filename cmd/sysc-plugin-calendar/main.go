@@ -93,7 +93,7 @@ func run(in io.Reader, out io.Writer) error {
 
 func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendarQuery) error {
 	c := v1.NewClient(in, &lockedWriter{w: out})
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.calendar", Name: "Calendar", Version: "0.3.0"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.calendar", Name: "Calendar", Version: "0.4.0"})); err != nil {
 		return err
 	}
 

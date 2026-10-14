@@ -35,7 +35,7 @@ jobs:
       # and installing it for every plugin keeps the plugin list in one place
       # (tools/catalog's cgoPlugins map) instead of duplicated here.
       - name: install libecal
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libecal2.0-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libecal2.0-dev libjson-glib-dev
       - name: Parse tag
         id: tag
         run: |

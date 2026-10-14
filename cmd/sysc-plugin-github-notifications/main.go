@@ -47,7 +47,7 @@ type pluginSettings struct {
 
 func runPlugin(in io.Reader, out io.Writer, gh githubnotifications.GH, opener func(context.Context, string) error) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.github-notifications", Name: "GitHub Notifications", Version: "0.3.1"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.github-notifications", Name: "GitHub Notifications", Version: "0.3.2"})); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())

@@ -29,7 +29,7 @@ func runClock(in io.Reader, out io.Writer, now func() time.Time) error {
 		now = time.Now
 	}
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.timer", Name: "Pomodoro Timer", Version: "1.4.0"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.timer", Name: "Pomodoro Timer", Version: "1.4.1"})); err != nil {
 		return err
 	}
 	tm := timer.NewSession(now)

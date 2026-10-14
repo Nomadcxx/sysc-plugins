@@ -48,7 +48,7 @@ type view struct {
 
 func run(in io.Reader, out io.Writer) error {
 	c := v1.NewClient(in, &lockedWriter{w: out})
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.screenshot", Name: "Screenshot", Version: "1.0.0"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.screenshot", Name: "Screenshot", Version: "1.0.1"})); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())

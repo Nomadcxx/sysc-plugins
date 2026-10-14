@@ -3,7 +3,7 @@
   "id": "org.sysc.github-notifications",
   "name": "GitHub Notifications",
   "description": "Triage unread GitHub notifications, open work, and contribution activity from the panel.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "protocol": {
     "major": 1,
     "minor": 4

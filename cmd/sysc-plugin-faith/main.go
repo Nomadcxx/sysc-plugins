@@ -90,7 +90,7 @@ func run(in io.Reader, out io.Writer, opt options) error {
 		opt.OpenURL = func(string) {}
 	}
 	c := v1.NewClient(in, &lockedWriter{w: out})
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.faith", Name: "Faith", Version: "0.1.0"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.faith", Name: "Faith", Version: "0.1.1"})); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
