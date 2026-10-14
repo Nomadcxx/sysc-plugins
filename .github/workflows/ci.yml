@@ -2,43 +2,45 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '**/*.png'
-      - '**/*.jpg'
-      - '**/*.jpeg'
-      - '**/*.gif'
-      - '**/*.svg'
-      - '**/*.webp'
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!docs/**'
+      - '!LICENSE'
+      - '!**/*.png'
+      - '!**/*.jpg'
+      - '!**/*.jpeg'
+      - '!**/*.gif'
+      - '!**/*.svg'
+      - '!**/*.webp'
       # Manifests, thumbnails and plugin bundles ship images that CI validates.
-      - '!plugins/*/screenshot.*'
-      - '!plugins/*/thumbnail.*'
-      - '!plugins/**/assets/**'
-      - '!internal/thumbnail/assets/**'
-      - '!**/testdata/**'
+      - 'plugins/*/screenshot.*'
+      - 'plugins/*/thumbnail.*'
+      - 'plugins/**/assets/**'
+      - 'internal/thumbnail/assets/**'
+      - '**/testdata/**'
   pull_request:
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '**/*.png'
-      - '**/*.jpg'
-      - '**/*.jpeg'
-      - '**/*.gif'
-      - '**/*.svg'
-      - '**/*.webp'
-      - '!plugins/*/screenshot.*'
-      - '!plugins/*/thumbnail.*'
-      - '!plugins/**/assets/**'
-      - '!internal/thumbnail/assets/**'
-      - '!**/testdata/**'
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!docs/**'
+      - '!LICENSE'
+      - '!**/*.png'
+      - '!**/*.jpg'
+      - '!**/*.jpeg'
+      - '!**/*.gif'
+      - '!**/*.svg'
+      - '!**/*.webp'
+      - '!catalog.json'
+      - 'plugins/*/screenshot.*'
+      - 'plugins/*/thumbnail.*'
+      - 'plugins/**/assets/**'
+      - 'internal/thumbnail/assets/**'
+      - '**/testdata/**'
       # Catalog-only PRs are opened by the release workflow with GITHUB_TOKEN.
       # That token cannot start pull_request workflows, so GitHub records a
       # failed empty run ("workflow file issue") for every catalog PR. Those
       # PRs are already checked with `catalog validate -fetch` in release.yml.
-      - 'catalog.json'
 
 # Supersede in-flight runs for the same branch or PR so a burst of pushes does
 # not queue a full build each. Default-branch pushes are exempt: every merge to
