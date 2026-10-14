@@ -19,7 +19,7 @@ import (
 
 func TestPluginWallpaperDepthGate(t *testing.T) {
 	h := startWallpaperDepth(t)
-	if hello := h.pluginHello(); hello.Plugin != (v1.Identity{ID: "org.sysc.wallpaper-depth", Name: "Wallpaper Depth", Version: "1.0.0"}) {
+	if hello := h.pluginHello(); hello.Plugin != (v1.Identity{ID: "org.sysc.wallpaper-depth", Name: "Wallpaper Depth", Version: "1.0.1"}) {
 		t.Fatalf("plugin handshake identity = %+v", hello.Plugin)
 	}
 	h.waitCallCount(v1.CallWallpaperSnapshot, 1)
