@@ -112,6 +112,17 @@ func TestPanelListsRunRefreshAndNewsNodes(t *testing.T) {
 	}
 }
 
+func TestPanelTreeKeepsDuplicateFlatpakNamesValid(t *testing.T) {
+	state := State{Updates: []Update{
+		{Name: "org.example.App", Source: SourceFlatpak},
+		{Name: "org.example.App", Source: SourceFlatpak},
+	}}
+	root := PanelTree(state, time.Time{}, "")
+	if err := v1.Validate(root, v1.ViewPanel); err != nil {
+		t.Fatalf("duplicate flatpak names produced an invalid panel: %v", err)
+	}
+}
+
 func TestPanelBoundsLargeUpdateLists(t *testing.T) {
 	const visiblePerSource = 100
 	sources := []Source{SourceRepo, SourceAUR, SourceFlatpak}

@@ -149,6 +149,36 @@ func TestCheckFlatpakCountsRefsWithoutAVersion(t *testing.T) {
 	}
 }
 
+func TestCheckFlatpakDistinguishesBranchesAndDeduplicatesRefs(t *testing.T) {
+	stdout := []byte("app/org.freedesktop.Platform.GL.default/x86_64/24.08\t24.08\n" +
+		"app/org.freedesktop.Platform.GL.default/x86_64/24.08extra\t24.08extra\n" +
+		"app/org.freedesktop.Platform.GL.default/x86_64/24.08\t24.08\n")
+	var gotArgs []string
+	run := func(_ context.Context, _ string, args ...string) ([]byte, []byte, int, error) {
+		gotArgs = append([]string(nil), args...)
+		return stdout, nil, 0, nil
+	}
+	updates, err := CheckFlatpak(context.Background(), run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 2 {
+		t.Fatalf("got %d updates, want two distinct refs: %+v", len(updates), updates)
+	}
+	if gotArgs[len(gotArgs)-1] != "--columns=ref,version" {
+		t.Fatalf("Flatpak columns = %q, want ref and version", gotArgs[len(gotArgs)-1])
+	}
+	want := []string{
+		"org.freedesktop.Platform.GL.default (x86_64, 24.08)",
+		"org.freedesktop.Platform.GL.default (x86_64, 24.08extra)",
+	}
+	for i, update := range updates {
+		if update.Name != want[i] {
+			t.Errorf("update %d name = %q, want %q", i, update.Name, want[i])
+		}
+	}
+}
+
 func TestParseArrowLinesSkipsMalformed(t *testing.T) {
 	updates := parseArrowLines([]byte("garbage\nfoo 1.0-1 -> 2.0-1\nnot an arrow\n"), SourceRepo)
 	if len(updates) != 1 || updates[0].Name != "foo" || updates[0].New != "2.0-1" {
