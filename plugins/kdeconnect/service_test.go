@@ -1445,7 +1445,7 @@ func TestRefreshRecentImagesRecordsMountError(t *testing.T) {
 	}
 }
 
-func TestRefreshRecentImagesIdleMountFailureStaysQuiet(t *testing.T) {
+func TestRefreshRecentImagesIdleMountFailureWaitsForReconnect(t *testing.T) {
 	t.Parallel()
 	bus := recentImagesBus(t.TempDir())
 	sftp := bus.objects[pluginPath("devA", "sftp")]
@@ -1474,8 +1474,57 @@ func TestRefreshRecentImagesIdleMountFailureStaysQuiet(t *testing.T) {
 			got++
 		}
 	}
+	if got != n {
+		t.Fatalf("failed idle mount repeated automatically: mountAndWait %d -> %d", n, got)
+	}
+
+	st.devices["devA"].Reachable = false
+	st.refreshRecentImages(bus, &chosen)
+	if st.sftpScanFailedFor != "" {
+		t.Fatalf("unreachable device kept failed mount state for %q", st.sftpScanFailedFor)
+	}
+	st.devices["devA"].Reachable = true
+	sftp.mounts = true
+	st.refreshRecentImages(bus, &chosen)
+	got = 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			got++
+		}
+	}
 	if got != n+1 {
-		t.Fatalf("failed idle mount did not retry: mountAndWait %d -> %d", n, got)
+		t.Fatalf("device reconnect did not retry mount: mountAndWait %d -> %d", n, got)
+	}
+}
+
+func TestManualRefreshRetriesFailedRecentImageMount(t *testing.T) {
+	bus := recentImagesBus(t.TempDir())
+	sftp := bus.objects[pluginPath("devA", "sftp")]
+	sftp.mounts = false
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 1 })
+	n := 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("initial mountAndWait calls = %d, want 1", n)
+	}
+
+	svc.Refresh()
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 1 })
+	got := 0
+	for _, c := range sftp.calls {
+		if c == sftpIface+".mountAndWait" {
+			got++
+		}
+	}
+	if got != n+1 {
+		t.Fatalf("manual refresh did not retry mount: mountAndWait %d -> %d", n, got)
 	}
 }
 
