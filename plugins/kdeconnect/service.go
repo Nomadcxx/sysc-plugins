@@ -507,6 +507,9 @@ func (st *daemonState) reconcileNow(bus daemonBus) error {
 	for id := range st.devices {
 		if !seen[id] {
 			delete(st.devices, id)
+			if st.sftpScanFailedFor == id {
+				st.sftpScanFailedFor = ""
+			}
 		}
 	}
 	return nil
@@ -535,6 +538,9 @@ func (st *daemonState) fetchDevice(bus daemonBus, id string) {
 	dev.PairRequestedByPeer = boolOf(props["isPairRequestedByPeer"])
 	dev.VerificationKey = strOf(props["verificationKey"])
 	dev.SupportedPlugins = stringListOf(props["supportedPlugins"])
+	if st.sftpScanFailedFor == id && (!dev.Reachable || !dev.Paired || !hasPlugin(dev, "sftp")) {
+		st.sftpScanFailedFor = ""
+	}
 	if dev.PairRequestedByPeer && !wasRequestedByPeer {
 		e := Event{
 			Kind:       EventPairingRequest,
@@ -913,6 +919,9 @@ func updateFromSignal(sig *dbus.Signal, bus daemonBus, st *daemonState) bool {
 		id, _ := sig.Body[0].(string)
 		if _, ok := st.devices[id]; ok {
 			delete(st.devices, id)
+			if st.sftpScanFailedFor == id {
+				st.sftpScanFailedFor = ""
+			}
 			for i, ordered := range st.order {
 				if ordered == id {
 					st.order = append(st.order[:i], st.order[i+1:]...)

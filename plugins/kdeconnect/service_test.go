@@ -1478,12 +1478,20 @@ func TestRefreshRecentImagesIdleMountFailureWaitsForReconnect(t *testing.T) {
 		t.Fatalf("failed idle mount repeated automatically: mountAndWait %d -> %d", n, got)
 	}
 
-	st.devices["devA"].Reachable = false
-	st.refreshRecentImages(bus, &chosen)
+	device := bus.objects[devicePath("devA")]
+	device.ifaces[kdeDeviceIface]["isReachable"] = dbus.MakeVariant(false)
+	if !updateFromSignal(&dbus.Signal{
+		Path: devicePath("devA"), Name: kdeDeviceIface + ".reachableChanged",
+	}, bus, st) {
+		t.Fatal("unreachable signal was ignored")
+	}
 	if st.sftpScanFailedFor != "" {
 		t.Fatalf("unreachable device kept failed mount state for %q", st.sftpScanFailedFor)
 	}
-	st.devices["devA"].Reachable = true
+	device.ifaces[kdeDeviceIface]["isReachable"] = dbus.MakeVariant(true)
+	updateFromSignal(&dbus.Signal{
+		Path: devicePath("devA"), Name: kdeDeviceIface + ".reachableChanged",
+	}, bus, st)
 	sftp.mounts = true
 	st.refreshRecentImages(bus, &chosen)
 	got = 0
