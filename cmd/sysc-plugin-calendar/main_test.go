@@ -187,6 +187,95 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 	_ = output.Close()
 }
 
+func TestCalendarProcessKeepsGoodEventsWhenOneEventIsUnreadable(t *testing.T) {
+	zone, err := time.LoadLocation("Australia/Melbourne")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 15, 9, 0, 0, 0, zone)
+	fixture := calendar.Event{ID: "0123456789abcdef0123456789abcdef", CalendarID: "work", Calendar: "Work", Summary: "Product review", Start: now.Add(time.Hour), End: now.Add(2 * time.Hour)}
+	input, host := io.Pipe()
+	plugin, output := io.Pipe()
+	hostOut := &lockedWriter{w: host}
+	finished := make(chan error, 1)
+	go func() {
+		finished <- runPlugin(input, output, func() time.Time { return now }, func(_ context.Context, start, end time.Time) (calendar.EDSResult, error) {
+			if !start.Before(end) {
+				return calendar.EDSResult{}, io.ErrUnexpectedEOF
+			}
+			return calendar.EDSResult{Available: true, Calendars: []calendar.CalendarSource{{ID: "work", Name: "Work", Color: "#0a7bde"}}, Events: []calendar.Event{fixture},
+				Errors: []string{`Outlook: VEVENT "x" DTSTART: unknown time zone "W. Europe Standard Time"`}}, nil
+		})
+	}()
+	stamped := make(chan []byte, 16)
+	go func() {
+		scanner := bufio.NewScanner(plugin)
+		for scanner.Scan() {
+			stamped <- append([]byte(nil), scanner.Bytes()...)
+		}
+		close(stamped)
+	}()
+	lines := make(chan []byte, 16)
+	go func() {
+		for line := range stamped {
+			var call v1.HostCall
+			if json.Unmarshal(line, &call) == nil && call.Type == v1.TypeHostCall && call.Call == v1.CallStateSet {
+				reply, _ := json.Marshal(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: json.RawMessage(`{}`)})
+				_, _ = host.Write(append(reply, '\n'))
+				continue
+			}
+			lines <- line
+		}
+		close(lines)
+	}()
+	sendHostJSON(t, hostOut, map[string]any{"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 8}}, "capabilities": []string{"panels", "state", "clipboard-write", "open-url"}})
+	if got := nextPluginLine(t, lines); messageType(got) != "plugin.hello" {
+		t.Fatalf("first plugin message = %s", got)
+	}
+	var call v1.HostCall
+	stateCall := nextPluginLine(t, lines)
+	if err := json.Unmarshal(stateCall, &call); err != nil || call.Call != v1.CallStateGet {
+		t.Fatalf("preference call = %s err=%v", stateCall, err)
+	}
+	result, _ := json.Marshal(v1.StateGetResult{Found: false})
+	sendHostJSON(t, hostOut, v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: result})
+	sendHostJSON(t, hostOut, v1.ViewOpen{Type: "view.open", ViewID: "calendar-panel", View: v1.ViewPanel, Entry: "panel", Width: calendar.PanelWidth, Height: calendar.PanelHeight})
+
+	var populated v1.ViewSnapshot
+	for {
+		line, ok := nextPluginLineIdle(t, lines, 300*time.Millisecond)
+		if !ok {
+			break
+		}
+		var snapshot v1.ViewSnapshot
+		if err := json.Unmarshal(line, &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Type == v1.TypeViewSnapshot && findWireNode(snapshot.Root, "event-"+fixture.ID) != nil {
+			populated = snapshot
+		}
+	}
+	if populated.Revision == 0 {
+		t.Fatal("no populated month snapshot: one unreadable event discarded the valid events (#162)")
+	}
+	if !treeContainsText(populated.Root, "Some events could not be read") {
+		t.Error("warning banner missing from the panel")
+	}
+
+	sendHostJSON(t, hostOut, v1.HostShutdown{Type: "host.shutdown"})
+	_ = host.Close()
+	_ = input.Close()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("calendar process did not stop")
+	}
+	_ = output.Close()
+}
+
 func TestCalendarHostCallDoesNotBlockLaterInputOrShutdown(t *testing.T) {
 	const responsivenessBudget = 100 * time.Millisecond
 	const startupBudget = 2 * time.Second
