@@ -17,6 +17,7 @@ type LoadStatus struct {
 	Available     bool
 	CalendarCount int
 	Error         string
+	Warning       string
 	ActionError   string
 	Notice        string
 	Stale         bool
@@ -204,6 +205,9 @@ func statusBanner(status LoadStatus, eventCount int) *v1.Node {
 		title = "Couldn’t read calendars"
 		detail = status.Error
 		tone = v1.ToneError
+	case status.Warning != "":
+		title = "Some events could not be read"
+		detail = status.Warning
 	case status.Truncated:
 		title = "Some events were omitted because the range is unusually busy."
 	}

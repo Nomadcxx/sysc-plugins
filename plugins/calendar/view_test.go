@@ -77,6 +77,25 @@ func TestCalendarPanelDetailsAndProviderStates(t *testing.T) {
 	}
 }
 
+func TestPartialReadWarningKeepsEventsAndAddsNoRetry(t *testing.T) {
+	date := time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC)
+	event := Event{ID: "meeting", Summary: "Design review", Calendar: "Work", Start: date.Add(time.Hour), End: date.Add(2 * time.Hour)}
+	status := LoadStatus{Available: true, CalendarCount: 1, Warning: `Outlook: VEVENT "x" DTSTART: unknown time zone "W. Europe Standard Time"`}
+	root := PanelTree(PanelState{Date: date, View: ViewMonth}, []Event{event}, "monday", status, date, nil, nil, false)
+	if err := v1.Validate(root, v1.ViewPanel); err != nil {
+		t.Fatal(err)
+	}
+	if !treeText(root, "Some events could not be read") {
+		t.Error("partial warning omitted its banner title")
+	}
+	if !treeText(root, "Design review") {
+		t.Error("partial warning hid the valid event")
+	}
+	if findNode(root, "cal-retry") != nil {
+		t.Error("partial warning added a retry button")
+	}
+}
+
 func TestExpandedCalendarFilterFitsEveryPanelView(t *testing.T) {
 	date := time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC)
 	sources := make([]CalendarSource, 12)

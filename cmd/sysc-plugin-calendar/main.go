@@ -338,7 +338,14 @@ func runPlugin(in io.Reader, out io.Writer, now func() time.Time, query calendar
 			status.Available = result.data.Available
 			status.Truncated = result.data.Truncated
 			errorText := result.err
-			if errorText == nil && len(result.data.Errors) > 0 {
+			// Per-event and per-source messages from QueryEDS sit next to the
+			// valid events it kept (#162); they are a warning, not a failed
+			// refresh. Only a query error or an unavailable EDS discards them.
+			status.Warning = ""
+			if len(result.data.Errors) > 0 {
+				status.Warning = truncateText(strings.Join(result.data.Errors, "; "), 1024)
+			}
+			if errorText == nil && !result.data.Available && len(result.data.Errors) > 0 {
 				errorText = errors.New(strings.Join(result.data.Errors, "; "))
 			}
 			if errorText != nil || !result.data.Available {
