@@ -110,9 +110,13 @@
       "category": "productivity",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/calendar-v0.4.0/plugins/calendar/thumbnail.webp",
+        "sha256": "55ca96069e4878434be58069689d99bdaa3bad9a56ce272ab02039209af3b25b"
+      },
       "added_at": "2026-09-29T04:04:20.323735366Z",
-      "updated_at": "2026-09-29T04:04:20.323735366Z",
-      "version": "0.3.0",
+      "updated_at": "2026-10-14T14:38:06.316723517Z",
+      "version": "0.4.0",
       "protocol": {
         "major": 1,
         "minor": 8
@@ -129,17 +133,49 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.3.0/org.sysc.calendar-0.3.0-linux-amd64.tar.gz",
-          "sha256": "346ab936a51f34cc1e73c77ff45f86cd9abfed5544b209315b2c2083c7ca943a",
-          "size": 2393502
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.4.0/org.sysc.calendar-0.4.0-linux-amd64.tar.gz",
+          "sha256": "24e59e13f7c8de39330d4a2354d0b35b74b3ee0b90febf4483987651923e15b4",
+          "size": 2425579
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.3.0/org.sysc.calendar-0.3.0-linux-arm64.tar.gz",
-          "sha256": "6d85f8e0046f8570bd1626942bbf91cd0807fa2b1fbe0b46003ba7558495c00a",
-          "size": 2201138
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.4.0/org.sysc.calendar-0.4.0-linux-arm64.tar.gz",
+          "sha256": "5362e302b539f95bb45a7634a1232836b799e5c732fe12013e77310840865646",
+          "size": 2229269
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/calendar-v0.3.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/calendar-v0.4.0",
+      "releases": [
+        {
+          "version": "0.3.0",
+          "protocol": {
+            "major": 1,
+            "minor": 8
+          },
+          "capabilities": [
+            "panels",
+            "settings",
+            "state",
+            "clipboard-write",
+            "open-url"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.3.0/org.sysc.calendar-0.3.0-linux-amd64.tar.gz",
+              "sha256": "346ab936a51f34cc1e73c77ff45f86cd9abfed5544b209315b2c2083c7ca943a",
+              "size": 2393502
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.3.0/org.sysc.calendar-0.3.0-linux-arm64.tar.gz",
+              "sha256": "6d85f8e0046f8570bd1626942bbf91cd0807fa2b1fbe0b46003ba7558495c00a",
+              "size": 2201138
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/calendar-v0.3.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.cat",
@@ -163,9 +199,13 @@
       "category": "monitoring",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/cat-v1.0.1/plugins/cat/thumbnail.webp",
+        "sha256": "38f6d5a96b8ca13f5acbdc919f9d198e1d05ec0a1fea92cf87b081d1b2a3e414"
+      },
       "added_at": "2026-09-29T04:04:21.885938661Z",
-      "updated_at": "2026-09-29T04:04:21.885938661Z",
-      "version": "1.0.0",
+      "updated_at": "2026-10-14T14:38:06.648576424Z",
+      "version": "1.0.1",
       "protocol": {
         "major": 1,
         "minor": 9
@@ -179,17 +219,46 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/cat-v1.0.0/org.sysc.cat-1.0.0-linux-amd64.tar.gz",
-          "sha256": "5513dbff19c6fbc5dfa95737564942bc046bdfb02d1283bd6d46c4e2f423a773",
-          "size": 2133278
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/cat-v1.0.1/org.sysc.cat-1.0.1-linux-amd64.tar.gz",
+          "sha256": "33963cc2b66d85955d43c4c8a191bf82d6d2ca540fdf868a86951cb7549871c9",
+          "size": 2135273
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/cat-v1.0.0/org.sysc.cat-1.0.0-linux-arm64.tar.gz",
-          "sha256": "35977f1ddc63028cf0b9bc0393be1e1ef92aa970bb95868284ed4fe9e1bcbaf5",
-          "size": 1970730
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/cat-v1.0.1/org.sysc.cat-1.0.1-linux-arm64.tar.gz",
+          "sha256": "055974195d901c3dfecd77318c1cda9d2881299060889770969b0061567a59aa",
+          "size": 1972011
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/cat-v1.0.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/cat-v1.0.1",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "protocol": {
+            "major": 1,
+            "minor": 9
+          },
+          "capabilities": [
+            "panels",
+            "settings"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/cat-v1.0.0/org.sysc.cat-1.0.0-linux-amd64.tar.gz",
+              "sha256": "5513dbff19c6fbc5dfa95737564942bc046bdfb02d1283bd6d46c4e2f423a773",
+              "size": 2133278
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/cat-v1.0.0/org.sysc.cat-1.0.0-linux-arm64.tar.gz",
+              "sha256": "35977f1ddc63028cf0b9bc0393be1e1ef92aa970bb95868284ed4fe9e1bcbaf5",
+              "size": 1970730
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/cat-v1.0.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.faith",
@@ -213,9 +282,13 @@
       "category": "utilities",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/faith-v0.1.1/plugins/faith/thumbnail.webp",
+        "sha256": "0e317d6a6092311ea71943a9369467987c1a55a27d2a42e7bd6ffec8735b0634"
+      },
       "added_at": "2026-09-29T04:04:23.893040961Z",
-      "updated_at": "2026-09-29T04:04:23.893040961Z",
-      "version": "0.1.0",
+      "updated_at": "2026-10-14T14:38:06.983484479Z",
+      "version": "0.1.1",
       "protocol": {
         "major": 1,
         "minor": 4
@@ -231,17 +304,48 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/faith-v0.1.0/org.sysc.faith-0.1.0-linux-amd64.tar.gz",
-          "sha256": "b92d488ae2756d6e2d46c8e35f3f3d349834f4fdd1454b1df14b329481521538",
-          "size": 14159873
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/faith-v0.1.1/org.sysc.faith-0.1.1-linux-amd64.tar.gz",
+          "sha256": "7ec6a6d7cafee0f6ebe252e0df377d9953041cd6a76cebd9037e2de450692e10",
+          "size": 14169346
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/faith-v0.1.0/org.sysc.faith-0.1.0-linux-arm64.tar.gz",
-          "sha256": "1e66be33f9bf2a9c7960ba5fb98d162cc0af8ab5e2974f670e74ea68e80ab86c",
-          "size": 13714866
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/faith-v0.1.1/org.sysc.faith-0.1.1-linux-arm64.tar.gz",
+          "sha256": "539759cc060cbd02a27602c11cd791bf50dfc2f4074f62427b1abc8af8a94f48",
+          "size": 13723039
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/faith-v0.1.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/faith-v0.1.1",
+      "releases": [
+        {
+          "version": "0.1.0",
+          "protocol": {
+            "major": 1,
+            "minor": 4
+          },
+          "capabilities": [
+            "notifications",
+            "panels",
+            "settings",
+            "state"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/faith-v0.1.0/org.sysc.faith-0.1.0-linux-amd64.tar.gz",
+              "sha256": "b92d488ae2756d6e2d46c8e35f3f3d349834f4fdd1454b1df14b329481521538",
+              "size": 14159873
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/faith-v0.1.0/org.sysc.faith-0.1.0-linux-arm64.tar.gz",
+              "sha256": "1e66be33f9bf2a9c7960ba5fb98d162cc0af8ab5e2974f670e74ea68e80ab86c",
+              "size": 13714866
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/faith-v0.1.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.games",
@@ -265,12 +369,16 @@
       "category": "media",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/games-v0.2.0/plugins/games/thumbnail.webp",
+        "sha256": "54aecb47aa7991a48e5364c39899f198a880b810cfb6c07c6bb6d419d38aa2ff"
+      },
       "added_at": "2026-09-29T04:04:26.687720363Z",
-      "updated_at": "2026-09-29T04:04:26.687720363Z",
-      "version": "0.1.0",
+      "updated_at": "2026-10-14T14:38:07.383311969Z",
+      "version": "0.2.0",
       "protocol": {
         "major": 1,
-        "minor": 8
+        "minor": 13
       },
       "capabilities": [
         "floating_surfaces",
@@ -284,17 +392,49 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/games-v0.1.0/org.sysc.games-0.1.0-linux-amd64.tar.gz",
-          "sha256": "0a018df308072f038d09b17728e8141ea53429ee7a700bd7499bf5ace8e9f9f0",
-          "size": 7640189
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/games-v0.2.0/org.sysc.games-0.2.0-linux-amd64.tar.gz",
+          "sha256": "1a4bd3dda8cdf0be15a7b2e509a689f9123d078c2adfc5b5b8737aa15275a516",
+          "size": 9179692
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/games-v0.1.0/org.sysc.games-0.1.0-linux-arm64.tar.gz",
-          "sha256": "d810a52ab1f5172bbeef4f7f1ee74b2ee8ef09993966f5ff75d368db13491994",
-          "size": 7243524
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/games-v0.2.0/org.sysc.games-0.2.0-linux-arm64.tar.gz",
+          "sha256": "c239065a459ea6997a981db90fe4a550ac15b2571ef8bc985dc919fe297d74db",
+          "size": 8637364
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/games-v0.1.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/games-v0.2.0",
+      "releases": [
+        {
+          "version": "0.1.0",
+          "protocol": {
+            "major": 1,
+            "minor": 8
+          },
+          "capabilities": [
+            "floating_surfaces",
+            "notifications",
+            "panels",
+            "settings",
+            "state"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/games-v0.1.0/org.sysc.games-0.1.0-linux-amd64.tar.gz",
+              "sha256": "0a018df308072f038d09b17728e8141ea53429ee7a700bd7499bf5ace8e9f9f0",
+              "size": 7640189
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/games-v0.1.0/org.sysc.games-0.1.0-linux-arm64.tar.gz",
+              "sha256": "d810a52ab1f5172bbeef4f7f1ee74b2ee8ef09993966f5ff75d368db13491994",
+              "size": 7243524
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/games-v0.1.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.github-notifications",
@@ -318,9 +458,13 @@
       "category": "productivity",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/github-notifications-v0.3.2/plugins/github-notifications/thumbnail.webp",
+        "sha256": "f39f73bf9fca7ff5a45c76ae4a8a3e824a4d9dec0d1204c8d935ed0e8d619bf3"
+      },
       "added_at": "2026-09-29T04:04:27.882402109Z",
-      "updated_at": "2026-09-29T04:04:27.882402109Z",
-      "version": "0.3.1",
+      "updated_at": "2026-10-14T14:38:07.816069332Z",
+      "version": "0.3.2",
       "protocol": {
         "major": 1,
         "minor": 4
@@ -338,17 +482,93 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/github-notifications-v0.3.1/org.sysc.github-notifications-0.3.1-linux-amd64.tar.gz",
-          "sha256": "bfec3fe25d1f9e4afe9a6d883956074062dd079df317f6dd009cf1f50387bb38",
-          "size": 2582507
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/github-notifications-v0.3.2/org.sysc.github-notifications-0.3.2-linux-amd64.tar.gz",
+          "sha256": "7cdbab5b74791d3c5fb7a49440186722ed2227db1764298da0f26bda92b72bbb",
+          "size": 2596769
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/github-notifications-v0.3.1/org.sysc.github-notifications-0.3.1-linux-arm64.tar.gz",
-          "sha256": "5245bbe91713e941f84eff0b4eff6942dccf8f6842ae44e02b92aca53f1d6dca",
-          "size": 2392788
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/github-notifications-v0.3.2/org.sysc.github-notifications-0.3.2-linux-arm64.tar.gz",
+          "sha256": "22feb6deea03b5b43f2ea9caffde7dae1c9a17ad7ec07817d6725614e57752a3",
+          "size": 2405569
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/github-notifications-v0.3.1"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/github-notifications-v0.3.2",
+      "releases": [
+        {
+          "version": "0.3.1",
+          "protocol": {
+            "major": 1,
+            "minor": 4
+          },
+          "capabilities": [
+            "notifications",
+            "panels",
+            "settings",
+            "state"
+          ],
+          "requires": {
+            "commands": [
+              "gh"
+            ]
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/github-notifications-v0.3.1/org.sysc.github-notifications-0.3.1-linux-amd64.tar.gz",
+              "sha256": "bfec3fe25d1f9e4afe9a6d883956074062dd079df317f6dd009cf1f50387bb38",
+              "size": 2582507
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/github-notifications-v0.3.1/org.sysc.github-notifications-0.3.1-linux-arm64.tar.gz",
+              "sha256": "5245bbe91713e941f84eff0b4eff6942dccf8f6842ae44e02b92aca53f1d6dca",
+              "size": 2392788
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/github-notifications-v0.3.1"
+        }
+      ]
+    },
+    {
+      "id": "org.sysc.herdr",
+      "name": "Herdr",
+      "author": "Nomadcxx",
+      "description": "Monitor herdr terminal sessions and coding agents from the bar.",
+      "category": "monitoring",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/herdr-v0.1.0/plugins/herdr/thumbnail.webp",
+        "sha256": "26844d155d58926acd53f6078da56f5da62eaf3daafc81d367e8df4b382555d6"
+      },
+      "added_at": "2026-10-14T14:38:08.165365358Z",
+      "updated_at": "2026-10-14T14:38:08.165365358Z",
+      "version": "0.1.0",
+      "protocol": {
+        "major": 1,
+        "minor": 16
+      },
+      "capabilities": [
+        "notifications",
+        "panels",
+        "settings"
+      ],
+      "requires": {
+        "commands": [
+          "herdr"
+        ]
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/herdr-v0.1.0/org.sysc.herdr-0.1.0-linux-amd64.tar.gz",
+          "sha256": "948a6d10d57ce250a9818d41a0826eee9f8981ef54ac325b6423d85ee9783832",
+          "size": 2795159
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/herdr-v0.1.0/org.sysc.herdr-0.1.0-linux-arm64.tar.gz",
+          "sha256": "f64959a99e2562765bb9038bddf4761ac8e704d1912cb7c7933574016f7abc39",
+          "size": 2582404
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/herdr-v0.1.0"
     },
     {
       "id": "org.sysc.kdeconnect",
@@ -372,18 +592,23 @@
       "category": "utilities",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/kdeconnect-v0.2.0/plugins/kdeconnect/thumbnail.webp",
+        "sha256": "b26de0273d6311ea7235c487671e9dec855802cf8f7abec9859d745932b5a4a1"
+      },
       "added_at": "2026-09-29T04:04:29.220559384Z",
-      "updated_at": "2026-09-29T04:04:29.220559384Z",
-      "version": "0.1.0",
+      "updated_at": "2026-10-14T14:38:08.512215152Z",
+      "version": "0.2.0",
       "protocol": {
         "major": 1,
-        "minor": 6
+        "minor": 16
       },
       "capabilities": [
         "notifications",
         "panels",
         "settings",
-        "state"
+        "state",
+        "files"
       ],
       "requires": {
         "commands": [
@@ -392,17 +617,50 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/kdeconnect-v0.1.0/org.sysc.kdeconnect-0.1.0-linux-amd64.tar.gz",
-          "sha256": "a38ceff41c44b193131b00a3d799bc53bb0a8186a9f080f5612e10d8ce27b41d",
-          "size": 3682264
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/kdeconnect-v0.2.0/org.sysc.kdeconnect-0.2.0-linux-amd64.tar.gz",
+          "sha256": "d46f3eb17bbefadcc2963e48b4eb8e043a28806d40819a41a767071e512761a3",
+          "size": 3861660
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/kdeconnect-v0.1.0/org.sysc.kdeconnect-0.1.0-linux-arm64.tar.gz",
-          "sha256": "4f430fbe235b10a807dcea7c76c1693550f5a439aab7517984153a725559007e",
-          "size": 3391643
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/kdeconnect-v0.2.0/org.sysc.kdeconnect-0.2.0-linux-arm64.tar.gz",
+          "sha256": "c7941a26a3018f7610c9a20558073f9f1df1ac00038eb9ad5081e2c6118750b4",
+          "size": 3561912
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/kdeconnect-v0.1.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/kdeconnect-v0.2.0",
+      "releases": [
+        {
+          "version": "0.1.0",
+          "protocol": {
+            "major": 1,
+            "minor": 6
+          },
+          "capabilities": [
+            "notifications",
+            "panels",
+            "settings",
+            "state"
+          ],
+          "requires": {
+            "commands": [
+              "kdeconnect-cli"
+            ]
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/kdeconnect-v0.1.0/org.sysc.kdeconnect-0.1.0-linux-amd64.tar.gz",
+              "sha256": "a38ceff41c44b193131b00a3d799bc53bb0a8186a9f080f5612e10d8ce27b41d",
+              "size": 3682264
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/kdeconnect-v0.1.0/org.sysc.kdeconnect-0.1.0-linux-arm64.tar.gz",
+              "sha256": "4f430fbe235b10a807dcea7c76c1693550f5a439aab7517984153a725559007e",
+              "size": 3391643
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/kdeconnect-v0.1.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.mini-docker",
@@ -426,9 +684,13 @@
       "category": "system",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/mini-docker-v0.4.1/plugins/mini-docker/thumbnail.webp",
+        "sha256": "df2cba9a6bb1f9ba570f885b5ddf5b05e2f80df6c9e44ee8479d562851c9d8df"
+      },
       "added_at": "2026-09-29T04:04:30.307779681Z",
-      "updated_at": "2026-09-29T04:04:30.307779681Z",
-      "version": "0.4.0",
+      "updated_at": "2026-10-14T14:38:08.875695511Z",
+      "version": "0.4.1",
       "protocol": {
         "major": 1,
         "minor": 4
@@ -444,17 +706,48 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.0/org.sysc.mini-docker-0.4.0-linux-amd64.tar.gz",
-          "sha256": "7b6076b2c866dddbd46f5abd5defd3d285b1e3a0863ea8d30ff51fe73bf7d1cb",
-          "size": 2552403
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.1/org.sysc.mini-docker-0.4.1-linux-amd64.tar.gz",
+          "sha256": "a01f58cfcb102f144ed2f9b8235a4fc5d0c917e47a7c1344eff14f27be36e2dc",
+          "size": 2553723
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.0/org.sysc.mini-docker-0.4.0-linux-arm64.tar.gz",
-          "sha256": "94183a1f81d573126ee166d294a91d7473f0a74f2e47168438fdeb65dcaf3b4e",
-          "size": 2364788
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.1/org.sysc.mini-docker-0.4.1-linux-arm64.tar.gz",
+          "sha256": "bcfb097f12ef22f3c062d1011a9d643ff4d90d5e4de4df3859b8d8ffe0885dff",
+          "size": 2365713
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/mini-docker-v0.4.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/mini-docker-v0.4.1",
+      "releases": [
+        {
+          "version": "0.4.0",
+          "protocol": {
+            "major": 1,
+            "minor": 4
+          },
+          "capabilities": [
+            "panels",
+            "settings"
+          ],
+          "requires": {
+            "commands": [
+              "docker"
+            ]
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.0/org.sysc.mini-docker-0.4.0-linux-amd64.tar.gz",
+              "sha256": "7b6076b2c866dddbd46f5abd5defd3d285b1e3a0863ea8d30ff51fe73bf7d1cb",
+              "size": 2552403
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.0/org.sysc.mini-docker-0.4.0-linux-arm64.tar.gz",
+              "sha256": "94183a1f81d573126ee166d294a91d7473f0a74f2e47168438fdeb65dcaf3b4e",
+              "size": 2364788
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/mini-docker-v0.4.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.moonbit",
@@ -478,9 +771,13 @@
       "category": "system",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/moonbit-v1.3.2/plugins/moonbit/thumbnail.webp",
+        "sha256": "f1aecd517344a96405db12f1c577e105b605d428f77f74246fb9b1312de622ae"
+      },
       "added_at": "2026-10-02T12:42:52.79671191Z",
-      "updated_at": "2026-10-02T13:45:19.26119857Z",
-      "version": "1.3.1",
+      "updated_at": "2026-10-14T14:38:09.250947285Z",
+      "version": "1.3.2",
       "protocol": {
         "major": 1,
         "minor": 15
@@ -496,18 +793,47 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/moonbit-v1.3.1/org.sysc.moonbit-1.3.1-linux-amd64.tar.gz",
-          "sha256": "39ca27d0bc46fcff8448a8a7dea7ebcbe94360d08cf3f10ab9046b5551fc8d94",
-          "size": 2332653
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/moonbit-v1.3.2/org.sysc.moonbit-1.3.2-linux-amd64.tar.gz",
+          "sha256": "8ab3725e37edfff46b412ed90f6392b06032075ba8535e30ad382816bed90536",
+          "size": 2338492
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/moonbit-v1.3.1/org.sysc.moonbit-1.3.1-linux-arm64.tar.gz",
-          "sha256": "328b14790f688886e0cfbd5a3cee9ff07faca3e785c33e1e442c88a3652c92a2",
-          "size": 2155835
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/moonbit-v1.3.2/org.sysc.moonbit-1.3.2-linux-arm64.tar.gz",
+          "sha256": "4fb8aeb7884780a83e0dc86bca3dbff5ec57ed75d96525fd8a085445f27086d3",
+          "size": 2161384
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/moonbit-v1.3.1",
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/moonbit-v1.3.2",
       "releases": [
+        {
+          "version": "1.3.1",
+          "protocol": {
+            "major": 1,
+            "minor": 15
+          },
+          "capabilities": [
+            "panels",
+            "state"
+          ],
+          "requires": {
+            "commands": [
+              "moonbit"
+            ]
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/moonbit-v1.3.1/org.sysc.moonbit-1.3.1-linux-amd64.tar.gz",
+              "sha256": "39ca27d0bc46fcff8448a8a7dea7ebcbe94360d08cf3f10ab9046b5551fc8d94",
+              "size": 2332653
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/moonbit-v1.3.1/org.sysc.moonbit-1.3.1-linux-arm64.tar.gz",
+              "sha256": "328b14790f688886e0cfbd5a3cee9ff07faca3e785c33e1e442c88a3652c92a2",
+              "size": 2155835
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/moonbit-v1.3.1"
+        },
         {
           "version": "1.3.0",
           "protocol": {
@@ -619,13 +945,17 @@
       "category": "productivity",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/notes-v1.2.1/plugins/notes/thumbnail.webp",
+        "sha256": "918a028ede82a78e8d9f8e45673d94fbea4baff0758ae4221ce5f1cab4275e45"
+      },
       "readme": {
-        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/notes-v1.2.0/plugins/notes/README.md",
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/notes-v1.2.1/plugins/notes/README.md",
         "sha256": "7f0bf43b731d253c02554e95c41c3e3a45cd9db019e5267456bc7386c05f43de"
       },
       "added_at": "2026-09-29T04:04:41.093803063Z",
-      "updated_at": "2026-10-01T23:16:55.076892246Z",
-      "version": "1.2.0",
+      "updated_at": "2026-10-14T14:38:09.596177074Z",
+      "version": "1.2.1",
       "protocol": {
         "major": 1,
         "minor": 11
@@ -643,18 +973,49 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.2.0/org.sysc.notes-1.2.0-linux-amd64.tar.gz",
-          "sha256": "84ac0f463cc1beb982c4953b9512aa98e0327dab0a5aac285da12d82b5e269b3",
-          "size": 2619522
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.2.1/org.sysc.notes-1.2.1-linux-amd64.tar.gz",
+          "sha256": "43d9f8721af4abe912d36b9036a8594f46bd6eff4861b2cc0c208f6539bb8657",
+          "size": 2657286
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.2.0/org.sysc.notes-1.2.0-linux-arm64.tar.gz",
-          "sha256": "e6c6bd3f080b4f79091e3e9467cea7f529f7d69f25bde5d7b6a03482f986209a",
-          "size": 2425903
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.2.1/org.sysc.notes-1.2.1-linux-arm64.tar.gz",
+          "sha256": "9bb516abce8f13daf7c7a0cfddebd49147e526196db0e1da7717fe5e657b9431",
+          "size": 2460463
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/notes-v1.2.0",
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/notes-v1.2.1",
       "releases": [
+        {
+          "version": "1.2.0",
+          "protocol": {
+            "major": 1,
+            "minor": 11
+          },
+          "capabilities": [
+            "notifications",
+            "panels",
+            "settings",
+            "state",
+            "floating_surfaces",
+            "clipboard-read"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.2.0/org.sysc.notes-1.2.0-linux-amd64.tar.gz",
+              "sha256": "84ac0f463cc1beb982c4953b9512aa98e0327dab0a5aac285da12d82b5e269b3",
+              "size": 2619522
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/notes-v1.2.0/org.sysc.notes-1.2.0-linux-arm64.tar.gz",
+              "sha256": "e6c6bd3f080b4f79091e3e9467cea7f529f7d69f25bde5d7b6a03482f986209a",
+              "size": 2425903
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/notes-v1.2.0"
+        },
         {
           "version": "1.1.0",
           "protocol": {
@@ -741,9 +1102,13 @@
       "category": "utilities",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/protonvpn-v1.0.2/plugins/protonvpn/thumbnail.webp",
+        "sha256": "150b8aad40748e5ed8cc518d82da160dbb0a82c3e2b32c43e29025f19eaa7fc3"
+      },
       "added_at": "2026-09-29T04:04:42.299091194Z",
-      "updated_at": "2026-10-02T04:35:39.806702301Z",
-      "version": "1.0.1",
+      "updated_at": "2026-10-14T14:38:09.724064787Z",
+      "version": "1.0.2",
       "protocol": {
         "major": 1,
         "minor": 8
@@ -762,18 +1127,50 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.1/org.sysc.protonvpn-1.0.1-linux-amd64.tar.gz",
-          "sha256": "ffb8de2e26effe28f1389007d5be316925f2d34c0258ef80ad0944cf8a0d5de6",
-          "size": 2724326
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.2/org.sysc.protonvpn-1.0.2-linux-amd64.tar.gz",
+          "sha256": "cc9ee54f4e77d12d1763fd1e6e51692178a414f66aae0a07f14307b8c26c4c30",
+          "size": 2739983
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.1/org.sysc.protonvpn-1.0.1-linux-arm64.tar.gz",
-          "sha256": "0324d999ebd9781c7c5bd4e79e8370a1809c88419f64071df7bfc355ff38427a",
-          "size": 2520012
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.2/org.sysc.protonvpn-1.0.2-linux-arm64.tar.gz",
+          "sha256": "ce2b849525530a73c3f55e7125896e15399a2e2d956a8bc06e03014079defd7f",
+          "size": 2532498
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/protonvpn-v1.0.1",
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/protonvpn-v1.0.2",
       "releases": [
+        {
+          "version": "1.0.1",
+          "protocol": {
+            "major": 1,
+            "minor": 8
+          },
+          "capabilities": [
+            "panels",
+            "settings",
+            "state",
+            "notifications",
+            "clipboard-write"
+          ],
+          "requires": {
+            "commands": [
+              "protonvpn"
+            ]
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.1/org.sysc.protonvpn-1.0.1-linux-amd64.tar.gz",
+              "sha256": "ffb8de2e26effe28f1389007d5be316925f2d34c0258ef80ad0944cf8a0d5de6",
+              "size": 2724326
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/protonvpn-v1.0.1/org.sysc.protonvpn-1.0.1-linux-arm64.tar.gz",
+              "sha256": "0324d999ebd9781c7c5bd4e79e8370a1809c88419f64071df7bfc355ff38427a",
+              "size": 2520012
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/protonvpn-v1.0.1"
+        },
         {
           "version": "1.0.0",
           "protocol": {
@@ -830,9 +1227,13 @@
       "category": "media",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/screen-recorder-v1.0.1/plugins/screen-recorder/thumbnail.webp",
+        "sha256": "903efa5c23fa7d1e2b18f918d217708a5c8e126805fe76dc84e3995ee6c32a1a"
+      },
       "added_at": "2026-09-29T04:04:43.430378614Z",
-      "updated_at": "2026-09-29T04:04:43.430378614Z",
-      "version": "1.0.0",
+      "updated_at": "2026-10-14T14:38:10.055196356Z",
+      "version": "1.0.1",
       "protocol": {
         "major": 1,
         "minor": 0
@@ -850,17 +1251,50 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screen-recorder-v1.0.0/org.sysc.screen-recorder-1.0.0-linux-amd64.tar.gz",
-          "sha256": "59a19020cbae46d3fb59cd2c1531358354f67f7f972264babf17df7e1500f363",
-          "size": 2324776
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screen-recorder-v1.0.1/org.sysc.screen-recorder-1.0.1-linux-amd64.tar.gz",
+          "sha256": "8a0d306e705f4375b2e8f6805e60a009c9e1acd55b3bb33f84f1fd770b3566bb",
+          "size": 2370949
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screen-recorder-v1.0.0/org.sysc.screen-recorder-1.0.0-linux-arm64.tar.gz",
-          "sha256": "29dfa729e3028fdeac78c21c3c0b8220863dfda9e3a745172c6f93332a668abe",
-          "size": 2148371
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screen-recorder-v1.0.1/org.sysc.screen-recorder-1.0.1-linux-arm64.tar.gz",
+          "sha256": "f5ce1f4bf0d187659f5a0849735315e68bb1075f9ebc34ec06222e58f45207ed",
+          "size": 2190054
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screen-recorder-v1.0.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screen-recorder-v1.0.1",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "protocol": {
+            "major": 1,
+            "minor": 0
+          },
+          "capabilities": [
+            "notifications",
+            "panels",
+            "settings",
+            "state"
+          ],
+          "requires": {
+            "commands": [
+              "gpu-screen-recorder"
+            ]
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screen-recorder-v1.0.0/org.sysc.screen-recorder-1.0.0-linux-amd64.tar.gz",
+              "sha256": "59a19020cbae46d3fb59cd2c1531358354f67f7f972264babf17df7e1500f363",
+              "size": 2324776
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screen-recorder-v1.0.0/org.sysc.screen-recorder-1.0.0-linux-arm64.tar.gz",
+              "sha256": "29dfa729e3028fdeac78c21c3c0b8220863dfda9e3a745172c6f93332a668abe",
+              "size": 2148371
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screen-recorder-v1.0.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.screenshot",
@@ -884,9 +1318,13 @@
       "category": "media",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/screenshot-v1.0.1/plugins/screenshot/thumbnail.webp",
+        "sha256": "63667617ae4d07663cd751bfd883f00f709a934af0fcb4613319b196c40b64a2"
+      },
       "added_at": "2026-10-01T07:33:47.825338184Z",
-      "updated_at": "2026-10-01T07:33:47.825338184Z",
-      "version": "1.0.0",
+      "updated_at": "2026-10-14T14:38:10.386807817Z",
+      "version": "1.0.1",
       "protocol": {
         "major": 1,
         "minor": 10
@@ -900,17 +1338,46 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screenshot-v1.0.0/org.sysc.screenshot-1.0.0-linux-amd64.tar.gz",
-          "sha256": "c57d9023d25aef2b586328952829beb4752990d4c76f45f5fbf966bdc598626f",
-          "size": 2248836
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screenshot-v1.0.1/org.sysc.screenshot-1.0.1-linux-amd64.tar.gz",
+          "sha256": "32ba3044ae4ad0109618182833abee6a0ad1441db56063f2811adcf034efbbc2",
+          "size": 2249024
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screenshot-v1.0.0/org.sysc.screenshot-1.0.0-linux-arm64.tar.gz",
-          "sha256": "4cf158a0937b723ca883827f128866d56df78df74cd971f068645909f8640b94",
-          "size": 2077471
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screenshot-v1.0.1/org.sysc.screenshot-1.0.1-linux-arm64.tar.gz",
+          "sha256": "2df01e4378bcf18466dd4cfe8d2ceb720fb5a70f2712cad2e218ffe006553568",
+          "size": 2077387
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screenshot-v1.0.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screenshot-v1.0.1",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "protocol": {
+            "major": 1,
+            "minor": 10
+          },
+          "capabilities": [
+            "panels",
+            "screenshot"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screenshot-v1.0.0/org.sysc.screenshot-1.0.0-linux-amd64.tar.gz",
+              "sha256": "c57d9023d25aef2b586328952829beb4752990d4c76f45f5fbf966bdc598626f",
+              "size": 2248836
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/screenshot-v1.0.0/org.sysc.screenshot-1.0.0-linux-arm64.tar.gz",
+              "sha256": "4cf158a0937b723ca883827f128866d56df78df74cd971f068645909f8640b94",
+              "size": 2077471
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screenshot-v1.0.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.timer",
@@ -934,9 +1401,13 @@
       "category": "productivity",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/timer-v1.4.1/plugins/timer/thumbnail.webp",
+        "sha256": "68690c5a6cd1e6670f4f5b6b0d8166b718f6d2a4ef9f078693286757472ed971"
+      },
       "added_at": "2026-09-24T23:19:00.769137222Z",
-      "updated_at": "2026-09-24T23:19:00.769137222Z",
-      "version": "1.4.0",
+      "updated_at": "2026-10-14T14:38:10.716374657Z",
+      "version": "1.4.1",
       "protocol": {
         "major": 1,
         "minor": 3
@@ -952,17 +1423,93 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/timer-v1.4.0/org.sysc.timer-1.4.0-linux-amd64.tar.gz",
-          "sha256": "ec3d3bf795c8c8499cacf80608b2dad5daa703a8dd12c0f656df390565f706af",
-          "size": 2256517
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/timer-v1.4.1/org.sysc.timer-1.4.1-linux-amd64.tar.gz",
+          "sha256": "dce5ba15b2ed2638ddc51ff39a49c0139a2aad827180e275c96e510184a90fa3",
+          "size": 2287722
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/timer-v1.4.0/org.sysc.timer-1.4.0-linux-arm64.tar.gz",
-          "sha256": "7ff314d2e81e435e4c289db35cfca489f47ef16680eea745f2cf8415ee13d54c",
-          "size": 2084914
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/timer-v1.4.1/org.sysc.timer-1.4.1-linux-arm64.tar.gz",
+          "sha256": "fad5eaf8af60d71a4167441b837aa00efb87d6345a19427ace0f72721a3b50e6",
+          "size": 2115071
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/timer-v1.4.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/timer-v1.4.1",
+      "releases": [
+        {
+          "version": "1.4.0",
+          "protocol": {
+            "major": 1,
+            "minor": 3
+          },
+          "capabilities": [
+            "notifications",
+            "panels",
+            "settings",
+            "state"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/timer-v1.4.0/org.sysc.timer-1.4.0-linux-amd64.tar.gz",
+              "sha256": "ec3d3bf795c8c8499cacf80608b2dad5daa703a8dd12c0f656df390565f706af",
+              "size": 2256517
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/timer-v1.4.0/org.sysc.timer-1.4.0-linux-arm64.tar.gz",
+              "sha256": "7ff314d2e81e435e4c289db35cfca489f47ef16680eea745f2cf8415ee13d54c",
+              "size": 2084914
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/timer-v1.4.0"
+        }
+      ]
+    },
+    {
+      "id": "org.sysc.updates",
+      "name": "System Updates",
+      "author": "Nomadcxx",
+      "description": "Pending repo, AUR and Flatpak updates, a reboot-needed marker, and updates run in a terminal you can watch.",
+      "category": "system",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/updates-v0.1.0/plugins/updates/thumbnail.webp",
+        "sha256": "c22b140b2f5c4bbf954cf8727461b876886801740c8717370327703e4e3fa749"
+      },
+      "added_at": "2026-10-14T14:38:11.060012054Z",
+      "updated_at": "2026-10-14T14:38:11.060012054Z",
+      "version": "0.1.0",
+      "protocol": {
+        "major": 1,
+        "minor": 13
+      },
+      "capabilities": [
+        "notifications",
+        "panels",
+        "settings",
+        "state",
+        "open-url"
+      ],
+      "requires": {
+        "commands": [
+          "pacman"
+        ]
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/updates-v0.1.0/org.sysc.updates-0.1.0-linux-amd64.tar.gz",
+          "sha256": "e892bbbe657592a7675d81571c7431ba9a584562d18e2ae7f1805a2c4a230094",
+          "size": 2503005
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/updates-v0.1.0/org.sysc.updates-0.1.0-linux-arm64.tar.gz",
+          "sha256": "8bfe01cab882cb761b61a976999a89b792def1fb834d6c1a936e09431ca78630",
+          "size": 2315763
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/updates-v0.1.0"
     },
     {
       "id": "org.sysc.wallpaper-depth",
@@ -986,13 +1533,17 @@
       "category": "appearance",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/wallpaper-depth-v1.0.1/plugins/wallpaper-depth/thumbnail.webp",
+        "sha256": "caac38467cb684f1271ec38d2ed49e448b3e0436203eb657c98342ddb96fcf2f"
+      },
       "readme": {
-        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/wallpaper-depth-v1.0.0/plugins/wallpaper-depth/README.md",
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/wallpaper-depth-v1.0.1/plugins/wallpaper-depth/README.md",
         "sha256": "71af85f0c1e78c5e9c4b4ba9632b3133e2e6bfefae7f41b38821d786fe4efed6"
       },
       "added_at": "2026-09-29T04:04:44.823473836Z",
-      "updated_at": "2026-09-29T04:04:44.823473836Z",
-      "version": "1.0.0",
+      "updated_at": "2026-10-14T14:38:11.395941671Z",
+      "version": "1.0.1",
       "protocol": {
         "major": 1,
         "minor": 7
@@ -1010,17 +1561,50 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/wallpaper-depth-v1.0.0/org.sysc.wallpaper-depth-1.0.0-linux-amd64.tar.gz",
-          "sha256": "9e5c2c63f2974208e3f3739d4400c650e7dbe2ddcffe81b272d1acef0e5afae5",
-          "size": 2335414
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/wallpaper-depth-v1.0.1/org.sysc.wallpaper-depth-1.0.1-linux-amd64.tar.gz",
+          "sha256": "9728f94bab8cf49e9f39302218a183a40369f3d00e687aa67f465d6844407420",
+          "size": 2340565
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/wallpaper-depth-v1.0.0/org.sysc.wallpaper-depth-1.0.0-linux-arm64.tar.gz",
-          "sha256": "4847ae8b89bcaab7e59138d7dfcb3afd851c84e108e5ceddb928361afcf49b42",
-          "size": 2158251
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/wallpaper-depth-v1.0.1/org.sysc.wallpaper-depth-1.0.1-linux-arm64.tar.gz",
+          "sha256": "851b1adacb79a346b59b7a21babb2457b0643eb7c563f91a0fda94b548777902",
+          "size": 2163221
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/wallpaper-depth-v1.0.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/wallpaper-depth-v1.0.1",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "protocol": {
+            "major": 1,
+            "minor": 7
+          },
+          "capabilities": [
+            "panels",
+            "settings",
+            "state",
+            "wallpaper"
+          ],
+          "requires": {
+            "commands": [
+              "python3"
+            ]
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/wallpaper-depth-v1.0.0/org.sysc.wallpaper-depth-1.0.0-linux-amd64.tar.gz",
+              "sha256": "9e5c2c63f2974208e3f3739d4400c650e7dbe2ddcffe81b272d1acef0e5afae5",
+              "size": 2335414
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/wallpaper-depth-v1.0.0/org.sysc.wallpaper-depth-1.0.0-linux-arm64.tar.gz",
+              "sha256": "4847ae8b89bcaab7e59138d7dfcb3afd851c84e108e5ceddb928361afcf49b42",
+              "size": 2158251
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/wallpaper-depth-v1.0.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.world-clock",
@@ -1044,9 +1628,13 @@
       "category": "utilities",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/world-clock-v2.0.1/plugins/world-clock/thumbnail.webp",
+        "sha256": "c2e70025c0e92e8eaefece46d22c73f42393d9b8a1121bd8b0d238644d4857f8"
+      },
       "added_at": "2026-09-29T04:04:45.91999474Z",
-      "updated_at": "2026-09-29T04:04:45.91999474Z",
-      "version": "2.0.0",
+      "updated_at": "2026-10-14T14:38:11.533980072Z",
+      "version": "2.0.1",
       "protocol": {
         "major": 1,
         "minor": 7
@@ -1061,17 +1649,47 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/world-clock-v2.0.0/org.sysc.world-clock-2.0.0-linux-amd64.tar.gz",
-          "sha256": "be1efc72da46253bb50f9052359cf34ec40b3a44931250b7761ed43eeb3ed11f",
-          "size": 2195547
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/world-clock-v2.0.1/org.sysc.world-clock-2.0.1-linux-amd64.tar.gz",
+          "sha256": "bddb9a13d84d7733f2cb1ff7a2a162856319497899494fabae198574efba4215",
+          "size": 2222022
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/world-clock-v2.0.0/org.sysc.world-clock-2.0.0-linux-arm64.tar.gz",
-          "sha256": "87eda702855cc4a0fa4d445ee7fedc92b2f17bb371287956fd2443764ab5fccb",
-          "size": 2030354
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/world-clock-v2.0.1/org.sysc.world-clock-2.0.1-linux-arm64.tar.gz",
+          "sha256": "7b4c92011968852b5917a21fecb7f7d56328fc4c9bf3f05273c44c6d29de7ac8",
+          "size": 2055241
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/world-clock-v2.0.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/world-clock-v2.0.1",
+      "releases": [
+        {
+          "version": "2.0.0",
+          "protocol": {
+            "major": 1,
+            "minor": 7
+          },
+          "capabilities": [
+            "panels",
+            "settings",
+            "state"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/world-clock-v2.0.0/org.sysc.world-clock-2.0.0-linux-amd64.tar.gz",
+              "sha256": "be1efc72da46253bb50f9052359cf34ec40b3a44931250b7761ed43eeb3ed11f",
+              "size": 2195547
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/world-clock-v2.0.0/org.sysc.world-clock-2.0.0-linux-arm64.tar.gz",
+              "sha256": "87eda702855cc4a0fa4d445ee7fedc92b2f17bb371287956fd2443764ab5fccb",
+              "size": 2030354
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/world-clock-v2.0.0"
+        }
+      ]
     }
   ]
 }
