@@ -175,10 +175,10 @@ func isCore(name string) bool {
 		return false
 	}
 	switch name {
-	case "linux", "linux-firmware", "nvidia", "systemd", "glibc", "mesa", "amd-ucode", "intel-ucode":
+	case "linux", "nvidia", "systemd", "glibc", "mesa", "amd-ucode", "intel-ucode":
 		return true
 	}
-	for _, prefix := range []string{"linux-lts", "linux-zen", "linux-hardened", "linux-rt", "linux-cachyos", "nvidia-"} {
+	for _, prefix := range []string{"linux-lts", "linux-zen", "linux-hardened", "linux-rt", "linux-cachyos", "linux-firmware", "nvidia-"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
 		}

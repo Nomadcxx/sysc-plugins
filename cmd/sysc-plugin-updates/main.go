@@ -384,17 +384,20 @@ func updateCommand(cfg settings) string {
 	return "sudo pacman -Syu"
 }
 
-// Post-update refresh budgets. A run is over when the pacman database lock
-// is gone and the log has been quiet for a settle window: a hand-off launcher
-// exits before pacman even starts, so its exit alone says nothing.
+// Post-update refresh budgets. A run looks settled when the pacman database
+// lock is gone and the log has been quiet for a settle window: a hand-off
+// launcher exits before pacman even starts, so its exit alone says nothing.
+// The watcher itself ends at the budget, because an AUR helper builds
+// packages between its two pacman transactions with no lock and no log
+// writes, and only the helper's install phase proves the run finished.
 const (
 	settleWindow     = 5 * time.Second
 	launcherGrace    = time.Minute
 	updateWaitBudget = 2 * time.Hour
 )
 
-// waitForTerminal re-checks once the upgrade has settled, so an update run in
-// a terminal that hands off to a server cannot leave the badge on the
+// waitForTerminal re-checks after the upgrade settles, so an update run in a
+// terminal that hands off to a server cannot leave the badge on the
 // pre-update count until the next interval.
 func waitForTerminal(cmd *exec.Cmd, onUpdate, onExit func()) {
 	done := make(chan struct{})
@@ -407,11 +410,12 @@ func waitForTerminal(cmd *exec.Cmd, onUpdate, onExit func()) {
 	waitForTerminalWith(done, pacmanLogMtime, pacmanLocked, ticker.C, time.Now, onUpdate, onExit)
 }
 
-// waitForTerminalWith polls the log and the database lock as activity, and
-// refreshes once the activity has settled, at the later of that settling and
-// the terminal exiting. When the terminal is gone and nothing ever moved, it
-// refreshes after launcherGrace, which covers a cancel at the sudo prompt and
-// a custom update command. The budget bounds the wait either way.
+// waitForTerminalWith refreshes once per settled episode: activity in the log
+// or the lock, then quiet. onExit releases the run guard once the run looks
+// over, at the first settled episode after the terminal exited, or when
+// nothing ever moved and launcherGrace passed (a cancel at the prompt, or a
+// custom update command that never touches pacman). The watcher keeps polling
+// until the budget so a later phase still refreshes the badge.
 func waitForTerminalWith(done <-chan struct{}, mtime func() time.Time, locked func() bool, ticks <-chan time.Time, now func() time.Time, onUpdate, onExit func()) {
 	start := now()
 	lastMtime := mtime()
@@ -420,6 +424,13 @@ func waitForTerminalWith(done <-chan struct{}, mtime func() time.Time, locked fu
 	exited := false
 	var exitedAt time.Time
 	refreshed := false
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			onExit()
+		}
+	}
 	for {
 		select {
 		case <-done:
@@ -427,31 +438,25 @@ func waitForTerminalWith(done <-chan struct{}, mtime func() time.Time, locked fu
 		case <-ticks:
 		}
 		if m := mtime(); !m.IsZero() && m != lastMtime {
-			lastMtime, lastActivity, active = m, now(), true
+			lastMtime, lastActivity, active, refreshed = m, now(), true, false
 		}
 		if locked() {
-			lastActivity, active = now(), true
+			lastActivity, active, refreshed = now(), true, false
 		}
-		switch {
-		case active && now().Sub(lastActivity) >= settleWindow:
-			if !refreshed {
-				refreshed = true
-				onUpdate()
-			}
-			if exited {
-				onExit()
-				return
-			}
-		case exited && !active && now().Sub(exitedAt) >= launcherGrace:
+		quiet := now().Sub(lastActivity) >= settleWindow
+		idle := exited && !active && now().Sub(exitedAt) >= launcherGrace
+		if (active && quiet || idle) && !refreshed {
+			refreshed = true
 			onUpdate()
-			onExit()
-			return
+		}
+		if idle || (exited && quiet && refreshed) {
+			release()
 		}
 		if now().Sub(start) >= updateWaitBudget {
 			if !refreshed {
 				onUpdate()
 			}
-			onExit()
+			release()
 			return
 		}
 	}

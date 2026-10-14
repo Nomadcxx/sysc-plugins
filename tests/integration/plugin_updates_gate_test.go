@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	"github.com/Nomadcxx/sysc-shell/plugin/lint"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -170,6 +171,7 @@ func startUpdatesGate(t *testing.T, logPath string, tools ...string) *updatesGat
 				default:
 				}
 				reply := &v1.HostReply{ID: m.ID, OK: true}
+				var apply func()
 				switch m.Call {
 				case v1.CallStateGet:
 					var params v1.StateGetParams
@@ -182,20 +184,31 @@ func startUpdatesGate(t *testing.T, logPath string, tools ...string) *updatesGat
 				case v1.CallStateSet:
 					var params v1.StateSetParams
 					if json.Unmarshal(m.Params, &params) == nil {
-						h.mu.Lock()
-						h.states[params.Key] = append(json.RawMessage(nil), params.Value...)
-						h.mu.Unlock()
+						apply = func() {
+							h.mu.Lock()
+							h.states[params.Key] = append(json.RawMessage(nil), params.Value...)
+							h.mu.Unlock()
+						}
 					}
 				}
 				h.mu.Lock()
 				held := h.holds[m.Call]
 				h.mu.Unlock()
 				if held != nil {
+					// A withheld reply means the host has the call but has not
+					// applied or answered it, which is the state the plugin
+					// sees as a timeout.
 					go func() {
 						<-held
+						if apply != nil {
+							apply()
+						}
 						_ = h.send(reply)
 					}()
 					continue
+				}
+				if apply != nil {
+					apply()
 				}
 				_ = h.send(reply)
 			case *v1.ViewSnapshot:
@@ -631,6 +644,7 @@ func TestPluginUpdatesKeepsPublishingWhileAReplyIsHeld(t *testing.T) {
 	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "updates-refresh") != nil })
 
 	release := h.withhold(v1.CallStateSet)
+	t.Cleanup(release)
 	// One click starts a check whose save the host will not answer. No tree
 	// wait follows the click, on purpose: the state.set has to be in flight
 	// before the flood, or the reply the plugin is waiting on would already
@@ -645,16 +659,18 @@ func TestPluginUpdatesKeepsPublishingWhileAReplyIsHeld(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Every resync must come back as a snapshot well inside the plugin's 5s
-	// host call timeout, which is how long a loop blocked on the held reply
-	// would stay silent.
-	h.waitSnapshots("panel-1", before+flood, 3*time.Second)
+	// Every resync must come back as a snapshot well inside the plugin's host
+	// call timeout, which is how long a loop blocked on the held reply would
+	// stay silent.
+	h.waitSnapshots("panel-1", before+flood, 3*hostcall.Default/5)
 
 	release()
 	h.setting(map[string]any{"aur_helper": "off"})
 	h.waitView("panel-1", func(root *v1.Node) bool {
 		return findID(root, "updates-row-aur-paru-bin") == nil && findID(root, "updates-row-repo-linux") != nil
 	})
+	// The held value is only applied at release, so a pass here means the save
+	// that followed the settings change reached the host as well.
 	h.waitState("last", func(raw json.RawMessage) bool {
 		return strings.Contains(string(raw), `"linux"`) && !strings.Contains(string(raw), "paru-bin")
 	})

@@ -18,25 +18,32 @@ type waitStep struct {
 }
 
 type waitScript struct {
+	t          *testing.T
 	steps      chan waitStep
 	ticks      chan time.Time
 	done       chan struct{}
-	exited     chan struct{}
+	finished   chan struct{}
 	clock      atomic.Int64
 	locked     atomic.Bool
 	updates    atomic.Int32
 	lastUpdate atomic.Int64
+	releases   atomic.Int32
 }
 
-func startWaitScript(base, mtime time.Time) *waitScript {
+func startWaitScript(t *testing.T, base, mtime time.Time) *waitScript {
+	t.Helper()
 	s := &waitScript{
-		steps:  make(chan waitStep),
-		ticks:  make(chan time.Time),
-		done:   make(chan struct{}),
-		exited: make(chan struct{}),
+		t:        t,
+		steps:    make(chan waitStep),
+		ticks:    make(chan time.Time),
+		done:     make(chan struct{}),
+		finished: make(chan struct{}),
 	}
 	s.clock.Store(base.UnixNano())
-	go waitForTerminalWith(s.done, s.mtimeAt, s.lockHeld, s.ticks, s.now, s.onUpdate, func() { close(s.exited) })
+	go func() {
+		waitForTerminalWith(s.done, s.mtimeAt, s.lockHeld, s.ticks, s.now, s.onUpdate, func() { s.releases.Add(1) })
+		close(s.finished)
+	}()
 	s.serve(waitStep{at: base, mtime: mtime})
 	return s
 }
@@ -59,9 +66,15 @@ func (s *waitScript) onUpdate() {
 	s.lastUpdate.Store(s.now().UnixNano())
 }
 
-// poll wakes the waiter for one tick and hands it the world to observe.
+// poll wakes the waiter for one tick and hands it the world to observe. The
+// sends are bounded so a waiter that stops polling fails the test instead of
+// hanging it.
 func (s *waitScript) poll(step waitStep) {
-	s.ticks <- step.at
+	select {
+	case s.ticks <- step.at:
+	case <-time.After(2 * time.Second):
+		s.t.Fatal("waiter stopped polling before the script ended")
+	}
 	s.serve(step)
 }
 
@@ -72,22 +85,38 @@ func (s *waitScript) exit(at, mtime time.Time) {
 	s.serve(waitStep{at: at, mtime: mtime})
 }
 
-func (s *waitScript) serve(step waitStep) { s.steps <- step }
+// driveToBudget polls in ten-minute strides to the two-hour budget, so every
+// script ends with the watcher actually stopping.
+func (s *waitScript) driveToBudget(base, from, mtime time.Time, locked bool) {
+	for at := from; !at.After(base.Add(updateWaitBudget)); at = at.Add(10 * time.Minute) {
+		s.poll(waitStep{at: at, mtime: mtime, locked: locked})
+	}
+}
 
-// TestWaitForTerminalRefreshesOnceAfterTheUpgradeSettles walks the cases the
-// post-update refresh has to survive: a hand-off launcher exits before pacman
-// starts, the log moves while the lock is held, a run that is cancelled or
-// ignores the log, and one that never finishes.
-func TestWaitForTerminalRefreshesOnceAfterTheUpgradeSettles(t *testing.T) {
+func (s *waitScript) serve(step waitStep) {
+	select {
+	case s.steps <- step:
+	case <-time.After(2 * time.Second):
+		s.t.Fatal("waiter stopped polling before the script ended")
+	}
+}
+
+// TestWaitForTerminalRefreshesOncePerSettledEpisode walks the cases the
+// post-update refresh has to survive: a hand-off launcher that exits before
+// pacman starts, a transaction that starts only after the launcher grace, a
+// run that is cancelled or ignores the log, and one that never finishes. It
+// also pins that the run guard is released exactly once, however the run ends.
+func TestWaitForTerminalRefreshesOncePerSettledEpisode(t *testing.T) {
 	const step = 5 * time.Second
 	base := time.Unix(1_700_000_000, 0)
 	quiet := base.Add(-time.Hour)
 
 	cases := []struct {
-		name       string
-		script     func(*waitScript, time.Time)
-		wantAfter  time.Duration
-		wantAtMost time.Duration
+		name          string
+		script        func(*waitScript, time.Time)
+		wantRefreshes int32
+		wantAfter     time.Duration
+		wantAtMost    time.Duration
 	}{
 		{
 			name: "the lock clears long after the log moved",
@@ -96,9 +125,9 @@ func TestWaitForTerminalRefreshesOnceAfterTheUpgradeSettles(t *testing.T) {
 				s.poll(waitStep{at: base.Add(step), mtime: logged, locked: true})
 				s.poll(waitStep{at: base.Add(2 * step), mtime: logged, locked: true})
 				s.poll(waitStep{at: base.Add(3 * step), mtime: logged, locked: false})
-				s.exit(base.Add(3*step), logged)
+				s.driveToBudget(base, base.Add(10*time.Minute), logged, false)
 			},
-			wantAfter: 3 * step, wantAtMost: 3 * step,
+			wantRefreshes: 1, wantAfter: 3 * step, wantAtMost: 3 * step,
 		},
 		{
 			name: "the launcher exits before pacman starts",
@@ -109,8 +138,9 @@ func TestWaitForTerminalRefreshesOnceAfterTheUpgradeSettles(t *testing.T) {
 				s.poll(waitStep{at: base.Add(2 * step), mtime: logged, locked: true})
 				s.poll(waitStep{at: base.Add(3 * step), mtime: logged, locked: true})
 				s.poll(waitStep{at: base.Add(4 * step), mtime: logged, locked: false})
+				s.driveToBudget(base, base.Add(10*time.Minute), logged, false)
 			},
-			wantAfter: 4 * step, wantAtMost: 4 * step,
+			wantRefreshes: 1, wantAfter: 4 * step, wantAtMost: 4 * step,
 		},
 		{
 			name: "nothing ever moves",
@@ -119,8 +149,24 @@ func TestWaitForTerminalRefreshesOnceAfterTheUpgradeSettles(t *testing.T) {
 				for i := 1; i <= int(launcherGrace/step); i++ {
 					s.poll(waitStep{at: base.Add(time.Duration(i) * step), mtime: quiet})
 				}
+				s.driveToBudget(base, base.Add(10*time.Minute), quiet, false)
 			},
-			wantAfter: launcherGrace, wantAtMost: launcherGrace,
+			wantRefreshes: 1, wantAfter: launcherGrace, wantAtMost: launcherGrace,
+		},
+		{
+			name: "the transaction starts after the grace",
+			script: func(s *waitScript, base time.Time) {
+				s.exit(base, quiet)
+				for i := 1; i <= int(launcherGrace/step); i++ {
+					s.poll(waitStep{at: base.Add(time.Duration(i) * step), mtime: quiet})
+				}
+				logged := base.Add(2 * time.Minute)
+				s.poll(waitStep{at: base.Add(2 * time.Minute), mtime: logged, locked: true})
+				s.poll(waitStep{at: base.Add(150 * time.Second), mtime: logged, locked: true})
+				s.poll(waitStep{at: base.Add(3 * time.Minute), mtime: logged, locked: false})
+				s.driveToBudget(base, base.Add(10*time.Minute), logged, false)
+			},
+			wantRefreshes: 2, wantAfter: 3 * time.Minute, wantAtMost: 3 * time.Minute,
 		},
 		{
 			name: "the lock is never released",
@@ -131,24 +177,27 @@ func TestWaitForTerminalRefreshesOnceAfterTheUpgradeSettles(t *testing.T) {
 					s.poll(waitStep{at: base.Add(time.Duration(i) * stride), mtime: logged, locked: true})
 				}
 			},
-			wantAfter: updateWaitBudget, wantAtMost: updateWaitBudget,
+			wantRefreshes: 1, wantAfter: updateWaitBudget, wantAtMost: updateWaitBudget,
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := startWaitScript(base, quiet)
+			s := startWaitScript(t, base, quiet)
 			c.script(s, base)
 			select {
-			case <-s.exited:
+			case <-s.finished:
 			case <-time.After(2 * time.Second):
 				t.Fatal("waiter did not finish")
 			}
-			if got := s.updates.Load(); got != 1 {
-				t.Fatalf("refreshes = %d, want exactly one", got)
+			if got := s.updates.Load(); got != c.wantRefreshes {
+				t.Fatalf("refreshes = %d, want %d", got, c.wantRefreshes)
+			}
+			if got := s.releases.Load(); got != 1 {
+				t.Fatalf("run guard released %d times, want exactly one", got)
 			}
 			got := time.Unix(0, s.lastUpdate.Load()).Sub(base)
 			if got < c.wantAfter || got > c.wantAtMost {
-				t.Fatalf("refresh happened at +%s, want between +%s and +%s", got, c.wantAfter, c.wantAtMost)
+				t.Fatalf("last refresh at +%s, want between +%s and +%s", got, c.wantAfter, c.wantAtMost)
 			}
 		})
 	}
