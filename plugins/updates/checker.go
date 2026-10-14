@@ -96,7 +96,9 @@ func CheckAUR(ctx context.Context, run Runner, helper string) ([]Update, error) 
 	return parseArrowLines(stdout, SourceAUR), nil
 }
 
-// CheckFlatpak runs flatpak remote-ls --updates.
+// CheckFlatpak runs flatpak remote-ls --updates. The columns are
+// tab-separated and the version is often empty, in particular for runtimes
+// such as org.gnome.Platform, so a ref without one still counts.
 func CheckFlatpak(ctx context.Context, run Runner) ([]Update, error) {
 	ctx, cancel := context.WithTimeout(ctx, FlatpakTimeout)
 	defer cancel()
@@ -109,11 +111,18 @@ func CheckFlatpak(ctx context.Context, run Runner) ([]Update, error) {
 	}
 	var out []Update
 	for _, line := range strings.Split(string(stdout), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 || !strings.Contains(fields[0], ".") {
+		columns := strings.SplitN(line, "\t", 2)
+		name := strings.TrimSpace(columns[0])
+		version := ""
+		if len(columns) == 2 {
+			version = strings.TrimSpace(columns[1])
+		} else if fields := strings.Fields(name); len(fields) > 1 {
+			name, version = fields[0], fields[1]
+		}
+		if name == "" || !strings.Contains(name, ".") {
 			continue
 		}
-		out = append(out, Update{Name: fields[0], New: fields[1], Source: SourceFlatpak})
+		out = append(out, Update{Name: name, New: version, Source: SourceFlatpak})
 	}
 	return out, nil
 }
@@ -158,13 +167,21 @@ func failureReason(stderr []byte, exit int) string {
 }
 
 // isCore reports the package families shown with the core tag in the panel.
+// Kernel headers and docs share the linux prefix but never need a reboot, so
+// they stay out; the kernel packages, the firmware and the graphics stack are
+// in.
 func isCore(name string) bool {
-	if name == "linux" || strings.HasPrefix(name, "linux-") || name == "nvidia" || strings.HasPrefix(name, "nvidia-") {
-		return true
+	if name == "" || strings.HasSuffix(name, "-headers") || strings.HasSuffix(name, "-docs") {
+		return false
 	}
 	switch name {
-	case "systemd", "glibc", "mesa", "amd-ucode", "intel-ucode":
+	case "linux", "linux-firmware", "nvidia", "systemd", "glibc", "mesa", "amd-ucode", "intel-ucode":
 		return true
+	}
+	for _, prefix := range []string{"linux-lts", "linux-zen", "linux-hardened", "linux-rt", "linux-cachyos", "nvidia-"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
 	}
 	return false
 }

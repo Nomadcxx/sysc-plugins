@@ -158,9 +158,10 @@ func panelGroup(name string, updates []Update, source Source) *v1.Node {
 
 func updateRow(update Update) *v1.Node {
 	text := update.Name
-	if update.Old != "" {
+	switch {
+	case update.Old != "":
 		text += "  " + update.Old + " → " + update.New
-	} else {
+	case update.New != "":
 		text += "  → " + update.New
 	}
 	children := []*v1.Node{{Kind: v1.KindText, Text: compactDisplayText(text, 40)}}

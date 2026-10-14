@@ -78,6 +78,8 @@ type updatesGateHost struct {
 	generation map[string]uint32
 	wake       chan struct{}
 	calls      chan updatesCall
+	snapshots  map[string]int
+	holds      map[v1.CallKind]chan struct{}
 	states     map[string]json.RawMessage
 	stdin      io.WriteCloser
 	cmd        *exec.Cmd
@@ -141,8 +143,10 @@ func startUpdatesGate(t *testing.T, logPath string, tools ...string) *updatesGat
 		t: t, enc: v1.NewEncoder(stdin), stdin: stdin, cmd: cmd,
 		roots: map[string]*v1.Node{}, revs: map[string]uint64{}, slots: map[string]viewSlot{},
 		outputs: map[string]string{}, generation: map[string]uint32{},
-		wake: make(chan struct{}, 1), calls: make(chan updatesCall, 8), states: map[string]json.RawMessage{},
-		done: make(chan error, 1),
+		wake: make(chan struct{}, 1), calls: make(chan updatesCall, 8),
+		snapshots: map[string]int{}, holds: map[v1.CallKind]chan struct{}{},
+		states: map[string]json.RawMessage{},
+		done:   make(chan error, 1),
 	}
 	if initial := os.Getenv("SYSC_FAKE_UPDATES_STATE"); initial != "" {
 		h.states["last"] = json.RawMessage(initial)
@@ -183,12 +187,23 @@ func startUpdatesGate(t *testing.T, logPath string, tools ...string) *updatesGat
 						h.mu.Unlock()
 					}
 				}
+				h.mu.Lock()
+				held := h.holds[m.Call]
+				h.mu.Unlock()
+				if held != nil {
+					go func() {
+						<-held
+						_ = h.send(reply)
+					}()
+					continue
+				}
 				_ = h.send(reply)
 			case *v1.ViewSnapshot:
 				h.mu.Lock()
 				slot, monitored := h.slots[m.ViewID]
 				h.roots[m.ViewID] = m.Root
 				h.revs[m.ViewID] = m.Revision
+				h.snapshots[m.ViewID]++
 				h.mu.Unlock()
 				if monitored {
 					checkFits(h.t, slot, m.Root)
@@ -286,6 +301,64 @@ func (h *updatesGateHost) waitCall(kind v1.CallKind) updatesCall {
 			return updatesCall{}
 		}
 	}
+}
+
+// withhold stops the host from answering one call kind until the returned
+// release runs. The call itself still arrives on h.calls, so a test can see
+// the plugin made it while the reply is pending.
+func (h *updatesGateHost) withhold(kind v1.CallKind) func() {
+	h.mu.Lock()
+	held := make(chan struct{})
+	h.holds[kind] = held
+	h.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			h.mu.Lock()
+			delete(h.holds, kind)
+			h.mu.Unlock()
+			close(held)
+		})
+	}
+}
+
+// snapshotCount reads how many snapshots a view has produced so far.
+func (h *updatesGateHost) snapshotCount(viewID string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.snapshots[viewID]
+}
+
+// waitSnapshots requires the view to reach count snapshots within within,
+// which is how a test tells a flowing event loop from a stalled one.
+func (h *updatesGateHost) waitSnapshots(viewID string, count int, within time.Duration) {
+	h.t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if h.snapshotCount(viewID) >= count {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	h.t.Fatalf("view %s produced %d snapshots, want %d within %s", viewID, h.snapshotCount(viewID), count, within)
+}
+
+// waitState waits for the stored value of a key to satisfy match, because a
+// plugin that saves through the state saver writes after the check lands.
+func (h *updatesGateHost) waitState(key string, match func(json.RawMessage) bool) {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var raw json.RawMessage
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		raw = append(json.RawMessage(nil), h.states[key]...)
+		h.mu.Unlock()
+		if match(raw) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	h.t.Fatalf("state %q never matched; last value %s", key, raw)
 }
 
 // clickUntil retries a click until the panel tree matches.
@@ -529,21 +602,62 @@ func TestPluginUpdatesRestoresAndPersistsStateOverTheProtocol(t *testing.T) {
 		return findID(root, "updates-row-repo-linux") != nil
 	})
 
-	h.mu.Lock()
-	raw := append(json.RawMessage(nil), h.states["last"]...)
-	h.mu.Unlock()
-	var saved struct {
-		Updates []struct {
-			Name string `json:"name"`
-		} `json:"updates"`
-		CheckedAt time.Time `json:"checked_at"`
+	h.waitState("last", func(raw json.RawMessage) bool {
+		var saved struct {
+			Updates []struct {
+				Name string `json:"name"`
+			} `json:"updates"`
+			CheckedAt time.Time `json:"checked_at"`
+		}
+		if err := json.Unmarshal(raw, &saved); err != nil {
+			return false
+		}
+		return len(saved.Updates) > 0 && saved.Updates[0].Name == "linux" && !saved.CheckedAt.IsZero()
+	})
+	if err := h.stop(); err != nil {
+		t.Fatalf("plugin shutdown: %v", err)
 	}
-	if err := json.Unmarshal(raw, &saved); err != nil {
-		t.Fatalf("persisted state %s: %v", raw, err)
+}
+
+// TestPluginUpdatesKeepsPublishingWhileAReplyIsHeld covers the stall #130
+// found: a host call made off the event loop must not leave the loop waiting
+// on a lock that caller holds, or the snapshots stop and the reply that does
+// arrive is dropped when the call times out.
+func TestPluginUpdatesKeepsPublishingWhileAReplyIsHeld(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "updates-argv.jsonl")
+	h := startUpdatesGate(t, logPath, "checkupdates", "paru", "flatpak")
+	panelW, panelH := updatesPanelSize(t)
+	h.open("panel-1", v1.ViewPanel, "panel", viewSlot{v1.ViewPanel, panelW, panelH}, "placement-1", "DP-1", 7)
+	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "updates-refresh") != nil })
+
+	release := h.withhold(v1.CallStateSet)
+	// One click starts a check whose save the host will not answer. No tree
+	// wait follows the click, on purpose: the state.set has to be in flight
+	// before the flood, or the reply the plugin is waiting on would already
+	// have timed out and the test would prove nothing.
+	h.click("panel-1", "updates-refresh")
+	h.waitCall(v1.CallStateSet)
+
+	before := h.snapshotCount("panel-1")
+	const flood = 12
+	for i := 0; i < flood; i++ {
+		if err := h.send(&v1.ViewResync{Type: v1.TypeViewResync, ViewID: "panel-1"}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if len(saved.Updates) == 0 || saved.Updates[0].Name != "linux" || saved.CheckedAt.IsZero() {
-		t.Fatalf("state.set did not store the refreshed result: %+v", saved)
-	}
+	// Every resync must come back as a snapshot well inside the plugin's 5s
+	// host call timeout, which is how long a loop blocked on the held reply
+	// would stay silent.
+	h.waitSnapshots("panel-1", before+flood, 3*time.Second)
+
+	release()
+	h.setting(map[string]any{"aur_helper": "off"})
+	h.waitView("panel-1", func(root *v1.Node) bool {
+		return findID(root, "updates-row-aur-paru-bin") == nil && findID(root, "updates-row-repo-linux") != nil
+	})
+	h.waitState("last", func(raw json.RawMessage) bool {
+		return strings.Contains(string(raw), `"linux"`) && !strings.Contains(string(raw), "paru-bin")
+	})
 	if err := h.stop(); err != nil {
 		t.Fatalf("plugin shutdown: %v", err)
 	}
