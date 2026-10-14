@@ -289,6 +289,7 @@ var loopCallPlugins = []string{
 	"sysc-plugin-aiusage",
 	"sysc-plugin-mini-docker",
 	"sysc-plugin-github-notifications",
+	"sysc-plugin-updates",
 }
 
 func TestEventLoopCallsGoThroughHelper(t *testing.T) {

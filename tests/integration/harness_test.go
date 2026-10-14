@@ -30,6 +30,9 @@ func TestMain(m *testing.M) {
 	if sock := os.Getenv("SYSC_FAKE_MOONBIT_PANEL"); sock != "" {
 		os.Exit(runGateFakeMoonbitPanel(sock))
 	}
+	if os.Getenv("SYSC_FAKE_UPDATES") == "1" {
+		os.Exit(runGateFakeUpdates())
+	}
 	os.Exit(m.Run())
 }
 

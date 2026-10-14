@@ -77,6 +77,12 @@
     "license": "MIT",
     "homepage": "https://github.com/Nomadcxx/sysc-plugins"
   },
+  "org.sysc.updates": {
+    "category": "system",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
   "org.sysc.wallpaper-depth": {
     "category": "appearance",
     "author": "Nomadcxx",
