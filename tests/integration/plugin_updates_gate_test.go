@@ -662,7 +662,7 @@ func TestPluginUpdatesKeepsPublishingWhileAReplyIsHeld(t *testing.T) {
 	// Every resync must come back as a snapshot well inside the plugin's host
 	// call timeout, which is how long a loop blocked on the held reply would
 	// stay silent.
-	h.waitSnapshots("panel-1", before+flood, 3*hostcall.Default/5)
+	h.waitSnapshots("panel-1", before+flood, 3*hostcall.Timeout()/5)
 
 	release()
 	h.setting(map[string]any{"aur_helper": "off"})
