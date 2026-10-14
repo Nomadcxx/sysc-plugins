@@ -130,6 +130,25 @@ func TestCheckFlatpak(t *testing.T) {
 	}
 }
 
+func TestCheckFlatpakCountsRefsWithoutAVersion(t *testing.T) {
+	run := runnerWith(sample(t, "flatpak-noversion.txt"), nil, 0, nil)
+	updates, err := CheckFlatpak(context.Background(), run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 4 {
+		t.Fatalf("got %d updates, want 4: %+v", len(updates), updates)
+	}
+	for i, want := range []string{"org.gnome.Platform", "org.freedesktop.Platform.GL.default", "org.gnome.Platform.Locale"} {
+		if updates[i].Name != want || updates[i].New != "" {
+			t.Fatalf("runtime update %d = %+v, want the bare name and no version", i, updates[i])
+		}
+	}
+	if last := updates[3]; last.Name != "com.example.App" || last.New != "1.2" {
+		t.Fatalf("last update = %+v", last)
+	}
+}
+
 func TestParseArrowLinesSkipsMalformed(t *testing.T) {
 	updates := parseArrowLines([]byte("garbage\nfoo 1.0-1 -> 2.0-1\nnot an arrow\n"), SourceRepo)
 	if len(updates) != 1 || updates[0].Name != "foo" || updates[0].New != "2.0-1" {
@@ -139,24 +158,34 @@ func TestParseArrowLinesSkipsMalformed(t *testing.T) {
 
 func TestIsCore(t *testing.T) {
 	for name, want := range map[string]bool{
-		"linux":             true,
-		"linux-lts":         true,
-		"linux-zen":         true,
-		"linux-hardened":    true,
-		"linux-rt":          true,
-		"linux-headers":     true,
-		"linux-api-headers": true,
-		"nvidia-utils":      true,
-		"nvidia-dkms":       true,
-		"nvidia-open":       true,
-		"systemd":           true,
-		"glibc":             true,
-		"mesa":              true,
-		"amd-ucode":         true,
-		"intel-ucode":       true,
-		"firefox":           false,
-		"bash":              false,
-		"vim":               false,
+		"linux":                 true,
+		"linux-lts":             true,
+		"linux-zen":             true,
+		"linux-hardened":        true,
+		"linux-rt":              true,
+		"linux-rt-lts":          true,
+		"linux-cachyos":         true,
+		"linux-firmware":        true,
+		"linux-firmware-whence": true,
+		"linux-firmware-amdgpu": true,
+		"linux-headers":         false,
+		"linux-lts-headers":     false,
+		"linux-zen-headers":     false,
+		"linux-api-headers":     false,
+		"linux-docs":            false,
+		"nvidia":                true,
+		"nvidia-utils":          true,
+		"nvidia-dkms":           true,
+		"nvidia-open":           true,
+		"systemd":               true,
+		"glibc":                 true,
+		"mesa":                  true,
+		"amd-ucode":             true,
+		"intel-ucode":           true,
+		"firefox":               false,
+		"bash":                  false,
+		"vim":                   false,
+		"":                      false,
 	} {
 		if got := isCore(name); got != want {
 			t.Errorf("isCore(%q) = %v, want %v", name, got, want)

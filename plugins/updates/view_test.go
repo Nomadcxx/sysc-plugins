@@ -133,3 +133,13 @@ func TestUpdateRowBoundsLongPackageIDs(t *testing.T) {
 		t.Fatalf("different long package names collided at %q", first.ID)
 	}
 }
+
+func TestUpdateRowShowsTheBareNameWithoutAVersion(t *testing.T) {
+	row := updateRow(Update{Name: "org.gnome.Platform", Source: SourceFlatpak})
+	if len(row.Children) == 0 {
+		t.Fatal("row has no text child")
+	}
+	if got := row.Children[0].Text; got != "org.gnome.Platform" {
+		t.Fatalf("row text = %q, want the bare name with no dangling arrow", got)
+	}
+}

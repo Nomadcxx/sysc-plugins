@@ -72,10 +72,13 @@ func run(in *os.File, out *os.File) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	saves := hostcall.NewStateSaver(ctx, c)
+	defer func() {
+		cancel()
+		saves.Flush(time.Second)
+	}()
 
 	var mu sync.Mutex
-	var sendMu sync.Mutex
 
 	cfg := defaultSettings()
 	svc := updates.NewService(updates.Config{AURHelper: cfg.aurHelper, IncludeFlatpak: cfg.includeFlatpak}, newRunner, lookPath, time.Now, rebootProbe)
@@ -127,9 +130,7 @@ func run(in *os.File, out *os.File) error {
 				continue
 			}
 			revision := current.rev + 1
-			sendMu.Lock()
 			err = c.Snapshot(viewID, revision, root)
-			sendMu.Unlock()
 			if err != nil {
 				continue
 			}
@@ -150,9 +151,7 @@ func run(in *os.File, out *os.File) error {
 		if data == nil {
 			return
 		}
-		sendMu.Lock()
-		_, _ = hostcall.Call(ctx, c, v1.CallStateSet, v1.StateSetParams{Key: "last", Value: data})
-		sendMu.Unlock()
+		saves.Save("last", data)
 	}
 
 	notifyIfDue := func() {
@@ -167,9 +166,7 @@ func run(in *os.File, out *os.File) error {
 			return
 		}
 		persist()
-		sendMu.Lock()
-		_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "System Updates", Body: body})
-		sendMu.Unlock()
+		hostcall.Async(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "System Updates", Body: body})
 	}
 
 	checkNow := queueOneCheck(func() {
@@ -216,9 +213,7 @@ func run(in *os.File, out *os.File) error {
 				if err != nil {
 					body = "Update failed: " + err.Error()
 				}
-				sendMu.Lock()
-				_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "System Updates", Body: body})
-				sendMu.Unlock()
+				hostcall.Async(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "System Updates", Body: body})
 				time.Sleep(5 * time.Second)
 				checkNow()
 			}()
@@ -247,9 +242,7 @@ func run(in *os.File, out *os.File) error {
 		go waitForTerminal(cmd, checkNow, finishUpdate)
 	}
 
-	sendMu.Lock()
 	reply, err := hostcall.Call(ctx, c, v1.CallStateGet, v1.StateGetParams{Key: "last"})
-	sendMu.Unlock()
 	if err == nil && reply.OK {
 		var result v1.StateGetResult
 		if json.Unmarshal(reply.Result, &result) == nil && result.Found {
@@ -308,15 +301,11 @@ func run(in *os.File, out *os.File) error {
 					if current.kind != v1.ViewBar {
 						continue
 					}
-					sendMu.Lock()
-					_, _ = hostcall.Call(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: event.Output, Generation: event.Generation, Instance: current.instance})
-					sendMu.Unlock()
+					hostcall.Async(ctx, c, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: event.Output, Generation: event.Generation, Instance: current.instance})
 				case "updates-refresh":
 					checkNow()
 				case "updates-news":
-					sendMu.Lock()
-					_, _ = hostcall.Call(ctx, c, v1.CallOpenURL, v1.OpenURLParams{URL: "https://archlinux.org/news/"})
-					sendMu.Unlock()
+					hostcall.Async(ctx, c, v1.CallOpenURL, v1.OpenURLParams{URL: "https://archlinux.org/news/"})
 				case "updates-run":
 					runUpdate()
 				}
@@ -395,8 +384,21 @@ func updateCommand(cfg settings) string {
 	return "sudo pacman -Syu"
 }
 
-// waitForTerminal re-checks after pacman.log changes settle and again when
-// the terminal exits, so an early check cannot hide the completed transaction.
+// Post-update refresh budgets. A run looks settled when the pacman database
+// lock is gone and the log has been quiet for a settle window: a hand-off
+// launcher exits before pacman even starts, so its exit alone says nothing.
+// The watcher itself ends at the budget, because an AUR helper builds
+// packages between its two pacman transactions with no lock and no log
+// writes, and only the helper's install phase proves the run finished.
+const (
+	settleWindow     = 5 * time.Second
+	launcherGrace    = time.Minute
+	updateWaitBudget = 2 * time.Hour
+)
+
+// waitForTerminal re-checks after the upgrade settles, so an update run in a
+// terminal that hands off to a server cannot leave the badge on the
+// pre-update count until the next interval.
 func waitForTerminal(cmd *exec.Cmd, onUpdate, onExit func()) {
 	done := make(chan struct{})
 	go func() {
@@ -405,27 +407,57 @@ func waitForTerminal(cmd *exec.Cmd, onUpdate, onExit func()) {
 	}()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	waitForTerminalWith(done, pacmanLogMtime, ticker.C, time.Sleep, onUpdate, onExit)
+	waitForTerminalWith(done, pacmanLogMtime, pacmanLocked, ticker.C, time.Now, onUpdate, onExit)
 }
 
-func waitForTerminalWith(done <-chan struct{}, mtime func() time.Time, ticks <-chan time.Time, wait func(time.Duration), onUpdate, onExit func()) {
-	startMtime := mtime()
-	lastMtime := startMtime
+// waitForTerminalWith refreshes once per settled episode: activity in the log
+// or the lock, then quiet. onExit releases the run guard once the run looks
+// over, at the first settled episode after the terminal exited, or when
+// nothing ever moved and launcherGrace passed (a cancel at the prompt, or a
+// custom update command that never touches pacman). The watcher keeps polling
+// until the budget so a later phase still refreshes the badge.
+func waitForTerminalWith(done <-chan struct{}, mtime func() time.Time, locked func() bool, ticks <-chan time.Time, now func() time.Time, onUpdate, onExit func()) {
+	start := now()
+	lastMtime := mtime()
+	lastActivity := start
+	active := false
+	exited := false
+	var exitedAt time.Time
+	refreshed := false
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			onExit()
+		}
+	}
 	for {
 		select {
 		case <-done:
-			wait(5 * time.Second)
-			onUpdate()
-			onExit()
-			return
+			exited, exitedAt, done = true, now(), nil
 		case <-ticks:
-			currentMtime := mtime()
-			if currentMtime.IsZero() || currentMtime == lastMtime {
-				continue
-			}
-			lastMtime = currentMtime
-			wait(5 * time.Second)
+		}
+		if m := mtime(); !m.IsZero() && m != lastMtime {
+			lastMtime, lastActivity, active, refreshed = m, now(), true, false
+		}
+		if locked() {
+			lastActivity, active, refreshed = now(), true, false
+		}
+		quiet := now().Sub(lastActivity) >= settleWindow
+		idle := exited && !active && now().Sub(exitedAt) >= launcherGrace
+		if (active && quiet || idle) && !refreshed {
+			refreshed = true
 			onUpdate()
+		}
+		if idle || (exited && quiet && refreshed) {
+			release()
+		}
+		if now().Sub(start) >= updateWaitBudget {
+			if !refreshed {
+				onUpdate()
+			}
+			release()
+			return
 		}
 	}
 }
@@ -468,6 +500,14 @@ func pacmanLogMtime() time.Time {
 		return time.Time{}
 	}
 	return info.ModTime()
+}
+
+// pacmanLocked reports a pacman transaction in progress: the database lock is
+// held from the start of the run until the last package is installed, which
+// the log alone cannot show, because downloads write nothing to it.
+func pacmanLocked() bool {
+	_, err := os.Stat("/var/lib/pacman/db.lck")
+	return err == nil
 }
 
 // osReboot reads the running kernel and boot time from the real system.

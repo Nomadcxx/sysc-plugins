@@ -1,0 +1,4 @@
+org.gnome.Platform	
+org.freedesktop.Platform.GL.default	
+org.gnome.Platform.Locale	
+com.example.App	1.2
