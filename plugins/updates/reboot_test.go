@@ -1,6 +1,7 @@
 package updates
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -13,7 +14,7 @@ func modulesFS(dirs map[string]string, log string) fstest.MapFS {
 		if base != "" {
 			fsys["usr/lib/modules/"+dir+"/pkgbase"] = &fstest.MapFile{Data: []byte(base + "\n")}
 		} else {
-			fsys["usr/lib/modules/"+dir] = &fstest.MapFile{Mode: 0o755}
+			fsys["usr/lib/modules/"+dir] = &fstest.MapFile{Mode: fs.ModeDir | 0o755}
 		}
 	}
 	if log != "" {
@@ -30,6 +31,17 @@ func TestRebootNotNeededWhenRunningKernelIsInstalled(t *testing.T) {
 	}
 }
 
+func TestRebootNotNeededWhenRunningTreeHasNoPkgbase(t *testing.T) {
+	fsys := modulesFS(map[string]string{
+		"6.16.9-arch1-1": "",
+		"6.17.2-arch1-1": "linux",
+	}, "")
+	needed, detail := RebootNeeded(fsys, "6.16.9-arch1-1", time.Time{})
+	if needed {
+		t.Fatalf("missing pkgbase is not evidence of an upgrade: %s", detail)
+	}
+}
+
 func TestRebootWhenRunningKernelHasNoModuleTree(t *testing.T) {
 	fsys := modulesFS(map[string]string{"6.17.2.arch1-1": "linux"}, "")
 	needed, detail := RebootNeeded(fsys, "6.16.9-arch1-1", time.Time{})
@@ -38,6 +50,14 @@ func TestRebootWhenRunningKernelHasNoModuleTree(t *testing.T) {
 	}
 	if !strings.Contains(detail, "6.17.2.arch1-1 is installed") || !strings.Contains(detail, "6.16.9-arch1-1 is running") {
 		t.Fatalf("detail = %q", detail)
+	}
+}
+
+func TestRebootNotNeededWhenOnlyExtramodulesRemain(t *testing.T) {
+	fsys := modulesFS(map[string]string{"extramodules-ARCH": ""}, "")
+	needed, detail := RebootNeeded(fsys, "6.16.9-arch1-1", time.Time{})
+	if needed {
+		t.Fatalf("extramodules are not an installed kernel tree: %s", detail)
 	}
 }
 
@@ -76,6 +96,17 @@ func TestRebootFromPacmanLogAfterBoot(t *testing.T) {
 	}
 	if !strings.Contains(detail, "linux was upgraded after boot") {
 		t.Fatalf("detail = %q", detail)
+	}
+}
+
+func TestRebootLogIgnoresKernelHeadersAndDriverBuilds(t *testing.T) {
+	boot := time.Date(2026, 10, 8, 2, 0, 0, 0, time.UTC)
+	log := "[2026-10-08T03:00:00+0000] [ALPM] upgraded linux-headers (6.16.9-1 -> 6.17.1-1)\n" +
+		"[2026-10-08T03:01:00+0000] [ALPM] upgraded nvidia-dkms (580.95-1 -> 580.101-1)\n"
+	fsys := modulesFS(map[string]string{"6.16.9-arch1-1": "linux"}, log)
+	needed, detail := RebootNeeded(fsys, "6.16.9-arch1-1", boot)
+	if needed {
+		t.Fatalf("header and DKMS updates should receive core tags without triggering a reboot warning: %s", detail)
 	}
 }
 

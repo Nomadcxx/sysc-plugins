@@ -75,6 +75,34 @@ func TestCheckSingleFlight(t *testing.T) {
 	}
 }
 
+func TestCheckStateCopyCannotBeMutatedWhileCheckRuns(t *testing.T) {
+	svc := NewService(Config{AURHelper: "off"}, goodRunner(t), okPath, nil, nil)
+	svc.Check(context.Background())
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	svc.run = func(ctx context.Context, name string, args ...string) ([]byte, []byte, int, error) {
+		close(entered)
+		<-release
+		return []byte("linux 1 -> 2\n"), nil, 0, nil
+	}
+	done := make(chan struct{})
+	go func() {
+		svc.Check(context.Background())
+		close(done)
+	}()
+	<-entered
+
+	state := svc.Check(context.Background())
+	state.Updates[0].Name = "mutated"
+	if svc.State().Updates[0].Name == "mutated" {
+		t.Fatal("Check during another check must return an isolated state copy")
+	}
+
+	close(release)
+	<-done
+}
+
 func TestCheckErrorKeepsLastGoodList(t *testing.T) {
 	fail := false
 	run := func(ctx context.Context, name string, args ...string) ([]byte, []byte, int, error) {
@@ -124,6 +152,48 @@ func TestPersistRestoreRoundTrip(t *testing.T) {
 	state := restored.State()
 	if len(state.Updates) != 3 || !state.CheckedAt.Equal(now) {
 		t.Fatalf("restored state = %+v", state)
+	}
+}
+
+func TestNotificationHistorySurvivesServiceRestart(t *testing.T) {
+	now := time.Date(2026, 10, 8, 14, 5, 0, 0, time.UTC)
+	reboot := func() (bool, string) { return true, "linux 6.17.1 is installed, 6.16.9 is running" }
+	svc := NewService(Config{AURHelper: "off"}, goodRunner(t), okPath, func() time.Time { return now }, reboot)
+	svc.Check(context.Background())
+	if body, ok := svc.TakeNotification(now); !ok || !strings.Contains(body, "Restart") {
+		t.Fatalf("first notification = %q, %v; want reboot", body, ok)
+	}
+	if body, ok := svc.TakeNotification(now); !ok || !strings.Contains(body, "updates") {
+		t.Fatalf("second notification = %q, %v; want daily update summary", body, ok)
+	}
+
+	restored := NewService(Config{AURHelper: "off"}, goodRunner(t), okPath, func() time.Time { return now }, reboot)
+	restored.RestoreState(svc.PersistedState())
+	restored.Check(context.Background())
+	if body, ok := restored.TakeNotification(now); ok {
+		t.Fatalf("same-day notification repeated after restore: %q", body)
+	}
+	if body, ok := restored.TakeNotification(now.Add(24 * time.Hour)); !ok || !strings.Contains(body, "updates") {
+		t.Fatalf("next-day notification = %q, %v; want daily update summary", body, ok)
+	}
+}
+
+func TestRebootNotificationCanFireForANewReboot(t *testing.T) {
+	needed := true
+	reboot := func() (bool, string) { return needed, "kernel upgrade pending" }
+	now := time.Date(2026, 10, 8, 14, 5, 0, 0, time.UTC)
+	svc := NewService(Config{AURHelper: "off"}, goodRunner(t), okPath, nil, reboot)
+	svc.Check(context.Background())
+	if _, ok := svc.TakeNotification(now); !ok {
+		t.Fatal("first reboot should notify")
+	}
+
+	needed = false
+	svc.Check(context.Background())
+	needed = true
+	svc.Check(context.Background())
+	if body, ok := svc.TakeNotification(now.Add(24 * time.Hour)); !ok || !strings.Contains(body, "Restart") {
+		t.Fatalf("new reboot notification = %q, %v", body, ok)
 	}
 }
 

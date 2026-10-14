@@ -2,8 +2,65 @@ package main
 
 import (
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestWaitForTerminalChecksAfterExitFollowingLogChange(t *testing.T) {
+	done := make(chan struct{})
+	ticks := make(chan time.Time, 1)
+	exited := make(chan struct{})
+	var reads atomic.Int32
+	var updates atomic.Int32
+	mtime := func() time.Time {
+		if reads.Add(1) == 1 {
+			return time.Unix(1, 0)
+		}
+		return time.Unix(2, 0)
+	}
+	wait := func(time.Duration) {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
+	go waitForTerminalWith(done, mtime, ticks, wait, func() { updates.Add(1) }, func() { close(exited) })
+	ticks <- time.Now()
+	<-exited
+	if got := updates.Load(); got != 2 {
+		t.Fatalf("refreshes = %d, want a post-exit refresh after the earlier log-triggered check", got)
+	}
+}
+
+func TestQueueOneCheckRunsOneFollowUpAfterAnActiveCheck(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	followUp := make(chan struct{})
+	var calls atomic.Int32
+	request := queueOneCheck(func() {
+		switch calls.Add(1) {
+		case 1:
+			close(started)
+			<-release
+		case 2:
+			close(followUp)
+		}
+	})
+	request()
+	<-started
+	request()
+	close(release)
+	select {
+	case <-followUp:
+	case <-time.After(time.Second):
+		t.Fatal("a refresh requested during an active check was lost")
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("check calls = %d, want 2", got)
+	}
+}
 
 func TestUpdateCommandChoice(t *testing.T) {
 	orig := lookPath

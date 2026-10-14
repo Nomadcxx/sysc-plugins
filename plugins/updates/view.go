@@ -1,6 +1,7 @@
 package updates
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"strconv"
 	"strings"
@@ -166,7 +167,19 @@ func updateRow(update Update) *v1.Node {
 	if update.Core {
 		children = append(children, &v1.Node{Kind: v1.KindText, Text: "core", Tone: v1.ToneAccent})
 	}
-	return &v1.Node{Kind: v1.KindRow, ID: "updates-row-" + string(update.Source) + "-" + update.Name, Gap: 8, Height: 20, Children: children}
+	return &v1.Node{Kind: v1.KindRow, ID: updateRowID(update), Gap: 8, Height: 20, Children: children}
+}
+
+func updateRowID(update Update) string {
+	prefix := "updates-row-" + string(update.Source) + "-"
+	name := update.Name
+	maxNameBytes := v1.MaxIdentBytes - len(prefix)
+	if len(name) > maxNameBytes {
+		hash := sha256.Sum256([]byte(name))
+		suffix := fmt.Sprintf("-%x", hash[:8])
+		name = compactMiddleText(name, maxNameBytes-len(suffix)) + suffix
+	}
+	return prefix + name
 }
 
 func actionButton(id, label, name string) *v1.Node {

@@ -35,8 +35,10 @@ type State struct {
 // persisted is the subset of State worth keeping across shell restarts: the
 // last good result, so the badge is honest before the first check lands.
 type persisted struct {
-	Updates   []Update  `json:"updates"`
-	CheckedAt time.Time `json:"checked_at"`
+	Updates        []Update  `json:"updates"`
+	CheckedAt      time.Time `json:"checked_at"`
+	LastNotifyDay  string    `json:"last_notify_day,omitempty"`
+	RebootNotified bool      `json:"reboot_notified,omitempty"`
 }
 
 // Config is the user-facing check configuration.
@@ -88,6 +90,10 @@ func (s *Service) SetConfig(cfg Config) {
 func (s *Service) State() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.stateLocked()
+}
+
+func (s *Service) stateLocked() State {
 	state := s.state
 	state.Updates = append([]Update(nil), s.state.Updates...)
 	return state
@@ -103,6 +109,8 @@ func (s *Service) RestoreState(raw []byte) {
 	defer s.mu.Unlock()
 	s.state.Updates = p.Updates
 	s.state.CheckedAt = p.CheckedAt
+	s.lastNotifyDay = p.LastNotifyDay
+	s.rebootNotified = p.RebootNotified
 }
 
 // PersistedState encodes the last good result for state.set. It returns nil
@@ -113,7 +121,10 @@ func (s *Service) PersistedState() []byte {
 	if s.state.CheckedAt.IsZero() {
 		return nil
 	}
-	data, err := json.Marshal(persisted{Updates: s.state.Updates, CheckedAt: s.state.CheckedAt})
+	data, err := json.Marshal(persisted{
+		Updates: s.state.Updates, CheckedAt: s.state.CheckedAt,
+		LastNotifyDay: s.lastNotifyDay, RebootNotified: s.rebootNotified,
+	})
 	if err != nil {
 		return nil
 	}
@@ -126,7 +137,7 @@ func (s *Service) PersistedState() []byte {
 func (s *Service) Check(ctx context.Context) State {
 	s.mu.Lock()
 	if s.checking {
-		state := s.state
+		state := s.stateLocked()
 		s.mu.Unlock()
 		return state
 	}
@@ -153,8 +164,10 @@ func (s *Service) Check(ctx context.Context) State {
 	}
 	s.state.RebootNeeded = needed
 	s.state.RebootDetail = detail
-	state := s.state
-	state.Updates = append([]Update(nil), s.state.Updates...)
+	if !needed {
+		s.rebootNotified = false
+	}
+	state := s.stateLocked()
 	s.mu.Unlock()
 	return state
 }

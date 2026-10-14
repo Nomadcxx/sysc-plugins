@@ -33,22 +33,33 @@ func modulesReboot(fsys fs.FS, uname string) (string, bool) {
 		return "", false
 	}
 	runningPkgbase := ""
+	runningFound := false
 	for _, entry := range entries {
 		if entry.IsDir() && entry.Name() == uname {
+			runningFound = true
 			runningPkgbase = pkgbase(fsys, entry.Name())
+			break
 		}
 	}
-	if runningPkgbase == "" {
+	if !runningFound {
+		// ponytail: when the running tree is gone, only one remaining pkgbase is unambiguous; the log rule covers multi-kernel systems.
+		installed := ""
 		for _, entry := range entries {
 			if !entry.IsDir() {
 				continue
 			}
 			name := pkgbase(fsys, entry.Name())
 			if name == "" {
-				name = "linux"
+				continue
 			}
-			return fmt.Sprintf("%s %s is installed, %s is running", name, entry.Name(), uname), true
+			if installed != "" {
+				return "", false // Multiple kernel trees make the missing package ambiguous.
+			}
+			installed = fmt.Sprintf("%s %s is installed, %s is running", name, entry.Name(), uname)
 		}
+		return installed, installed != ""
+	}
+	if runningPkgbase == "" {
 		return "", false
 	}
 	for _, entry := range entries {
@@ -92,7 +103,7 @@ func logReboot(fsys fs.FS, bootTime time.Time) (string, bool) {
 		if err != nil || !when.After(bootTime) {
 			continue
 		}
-		if !isCore(fields[3]) {
+		if !needsRebootAfterUpgrade(fields[3]) {
 			continue
 		}
 		if when.After(newestAt) {
@@ -103,4 +114,17 @@ func logReboot(fsys fs.FS, bootTime time.Time) (string, bool) {
 		return "", false
 	}
 	return fmt.Sprintf("%s was upgraded after boot", newest), true
+}
+
+// needsRebootAfterUpgrade is narrower than the panel's core tag: headers and
+// DKMS packages are core updates, but their presence alone does not prove the
+// running kernel or system services still use old files.
+func needsRebootAfterUpgrade(name string) bool {
+	switch name {
+	case "linux", "linux-lts", "linux-zen", "linux-hardened", "linux-rt", "linux-rt-lts",
+		"nvidia-utils", "systemd", "glibc", "mesa", "amd-ucode", "intel-ucode":
+		return true
+	default:
+		return false
+	}
 }

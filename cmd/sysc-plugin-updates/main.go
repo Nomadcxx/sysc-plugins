@@ -83,6 +83,7 @@ func run(in *os.File, out *os.File) error {
 	views := map[string]view{}
 	lastTree := map[string][sha256.Size]byte{}
 	runHint := ""
+	updateRunning := false
 
 	incoming := make(chan v1.Message, 8)
 	go func() {
@@ -165,27 +166,37 @@ func run(in *os.File, out *os.File) error {
 		if !ok {
 			return
 		}
+		persist()
 		sendMu.Lock()
 		_, _ = hostcall.Call(ctx, c, v1.CallNotify, v1.NotifyParams{Summary: "System Updates", Body: body})
 		sendMu.Unlock()
 	}
 
-	checkNow := func() {
-		go func() {
-			svc.Check(ctx)
-			persist()
-			publish("")
-			notifyIfDue()
-		}()
-	}
+	checkNow := queueOneCheck(func() {
+		svc.Check(ctx)
+		persist()
+		publish("")
+		notifyIfDue()
+	})
 
 	runUpdate := func() {
 		mu.Lock()
+		if updateRunning {
+			mu.Unlock()
+			return
+		}
+		updateRunning = true
 		cfgSnap := cfg
 		mu.Unlock()
+		finishUpdate := func() {
+			mu.Lock()
+			updateRunning = false
+			mu.Unlock()
+		}
 
 		if cfgSnap.updateMethod == "pkexec" {
 			if _, err := lookPath("pkexec"); err != nil {
+				finishUpdate()
 				setRunHint("pkexec not found. Use the terminal method, or run a polkit agent.")
 				publish("")
 				return
@@ -193,12 +204,14 @@ func run(in *os.File, out *os.File) error {
 			setRunHint("")
 			cmd := exec.Command("pkexec", "pacman", "-Syu", "--noconfirm")
 			if err := cmd.Start(); err != nil {
+				finishUpdate()
 				setRunHint("Couldn't start pkexec: " + err.Error())
 				publish("")
 				return
 			}
 			go func() {
 				err := cmd.Wait()
+				finishUpdate()
 				body := "Update finished."
 				if err != nil {
 					body = "Update failed: " + err.Error()
@@ -215,6 +228,7 @@ func run(in *os.File, out *os.File) error {
 		command := updateCommand(cfgSnap)
 		bin, prefix, err := terminal.Resolve(cfgSnap.terminal, lookPath)
 		if err != nil {
+			finishUpdate()
 			setRunHint("No terminal found. Set one in the plugin's settings, or run: " + command)
 			publish("")
 			return
@@ -224,12 +238,13 @@ func run(in *os.File, out *os.File) error {
 		args := append(append([]string{}, prefix...), "sh", "-c", script)
 		cmd := exec.Command(bin, args...)
 		if err := cmd.Start(); err != nil {
+			finishUpdate()
 			setRunHint("Couldn't start " + bin + ": " + err.Error())
 			publish("")
 			return
 		}
 		publish("")
-		go waitForTerminal(cmd, checkNow)
+		go waitForTerminal(cmd, checkNow, finishUpdate)
 	}
 
 	sendMu.Lock()
@@ -380,31 +395,70 @@ func updateCommand(cfg settings) string {
 	return "sudo pacman -Syu"
 }
 
-// waitForTerminal re-checks the system after the terminal exits or after
-// pacman.log moves on, whichever comes first, with a settle delay so the
-// database lock is gone.
-func waitForTerminal(cmd *exec.Cmd, onDone func()) {
+// waitForTerminal re-checks after pacman.log changes settle and again when
+// the terminal exits, so an early check cannot hide the completed transaction.
+func waitForTerminal(cmd *exec.Cmd, onUpdate, onExit func()) {
 	done := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
 		close(done)
 	}()
-	startMtime := pacmanLogMtime()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	waitForTerminalWith(done, pacmanLogMtime, ticker.C, time.Sleep, onUpdate, onExit)
+}
+
+func waitForTerminalWith(done <-chan struct{}, mtime func() time.Time, ticks <-chan time.Time, wait func(time.Duration), onUpdate, onExit func()) {
+	startMtime := mtime()
+	lastMtime := startMtime
 	for {
 		select {
 		case <-done:
-			time.Sleep(5 * time.Second)
-			onDone()
+			wait(5 * time.Second)
+			onUpdate()
+			onExit()
 			return
-		case <-ticker.C:
-			if mtime := pacmanLogMtime(); !mtime.IsZero() && mtime != startMtime {
-				time.Sleep(5 * time.Second)
-				onDone()
+		case <-ticks:
+			currentMtime := mtime()
+			if currentMtime.IsZero() || currentMtime == lastMtime {
+				continue
+			}
+			lastMtime = currentMtime
+			wait(5 * time.Second)
+			onUpdate()
+		}
+	}
+}
+
+// queueOneCheck serializes refresh requests and remembers one that arrives
+// while a check is running.
+func queueOneCheck(run func()) func() {
+	var mu sync.Mutex
+	running := false
+	pending := false
+	return func() {
+		mu.Lock()
+		if running {
+			pending = true
+			mu.Unlock()
+			return
+		}
+		running = true
+		mu.Unlock()
+		go func() {
+			for {
+				run()
+				mu.Lock()
+				if pending {
+					pending = false
+					mu.Unlock()
+					continue
+				}
+				running = false
+				mu.Unlock()
 				return
 			}
-		}
+		}()
 	}
 }
 

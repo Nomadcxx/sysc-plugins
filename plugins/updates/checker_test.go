@@ -139,17 +139,24 @@ func TestParseArrowLinesSkipsMalformed(t *testing.T) {
 
 func TestIsCore(t *testing.T) {
 	for name, want := range map[string]bool{
-		"linux":       true,
-		"linux-lts":   true,
-		"nvidia-dkms": true,
-		"systemd":     true,
-		"glibc":       true,
-		"mesa":        true,
-		"amd-ucode":   true,
-		"intel-ucode": true,
-		"firefox":     false,
-		"bash":        false,
-		"vim":         false,
+		"linux":             true,
+		"linux-lts":         true,
+		"linux-zen":         true,
+		"linux-hardened":    true,
+		"linux-rt":          true,
+		"linux-headers":     true,
+		"linux-api-headers": true,
+		"nvidia-utils":      true,
+		"nvidia-dkms":       true,
+		"nvidia-open":       true,
+		"systemd":           true,
+		"glibc":             true,
+		"mesa":              true,
+		"amd-ucode":         true,
+		"intel-ucode":       true,
+		"firefox":           false,
+		"bash":              false,
+		"vim":               false,
 	} {
 		if got := isCore(name); got != want {
 			t.Errorf("isCore(%q) = %v, want %v", name, got, want)

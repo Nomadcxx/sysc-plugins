@@ -1,8 +1,10 @@
 package updates
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
 	"github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -106,5 +108,28 @@ func TestPanelListsRunRefreshAndNewsNodes(t *testing.T) {
 		if !found {
 			t.Errorf("panel is missing node %q (have %v)", want, ids)
 		}
+	}
+}
+
+func TestUpdateRowBoundsLongPackageIDs(t *testing.T) {
+	short := updateRow(Update{Name: "linux", Source: SourceRepo})
+	if short.ID != "updates-row-repo-linux" {
+		t.Fatalf("short package ID = %q, want stable readable ID", short.ID)
+	}
+
+	firstName := "pkg-" + strings.Repeat("x", v1.MaxIdentBytes) + "-end"
+	secondName := "pkg-" + strings.Repeat("y", v1.MaxIdentBytes) + "-end"
+	first := updateRow(Update{Name: firstName, Source: SourceRepo})
+	second := updateRow(Update{Name: secondName, Source: SourceRepo})
+	for _, row := range []*v1.Node{first, second} {
+		if len(row.ID) > v1.MaxIdentBytes {
+			t.Errorf("row ID is %d bytes, limit is %d", len(row.ID), v1.MaxIdentBytes)
+		}
+		if !utf8.ValidString(row.ID) {
+			t.Errorf("row ID is not valid UTF-8: %q", row.ID)
+		}
+	}
+	if first.ID == second.ID {
+		t.Fatalf("different long package names collided at %q", first.ID)
 	}
 }

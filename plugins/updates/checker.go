@@ -157,10 +157,9 @@ func failureReason(stderr []byte, exit int) string {
 	return text
 }
 
-// isCore reports whether a package belongs to the set where an upgrade
-// strongly suggests a reboot: the kernel and the base userspace.
+// isCore reports the package families shown with the core tag in the panel.
 func isCore(name string) bool {
-	if strings.HasPrefix(name, "linux") || strings.HasPrefix(name, "nvidia") {
+	if name == "linux" || strings.HasPrefix(name, "linux-") || name == "nvidia" || strings.HasPrefix(name, "nvidia-") {
 		return true
 	}
 	switch name {

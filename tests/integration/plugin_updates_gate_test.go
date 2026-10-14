@@ -47,6 +47,17 @@ func runGateFakeUpdates() int {
 		}
 	case "flatpak":
 		_, _ = os.Stdout.WriteString("org.mozilla.firefox 143.0.2\n")
+	case "xdg-terminal-exec":
+		if release := os.Getenv("SYSC_FAKE_UPDATES_TERMINAL_RELEASE"); release != "" {
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, err := os.Stat(release); err == nil {
+					return 0
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			return 1
+		}
 	}
 	return 0
 }
@@ -67,6 +78,7 @@ type updatesGateHost struct {
 	generation map[string]uint32
 	wake       chan struct{}
 	calls      chan updatesCall
+	states     map[string]json.RawMessage
 	stdin      io.WriteCloser
 	cmd        *exec.Cmd
 	done       chan error
@@ -129,8 +141,11 @@ func startUpdatesGate(t *testing.T, logPath string, tools ...string) *updatesGat
 		t: t, enc: v1.NewEncoder(stdin), stdin: stdin, cmd: cmd,
 		roots: map[string]*v1.Node{}, revs: map[string]uint64{}, slots: map[string]viewSlot{},
 		outputs: map[string]string{}, generation: map[string]uint32{},
-		wake: make(chan struct{}, 1), calls: make(chan updatesCall, 8),
+		wake: make(chan struct{}, 1), calls: make(chan updatesCall, 8), states: map[string]json.RawMessage{},
 		done: make(chan error, 1),
+	}
+	if initial := os.Getenv("SYSC_FAKE_UPDATES_STATE"); initial != "" {
+		h.states["last"] = json.RawMessage(initial)
 	}
 	cmd.Stderr = &h.stderr
 	if err := cmd.Start(); err != nil {
@@ -150,7 +165,25 @@ func startUpdatesGate(t *testing.T, logPath string, tools ...string) *updatesGat
 				case h.calls <- updatesCall{kind: m.Call, params: m.Params}:
 				default:
 				}
-				_ = h.send(&v1.HostReply{ID: m.ID, OK: true})
+				reply := &v1.HostReply{ID: m.ID, OK: true}
+				switch m.Call {
+				case v1.CallStateGet:
+					var params v1.StateGetParams
+					_ = json.Unmarshal(m.Params, &params)
+					h.mu.Lock()
+					value, found := h.states[params.Key]
+					value = append(json.RawMessage(nil), value...)
+					h.mu.Unlock()
+					reply.Result, _ = json.Marshal(v1.StateGetResult{Found: found, Value: value})
+				case v1.CallStateSet:
+					var params v1.StateSetParams
+					if json.Unmarshal(m.Params, &params) == nil {
+						h.mu.Lock()
+						h.states[params.Key] = append(json.RawMessage(nil), params.Value...)
+						h.mu.Unlock()
+					}
+				}
+				_ = h.send(reply)
 			case *v1.ViewSnapshot:
 				h.mu.Lock()
 				slot, monitored := h.slots[m.ViewID]
@@ -236,6 +269,23 @@ func (h *updatesGateHost) clickUntilCall(viewID, node string, kind v1.CallKind) 
 	}
 	h.t.Fatalf("click %q never produced host call %s", node, kind)
 	return updatesCall{}
+}
+
+func (h *updatesGateHost) waitCall(kind v1.CallKind) updatesCall {
+	h.t.Helper()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case call := <-h.calls:
+			if call.kind == kind {
+				return call
+			}
+		case <-deadline.C:
+			h.t.Fatalf("plugin did not make host call %s", kind)
+			return updatesCall{}
+		}
+	}
 }
 
 // clickUntil retries a click until the panel tree matches.
@@ -425,6 +475,159 @@ func TestPluginUpdatesGate(t *testing.T) {
 	h.waitView("panel-1", func(root *v1.Node) bool {
 		return findID(root, "updates-row-aur-paru-bin") == nil && findID(root, "updates-row-repo-linux") != nil
 	})
+	if err := h.stop(); err != nil {
+		t.Fatalf("plugin shutdown: %v", err)
+	}
+}
+
+func TestPluginUpdatesUsesOverrideAndPreventsConcurrentRun(t *testing.T) {
+	release := filepath.Join(t.TempDir(), "release-terminal")
+	t.Setenv("SYSC_FAKE_UPDATES_TERMINAL_RELEASE", release)
+	logPath := filepath.Join(t.TempDir(), "updates-argv.jsonl")
+	h := startUpdatesGate(t, logPath, "checkupdates", "paru", "flatpak", "xdg-terminal-exec")
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
+
+	h.setting(map[string]any{"hide_when_zero": false, "update_command": "topgrade --yes"})
+	panelW, panelH := updatesPanelSize(t)
+	h.open("panel-1", v1.ViewPanel, "panel", viewSlot{v1.ViewPanel, panelW, panelH}, "placement-1", "DP-1", 7)
+	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "updates-run") != nil })
+	h.click("panel-1", "updates-run")
+	waitUpdatesArgv(t, logPath, func(args []string) bool {
+		return len(args) == 3 && args[0] == "sh" && args[1] == "-c" && strings.HasPrefix(args[2], "topgrade --yes")
+	})
+
+	h.click("panel-1", "updates-run")
+	time.Sleep(250 * time.Millisecond)
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runs int
+	for _, line := range strings.Split(string(data), "\n") {
+		var args []string
+		if json.Unmarshal([]byte(line), &args) == nil && len(args) == 3 && args[0] == "sh" {
+			runs++
+		}
+	}
+	_ = os.WriteFile(release, nil, 0o600)
+	if runs != 1 {
+		t.Fatalf("concurrent clicks started %d update terminals, want one; calls:\n%s", runs, data)
+	}
+	if err := h.stop(); err != nil {
+		t.Fatalf("plugin shutdown: %v", err)
+	}
+}
+
+func TestPluginUpdatesRestoresAndPersistsStateOverTheProtocol(t *testing.T) {
+	t.Setenv("SYSC_FAKE_UPDATES_STATE", `{"updates":[{"name":"seeded-package","old":"1","new":"2","source":"repo"}],"checked_at":"2026-10-13T12:00:00Z"}`)
+	logPath := filepath.Join(t.TempDir(), "updates-argv.jsonl")
+	h := startUpdatesGate(t, logPath, "checkupdates", "paru", "flatpak")
+	panelW, panelH := updatesPanelSize(t)
+	h.open("panel-1", v1.ViewPanel, "panel", viewSlot{v1.ViewPanel, panelW, panelH}, "placement-1", "DP-1", 7)
+	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "updates-row-repo-seeded-package") != nil })
+	h.clickUntil("panel-1", "updates-refresh", func(root *v1.Node) bool {
+		return findID(root, "updates-row-repo-linux") != nil
+	})
+
+	h.mu.Lock()
+	raw := append(json.RawMessage(nil), h.states["last"]...)
+	h.mu.Unlock()
+	var saved struct {
+		Updates []struct {
+			Name string `json:"name"`
+		} `json:"updates"`
+		CheckedAt time.Time `json:"checked_at"`
+	}
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatalf("persisted state %s: %v", raw, err)
+	}
+	if len(saved.Updates) == 0 || saved.Updates[0].Name != "linux" || saved.CheckedAt.IsZero() {
+		t.Fatalf("state.set did not store the refreshed result: %+v", saved)
+	}
+	if err := h.stop(); err != nil {
+		t.Fatalf("plugin shutdown: %v", err)
+	}
+}
+
+func TestPluginUpdatesSendsNotifications(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "updates-argv.jsonl")
+	h := startUpdatesGate(t, logPath, "checkupdates", "paru", "flatpak")
+	h.setting(map[string]any{"notify": true})
+	panelW, panelH := updatesPanelSize(t)
+	h.open("panel-1", v1.ViewPanel, "panel", viewSlot{v1.ViewPanel, panelW, panelH}, "placement-1", "DP-1", 7)
+	h.clickUntil("panel-1", "updates-refresh", func(root *v1.Node) bool {
+		return findID(root, "updates-row-repo-linux") != nil
+	})
+	call := h.waitCall(v1.CallNotify)
+	var notification v1.NotifyParams
+	if err := json.Unmarshal(call.params, &notification); err != nil {
+		t.Fatal(err)
+	}
+	if notification.Summary != "System Updates" || notification.Body == "" {
+		t.Fatalf("notification = %+v", notification)
+	}
+	if err := h.stop(); err != nil {
+		t.Fatalf("plugin shutdown: %v", err)
+	}
+}
+
+func TestPluginUpdatesReportsMissingRunPrograms(t *testing.T) {
+	for _, tc := range []struct {
+		name, setting, want string
+		tools               []string
+	}{
+		{name: "pkexec", setting: `{"update_method":"pkexec"}`, want: "pkexec not found"},
+		{name: "terminal", setting: `{"update_method":"terminal"}`, want: "No terminal found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logPath := filepath.Join(t.TempDir(), "updates-argv.jsonl")
+			h := startUpdatesGate(t, logPath, tc.tools...)
+			var values map[string]any
+			if err := json.Unmarshal([]byte(tc.setting), &values); err != nil {
+				t.Fatal(err)
+			}
+			h.setting(values)
+			panelW, panelH := updatesPanelSize(t)
+			h.open("panel-1", v1.ViewPanel, "panel", viewSlot{v1.ViewPanel, panelW, panelH}, "placement-1", "DP-1", 7)
+			h.clickUntil("panel-1", "updates-run", func(root *v1.Node) bool {
+				return strings.Contains(treeText(root), tc.want)
+			})
+			if err := h.stop(); err != nil {
+				t.Fatalf("plugin shutdown: %v", err)
+			}
+		})
+	}
+}
+
+func TestPluginUpdatesIgnoresClicksFromAClosedView(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "updates-argv.jsonl")
+	h := startUpdatesGate(t, logPath, "xdg-terminal-exec")
+	panelW, panelH := updatesPanelSize(t)
+	h.open("panel-1", v1.ViewPanel, "panel", viewSlot{v1.ViewPanel, panelW, panelH}, "placement-1", "DP-1", 7)
+	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "updates-run") != nil })
+	h.mu.Lock()
+	revision := h.revs["panel-1"]
+	h.mu.Unlock()
+	if err := h.send(&v1.ViewClose{Type: v1.TypeViewClose, ViewID: "panel-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.send(&v1.InputEvent{
+		Type: v1.TypeInputEvent, ViewID: "panel-1", Revision: revision,
+		Node: "updates-run", Event: v1.EventActivate, Output: "DP-1", Generation: 7,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	data, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		var args []string
+		if json.Unmarshal([]byte(line), &args) == nil && len(args) > 0 && args[0] == "sh" {
+			t.Fatalf("closed view launched an update terminal: %s", line)
+		}
+	}
 	if err := h.stop(); err != nil {
 		t.Fatalf("plugin shutdown: %v", err)
 	}
