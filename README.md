@@ -38,7 +38,7 @@ it.
 | **Wallpaper Depth** | Depth masks for image wallpapers, so scenery can sit in front of the shell's centred clock | `python3` |
 | **World Clock** | Labelled clocks for other cities in the bar and panel | |
 
-Moonbit is source-only until it has a catalog release. The rest install from the plugin manager.
+Every plugin but Herdr installs from the plugin manager; it has no release yet.
 
 ## Installation
 
