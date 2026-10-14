@@ -44,15 +44,26 @@ func TestCheckCollectsAllSources(t *testing.T) {
 	}
 }
 
-func TestCheckSingleFlight(t *testing.T) {
+func TestCheckSingleFlightRerunsWithLatestConfig(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	var calls int
+	var checkCalls, flatpakCalls int
 	run := func(ctx context.Context, name string, args ...string) ([]byte, []byte, int, error) {
-		calls++
-		close(entered)
-		<-release
-		return []byte("linux 1 -> 2\n"), nil, 0, nil
+		switch name {
+		case "checkupdates":
+			checkCalls++
+			if checkCalls == 1 {
+				close(entered)
+				<-release
+				return []byte("linux 1 -> 2\n"), nil, 0, nil
+			}
+			return []byte("linux 2 -> 3\n"), nil, 0, nil
+		case "flatpak":
+			flatpakCalls++
+			return nil, nil, 0, nil
+		default:
+			return nil, nil, -1, errors.New("unexpected command " + name)
+		}
 	}
 	svc := NewService(Config{AURHelper: "off"}, run, okPath, nil, nil)
 
@@ -60,18 +71,28 @@ func TestCheckSingleFlight(t *testing.T) {
 	go func() { done <- svc.Check(context.Background()) }()
 	<-entered
 
+	svc.SetConfig(Config{AURHelper: "off", IncludeFlatpak: true})
 	second := svc.Check(context.Background())
 	if !second.Checking {
 		t.Fatal("a second caller while a check runs should see Checking=true")
 	}
-	if calls != 1 {
-		t.Fatalf("runner called %d times during single flight, want 1", calls)
+	if checkCalls != 1 {
+		t.Fatalf("runner called %d times during first check, want 1", checkCalls)
 	}
 
 	close(release)
 	final := <-done
 	if final.Checking || len(final.Updates) != 1 {
 		t.Fatalf("final state = %+v", final)
+	}
+	if checkCalls != 2 {
+		t.Fatalf("checkupdates ran %d times, want one coalesced rerun", checkCalls)
+	}
+	if flatpakCalls != 1 {
+		t.Fatalf("flatpak ran %d times after settings changed, want 1", flatpakCalls)
+	}
+	if got := final.Updates[0].New; got != "3" {
+		t.Fatalf("final update version = %q, want result from the rerun", got)
 	}
 }
 
@@ -81,9 +102,13 @@ func TestCheckStateCopyCannotBeMutatedWhileCheckRuns(t *testing.T) {
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	calls := 0
 	svc.run = func(ctx context.Context, name string, args ...string) ([]byte, []byte, int, error) {
-		close(entered)
-		<-release
+		calls++
+		if calls == 1 {
+			close(entered)
+			<-release
+		}
 		return []byte("linux 1 -> 2\n"), nil, 0, nil
 	}
 	done := make(chan struct{})
