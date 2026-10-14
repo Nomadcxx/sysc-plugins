@@ -554,7 +554,7 @@ func TestPluginUpdatesGate(t *testing.T) {
 
 	h.click("panel-1", "updates-run")
 	waitUpdatesArgv(t, logPath, func(args []string) bool {
-		return len(args) == 3 && args[0] == "sh" && args[1] == "-c" && strings.HasPrefix(args[2], "paru -Syu")
+		return len(args) == 3 && args[0] == "sh" && args[1] == "-c" && strings.Contains(args[2], "sh -c 'paru -Syu'")
 	})
 
 	h.setting(map[string]any{"aur_helper": "off"})
@@ -579,7 +579,7 @@ func TestPluginUpdatesUsesOverrideAndPreventsConcurrentRun(t *testing.T) {
 	h.waitView("panel-1", func(root *v1.Node) bool { return findID(root, "updates-run") != nil })
 	h.click("panel-1", "updates-run")
 	waitUpdatesArgv(t, logPath, func(args []string) bool {
-		return len(args) == 3 && args[0] == "sh" && args[1] == "-c" && strings.HasPrefix(args[2], "topgrade --yes")
+		return len(args) == 3 && args[0] == "sh" && args[1] == "-c" && strings.Contains(args[2], "sh -c 'topgrade --yes'")
 	})
 
 	h.click("panel-1", "updates-run")

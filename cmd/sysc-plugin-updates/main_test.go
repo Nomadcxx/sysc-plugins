@@ -2,6 +2,10 @@ package main
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,36 +16,46 @@ import (
 // world exactly once per wake-up, so serving steps in order from a channel
 // keeps the test deterministic: no sleeps, no wall clock.
 type waitStep struct {
-	at     time.Time
-	mtime  time.Time
-	locked bool
+	at             time.Time
+	mtime          time.Time
+	locked         bool
+	commandStarted bool
+	commandDone    bool
 }
 
 type waitScript struct {
-	t          *testing.T
-	steps      chan waitStep
-	ticks      chan time.Time
-	done       chan struct{}
-	finished   chan struct{}
-	clock      atomic.Int64
-	locked     atomic.Bool
-	updates    atomic.Int32
-	lastUpdate atomic.Int64
-	releases   atomic.Int32
+	t           *testing.T
+	steps       chan waitStep
+	ticks       chan time.Time
+	done        chan struct{}
+	finished    chan struct{}
+	updateSeen  chan struct{}
+	clock       atomic.Int64
+	locked      atomic.Bool
+	started     atomic.Bool
+	commandDone atomic.Bool
+	updates     atomic.Int32
+	lastUpdate  atomic.Int64
+	releases    atomic.Int32
+	releasedAt  atomic.Int64
 }
 
 func startWaitScript(t *testing.T, base, mtime time.Time) *waitScript {
 	t.Helper()
 	s := &waitScript{
-		t:        t,
-		steps:    make(chan waitStep),
-		ticks:    make(chan time.Time),
-		done:     make(chan struct{}),
-		finished: make(chan struct{}),
+		t:          t,
+		steps:      make(chan waitStep),
+		ticks:      make(chan time.Time),
+		done:       make(chan struct{}),
+		finished:   make(chan struct{}),
+		updateSeen: make(chan struct{}, 8),
 	}
 	s.clock.Store(base.UnixNano())
 	go func() {
-		waitForTerminalWith(s.done, s.mtimeAt, s.lockHeld, s.ticks, s.now, s.onUpdate, func() { s.releases.Add(1) })
+		waitForTerminalWith(s.done, s.started.Load, s.commandDone.Load, s.mtimeAt, s.lockHeld, s.ticks, s.now, s.onUpdate, func() {
+			s.releases.Add(1)
+			s.releasedAt.Store(s.now().UnixNano())
+		})
 		close(s.finished)
 	}()
 	s.serve(waitStep{at: base, mtime: mtime})
@@ -56,6 +70,12 @@ func (s *waitScript) mtimeAt() time.Time {
 	step := <-s.steps
 	s.clock.Store(step.at.UnixNano())
 	s.locked.Store(step.locked)
+	if step.commandStarted {
+		s.started.Store(true)
+	}
+	if step.commandDone {
+		s.commandDone.Store(true)
+	}
 	return step.mtime
 }
 
@@ -64,6 +84,10 @@ func (s *waitScript) lockHeld() bool { return s.locked.Load() }
 func (s *waitScript) onUpdate() {
 	s.updates.Add(1)
 	s.lastUpdate.Store(s.now().UnixNano())
+	select {
+	case s.updateSeen <- struct{}{}:
+	default:
+	}
 }
 
 // poll wakes the waiter for one tick and hands it the world to observe. The
@@ -200,6 +224,66 @@ func TestWaitForTerminalRefreshesOncePerSettledEpisode(t *testing.T) {
 				t.Fatalf("last refresh at +%s, want between +%s and +%s", got, c.wantAfter, c.wantAtMost)
 			}
 		})
+	}
+}
+
+func TestWaitForTerminalKeepsRunGuardAcrossAURBuildGap(t *testing.T) {
+	const step = 5 * time.Second
+	base := time.Unix(1_700_000_000, 0)
+	quiet := base.Add(-time.Hour)
+	s := startWaitScript(t, base, quiet)
+
+	// The terminal launcher returns immediately, but its shell command starts
+	// and remains alive while the AUR helper builds between pacman phases.
+	s.exit(base, quiet)
+	firstLog := base.Add(step)
+	s.poll(waitStep{at: base.Add(step), mtime: firstLog, locked: true, commandStarted: true})
+	s.poll(waitStep{at: base.Add(2 * step), mtime: firstLog, locked: true, commandStarted: true})
+	s.poll(waitStep{at: base.Add(3 * step), mtime: firstLog, commandStarted: true})
+	select {
+	case <-s.updateSeen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiter did not refresh after the first pacman phase")
+	}
+	if got := s.releases.Load(); got != 0 {
+		t.Fatalf("run guard released after the first pacman phase: %d release(s)", got)
+	}
+
+	secondLog := base.Add(30 * time.Minute)
+	s.poll(waitStep{at: secondLog, mtime: secondLog, locked: true, commandStarted: true})
+	s.poll(waitStep{at: secondLog.Add(step), mtime: secondLog, commandStarted: true})
+	completedAt := secondLog.Add(2 * step)
+	s.poll(waitStep{at: completedAt, mtime: secondLog, commandStarted: true, commandDone: true})
+
+	select {
+	case <-s.finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiter did not finish")
+	}
+	if got := time.Unix(0, s.releasedAt.Load()); got.Before(completedAt) {
+		t.Fatalf("run guard released at %s before update command finished at %s", got.Sub(base), completedAt.Sub(base))
+	}
+}
+
+func TestTerminalUpdateScriptWritesCommandMarkers(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "space ' quote")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	commandOutput := filepath.Join(dir, "command-output")
+	command := "printf '%s' 'ran' > " + shellQuote(commandOutput) + "; false"
+	cmd := exec.Command("sh", "-c", terminalUpdateScript(command, dir))
+	cmd.Stdin = strings.NewReader("\n")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run terminal script: %v", err)
+	}
+	if got, err := os.ReadFile(commandOutput); err != nil || string(got) != "ran" {
+		t.Fatalf("update command output = %q, err %v", got, err)
+	}
+	for _, marker := range []string{"started", "done"} {
+		if _, err := os.Stat(filepath.Join(dir, marker)); err != nil {
+			t.Fatalf("%s marker missing: %v", marker, err)
+		}
 	}
 }
 
