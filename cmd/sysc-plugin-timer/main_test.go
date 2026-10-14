@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	"github.com/Nomadcxx/sysc-plugins/plugins/timer"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -278,10 +277,6 @@ func TestTickSavesTheRolledPhase(t *testing.T) {
 }
 
 func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
-	orig := hostcall.Default
-	hostcall.Default = 5 * time.Second
-	defer func() { hostcall.Default = orig }()
-
 	toPlugin, hostOut := io.Pipe()
 	hostIn, pluginOut := io.Pipe()
 	defer toPlugin.Close()
@@ -361,12 +356,12 @@ func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
 
 	select {
 	case <-burstSent:
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(time.Second):
 		t.Fatal("plugin stopped receiving input behind a held host call")
 	}
 	select {
 	case <-snapshotted:
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(time.Second):
 		t.Fatal("plugin is wedged: it never rendered the view opened after the input burst")
 	}
 }

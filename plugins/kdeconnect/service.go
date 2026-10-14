@@ -365,7 +365,7 @@ func (s *Service) serve(bus daemonBus) error {
 		case <-s.refresh:
 			// A manual refresh always runs; the shared rate limit is for the
 			// signal-driven reconciles only.
-			st.idleScanEmpty = false
+			st.resetRecentImageScan()
 			_ = st.reconcileNow(bus)
 			scanAndPublish()
 		case a := <-s.actions:
@@ -374,7 +374,7 @@ func (s *Service) serve(bus daemonBus) error {
 				publish()
 			}
 		case set := <-s.configure:
-			st.idleScanEmpty = false
+			st.resetRecentImageScan()
 			s.settings = set
 			interval = tickInterval(set.RefreshSeconds)
 			if ticker != nil {
@@ -387,7 +387,7 @@ func (s *Service) serve(bus daemonBus) error {
 				tickC = ticker.C
 			}
 		case id := <-s.selectReq:
-			st.idleScanEmpty = false
+			st.resetRecentImageScan()
 			saved = id
 			scanAndPublish()
 		case sig, ok := <-signals:
@@ -437,10 +437,19 @@ type daemonState struct {
 	events        chan<- Event
 	recentImages  []RecentImage
 	// idleScanEmpty is a successful empty-path scan that found no photos.
-	// Further ticks skip the mount until a refresh, selection change, or
-	// settings change; a failed mount never sets it, so permission grant
-	// can still recover.
 	idleScanEmpty bool
+	// sftpScanFailedFor suppresses repeated timer mounts after a failure.
+	// A disconnect, refresh, selection, or settings change clears it.
+	// ponytail: no timed retry while the phone stays reachable; add bounded
+	// backoff only if users need recovery without one of those triggers.
+	sftpScanFailedFor string
+}
+
+// resetRecentImageScan lets an explicit refresh, selection, or settings
+// change retry a scan that stopped after finding no images or a failed mount.
+func (st *daemonState) resetRecentImageScan() {
+	st.idleScanEmpty = false
+	st.sftpScanFailedFor = ""
 }
 
 // emit delivers an event without ever blocking the serve loop.
@@ -498,6 +507,9 @@ func (st *daemonState) reconcileNow(bus daemonBus) error {
 	for id := range st.devices {
 		if !seen[id] {
 			delete(st.devices, id)
+			if st.sftpScanFailedFor == id {
+				st.sftpScanFailedFor = ""
+			}
 		}
 	}
 	return nil
@@ -526,6 +538,9 @@ func (st *daemonState) fetchDevice(bus daemonBus, id string) {
 	dev.PairRequestedByPeer = boolOf(props["isPairRequestedByPeer"])
 	dev.VerificationKey = strOf(props["verificationKey"])
 	dev.SupportedPlugins = stringListOf(props["supportedPlugins"])
+	if st.sftpScanFailedFor == id && (!dev.Reachable || !dev.Paired || !hasPlugin(dev, "sftp")) {
+		st.sftpScanFailedFor = ""
+	}
 	if dev.PairRequestedByPeer && !wasRequestedByPeer {
 		e := Event{
 			Kind:       EventPairingRequest,
@@ -904,6 +919,9 @@ func updateFromSignal(sig *dbus.Signal, bus daemonBus, st *daemonState) bool {
 		id, _ := sig.Body[0].(string)
 		if _, ok := st.devices[id]; ok {
 			delete(st.devices, id)
+			if st.sftpScanFailedFor == id {
+				st.sftpScanFailedFor = ""
+			}
 			for i, ordered := range st.order {
 				if ordered == id {
 					st.order = append(st.order[:i], st.order[i+1:]...)
@@ -1329,13 +1347,11 @@ var mockupIdleRoots = []string{"DCIM", "Pictures"}
 // where the share landed, and the scan plus thumbnails run over the mount.
 // The configured path is relative to the mount point. An empty path still
 // mounts and scans DCIM plus Pictures for the mockup, but leaves the grid
-// empty. Every failure — no sftp plugin, a failed mount, an unreadable
-// file — degrades to an empty grid, never an unavailable panel.
+// empty. Mount failures stop timer retries until a refresh, selection or
+// settings change, or an observed disconnect. Other failures degrade to an
+// empty grid, never an unavailable panel.
 func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 	gridPath := st.svc.settings.RecentImagesPath
-	if gridPath == "" && st.idleScanEmpty {
-		return
-	}
 	st.recentImages = nil
 	devices := make([]Device, 0, len(st.order))
 	for _, id := range st.order {
@@ -1346,9 +1362,16 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 	selected := resolveSelection(devices, *saved)
 	dev := st.devices[selected]
 	if dev == nil || !dev.Reachable || !dev.Paired || !hasPlugin(dev, "sftp") {
+		st.sftpScanFailedFor = ""
 		if dev != nil {
 			dev.SFTPError = ""
 		}
+		return
+	}
+	if st.sftpScanFailedFor != "" && st.sftpScanFailedFor != selected {
+		st.sftpScanFailedFor = ""
+	}
+	if st.sftpScanFailedFor == selected || (gridPath == "" && st.idleScanEmpty) {
 		return
 	}
 	obj := bus.object(kdeService, pluginPath(selected, "sftp"))
@@ -1356,6 +1379,7 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 	// the file manager, on every background refresh. mountPoint then reads
 	// where the share landed.
 	if call := obj.Call(sftpIface+".mountAndWait", 0); call.Err != nil || !replyTrue(call) {
+		st.sftpScanFailedFor = selected
 		if gridPath != "" {
 			dev.SFTPError = sftpMountReason(obj, call)
 		}
