@@ -6,6 +6,20 @@
       "name": "AI Usage",
       "author": "Nomadcxx",
       "description": "Shows AI coding-assistant usage quotas in the bar with a detail panel and threshold alerts.",
+      "name_i18n": {
+        "es": "Uso de IA",
+        "ja": "AI 使用量",
+        "ko": "AI 사용량",
+        "pt": "Uso de IA",
+        "ru": "Использование ИИ"
+      },
+      "description_i18n": {
+        "es": "Uso de IA por aplicación del motor CodeReady",
+        "ja": "CodeReady エンジンのアプリ別 AI トークン使用量",
+        "ko": "CodeReady 엔진의 앱별 AI 토큰 사용량",
+        "pt": "Uso de IA por aplicativo do motor CodeReady",
+        "ru": "Использование ИИ по приложениям движка CodeReady"
+      },
       "category": "monitoring",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -37,27 +51,27 @@
           "size": 5080166
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/aiusage-v0.1.0",
-      "name_i18n": {
-        "es": "Uso de IA",
-        "pt": "Uso de IA",
-        "ja": "AI 使用量",
-        "ko": "AI 사용량",
-        "ru": "Использование ИИ"
-      },
-      "description_i18n": {
-        "es": "Uso de IA por aplicación del motor CodeReady",
-        "pt": "Uso de IA por aplicativo do motor CodeReady",
-        "ja": "CodeReady エンジンのアプリ別 AI トークン使用量",
-        "ko": "CodeReady 엔진의 앱별 AI 토큰 사용량",
-        "ru": "Использование ИИ по приложениям движка CodeReady"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/aiusage-v0.1.0"
     },
     {
       "id": "org.sysc.calendar",
       "name": "Calendar",
       "author": "Nomadcxx",
       "description": "A read-only EDS calendar with event views, details, and safe actions.",
+      "name_i18n": {
+        "es": "Calendario",
+        "ja": "カレンダー",
+        "ko": "달력",
+        "pt": "Calendário",
+        "ru": "Календарь"
+      },
+      "description_i18n": {
+        "es": "Días restantes hasta cada evento",
+        "ja": "各イベントまでの残り日数",
+        "ko": "각 일정까지 남은 일수",
+        "pt": "Dias restantes até cada evento",
+        "ru": "Дней до каждого события"
+      },
       "category": "productivity",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -90,27 +104,27 @@
           "size": 2201138
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/calendar-v0.3.0",
-      "name_i18n": {
-        "es": "Calendario",
-        "pt": "Calendário",
-        "ja": "カレンダー",
-        "ko": "달력",
-        "ru": "Календарь"
-      },
-      "description_i18n": {
-        "es": "Días restantes hasta cada evento",
-        "pt": "Dias restantes até cada evento",
-        "ja": "各イベントまでの残り日数",
-        "ko": "각 일정까지 남은 일수",
-        "ru": "Дней до каждого события"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/calendar-v0.3.0"
     },
     {
       "id": "org.sysc.cat",
       "name": "Cat",
       "author": "Nomadcxx",
       "description": "An animated cat in the bar that walks and gallops with CPU load, and grooms, stretches and naps while the machine idles.",
+      "name_i18n": {
+        "es": "Gato",
+        "ja": "猫",
+        "ko": "고양이",
+        "pt": "Gato",
+        "ru": "Кошка"
+      },
+      "description_i18n": {
+        "es": "Salvapantallas con fotos aleatorias de gatos",
+        "ja": "猫のランダム写真スクリーンセイバー パネル",
+        "ko": "무작위 고양이 사진 화면 보호기 패널",
+        "pt": "Protetor de tela com fotos aleatórias de gatos",
+        "ru": "Заставка со случайными фотографиями кошек"
+      },
       "category": "monitoring",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -140,27 +154,27 @@
           "size": 1970730
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/cat-v1.0.0",
-      "name_i18n": {
-        "es": "Gato",
-        "pt": "Gato",
-        "ja": "猫",
-        "ko": "고양이",
-        "ru": "Кошка"
-      },
-      "description_i18n": {
-        "es": "Salvapantallas con fotos aleatorias de gatos",
-        "pt": "Protetor de tela com fotos aleatórias de gatos",
-        "ja": "猫のランダム写真スクリーンセイバー パネル",
-        "ko": "무작위 고양이 사진 화면 보호기 패널",
-        "ru": "Заставка со случайными фотографиями кошек"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/cat-v1.0.0"
     },
     {
       "id": "org.sysc.faith",
       "name": "Faith",
       "author": "Nomadcxx",
       "description": "A cross on the bar that offers a prayer when clicked, and a Scripture panel with cross-references and commentary.",
+      "name_i18n": {
+        "es": "Fe",
+        "ja": "信仰",
+        "ko": "신앙",
+        "pt": "Fé",
+        "ru": "Вера"
+      },
+      "description_i18n": {
+        "es": "Horarios de oración y fecha del calendario de la Hégira, con cálculo ajustable",
+        "ja": "礼拝時刻とヒジュラ暦日付、計算方式調整可",
+        "ko": "기도 시간과 히즈리 달력 날짜, 계산법 조절 가능",
+        "pt": "Horários de oração e data do calendário islâmico, com cálculo ajustável",
+        "ru": "Время намаза и дата по хиджре, настраиваемый расчёт"
+      },
       "category": "utilities",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -192,27 +206,27 @@
           "size": 13714866
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/faith-v0.1.0",
-      "name_i18n": {
-        "es": "Fe",
-        "pt": "Fé",
-        "ja": "信仰",
-        "ko": "신앙",
-        "ru": "Вера"
-      },
-      "description_i18n": {
-        "es": "Horarios de oración y fecha del calendario de la Hégira, con cálculo ajustable",
-        "pt": "Horários de oração e data do calendário islâmico, com cálculo ajustável",
-        "ja": "礼拝時刻とヒジュラ暦日付、計算方式調整可",
-        "ko": "기도 시간과 히즈리 달력 날짜, 계산법 조절 가능",
-        "ru": "Время намаза и дата по хиджре, настраиваемый расчёт"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/faith-v0.1.0"
     },
     {
       "id": "org.sysc.games",
       "name": "Games",
       "author": "Nomadcxx",
       "description": "Lutris game deck: launch, running truth, session history, cover art.",
+      "name_i18n": {
+        "es": "Juegos",
+        "ja": "ゲーム",
+        "ko": "게임",
+        "pt": "Jogos",
+        "ru": "Игры"
+      },
+      "description_i18n": {
+        "es": "Juega Buscaminas y Snake, en vivo en un panel",
+        "ja": "マインスイーパとスネークをパネルでライブプレイ",
+        "ko": "지뢰찾기와 스네이크를 패널에서 바로 플레이",
+        "pt": "Jogue Campo Minado e Cobra, ao vivo em um painel",
+        "ru": "«Сапёр» и «Змейка» прямо в панели"
+      },
       "category": "media",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -245,27 +259,27 @@
           "size": 7243524
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/games-v0.1.0",
-      "name_i18n": {
-        "es": "Juegos",
-        "pt": "Jogos",
-        "ja": "ゲーム",
-        "ko": "게임",
-        "ru": "Игры"
-      },
-      "description_i18n": {
-        "es": "Juega Buscaminas y Snake, en vivo en un panel",
-        "pt": "Jogue Campo Minado e Cobra, ao vivo em um painel",
-        "ja": "マインスイーパとスネークをパネルでライブプレイ",
-        "ko": "지뢰찾기와 스네이크를 패널에서 바로 플레이",
-        "ru": "«Сапёр» и «Змейка» прямо в панели"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/games-v0.1.0"
     },
     {
       "id": "org.sysc.github-notifications",
       "name": "GitHub Notifications",
       "author": "Nomadcxx",
       "description": "Triage unread GitHub notifications, open work, and contribution activity from the panel.",
+      "name_i18n": {
+        "es": "Notificaciones de GitHub",
+        "ja": "GitHub 通知",
+        "ko": "GitHub 알림",
+        "pt": "Notificações do GitHub",
+        "ru": "Уведомления GitHub"
+      },
+      "description_i18n": {
+        "es": "Tu bandeja de entrada de GitHub en la barra",
+        "ja": "バー上の GitHub 受信トレイ",
+        "ko": "바에 표시되는 GitHub 받은편지함",
+        "pt": "Sua caixa de entrada do GitHub na barra",
+        "ru": "Ваша почта GitHub на панели"
+      },
       "category": "productivity",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -299,27 +313,27 @@
           "size": 2392788
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/github-notifications-v0.3.1",
-      "name_i18n": {
-        "es": "Notificaciones de GitHub",
-        "pt": "Notificações do GitHub",
-        "ja": "GitHub 通知",
-        "ko": "GitHub 알림",
-        "ru": "Уведомления GitHub"
-      },
-      "description_i18n": {
-        "es": "Tu bandeja de entrada de GitHub en la barra",
-        "pt": "Sua caixa de entrada do GitHub na barra",
-        "ja": "バー上の GitHub 受信トレイ",
-        "ko": "바에 표시되는 GitHub 받은편지함",
-        "ru": "Ваша почта GitHub на панели"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/github-notifications-v0.3.1"
     },
     {
       "id": "org.sysc.kdeconnect",
       "name": "Phone Connect",
       "author": "Nomadcxx",
       "description": "Connects to a paired phone over KDE Connect, showing battery, notifications, and recent photos in the bar panel.",
+      "name_i18n": {
+        "es": "KDE Connect",
+        "ja": "KDE Connect",
+        "ko": "KDE Connect",
+        "pt": "KDE Connect",
+        "ru": "KDE Connect"
+      },
+      "description_i18n": {
+        "es": "Dispositivos KDE Connect, batería y notificaciones en la barra",
+        "ja": "KDE Connect のデバイス、電池と通知をバーに表示",
+        "ko": "KDE Connect 기기, 배터리와 알림을 바에 표시",
+        "pt": "Dispositivos KDE Connect, bateria e notificações na barra",
+        "ru": "Устройства KDE Connect, батарея и уведомления на панели"
+      },
       "category": "utilities",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -353,33 +367,37 @@
           "size": 3391643
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/kdeconnect-v0.1.0",
-      "name_i18n": {
-        "es": "KDE Connect",
-        "pt": "KDE Connect",
-        "ja": "KDE Connect",
-        "ko": "KDE Connect",
-        "ru": "KDE Connect"
-      },
-      "description_i18n": {
-        "es": "Dispositivos KDE Connect, batería y notificaciones en la barra",
-        "pt": "Dispositivos KDE Connect, bateria e notificações na barra",
-        "ja": "KDE Connect のデバイス、電池と通知をバーに表示",
-        "ko": "KDE Connect 기기, 배터리와 알림을 바에 표시",
-        "ru": "Устройства KDE Connect, батарея и уведомления на панели"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/kdeconnect-v0.1.0"
     },
     {
       "id": "org.sysc.mini-docker",
       "name": "Mini Docker",
       "author": "Nomadcxx",
       "description": "Shows the Docker whale in the bar with a panel to manage containers.",
+      "name_i18n": {
+        "es": "Docker",
+        "ja": "Docker",
+        "ko": "Docker",
+        "pt": "Docker",
+        "ru": "Docker"
+      },
+      "description_i18n": {
+        "es": "Estado y controles de contenedores en la barra",
+        "ja": "バー上のコンテナ状態とコントロール",
+        "ko": "바에 표시되는 컨테이너 상태와 제어",
+        "pt": "Status e controles de contêineres na barra",
+        "ru": "Состояние контейнеров и управление на панели"
+      },
       "category": "system",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/mini-docker-v0.4.1/plugins/mini-docker/thumbnail.webp",
+        "sha256": "df2cba9a6bb1f9ba570f885b5ddf5b05e2f80df6c9e44ee8479d562851c9d8df"
+      },
       "added_at": "2026-09-29T04:04:30.307779681Z",
-      "updated_at": "2026-09-29T04:04:30.307779681Z",
-      "version": "0.4.0",
+      "updated_at": "2026-10-14T14:12:37.638555429Z",
+      "version": "0.4.1",
       "protocol": {
         "major": 1,
         "minor": 4
@@ -395,37 +413,68 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.0/org.sysc.mini-docker-0.4.0-linux-amd64.tar.gz",
-          "sha256": "7b6076b2c866dddbd46f5abd5defd3d285b1e3a0863ea8d30ff51fe73bf7d1cb",
-          "size": 2552403
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.1/org.sysc.mini-docker-0.4.1-linux-amd64.tar.gz",
+          "sha256": "a01f58cfcb102f144ed2f9b8235a4fc5d0c917e47a7c1344eff14f27be36e2dc",
+          "size": 2553723
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.0/org.sysc.mini-docker-0.4.0-linux-arm64.tar.gz",
-          "sha256": "94183a1f81d573126ee166d294a91d7473f0a74f2e47168438fdeb65dcaf3b4e",
-          "size": 2364788
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.1/org.sysc.mini-docker-0.4.1-linux-arm64.tar.gz",
+          "sha256": "bcfb097f12ef22f3c062d1011a9d643ff4d90d5e4de4df3859b8d8ffe0885dff",
+          "size": 2365713
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/mini-docker-v0.4.0",
-      "name_i18n": {
-        "es": "Docker",
-        "pt": "Docker",
-        "ja": "Docker",
-        "ko": "Docker",
-        "ru": "Docker"
-      },
-      "description_i18n": {
-        "es": "Estado y controles de contenedores en la barra",
-        "pt": "Status e controles de contêineres na barra",
-        "ja": "バー上のコンテナ状態とコントロール",
-        "ko": "바에 표시되는 컨테이너 상태와 제어",
-        "ru": "Состояние контейнеров и управление на панели"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/mini-docker-v0.4.1",
+      "releases": [
+        {
+          "version": "0.4.0",
+          "protocol": {
+            "major": 1,
+            "minor": 4
+          },
+          "capabilities": [
+            "panels",
+            "settings"
+          ],
+          "requires": {
+            "commands": [
+              "docker"
+            ]
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.0/org.sysc.mini-docker-0.4.0-linux-amd64.tar.gz",
+              "sha256": "7b6076b2c866dddbd46f5abd5defd3d285b1e3a0863ea8d30ff51fe73bf7d1cb",
+              "size": 2552403
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/mini-docker-v0.4.0/org.sysc.mini-docker-0.4.0-linux-arm64.tar.gz",
+              "sha256": "94183a1f81d573126ee166d294a91d7473f0a74f2e47168438fdeb65dcaf3b4e",
+              "size": 2364788
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/mini-docker-v0.4.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.moonbit",
       "name": "Moonbit",
       "author": "Nomadcxx",
       "description": "Moonbit system cleaner from the bar: scan, review, and reclaim disk space.",
+      "name_i18n": {
+        "es": "MoonBit",
+        "ja": "MoonBit",
+        "ko": "MoonBit",
+        "pt": "MoonBit",
+        "ru": "MoonBit"
+      },
+      "description_i18n": {
+        "es": "Información del lenguaje en vivo, a la vanguardia",
+        "ja": "ライブの言語情報、世界に先駆けて",
+        "ko": "라이브 언어 정보, 세계 최초",
+        "pt": "Informação da linguagem ao vivo, pioneira",
+        "ru": "Живая информация о языке, в мире первая"
+      },
       "category": "system",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -546,27 +595,27 @@
           },
           "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/moonbit-v1.1.0"
         }
-      ],
-      "name_i18n": {
-        "es": "MoonBit",
-        "pt": "MoonBit",
-        "ja": "MoonBit",
-        "ko": "MoonBit",
-        "ru": "MoonBit"
-      },
-      "description_i18n": {
-        "es": "Información del lenguaje en vivo, a la vanguardia",
-        "pt": "Informação da linguagem ao vivo, pioneira",
-        "ja": "ライブの言語情報、世界に先駆けて",
-        "ko": "라이브 언어 정보, 세계 최초",
-        "ru": "Живая информация о языке, в мире первая"
-      }
+      ]
     },
     {
       "id": "org.sysc.notes",
       "name": "Notes",
       "author": "Nomadcxx",
       "description": "Markdown notes and pastel sticky notes for your Obsidian folder, with one box to search or start a note.",
+      "name_i18n": {
+        "es": "Notas",
+        "ja": "メモ",
+        "ko": "메모",
+        "pt": "Notas",
+        "ru": "Заметки"
+      },
+      "description_i18n": {
+        "es": "Notas en Markdown y notas adhesivas en tonos pastel para tu carpeta de Obsidian, con un campo para buscar o iniciar una nota.",
+        "ja": "Obsidian フォルダ用の Markdown メモとパステルカラーの付箋。1つの入力欄で検索も新規作成もできます。",
+        "ko": "Obsidian 폴더용 Markdown 메모와 파스텔 색 메모지. 입력창 하나에서 검색하거나 새 메모를 시작합니다.",
+        "pt": "Notas em Markdown e notas adesivas em tons pastel para sua pasta do Obsidian, com um campo para buscar ou iniciar uma nota.",
+        "ru": "Заметки в Markdown и пастельные стикеры для папки Obsidian — одно поле для поиска или новой заметки."
+      },
       "category": "productivity",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -668,27 +717,27 @@
           },
           "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/notes-v1.0.0"
         }
-      ],
-      "name_i18n": {
-        "es": "Notas",
-        "pt": "Notas",
-        "ja": "メモ",
-        "ko": "메모",
-        "ru": "Заметки"
-      },
-      "description_i18n": {
-        "es": "Notas en Markdown y notas adhesivas en tonos pastel para tu carpeta de Obsidian, con un campo para buscar o iniciar una nota.",
-        "pt": "Notas em Markdown e notas adesivas em tons pastel para sua pasta do Obsidian, com um campo para buscar ou iniciar uma nota.",
-        "ja": "Obsidian フォルダ用の Markdown メモとパステルカラーの付箋。1つの入力欄で検索も新規作成もできます。",
-        "ko": "Obsidian 폴더용 Markdown 메모와 파스텔 색 메모지. 입력창 하나에서 검색하거나 새 메모를 시작합니다.",
-        "ru": "Заметки в Markdown и пастельные стикеры для папки Obsidian — одно поле для поиска или новой заметки."
-      }
+      ]
     },
     {
       "id": "org.sysc.protonvpn",
       "name": "ProtonVPN",
       "author": "Nomadcxx",
       "description": "ProtonVPN from the bar: quick connect, server picker, and protection status.",
+      "name_i18n": {
+        "es": "ProtonVPN",
+        "ja": "ProtonVPN",
+        "ko": "ProtonVPN",
+        "pt": "ProtonVPN",
+        "ru": "ProtonVPN"
+      },
+      "description_i18n": {
+        "es": "Controles de ProtonVPN, estado en vivo",
+        "ja": "ProtonVPN のコントロール、ライブ状態",
+        "ko": "ProtonVPN 제어, 실시간 상태",
+        "pt": "Controles do ProtonVPN, status ao vivo",
+        "ru": "Управление ProtonVPN, живое состояние"
+      },
       "category": "utilities",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -757,27 +806,27 @@
           },
           "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/protonvpn-v1.0.0"
         }
-      ],
-      "name_i18n": {
-        "es": "ProtonVPN",
-        "pt": "ProtonVPN",
-        "ja": "ProtonVPN",
-        "ko": "ProtonVPN",
-        "ru": "ProtonVPN"
-      },
-      "description_i18n": {
-        "es": "Controles de ProtonVPN, estado en vivo",
-        "pt": "Controles do ProtonVPN, status ao vivo",
-        "ja": "ProtonVPN のコントロール、ライブ状態",
-        "ko": "ProtonVPN 제어, 실시간 상태",
-        "ru": "Управление ProtonVPN, живое состояние"
-      }
+      ]
     },
     {
       "id": "org.sysc.screen-recorder",
       "name": "Screen Recorder",
       "author": "Nomadcxx",
       "description": "Records the screen or a window to video from the bar, with optional audio and a replay buffer.",
+      "name_i18n": {
+        "es": "Grabadora de pantalla",
+        "ja": "画面録画",
+        "ko": "화면 녹화",
+        "pt": "Gravador de tela",
+        "ru": "Запись экрана"
+      },
+      "description_i18n": {
+        "es": "Graba la pantalla con o sin audio, en vivo en la barra",
+        "ja": "音あり/なしで画面を録画、バーにライブ表示",
+        "ko": "소리와 함께 또는 없이 화면 녹화, 바에 실시간 표시",
+        "pt": "Grave a tela com ou sem áudio, ao vivo na barra",
+        "ru": "Запись экрана со звуком или без, живая индикация на панели"
+      },
       "category": "media",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -811,27 +860,27 @@
           "size": 2148371
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screen-recorder-v1.0.0",
-      "name_i18n": {
-        "es": "Grabadora de pantalla",
-        "pt": "Gravador de tela",
-        "ja": "画面録画",
-        "ko": "화면 녹화",
-        "ru": "Запись экрана"
-      },
-      "description_i18n": {
-        "es": "Graba la pantalla con o sin audio, en vivo en la barra",
-        "pt": "Grave a tela com ou sem áudio, ao vivo na barra",
-        "ja": "音あり/なしで画面を録画、バーにライブ表示",
-        "ko": "소리와 함께 또는 없이 화면 녹화, 바에 실시간 표시",
-        "ru": "Запись экрана со звуком или без, живая индикация на панели"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screen-recorder-v1.0.0"
     },
     {
       "id": "org.sysc.screenshot",
       "name": "Screenshot",
       "author": "Nomadcxx",
       "description": "Takes a region, window or screen screenshot from a bar button, using the shell's own capture engine.",
+      "name_i18n": {
+        "es": "Captura de pantalla",
+        "ja": "スクリーンショット",
+        "ko": "스크린샷",
+        "pt": "Captura de tela",
+        "ru": "Скриншот"
+      },
+      "description_i18n": {
+        "es": "Haz capturas de pantalla desde la barra",
+        "ja": "バーからスクリーンショットを撮影",
+        "ko": "바에서 스크린샷 촬영",
+        "pt": "Tire capturas de tela pela barra",
+        "ru": "Делайте скриншоты из панели"
+      },
       "category": "media",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -861,27 +910,27 @@
           "size": 2077471
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screenshot-v1.0.0",
-      "name_i18n": {
-        "es": "Captura de pantalla",
-        "pt": "Captura de tela",
-        "ja": "スクリーンショット",
-        "ko": "스크린샷",
-        "ru": "Скриншот"
-      },
-      "description_i18n": {
-        "es": "Haz capturas de pantalla desde la barra",
-        "pt": "Tire capturas de tela pela barra",
-        "ja": "バーからスクリーンショットを撮影",
-        "ko": "바에서 스크린샷 촬영",
-        "ru": "Делайте скриншоты из панели"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/screenshot-v1.0.0"
     },
     {
       "id": "org.sysc.timer",
       "name": "Pomodoro Timer",
       "author": "Nomadcxx",
       "description": "A Pomodoro timer in the bar with work and break sessions.",
+      "name_i18n": {
+        "es": "Temporizador",
+        "ja": "タイマー",
+        "ko": "타이머",
+        "pt": "Temporizador",
+        "ru": "Таймер"
+      },
+      "description_i18n": {
+        "es": "Tiempo restante hasta la alarma, en vivo en la barra",
+        "ja": "アラームまでの残り時間をバーにライブ表示",
+        "ko": "알림까지 남은 시간을 바에 실시간 표시",
+        "pt": "Tempo restante até o alarme, ao vivo na barra",
+        "ru": "Оставшееся время до сигнала, живое отображение на панели"
+      },
       "category": "productivity",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -913,27 +962,27 @@
           "size": 2084914
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/timer-v1.4.0",
-      "name_i18n": {
-        "es": "Temporizador",
-        "pt": "Temporizador",
-        "ja": "タイマー",
-        "ko": "타이머",
-        "ru": "Таймер"
-      },
-      "description_i18n": {
-        "es": "Tiempo restante hasta la alarma, en vivo en la barra",
-        "pt": "Tempo restante até o alarme, ao vivo na barra",
-        "ja": "アラームまでの残り時間をバーにライブ表示",
-        "ko": "알림까지 남은 시간을 바에 실시간 표시",
-        "ru": "Оставшееся время до сигнала, живое отображение на панели"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/timer-v1.4.0"
     },
     {
       "id": "org.sysc.wallpaper-depth",
       "name": "Wallpaper Depth",
       "author": "Nomadcxx",
       "description": "Generates a depth mask for the current image wallpaper to place foreground scenery over a centred desktop clock.",
+      "name_i18n": {
+        "es": "Profundidad del fondo",
+        "ja": "壁紙の奥行き",
+        "ko": "배경 화면 깊이",
+        "pt": "Profundidade do papel de parede",
+        "ru": "Глубина обоев"
+      },
+      "description_i18n": {
+        "es": "Convierte tu fondo de pantalla en una escena 3D",
+        "ja": "壁紙を 3D シーンに変換",
+        "ko": "배경 화면을 3D 장면으로 변환",
+        "pt": "Transforme seu papel de parede em uma cena 3D",
+        "ru": "Превратите обои в 3D-сцену"
+      },
       "category": "appearance",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -971,27 +1020,27 @@
           "size": 2158251
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/wallpaper-depth-v1.0.0",
-      "name_i18n": {
-        "es": "Profundidad del fondo",
-        "pt": "Profundidade do papel de parede",
-        "ja": "壁紙の奥行き",
-        "ko": "배경 화면 깊이",
-        "ru": "Глубина обоев"
-      },
-      "description_i18n": {
-        "es": "Convierte tu fondo de pantalla en una escena 3D",
-        "pt": "Transforme seu papel de parede em uma cena 3D",
-        "ja": "壁紙を 3D シーンに変換",
-        "ko": "배경 화면을 3D 장면으로 변환",
-        "ru": "Превратите обои в 3D-сцену"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/wallpaper-depth-v1.0.0"
     },
     {
       "id": "org.sysc.world-clock",
       "name": "World Clock",
       "author": "Nomadcxx",
       "description": "Search and manage labelled world clocks in the bar and panel.",
+      "name_i18n": {
+        "es": "Reloj mundial",
+        "ja": "世界時計",
+        "ko": "세계 시계",
+        "pt": "Relógio mundial",
+        "ru": "Мировые часы"
+      },
+      "description_i18n": {
+        "es": "Elige ciudades y consulta su hora en vivo en la barra",
+        "ja": "都市を選んでバーにライブ時刻表示",
+        "ko": "도시를 선택하면 바에 현지 시각 실시간 표시",
+        "pt": "Escolha cidades e veja a hora ao vivo na barra",
+        "ru": "Выберите города — их время на панели"
+      },
       "category": "utilities",
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
@@ -1022,21 +1071,7 @@
           "size": 2030354
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/world-clock-v2.0.0",
-      "name_i18n": {
-        "es": "Reloj mundial",
-        "pt": "Relógio mundial",
-        "ja": "世界時計",
-        "ko": "세계 시계",
-        "ru": "Мировые часы"
-      },
-      "description_i18n": {
-        "es": "Elige ciudades y consulta su hora en vivo en la barra",
-        "pt": "Escolha cidades e veja a hora ao vivo na barra",
-        "ja": "都市を選んでバーにライブ時刻表示",
-        "ko": "도시를 선택하면 바에 현지 시각 실시간 표시",
-        "ru": "Выберите города — их время на панели"
-      }
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/world-clock-v2.0.0"
     }
   ]
 }
