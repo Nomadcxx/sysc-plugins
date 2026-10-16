@@ -181,14 +181,14 @@ func runWith(in, out *os.File, roots thinkpad.Roots, storePath string) error {
 					}
 				}
 			case *v1.ViewResync:
-				if v, ok := views[m.ViewID]; ok {
-					v.rev = 0
-					views[m.ViewID] = v
-				}
+				// A resync replaces the host's tree but must not reuse a revision:
+				// queued input from the old tree still carries its old revision.
 				publish()
 			case *v1.InputEvent:
-				handleInput(ctx, c, controller, m, views, &selected, &pendingName)
-				publish()
+				if _, ok := currentInputView(m, views); ok {
+					handleInput(ctx, c, controller, m, views, &selected, &pendingName)
+					publish()
+				}
 			case *v1.SettingsChanged:
 				if settings.apply(m, minor) {
 					controller.Reconfigure(settings.config)
@@ -217,6 +217,14 @@ type view struct {
 	resizeTarget int
 }
 
+func currentInputView(m *v1.InputEvent, views map[string]view) (view, bool) {
+	if m == nil {
+		return view{}, false
+	}
+	source, ok := views[m.ViewID]
+	return source, ok && source.rev > 0 && m.Revision == source.rev
+}
+
 func handleInput(
 	ctx context.Context,
 	c *v1.Client,
@@ -225,10 +233,13 @@ func handleInput(
 	views map[string]view,
 	selected, pendingName *string,
 ) {
-	if m == nil || controller == nil {
+	if controller == nil {
 		return
 	}
-	source := views[m.ViewID]
+	source, ok := currentInputView(m, views)
+	if !ok {
+		return
+	}
 
 	// The text field is the one place the user types, so its live value is
 	// remembered here: the host owns the buffer, the plugin owns the meaning.
@@ -309,7 +320,12 @@ func handleInput(
 	case strings.HasPrefix(m.Node, "fan:"):
 		report(controller.SetFanLevel(strings.TrimPrefix(m.Node, "fan:")))
 	case strings.HasPrefix(m.Node, "kbd:"):
-		report(controller.SetKeyboardStep(strings.TrimPrefix(m.Node, "kbd:")))
+		step := strings.TrimPrefix(m.Node, "kbd:")
+		if step == "toggle" {
+			report(controller.ToggleKeyboard())
+		} else {
+			report(controller.SetKeyboardStep(step))
+		}
 	case m.Node == "lid":
 		report(controller.ToggleLid())
 	case strings.HasPrefix(m.Node, "profile:apply:"):

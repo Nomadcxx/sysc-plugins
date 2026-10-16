@@ -112,6 +112,26 @@ func TestBarFanGaugeAndRPMVisibilityAreIndependent(t *testing.T) {
 	}
 }
 
+func TestFanNoteDoesNotReportInvalidRPMAsZero(t *testing.T) {
+	snap := snapshots()["full"]
+	snap.State.FanValid = false
+	snap.State.FanRPM = 0
+	if got := fanNote(snap, true); got != "Fan speed unavailable." {
+		t.Fatalf("fan note = %q, want an unavailable reading", got)
+	}
+}
+
+func TestKeyboardHardwareChangeDoesNotClaimLidLightChanged(t *testing.T) {
+	snap := snapshots()["full"]
+	snap.ExternalKeyboard = true
+	if got := keyboardNote(snap, true); got != "A hardware key changed the backlight." {
+		t.Fatalf("keyboard note = %q, want the external keyboard-light change", got)
+	}
+	if got := lidNote(snap, true); got != "Lit while the lid logo is on." {
+		t.Fatalf("lid note = %q, want the unchanged lid-light note", got)
+	}
+}
+
 func TestTooltipLints(t *testing.T) {
 	cfg := DefaultConfig()
 	eachSnapshot(t, func(t *testing.T, name string, snap Snapshot) {

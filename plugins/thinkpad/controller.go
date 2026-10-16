@@ -60,9 +60,10 @@ type Snapshot struct {
 	StoreIssue string
 	StorePath  string
 	Busy       bool
-	// External reports that the user changed a light with the hardware key
-	// since the last frame, so the panel can say so rather than look stuck.
-	External bool
+	// External reports whether either light changed with a hardware key.
+	External         bool
+	ExternalKeyboard bool
+	ExternalLid      bool
 }
 
 // Controller is the plugin's brain. It owns the hardware and the profile store
@@ -81,11 +82,12 @@ type Controller struct {
 	busy   bool
 	warmed bool
 	warned bool
-	// external latches when the kernel reports a light was changed outside
-	// software, and clears on the next change we make ourselves.
-	external bool
-	hwSeen   struct{ keyboard, lid int }
-	hwValid  struct{ keyboard, lid bool }
+	// These latch when the kernel reports an external light change and clear
+	// when the plugin makes a change itself.
+	externalKeyboard bool
+	externalLid      bool
+	hwSeen           struct{ keyboard, lid int }
+	hwValid          struct{ keyboard, lid bool }
 }
 
 // NewController wires a controller to its hardware and profile store. The
@@ -113,7 +115,7 @@ func (c *Controller) Reconfigure(cfg Config) {
 	c.warmed = true
 	state := c.hw.Read()
 	c.mu.Lock()
-	c.external = c.detectExternalLocked(state)
+	c.externalKeyboard, c.externalLid = c.detectExternalLocked(state)
 	c.state = state
 	c.want = settingsFromState(state)
 	cfg = c.cfg
@@ -127,24 +129,42 @@ func (c *Controller) Snapshot() Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return Snapshot{
-		State:      c.state,
-		Config:     c.cfg,
-		Active:     c.active,
-		Want:       c.want,
-		Profiles:   c.store.Profiles(),
-		StoreIssue: c.store.LoadIssue(),
-		StorePath:  c.store.Path(),
-		Busy:       c.busy,
-		External:   c.external,
+		State:            c.state,
+		Config:           c.cfg,
+		Active:           c.active,
+		Want:             c.want,
+		Profiles:         c.store.Profiles(),
+		StoreIssue:       c.store.LoadIssue(),
+		StorePath:        c.store.Path(),
+		Busy:             c.busy,
+		External:         c.externalKeyboard || c.externalLid,
+		ExternalKeyboard: c.externalKeyboard,
+		ExternalLid:      c.externalLid,
 	}
 }
 
 // Refresh re-reads the hardware and checks the thermal guard.
 func (c *Controller) Refresh() {
+	c.refresh(0)
+}
+
+func (c *Controller) refresh(written writeMask) {
 	state := c.hw.Read()
 
 	c.mu.Lock()
-	c.external = c.detectExternalLocked(state)
+	// Some thinkpad_acpi versions also advance brightness_hw_changed after a
+	// software write. Baseline only lights this apply actually wrote before
+	// detecting external changes; the other light's counter remains meaningful.
+	if written&writeKeyboard != 0 {
+		c.hwSeen.keyboard, c.hwValid.keyboard = state.Keyboard.HWChanged, state.Keyboard.HWChangedValid
+	}
+	if written&writeLid != 0 {
+		c.hwSeen.lid, c.hwValid.lid = state.Lid.HWChanged, state.Lid.HWChangedValid
+	}
+	c.clearExternalLocked(written)
+	keyboardChanged, lidChanged := c.detectExternalLocked(state)
+	c.externalKeyboard = c.externalKeyboard || keyboardChanged
+	c.externalLid = c.externalLid || lidChanged
 	c.state = state
 	cfg := c.cfg
 	c.mu.Unlock()
@@ -154,7 +174,7 @@ func (c *Controller) Refresh() {
 
 // detectExternalLocked notices a light the user changed with the hardware key,
 // so the UI can say "you changed this with the key" instead of looking stuck.
-func (c *Controller) detectExternalLocked(state State) bool {
+func (c *Controller) detectExternalLocked(state State) (bool, bool) {
 	changed := func(st LEDState, seen *int, valid *bool) bool {
 		if !st.HWChangedValid {
 			return false
@@ -177,7 +197,16 @@ func (c *Controller) detectExternalLocked(state State) bool {
 	if lidChanged {
 		c.want.LidOn = state.Lid.On()
 	}
-	return keyboardChanged || lidChanged
+	return keyboardChanged, lidChanged
+}
+
+func (c *Controller) clearExternalLocked(written writeMask) {
+	if written&writeKeyboard != 0 {
+		c.externalKeyboard = false
+	}
+	if written&writeLid != 0 {
+		c.externalLid = false
+	}
 }
 
 func settingsFromState(state State) Settings {
@@ -246,7 +275,6 @@ func (c *Controller) ApplyProfile(name string) error {
 	c.mu.Lock()
 	c.active = p.Name
 	c.want = sanitizeSettings(p.Settings)
-	c.external = false
 	c.mu.Unlock()
 
 	res := c.apply(writeAll)
@@ -269,7 +297,6 @@ func (c *Controller) SetFanLevel(level string) error {
 	want := c.want
 	want.FanLevel = level
 	c.want = want
-	c.external = false
 	c.mu.Unlock()
 
 	return c.applyAndPersist(writeFan)
@@ -285,7 +312,6 @@ func (c *Controller) SetKeyboard(on bool, level int) error {
 	want.KeyboardOn = on
 	want.KeyboardLevel = level
 	c.want = want
-	c.external = false
 	c.mu.Unlock()
 
 	return c.applyAndPersist(writeKeyboard)
@@ -306,7 +332,6 @@ func (c *Controller) ToggleKeyboard() error {
 		}
 	}
 	c.want = want
-	c.external = false
 	c.mu.Unlock()
 
 	return c.applyAndPersist(writeKeyboard)
@@ -346,7 +371,6 @@ func (c *Controller) ToggleLid() error {
 	want := c.want
 	want.LidOn = !want.LidOn
 	c.want = want
-	c.external = false
 	c.mu.Unlock()
 
 	return c.applyAndPersist(writeLid)
@@ -358,7 +382,6 @@ func (c *Controller) SetLid(on bool) error {
 	want := c.want
 	want.LidOn = on
 	c.want = want
-	c.external = false
 	c.mu.Unlock()
 
 	return c.applyAndPersist(writeLid)
@@ -456,20 +479,25 @@ func (c *Controller) apply(mask writeMask) Result {
 	// warning rather than being swallowed by the start-up one.
 	c.mu.Lock()
 	c.warned = false
-	// Some drivers bump brightness_hw_changed on a software write as well as
-	// on the key. Clearing the flag here keeps our own toggle from coming
-	// back to us a moment later as "you changed this with the key".
-	c.external = false
 	c.mu.Unlock()
 
+	var written writeMask
 	if mask&writeFan != 0 && want.FanLevel != "" && c.hw.fanAvailable() {
 		push("fan", c.hw.SetFanLevel(want.FanLevel))
 	}
 	if mask&writeKeyboard != 0 && c.hw.keyboardAvailable() {
-		push("keyboard", c.hw.SetKeyboard(want.KeyboardValue()))
+		err := c.hw.SetKeyboard(want.KeyboardValue())
+		push("keyboard", err)
+		if err == nil {
+			written |= writeKeyboard
+		}
 	}
 	if mask&writeLid != 0 && c.hw.lidAvailable() {
-		push("lid logo", c.hw.SetLid(want.LidOn))
+		err := c.hw.SetLid(want.LidOn)
+		push("lid logo", err)
+		if err == nil {
+			written |= writeLid
+		}
 	}
 
 	if !res.OK() && c.cfg.NotifyOnWriteError {
@@ -478,7 +506,7 @@ func (c *Controller) apply(mask writeMask) Result {
 		c.raise("ThinkPad: change refused", res.Error().Error()+
 			"\n\nOpen the panel and follow the setup steps, then press Re-check.", true)
 	}
-	c.Refresh()
+	c.refresh(written)
 	return res
 }
 

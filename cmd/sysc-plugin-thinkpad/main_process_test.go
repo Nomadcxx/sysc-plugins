@@ -64,12 +64,12 @@ func TestRunProcessesPanelSessionAndStopsPublishingClosedViews(t *testing.T) {
 
 	barCount = host.snapshotCount("bar-1")
 	host.send(t, &v1.InputEvent{
-		ViewID: "bar-1", Node: "open", Event: v1.EventActivate,
+		ViewID: "bar-1", Revision: bar.Revision, Node: "open", Event: v1.EventActivate,
 		Output: "DP-1", Generation: 3,
 	})
 	openCall := host.waitCall(t, v1.CallPanelOpen, 0)
 	assertPanelCall(t, openCall, "panel", "DP-1", "bar-instance", 3)
-	host.waitSnapshotAfter(t, "bar-1", barCount)
+	bar = host.waitSnapshotAfter(t, "bar-1", barCount)
 
 	host.send(t, &v1.ViewOpen{
 		ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Instance: "bar-instance",
@@ -82,7 +82,7 @@ func TestRunProcessesPanelSessionAndStopsPublishingClosedViews(t *testing.T) {
 
 	panelCount := host.snapshotCount("panel-1")
 	host.send(t, &v1.InputEvent{
-		ViewID: "panel-1", Node: "settings", Event: v1.EventActivate,
+		ViewID: "panel-1", Revision: panel.Revision, Node: "settings", Event: v1.EventActivate,
 		Output: "DP-1", Generation: 3,
 	})
 	settingsCall := host.waitCall(t, v1.CallPanelOpen, 1)
@@ -100,7 +100,7 @@ func TestRunProcessesPanelSessionAndStopsPublishingClosedViews(t *testing.T) {
 
 	settingsCount := host.snapshotCount("settings-1")
 	host.send(t, &v1.InputEvent{
-		ViewID: "settings-1", Node: "back", Event: v1.EventActivate,
+		ViewID: "settings-1", Revision: settings.Revision, Node: "back", Event: v1.EventActivate,
 		Output: "DP-1", Generation: 3,
 	})
 	backCall := host.waitCall(t, v1.CallPanelOpen, 2)
@@ -111,11 +111,11 @@ func TestRunProcessesPanelSessionAndStopsPublishingClosedViews(t *testing.T) {
 		ViewID: "panel-2", View: v1.ViewPanel, Entry: "panel", Instance: "bar-instance",
 		Output: "DP-1", Generation: 3, Width: thinkpad.PanelWidth, Height: 564,
 	})
-	host.waitSnapshotAfter(t, "panel-2", 0)
+	panel2 := host.waitSnapshotAfter(t, "panel-2", 0)
 
 	panelCount = host.snapshotCount("panel-2")
 	host.send(t, &v1.InputEvent{
-		ViewID: "panel-2", Node: "settings", Event: v1.EventActivate,
+		ViewID: "panel-2", Revision: panel2.Revision, Node: "settings", Event: v1.EventActivate,
 		Output: "DP-1", Generation: 3,
 	})
 	host.waitCall(t, v1.CallPanelOpen, 3)
@@ -125,11 +125,11 @@ func TestRunProcessesPanelSessionAndStopsPublishingClosedViews(t *testing.T) {
 		ViewID: "settings-2", View: v1.ViewPanel, Entry: "settings", Instance: "bar-instance",
 		Output: "DP-1", Generation: 3, Width: thinkpad.PanelWidth, Height: 720,
 	})
-	host.waitSnapshotAfter(t, "settings-2", 0)
+	settings2 := host.waitSnapshotAfter(t, "settings-2", 0)
 
 	settingsCount = host.snapshotCount("settings-2")
 	host.send(t, &v1.InputEvent{
-		ViewID: "settings-2", Node: "close", Event: v1.EventActivate,
+		ViewID: "settings-2", Revision: settings2.Revision, Node: "close", Event: v1.EventActivate,
 		Output: "DP-1", Generation: 3,
 	})
 	closeCall := host.waitCall(t, v1.CallPanelClose, 0)
@@ -141,13 +141,18 @@ func TestRunProcessesPanelSessionAndStopsPublishingClosedViews(t *testing.T) {
 		Output: "DP-1", Generation: 3, Width: thinkpad.PanelWidth, Height: 564,
 	})
 	host.waitSnapshotAfter(t, "panel-3", 0)
-
-	barCount = host.snapshotCount("bar-1")
 	host.send(t, &v1.ViewClose{ViewID: "bar-1"})
 	host.send(t, &v1.SettingsChanged{Scope: v1.ScopeInstance, Instance: "bar-instance", Values: map[string]any{
 		"show_fan": true, "show_kbd": true, "show_lid": true, "show_rpm": true,
 	}})
 	host.waitSnapshotAfter(t, "panel-3", 1)
+	// The first post-close publish drains snapshots that were already in
+	// flight from opening panel-3. Take the baseline only after that fence.
+	barCount = host.snapshotCount("bar-1")
+	host.send(t, &v1.SettingsChanged{Scope: v1.ScopeInstance, Instance: "bar-instance", Values: map[string]any{
+		"show_fan": false, "show_kbd": true, "show_lid": true, "show_rpm": false,
+	}})
+	host.waitSnapshotAfter(t, "panel-3", 2)
 	if got := host.snapshotCount("bar-1"); got != barCount {
 		t.Errorf("closed bar received %d new snapshots, want none", got-barCount)
 	}
@@ -162,6 +167,60 @@ func TestRunProcessesPanelSessionAndStopsPublishingClosedViews(t *testing.T) {
 					id, snapshots[i-1].Revision, snapshots[i].Revision)
 			}
 		}
+	}
+}
+
+func TestViewResyncKeepsInputRevisionsMonotonic(t *testing.T) {
+	roots := processTestRoots(t)
+	host := startProcessHost(t, roots, filepath.Join(t.TempDir(), "profiles.json"))
+	t.Cleanup(func() { host.cleanup(t) })
+	host.waitHello(t)
+
+	host.send(t, &v1.ViewOpen{
+		ViewID: "bar", View: v1.ViewBar, Entry: "bar", Output: "DP-1", Generation: 1,
+		Width: 240, Height: 32,
+	})
+	initial := host.waitSnapshotAfter(t, "bar", 0)
+
+	resyncCount := host.snapshotCount("bar")
+	host.send(t, &v1.ViewResync{ViewID: "bar"})
+	resynced := host.waitSnapshotAfter(t, "bar", resyncCount)
+	if resynced.Revision <= initial.Revision {
+		t.Fatalf("resync reused revision %d after revision %d", resynced.Revision, initial.Revision)
+	}
+
+	// The old tree may still have a queued pointer event when the shell asks for
+	// a resync. Advance the process through another message before checking that
+	// the stale event did not open the panel.
+	count := host.snapshotCount("bar")
+	host.send(t, &v1.InputEvent{
+		ViewID: "bar", Revision: initial.Revision, Node: "open", Event: v1.EventActivate,
+		Output: "DP-1", Generation: 1,
+	})
+	host.send(t, &v1.SettingsChanged{Scope: v1.ScopeInstance, Instance: "bar", Values: map[string]any{
+		"show_fan": true,
+	}})
+	latest := host.waitSnapshotAfter(t, "bar", count)
+
+	host.mu.Lock()
+	var openCalls int
+	for _, call := range host.calls {
+		if call.Call == v1.CallPanelOpen {
+			openCalls++
+		}
+	}
+	host.mu.Unlock()
+	if openCalls != 0 {
+		t.Fatalf("stale revision opened the panel %d times", openCalls)
+	}
+
+	host.send(t, &v1.InputEvent{
+		ViewID: "bar", Revision: latest.Revision, Node: "open", Event: v1.EventActivate,
+		Output: "DP-1", Generation: 1,
+	})
+	host.waitCall(t, v1.CallPanelOpen, 0)
+	if err := host.shutdown(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -218,11 +218,11 @@ func TestBarOpenAcceptsLeftAndRightClicks(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			selected, pending := "", ""
-			views := map[string]view{"bar-view": {entry: "bar", instance: "bar-placement"}}
+			views := map[string]view{"bar-view": {entry: "bar", instance: "bar-placement", rev: 1}}
 			done := make(chan struct{})
 			go func() {
 				handleInput(ctx, client, controller, &v1.InputEvent{
-					ViewID: "bar-view", Node: "open", Event: tc.event, Button: tc.button,
+					ViewID: "bar-view", Revision: 1, Node: "open", Event: tc.event, Button: tc.button,
 					Output: "DP-1",
 				}, views, &selected, &pending)
 				close(done)
@@ -261,6 +261,79 @@ func TestBarOpenAcceptsLeftAndRightClicks(t *testing.T) {
 	}
 }
 
+func TestKeyboardToggleInputTurnsBacklightOn(t *testing.T) {
+	ledPath := filepath.Join(t.TempDir(), "leds", thinkpad.LEDKeyboardBacklight)
+	if err := os.MkdirAll(ledPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	brightness := filepath.Join(ledPath, "brightness")
+	if err := os.WriteFile(brightness, []byte("0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ledPath, "max_brightness"), []byte("3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	controller := thinkpad.NewController(
+		thinkpad.NewHardware(thinkpad.Roots{LEDsRoot: filepath.Dir(ledPath)}),
+		thinkpad.OpenStore(filepath.Join(t.TempDir(), "profiles.json")), nil,
+	)
+	controller.Refresh()
+
+	selected, pending := "", ""
+	handleInput(context.Background(), nil, controller, &v1.InputEvent{
+		ViewID: "panel", Revision: 1, Node: "kbd:toggle", Event: v1.EventActivate,
+	}, map[string]view{"panel": {entry: "panel", rev: 1}}, &selected, &pending)
+
+	got, err := os.ReadFile(brightness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(got)) != "1" {
+		t.Fatalf("keyboard brightness after toggle = %q, want 1", strings.TrimSpace(string(got)))
+	}
+}
+
+func TestInputFromStaleOrClosedViewCannotChangeFan(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		revision uint64
+		views    map[string]view
+	}{
+		{name: "stale revision", revision: 1, views: map[string]view{"panel": {entry: "panel", rev: 2}}},
+		{name: "closed view", revision: 1, views: map[string]view{}},
+		{name: "unpublished view", revision: 0, views: map[string]view{"panel": {entry: "panel"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fanPath := filepath.Join(t.TempDir(), "fan")
+			if err := os.WriteFile(fanPath, []byte("status: enabled\nspeed: 3666\nlevel: auto\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			controller := thinkpad.NewController(
+				thinkpad.NewHardware(thinkpad.Roots{FanPath: fanPath}),
+				thinkpad.OpenStore(filepath.Join(t.TempDir(), "profiles.json")), nil,
+			)
+			controller.Refresh()
+			before, err := os.ReadFile(fanPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			selected, pending := "", ""
+			handleInput(context.Background(), nil, controller, &v1.InputEvent{
+				ViewID: "panel", Revision: tc.revision, Node: "fan:5", Event: v1.EventActivate,
+			}, tc.views, &selected, &pending)
+
+			after, err := os.ReadFile(fanPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Fatalf("invalid view input changed hardware from %q to %q", before, after)
+			}
+		})
+	}
+}
+
 func TestSliderInputWritesOnlyFiniteIntegerLevelsInRange(t *testing.T) {
 	root := t.TempDir()
 	fanPath := filepath.Join(root, "fan")
@@ -284,10 +357,11 @@ func TestSliderInputWritesOnlyFiniteIntegerLevelsInRange(t *testing.T) {
 	controller.Refresh()
 
 	selected, pending := "", ""
+	views := map[string]view{"panel": {entry: "panel", rev: 1}}
 	send := func(node string, value *float64) {
 		handleInput(context.Background(), nil, controller, &v1.InputEvent{
-			ViewID: "panel", Node: node, Event: v1.EventChange, Value: value,
-		}, nil, &selected, &pending)
+			ViewID: "panel", Revision: 1, Node: node, Event: v1.EventChange, Value: value,
+		}, views, &selected, &pending)
 	}
 	value := 5.0
 	send("fan-slider", &value)

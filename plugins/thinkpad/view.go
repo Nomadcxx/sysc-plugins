@@ -412,6 +412,8 @@ func fanNote(snap Snapshot, enabled bool) string {
 		return "Needs fan_control=1 in the driver options."
 	case !enabled:
 		return "Needs write access to change the level."
+	case !snap.State.FanValid:
+		return "Fan speed unavailable."
 	case snap.State.FanLevel == FanLevelDisengaged:
 		return fmt.Sprintf("Full speed · %d RPM", snap.State.FanRPM)
 	case numericLow(snap.State.FanLevel):
@@ -550,7 +552,7 @@ func keyboardNote(snap Snapshot, enabled bool) string {
 	switch {
 	case !led.Present:
 		return "This model has no backlight."
-	case snap.External:
+	case snap.ExternalKeyboard:
 		return "A hardware key changed the backlight."
 	case !enabled:
 		return "Needs write access to change it."
@@ -623,7 +625,7 @@ func lidNote(snap Snapshot, enabled bool) string {
 	switch {
 	case !snap.State.Lid.Present:
 		return "This model has no lid dot."
-	case snap.External:
+	case snap.ExternalLid:
 		return "A hardware key changed the lid light."
 	case !enabled:
 		return "Needs write access to switch it."

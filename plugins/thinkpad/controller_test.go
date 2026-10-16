@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Nomadcxx/sysc-metrics"
 )
 
 // controllerRig wires a controller to a fake sysfs tree, a real store file and
@@ -633,7 +635,8 @@ func TestHardwareKeypressesAreReportedAsExternal(t *testing.T) {
 
 	writeFixture(t, rig.hw.Roots().LEDsRoot+"/"+LEDKeyboardBacklight+"/brightness_hw_changed", "2")
 	c.Refresh()
-	if !c.Snapshot().External {
+	snap := c.Snapshot()
+	if !snap.External || !snap.ExternalKeyboard || snap.ExternalLid {
 		t.Error("External = false after the hardware counter moved")
 	}
 
@@ -663,18 +666,70 @@ func TestExternalLightChangesSurviveAnUnrelatedControlAction(t *testing.T) {
 	writeFixture(t, rig.brightnessPath(LEDLidLogoDot), "1")
 	writeFixture(t, rig.brightnessPath(LEDLidLogoDot)+"_hw_changed", "2")
 	c.Refresh()
-	if !c.Snapshot().External {
+	snap := c.Snapshot()
+	if !snap.External || !snap.ExternalKeyboard || !snap.ExternalLid {
 		t.Fatal("External = false after both hardware light counters moved")
+	}
+	c.Refresh()
+	if snap = c.Snapshot(); !snap.ExternalKeyboard || !snap.ExternalLid {
+		t.Fatal("external light notes disappeared on an ordinary poll")
 	}
 
 	if err := c.SetFanLevel("5"); err != nil {
 		t.Fatalf("SetFanLevel: %v", err)
+	}
+	if snap = c.Snapshot(); !snap.ExternalKeyboard || !snap.ExternalLid {
+		t.Fatal("fan change cleared an unrelated external light note")
 	}
 	if got := rig.led(LEDKeyboardBacklight); got != "2" {
 		t.Errorf("keyboard after fan change = %q, want external key setting 2", got)
 	}
 	if got := rig.led(LEDLidLogoDot); got != "1" {
 		t.Errorf("lid after fan change = %q, want external key setting 1", got)
+	}
+	if err := c.SetKeyboard(false, 0); err != nil {
+		t.Fatalf("SetKeyboard: %v", err)
+	}
+	if snap = c.Snapshot(); snap.ExternalKeyboard || !snap.ExternalLid {
+		t.Fatalf("keyboard action flags = keyboard:%v lid:%v, want only lid latched", snap.ExternalKeyboard, snap.ExternalLid)
+	}
+	if err := c.SetLid(false); err != nil {
+		t.Fatalf("SetLid: %v", err)
+	}
+	if snap = c.Snapshot(); snap.External {
+		t.Fatal("setting the lid light did not clear its external-change note")
+	}
+}
+
+func TestSoftwareLEDWriteThatMovesHardwareCounterIsNotExternal(t *testing.T) {
+	rig := newRig(t, "", map[string]string{
+		LEDKeyboardBacklight: "brightness=1;max_brightness=3;brightness_hw_changed=1",
+	}, 0, false)
+	brightnessPath := rig.brightnessPath(LEDKeyboardBacklight)
+	previous, counter := 1, 1
+	rig.hw.readLEDSnapshot = func() (metrics.LEDSnapshot, error) {
+		brightness, err := strconv.Atoi(strings.TrimSpace(readFile(t, brightnessPath)))
+		if err != nil {
+			return metrics.LEDSnapshot{}, err
+		}
+		// Model kernels that increment brightness_hw_changed after a software
+		// write, using the same sysfs tree as the rest of this test.
+		if brightness != previous {
+			counter++
+			previous = brightness
+		}
+		return metrics.LEDSnapshot{LEDs: []metrics.LED{{
+			Name: LEDKeyboardBacklight, Brightness: brightness, BrightnessValid: true,
+			MaxBrightness: 3, HWChanged: counter, HWChangedValid: true, Writable: true,
+		}}}, nil
+	}
+	c := rig.controller()
+	c.Refresh()
+	if err := c.SetKeyboard(true, 2); err != nil {
+		t.Fatalf("SetKeyboard: %v", err)
+	}
+	if snap := c.Snapshot(); snap.ExternalKeyboard || snap.External {
+		t.Fatalf("plugin's own LED write was reported as external: %+v", snap)
 	}
 }
 
