@@ -159,6 +159,23 @@ func TestFanSliderAndModesFitTheCard(t *testing.T) {
 	}
 }
 
+func TestDisabledFanStatusIsVisibleWithoutBlockingLevelSelection(t *testing.T) {
+	snap := snapshots()["full"]
+	snap.State.FanStatus = "disabled"
+	card := fanCard(snap)
+
+	if got := fanLevelCaption(snap); got != "disabled" {
+		t.Errorf("fan status caption = %q, want disabled", got)
+	}
+	note := fanNote(snap, true)
+	if !strings.Contains(strings.ToLower(note), "fan is disabled") || !strings.Contains(note, "re-enabled") {
+		t.Errorf("fan note = %q, want disabled state and what level changes mean", note)
+	}
+	if got := findByID(card, "fan-slider"); got == nil || got.Disabled {
+		t.Errorf("fan slider = %+v, want usable for setting the level after re-enable", got)
+	}
+}
+
 func TestKeyboardSliderUsesTheLEDRange(t *testing.T) {
 	for _, maxBrightness := range []int{1, 2, 3, 4, 8} {
 		snap := snapshots()["full"]

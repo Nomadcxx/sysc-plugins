@@ -24,6 +24,16 @@ type Result struct {
 	Failed  []error
 }
 
+// writeMask keeps direct controls independent; applying a profile selects all.
+type writeMask uint8
+
+const (
+	writeFan writeMask = 1 << iota
+	writeKeyboard
+	writeLid
+	writeAll = writeFan | writeKeyboard | writeLid
+)
+
 // OK reports whether everything asked for was written.
 func (r Result) OK() bool { return len(r.Failed) == 0 }
 
@@ -239,7 +249,7 @@ func (c *Controller) ApplyProfile(name string) error {
 	c.external = false
 	c.mu.Unlock()
 
-	res := c.apply()
+	res := c.apply(writeAll)
 	if err := res.Error(); err != nil {
 		return err
 	}
@@ -262,11 +272,7 @@ func (c *Controller) SetFanLevel(level string) error {
 	c.external = false
 	c.mu.Unlock()
 
-	res := c.apply()
-	if err := res.Error(); err != nil {
-		return err
-	}
-	return c.persistActive()
+	return c.applyAndPersist(writeFan)
 }
 
 // SetKeyboard sets the backlight directly. The level is kept even while the
@@ -282,11 +288,7 @@ func (c *Controller) SetKeyboard(on bool, level int) error {
 	c.external = false
 	c.mu.Unlock()
 
-	res := c.apply()
-	if err := res.Error(); err != nil {
-		return err
-	}
-	return c.persistActive()
+	return c.applyAndPersist(writeKeyboard)
 }
 
 // ToggleKeyboard flips the backlight, restoring the remembered level when it
@@ -307,11 +309,7 @@ func (c *Controller) ToggleKeyboard() error {
 	c.external = false
 	c.mu.Unlock()
 
-	res := c.apply()
-	if err := res.Error(); err != nil {
-		return err
-	}
-	return c.persistActive()
+	return c.applyAndPersist(writeKeyboard)
 }
 
 // SetKeyboardStep applies one of the backlight buttons: "off" or a decimal
@@ -329,11 +327,7 @@ func (c *Controller) SetKeyboardStep(step string) error {
 		c.want = want
 		c.mu.Unlock()
 
-		res := c.apply()
-		if err := res.Error(); err != nil {
-			return err
-		}
-		return c.persistActive()
+		return c.applyAndPersist(writeKeyboard)
 	}
 	level, err := strconv.Atoi(step)
 	if err != nil || level < 1 || level > MaxKeyboardLevel {
@@ -355,11 +349,7 @@ func (c *Controller) ToggleLid() error {
 	c.external = false
 	c.mu.Unlock()
 
-	res := c.apply()
-	if err := res.Error(); err != nil {
-		return err
-	}
-	return c.persistActive()
+	return c.applyAndPersist(writeLid)
 }
 
 // SetLid lights or extinguishes the lid logo directly.
@@ -371,11 +361,7 @@ func (c *Controller) SetLid(on bool) error {
 	c.external = false
 	c.mu.Unlock()
 
-	res := c.apply()
-	if err := res.Error(); err != nil {
-		return err
-	}
-	return c.persistActive()
+	return c.applyAndPersist(writeLid)
 }
 
 // SaveProfile stores the current settings under a name and makes it active, so
@@ -435,10 +421,17 @@ func (c *Controller) Recheck() {
 	c.Refresh()
 }
 
-// apply pushes the wanted settings to the hardware one control at a time. The
-// level writes are confirmed by the Refresh that follows, not by the write's
-// exit status: thinkpad_acpi can accept a write and still keep the old value.
-func (c *Controller) apply() Result {
+// apply writes the selected wanted settings one control at a time. The writes
+// are followed by Refresh because thinkpad_acpi can accept one and keep the old
+// value anyway.
+func (c *Controller) applyAndPersist(mask writeMask) error {
+	if err := c.apply(mask).Error(); err != nil {
+		return err
+	}
+	return c.persistActive()
+}
+
+func (c *Controller) apply(mask writeMask) Result {
 	c.mu.Lock()
 	want := c.want
 	c.busy = true
@@ -469,13 +462,13 @@ func (c *Controller) apply() Result {
 	c.external = false
 	c.mu.Unlock()
 
-	if want.FanLevel != "" && c.hw.fanAvailable() {
+	if mask&writeFan != 0 && want.FanLevel != "" && c.hw.fanAvailable() {
 		push("fan", c.hw.SetFanLevel(want.FanLevel))
 	}
-	if c.hw.keyboardAvailable() {
+	if mask&writeKeyboard != 0 && c.hw.keyboardAvailable() {
 		push("keyboard", c.hw.SetKeyboard(want.KeyboardValue()))
 	}
-	if c.hw.lidAvailable() {
+	if mask&writeLid != 0 && c.hw.lidAvailable() {
 		push("lid logo", c.hw.SetLid(want.LidOn))
 	}
 

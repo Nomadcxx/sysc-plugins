@@ -278,7 +278,7 @@ func handleInput(
 		(m.Event == v1.EventPointer && m.Button == v1.ButtonSecondary)) {
 		if c != nil {
 			_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{
-				Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID,
+				Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: source.instance,
 			})
 		}
 		return

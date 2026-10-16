@@ -141,6 +141,33 @@ func TestChangeAfterApplyOnStartOffPreservesLiveLightSettings(t *testing.T) {
 	}
 }
 
+func TestKeyboardChangeWorksAndPersistsWhenFanIsReadOnly(t *testing.T) {
+	rig := newRig(t, fullFan, fullLEDs(), 0, false)
+	if err := chmodReadOnly(t, rig.hw.Roots().FanPath); err != nil {
+		t.Fatal(err)
+	}
+	rig.hw.ForgetWriteProbes()
+
+	cfg := DefaultConfig()
+	cfg.ApplyOnStart = false
+	c := rig.controller()
+	c.Reconfigure(cfg)
+
+	if err := c.SetKeyboard(true, 3); err != nil {
+		t.Fatalf("SetKeyboard with unrelated read-only fan: %v", err)
+	}
+	if got := rig.led(LEDKeyboardBacklight); got != "3" {
+		t.Errorf("keyboard brightness = %q, want 3", got)
+	}
+	profile, ok := rig.store.Profile(c.ActiveName())
+	if !ok {
+		t.Fatalf("active profile %q is missing", c.ActiveName())
+	}
+	if !profile.Settings.KeyboardOn || profile.Settings.KeyboardLevel != 3 {
+		t.Errorf("saved keyboard settings = %+v, want on at level 3", profile.Settings)
+	}
+}
+
 func TestApplyOnStartOffRetainsRememberedKeyboardLevelWhenHardwareIsOff(t *testing.T) {
 	rig := newRig(t, fullFan, map[string]string{
 		LEDKeyboardBacklight: "brightness=0;max_brightness=3",

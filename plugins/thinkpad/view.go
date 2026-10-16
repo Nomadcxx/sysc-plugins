@@ -392,6 +392,9 @@ func fanLevelCaption(snap Snapshot) string {
 	if !snap.State.HaveFan {
 		return "thinkpad_acpi is not loaded"
 	}
+	if snap.State.FanStatus == "disabled" {
+		return "disabled"
+	}
 	if !snap.State.FanLevelValid {
 		return "no fan_control=1, read only"
 	}
@@ -405,6 +408,8 @@ func fanNote(snap Snapshot, enabled bool) string {
 	switch {
 	case !snap.State.HaveFan:
 		return "Load thinkpad_acpi to manage the fan."
+	case snap.State.FanStatus == "disabled":
+		return "Fan is disabled; levels apply after it is re-enabled."
 	case !snap.State.FanLevelValid:
 		return "Needs fan_control=1 in the driver options."
 	case !enabled:

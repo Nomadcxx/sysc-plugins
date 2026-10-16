@@ -46,9 +46,9 @@ func TestSetupScriptCoversEveryRequirement(t *testing.T) {
 		"sysc-thinkpad",            // the name the udev rules hand nodes to
 		"/etc/udev/rules.d/",       // the driver resets modes on every load
 		"udevadm control --reload", // or the rules are never read
-		"systemctl --user exit",   // refreshes a lingering user manager
+		"systemctl --user exit",    // refreshes a lingering user manager
 		"only programs launched from that terminal", // newgrp does not refresh systemd services
-		"Re-check",                 // how they confirm it worked
+		"Re-check", // how they confirm it worked
 	} {
 		if !strings.Contains(setupScript, want) {
 			t.Errorf("setupScript no longer mentions %q", want)
@@ -218,12 +218,13 @@ func TestBarOpenAcceptsLeftAndRightClicks(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			selected, pending := "", ""
+			views := map[string]view{"bar-view": {entry: "bar", instance: "bar-placement"}}
 			done := make(chan struct{})
 			go func() {
 				handleInput(ctx, client, controller, &v1.InputEvent{
 					ViewID: "bar-view", Node: "open", Event: tc.event, Button: tc.button,
 					Output: "DP-1",
-				}, nil, &selected, &pending)
+				}, views, &selected, &pending)
 				close(done)
 			}()
 			calls := make(chan v1.HostCall, 1)
@@ -242,7 +243,7 @@ func TestBarOpenAcceptsLeftAndRightClicks(t *testing.T) {
 				if err := json.Unmarshal(call.Params, &params); err != nil {
 					t.Fatal(err)
 				}
-				if params.Entry != "panel" || params.Output != "DP-1" || params.Instance != "bar-view" {
+				if params.Entry != "panel" || params.Output != "DP-1" || params.Instance != "bar-placement" {
 					t.Errorf("panel.open params = %+v", params)
 				}
 				cancel()
