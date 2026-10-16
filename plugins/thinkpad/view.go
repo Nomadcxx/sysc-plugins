@@ -289,10 +289,8 @@ func liveLine(snap Snapshot) string {
 	if !snap.State.FanValid {
 		return "Fan reading unavailable"
 	}
-	level := snap.State.FanLevel
-	if !snap.State.FanLevelValid {
-		level = "unmanaged"
-	} else {
+	level := "unmanaged"
+	if snap.State.FanLevelValid {
 		level = FanLevelLabel(snap.State.FanLevel)
 	}
 	return fmt.Sprintf("Fan %s · %d RPM", level, snap.State.FanRPM)
