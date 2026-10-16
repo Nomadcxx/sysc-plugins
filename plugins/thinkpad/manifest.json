@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "id": "org.sysc.thinkpad",
+  "name": "ThinkPad",
+  "description": "Fan, keyboard backlight and logo light controls with CPU temperature and saved profiles.",
+  "version": "0.1.0",
+  "protocol": {"major": 1, "minor": 17},
+  "exec": "bin/sysc-plugin-thinkpad",
+  "capabilities": ["panels", "settings", "state", "notifications", "clipboard-write"],
+  "requires": {"commands": []},
+  "services": [{"id": "thinkpad"}],
+  "widgets": [
+    {
+      "id": "bar",
+      "settings": [
+        {"key": "show_fan", "type": "bool", "label": "Show fan", "default": true},
+        {"key": "show_kbd", "type": "bool", "label": "Show keyboard backlight", "default": true},
+        {"key": "show_lid", "type": "bool", "label": "Show lid logo", "default": true},
+        {"key": "show_rpm", "type": "bool", "label": "Show fan RPM", "default": true}
+      ]
+    }
+  ],
+  "panels": [
+    {"id": "panel", "width": 758, "height": 564, "placement": "attached"},
+    {"id": "settings", "width": 758, "height": 720, "placement": "attached", "include_settings": true}
+  ],
+  "settings": [
+    {
+      "key": "active_profile",
+      "type": "string",
+      "label": "Profile applied on start",
+      "description": "Profile to restore when ThinkPad starts. Leave blank to use the last profile applied in the panel.",
+      "default": ""
+    },
+    {
+      "key": "apply_on_start",
+      "type": "bool",
+      "label": "Apply the profile on start",
+      "description": "Push the active profile to the hardware as soon as the plugin attaches, so the machine comes up the way you left it.",
+      "default": true
+    },
+    {
+      "key": "logo_path",
+      "type": "string",
+      "label": "Custom logo image",
+      "description": "Absolute path to a PNG to use in the panel header instead of the built-in wordmark.",
+      "default": ""
+    },
+    {
+      "key": "poll_interval_ms",
+      "type": "int",
+      "label": "Poll interval (ms)",
+      "description": "How often fan speed and light levels are re-read from the hardware.",
+      "default": 2500,
+      "min": 1000,
+      "max": 10000
+    },
+    {
+      "key": "warn_thermal",
+      "type": "bool",
+      "label": "Overheat warning",
+      "description": "Warn when the CPU gets hot, which matters most while a low fan level is pinned.",
+      "default": true
+    },
+    {
+      "key": "thermal_limit_c",
+      "type": "int",
+      "label": "Overheat threshold (°C)",
+      "default": 85,
+      "min": 60,
+      "max": 110,
+      "visible_when": {"key": "warn_thermal", "equals": true}
+    },
+    {
+      "key": "notify_on_write_error",
+      "type": "bool",
+      "label": "Notify on write errors",
+      "description": "Raise a desktop notification when the hardware refuses a change, usually because permissions have not been set up yet.",
+      "default": true
+    }
+  ]
+}

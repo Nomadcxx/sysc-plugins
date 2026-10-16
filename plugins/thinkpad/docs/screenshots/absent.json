@@ -1,0 +1,555 @@
+{
+  "kind": "column",
+  "padding": 22,
+  "gap": 12,
+  "children": [
+    {
+      "kind": "column",
+      "fill": "card",
+      "shape": "card",
+      "height": 92,
+      "padding": 16,
+      "gap": 12,
+      "children": [
+        {
+          "kind": "row",
+          "height": 60,
+          "gap": 12,
+          "children": [
+            {
+              "kind": "image",
+              "path": "/home/nomadx/sysc-plugins/.worktrees/thinkpad-controls/plugins/thinkpad/assets/thinkpad.png",
+              "image_w": 122,
+              "image_h": 44,
+              "name": "ThinkPad",
+              "role": "img"
+            },
+            {
+              "kind": "column",
+              "width": 248,
+              "height": 40,
+              "gap": 8,
+              "children": [
+                {
+                  "kind": "text",
+                  "key": "hero-state",
+                  "text": "Fan unavailable",
+                  "size": "label",
+                  "tabular": true
+                },
+                {
+                  "kind": "text",
+                  "key": "hero-detail",
+                  "text": "Backlight unavailable · lid light unavailable",
+                  "tone": "subtle",
+                  "size": "caption",
+                  "tabular": true
+                }
+              ]
+            },
+            {
+              "kind": "column",
+              "width": 192,
+              "height": 40,
+              "gap": 8,
+              "children": [
+                {
+                  "kind": "text",
+                  "key": "hero-thermal",
+                  "text": "CPU unavailable",
+                  "tone": "subtle",
+                  "size": "label",
+                  "tabular": true
+                },
+                {
+                  "kind": "text",
+                  "key": "hero-access",
+                  "text": "No ThinkPad hardware found",
+                  "tone": "subtle",
+                  "size": "caption",
+                  "tabular": true
+                }
+              ]
+            },
+            {
+              "kind": "button",
+              "id": "settings",
+              "icon": "settings",
+              "width": 28,
+              "height": 28,
+              "padding": 4,
+              "name": "Open ThinkPad settings",
+              "role": "button",
+              "events": [
+                "activate"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "row",
+      "height": 320,
+      "gap": 12,
+      "children": [
+        {
+          "kind": "column",
+          "width": 351,
+          "height": 320,
+          "gap": 12,
+          "children": [
+            {
+              "kind": "column",
+              "fill": "card",
+              "shape": "card",
+              "height": 168,
+              "padding": 12,
+              "gap": 8,
+              "children": [
+                {
+                  "kind": "row",
+                  "height": 28,
+                  "gap": 8,
+                  "children": [
+                    {
+                      "kind": "icon",
+                      "icon": "speed",
+                      "icon_size": 18,
+                      "tone": "subtle",
+                      "name": "Fan"
+                    },
+                    {
+                      "kind": "column",
+                      "width": 301,
+                      "height": 28,
+                      "gap": 1,
+                      "children": [
+                        {
+                          "kind": "text",
+                          "key": "fan-title",
+                          "text": "No fan interface",
+                          "size": "label",
+                          "tabular": true
+                        },
+                        {
+                          "kind": "text",
+                          "key": "fan-level",
+                          "text": "thinkpad_acpi is not loaded",
+                          "tone": "subtle",
+                          "size": "caption",
+                          "tabular": true
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "kind": "row",
+                  "height": 26,
+                  "gap": 8,
+                  "children": [
+                    {
+                      "kind": "slider",
+                      "id": "fan-slider",
+                      "max": 7,
+                      "step": 1,
+                      "disabled": true,
+                      "width": 255,
+                      "height": 26,
+                      "name": "Fan level",
+                      "role": "slider",
+                      "events": [
+                        "change"
+                      ]
+                    },
+                    {
+                      "kind": "text",
+                      "key": "fan-slider-value",
+                      "text": "—",
+                      "tone": "subtle",
+                      "size": "caption",
+                      "tabular": true,
+                      "width": 64
+                    }
+                  ]
+                },
+                {
+                  "kind": "row",
+                  "height": 26,
+                  "gap": 8,
+                  "children": [
+                    {
+                      "kind": "button",
+                      "id": "fan:auto",
+                      "text": "Auto",
+                      "fill": "soft",
+                      "disabled": true,
+                      "width": 159,
+                      "height": 26,
+                      "padding": 6,
+                      "name": "Let firmware control the fan",
+                      "role": "button",
+                      "events": [
+                        "activate"
+                      ]
+                    },
+                    {
+                      "kind": "button",
+                      "id": "fan:disengaged",
+                      "text": "Full",
+                      "fill": "soft",
+                      "disabled": true,
+                      "width": 159,
+                      "height": 26,
+                      "padding": 6,
+                      "name": "Set the fan to full speed",
+                      "role": "button",
+                      "events": [
+                        "activate"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "kind": "row",
+                  "height": 22,
+                  "children": [
+                    {
+                      "kind": "text",
+                      "key": "fan-note",
+                      "text": "Load thinkpad_acpi to manage the fan.",
+                      "tone": "subtle",
+                      "size": "caption",
+                      "tabular": true,
+                      "width": 327
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "column",
+              "fill": "card",
+              "shape": "card",
+              "height": 140,
+              "padding": 12,
+              "gap": 8,
+              "children": [
+                {
+                  "kind": "row",
+                  "height": 28,
+                  "gap": 8,
+                  "children": [
+                    {
+                      "kind": "icon",
+                      "icon": "tune",
+                      "icon_size": 18,
+                      "name": "Profiles"
+                    },
+                    {
+                      "kind": "column",
+                      "width": 117,
+                      "height": 28,
+                      "gap": 1,
+                      "children": [
+                        {
+                          "kind": "text",
+                          "key": "profile-title",
+                          "text": "Profiles",
+                          "size": "label",
+                          "tabular": true
+                        },
+                        {
+                          "kind": "text",
+                          "key": "profile-count",
+                          "text": "1 saved",
+                          "tone": "subtle",
+                          "size": "caption",
+                          "tabular": true
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "button",
+                      "id": "profile:rename",
+                      "text": "Rename",
+                      "fill": "soft",
+                      "width": 80,
+                      "height": 28,
+                      "padding": 6,
+                      "name": "Rename the selected profile",
+                      "role": "button",
+                      "events": [
+                        "activate"
+                      ]
+                    },
+                    {
+                      "kind": "button",
+                      "id": "profile:save",
+                      "text": "Save",
+                      "fill": "accent",
+                      "width": 80,
+                      "height": 28,
+                      "padding": 6,
+                      "name": "Save the current controls as a profile",
+                      "role": "button",
+                      "events": [
+                        "activate"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "kind": "list",
+                  "key": "profiles",
+                  "height": 42,
+                  "gap": 6,
+                  "children": [
+                    {
+                      "kind": "row",
+                      "key": "profile:pick:default",
+                      "fill": "chip",
+                      "height": 42,
+                      "padding": 8,
+                      "gap": 6,
+                      "children": [
+                        {
+                          "kind": "column",
+                          "width": 176,
+                          "height": 16,
+                          "gap": 1,
+                          "children": [
+                            {
+                              "kind": "text",
+                              "key": "profile-name-default",
+                              "text": "default",
+                              "size": "label",
+                              "tabular": true
+                            },
+                            {
+                              "kind": "text",
+                              "key": "profile-body-default",
+                              "text": "fan auto · backlight off · lid off",
+                              "tone": "subtle",
+                              "size": "caption",
+                              "tabular": true
+                            }
+                          ]
+                        },
+                        {
+                          "kind": "button",
+                          "id": "profile:apply:default",
+                          "text": "Apply",
+                          "fill": "accent",
+                          "width": 76,
+                          "height": 26,
+                          "padding": 6,
+                          "name": "Apply the default profile",
+                          "role": "button",
+                          "events": [
+                            "activate"
+                          ]
+                        },
+                        {
+                          "kind": "button",
+                          "id": "profile:delete:default",
+                          "icon": "delete",
+                          "disabled": true,
+                          "width": 32,
+                          "height": 26,
+                          "padding": 6,
+                          "name": "Delete the default profile",
+                          "role": "button",
+                          "events": [
+                            "activate"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "kind": "text_input",
+                  "id": "profile-name",
+                  "key": "profile-name",
+                  "height": 30,
+                  "name": "New profile name",
+                  "role": "textbox",
+                  "events": [
+                    "change",
+                    "submit"
+                  ],
+                  "submit_on_enter": true,
+                  "placeholder": "New profile name"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "column",
+          "width": 351,
+          "height": 218,
+          "gap": 12,
+          "children": [
+            {
+              "kind": "column",
+              "fill": "card",
+              "shape": "card",
+              "height": 110,
+              "padding": 12,
+              "gap": 8,
+              "children": [
+                {
+                  "kind": "row",
+                  "height": 28,
+                  "gap": 8,
+                  "children": [
+                    {
+                      "kind": "icon",
+                      "icon": "keyboard",
+                      "icon_size": 18,
+                      "tone": "subtle",
+                      "name": "Keyboard"
+                    },
+                    {
+                      "kind": "column",
+                      "width": 213,
+                      "height": 28,
+                      "gap": 1,
+                      "children": [
+                        {
+                          "kind": "text",
+                          "key": "kbd-title",
+                          "text": "No keyboard backlight",
+                          "size": "label",
+                          "tabular": true
+                        },
+                        {
+                          "kind": "text",
+                          "key": "kbd-detail",
+                          "text": "not exposed by this model",
+                          "tone": "subtle",
+                          "size": "caption",
+                          "tabular": true
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "button",
+                      "id": "kbd:toggle",
+                      "text": "None",
+                      "fill": "soft",
+                      "disabled": true,
+                      "width": 72,
+                      "height": 28,
+                      "padding": 6,
+                      "name": "Toggle the keyboard backlight",
+                      "role": "button",
+                      "events": [
+                        "activate"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "kind": "row",
+                  "height": 22,
+                  "children": [
+                    {
+                      "kind": "text",
+                      "key": "kbd-note",
+                      "text": "This model has no backlight.",
+                      "tone": "subtle",
+                      "size": "caption",
+                      "tabular": true,
+                      "width": 327
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "column",
+              "fill": "card",
+              "shape": "card",
+              "height": 96,
+              "padding": 12,
+              "gap": 8,
+              "children": [
+                {
+                  "kind": "row",
+                  "height": 28,
+                  "gap": 8,
+                  "children": [
+                    {
+                      "kind": "icon",
+                      "icon": "brightness_high",
+                      "icon_size": 18,
+                      "tone": "subtle",
+                      "name": "Lid light"
+                    },
+                    {
+                      "kind": "column",
+                      "width": 213,
+                      "height": 28,
+                      "gap": 1,
+                      "children": [
+                        {
+                          "kind": "text",
+                          "key": "lid-title",
+                          "text": "Lid light",
+                          "size": "label",
+                          "tabular": true
+                        },
+                        {
+                          "kind": "text",
+                          "key": "lid-detail",
+                          "text": "not exposed by this model",
+                          "tone": "subtle",
+                          "size": "caption",
+                          "tabular": true
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "button",
+                      "id": "lid",
+                      "text": "None",
+                      "fill": "soft",
+                      "disabled": true,
+                      "width": 72,
+                      "height": 28,
+                      "padding": 6,
+                      "name": "Toggle the lid light",
+                      "role": "button",
+                      "events": [
+                        "activate"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "kind": "row",
+                  "height": 22,
+                  "children": [
+                    {
+                      "kind": "text",
+                      "key": "lid-note",
+                      "text": "This model has no lid dot.",
+                      "tone": "subtle",
+                      "size": "caption",
+                      "tabular": true,
+                      "width": 327
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
