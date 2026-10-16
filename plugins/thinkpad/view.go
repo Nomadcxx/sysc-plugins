@@ -209,15 +209,6 @@ func fillFor(enabled bool, on string, off string) string {
 	return off
 }
 
-// thermalTone keeps the hero honest: a hot CPU reads as an error even though
-// nothing has actually failed yet.
-func thermalTone(snap Snapshot, cfg Config) v1.Tone {
-	if cfg.WarnThermal && snap.State.CPUTempValid && snap.State.Hot(cfg.ThermalLimitC) {
-		return v1.ToneError
-	}
-	return v1.ToneSubtle
-}
-
 func thermalLabel(snap Snapshot, cfg Config) string {
 	if !snap.State.CPUTempValid {
 		// Short on purpose: this sits in the hero's narrow side column, and
@@ -266,7 +257,7 @@ func hero(snap Snapshot, cfg Config, logo string) *v1.Node {
 		caption("hero-detail", detailLine(snap), 0),
 	)
 	side := columnNode(cardGap, 0, 0,
-		textNode("hero-thermal", thermalLabel(snap, cfg), sizeLabel, thermalTone(snap, cfg), 0),
+		textNode("hero-thermal", thermalLabel(snap, cfg), sizeLabel, v1.ToneNormal, 0),
 		caption("hero-access", accessLabel(snap), 0),
 	)
 
@@ -752,9 +743,9 @@ func setupCard(snap Snapshot) *v1.Node {
 		Height: setupCardHeight, Padding: cardPad, Gap: cardGap,
 		Children: []*v1.Node{
 			textNode("setup-title", "Some controls need setup",
-				sizeLabel, v1.ToneError, 0),
-			caption("setup-why", "A fan option or write permission is missing. "+
-				"Copy the fix, run it in a terminal, then re-check.", cardContent()),
+				sizeLabel, v1.ToneNormal, 0),
+			textNode("setup-why", "A fan option or write permission is missing. "+
+				"Copy the fix, run it in a terminal, then re-check.", sizeCaption, v1.ToneNormal, cardContent()),
 			&v1.Node{
 				Kind: v1.KindRow, Height: actionRowHeight, Gap: cardGap,
 				Children: []*v1.Node{
@@ -773,12 +764,13 @@ func storeCard(snap Snapshot) *v1.Node {
 		Kind: v1.KindColumn, Fill: fillErrored, Shape: shapeCard,
 		Height: storeCardHeight, Padding: cardPad, Gap: 4,
 		Children: []*v1.Node{
-			textNode("store-title", "Profile store problem", sizeLabel, v1.ToneError, 0),
-			caption("store-body", snap.StoreIssue, cardContent()),
+			textNode("store-title", "Profile store problem", sizeLabel, v1.ToneNormal, 0),
+			textNode("store-body", snap.StoreIssue, sizeCaption, v1.ToneNormal, cardContent()),
 			// The store refuses to overwrite a file it could not parse, so the
 			// user's own profiles are still on disk. Say so: an error card that
 			// only names the fault reads as "your profiles are gone".
-			caption("store-hint", "Left untouched — edit or delete it to start fresh.", cardContent()),
+			textNode("store-hint", "Left untouched — edit or delete it to start fresh.",
+				sizeCaption, v1.ToneNormal, cardContent()),
 		},
 	}
 }

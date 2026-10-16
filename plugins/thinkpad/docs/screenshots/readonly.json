@@ -57,7 +57,6 @@
                   "kind": "text",
                   "key": "hero-thermal",
                   "text": "CPU 48 °C",
-                  "tone": "subtle",
                   "size": "label",
                   "tabular": true
                 },
@@ -700,7 +699,6 @@
           "kind": "text",
           "key": "setup-title",
           "text": "Some controls need setup",
-          "tone": "error",
           "size": "label",
           "tabular": true
         },
@@ -708,7 +706,6 @@
           "kind": "text",
           "key": "setup-why",
           "text": "A fan option or write permission is missing. Copy the fix, run it in a terminal, then re-check.",
-          "tone": "subtle",
           "size": "caption",
           "tabular": true,
           "width": 327

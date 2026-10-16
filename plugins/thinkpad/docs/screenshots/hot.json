@@ -57,7 +57,6 @@
                   "kind": "text",
                   "key": "hero-thermal",
                   "text": "CPU 93 °C · hot",
-                  "tone": "error",
                   "size": "label",
                   "tabular": true
                 },
