@@ -69,7 +69,7 @@ func TestRunProcessesPanelSessionAndStopsPublishingClosedViews(t *testing.T) {
 	})
 	openCall := host.waitCall(t, v1.CallPanelOpen, 0)
 	assertPanelCall(t, openCall, "panel", "DP-1", "bar-instance", 3)
-	bar = host.waitSnapshotAfter(t, "bar-1", barCount)
+	host.waitSnapshotAfter(t, "bar-1", barCount)
 
 	host.send(t, &v1.ViewOpen{
 		ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Instance: "bar-instance",
