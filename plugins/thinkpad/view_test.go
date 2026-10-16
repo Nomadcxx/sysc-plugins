@@ -252,6 +252,34 @@ func TestPartialSetupIsReportedWithoutDisablingWritableControls(t *testing.T) {
 	}
 }
 
+func TestErrorCardsUseNormalContrastText(t *testing.T) {
+	snap := snapshots()["readonly"]
+	cards := map[string]*v1.Node{
+		"setup": setupCard(snap),
+		"store": storeCard(Snapshot{StoreIssue: "thinkpad.json is not valid JSON"}),
+	}
+	for name, card := range cards {
+		walk(card, func(node *v1.Node) {
+			if node.Kind == v1.KindText && node.Tone != v1.ToneNormal {
+				t.Errorf("%s text %q tone = %q, want normal foreground on the error container",
+					name, node.Key, node.Tone)
+			}
+		})
+	}
+}
+
+func TestHotThermalWarningUsesNormalContrastText(t *testing.T) {
+	var got *v1.Node
+	walk(hero(snapshots()["hot"], DefaultConfig(), ""), func(node *v1.Node) {
+		if node.Key == "hero-thermal" {
+			got = node
+		}
+	})
+	if got == nil || !strings.Contains(got.Text, "hot") || got.Tone != v1.ToneNormal {
+		t.Fatalf("hot thermal label = %+v, want an explicit hot warning in normal foreground", got)
+	}
+}
+
 func TestBarUsesTheThinkPadWordmarkAndDeclaresPointerInput(t *testing.T) {
 	logo := filepath.Join(t.TempDir(), "thinkpad.png")
 	if err := os.WriteFile(logo, []byte("image"), 0o644); err != nil {

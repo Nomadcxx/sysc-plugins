@@ -57,7 +57,6 @@
                   "kind": "text",
                   "key": "hero-thermal",
                   "text": "CPU 48 °C",
-                  "tone": "subtle",
                   "size": "label",
                   "tabular": true
                 },

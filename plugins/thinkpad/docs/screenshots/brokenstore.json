@@ -57,7 +57,6 @@
                   "kind": "text",
                   "key": "hero-thermal",
                   "text": "CPU 48 °C",
-                  "tone": "subtle",
                   "size": "label",
                   "tabular": true
                 },
@@ -531,7 +530,6 @@
           "kind": "text",
           "key": "store-title",
           "text": "Profile store problem",
-          "tone": "error",
           "size": "label",
           "tabular": true
         },
@@ -539,7 +537,6 @@
           "kind": "text",
           "key": "store-body",
           "text": "thinkpad.json is not valid JSON",
-          "tone": "subtle",
           "size": "caption",
           "tabular": true,
           "width": 327
@@ -548,7 +545,6 @@
           "kind": "text",
           "key": "store-hint",
           "text": "Left untouched — edit or delete it to start fresh.",
-          "tone": "subtle",
           "size": "caption",
           "tabular": true,
           "width": 327
