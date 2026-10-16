@@ -1,0 +1,75 @@
+{
+  "kind": "column",
+  "children": [
+    {
+      "kind": "row",
+      "height": 32,
+      "padding": 4,
+      "gap": 6,
+      "children": [
+        {
+          "kind": "button",
+          "id": "open",
+          "width": 52,
+          "height": 24,
+          "padding": 4,
+          "name": "Open the ThinkPad panel",
+          "role": "button",
+          "events": [
+            "activate",
+            "pointer"
+          ],
+          "children": [
+            {
+              "kind": "image",
+              "path": "/home/nomadx/sysc-plugins/.worktrees/thinkpad-controls/plugins/thinkpad/assets/thinkpad.png",
+              "image_w": 44,
+              "image_h": 16,
+              "name": "ThinkPad",
+              "role": "img"
+            }
+          ]
+        },
+        {
+          "kind": "gauge",
+          "key": "fan",
+          "value": 0.7386666666666667,
+          "animate": true,
+          "width": 40,
+          "height": 16
+        },
+        {
+          "kind": "text",
+          "key": "bar-rpm",
+          "text": "4432",
+          "size": "mono",
+          "tabular": true,
+          "width": 40
+        },
+        {
+          "kind": "row",
+          "width": 60,
+          "height": 24,
+          "gap": 4,
+          "children": [
+            {
+              "kind": "icon",
+              "icon": "brightness_high",
+              "icon_size": 14,
+              "tone": "accent",
+              "name": "Keyboard backlight"
+            },
+            {
+              "kind": "text",
+              "key": "bar-kbd",
+              "text": "2",
+              "size": "mono",
+              "tabular": true,
+              "width": 32
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -35,11 +35,12 @@ it.
 | **ProtonVPN** | Quick connect, server picker and protection status | `protonvpn` |
 | **Screen Recorder** | Record the screen or a window, with optional audio and a replay buffer | `gpu-screen-recorder` |
 | **Screenshot** | Region, window or screen capture from a bar button, using the shell's own capture engine | |
+| **ThinkPad** | Fan speed, keyboard backlight and the lid logo light, with profiles that come back on every boot | |
 | **System Updates** | Pending repo, AUR and Flatpak updates in the bar, a reboot-needed marker, and updates run in a terminal you can watch | `pacman` (`pacman-contrib` optional) |
 | **Wallpaper Depth** | Depth masks for image wallpapers, so scenery can sit in front of the shell's centred clock | `python3` |
 | **World Clock** | Labelled clocks for other cities in the bar and panel | |
 
-Every plugin but Herdr installs from the plugin manager; it has no release yet.
+ThinkPad is source-only until its catalog release. Herdr has no release yet; every other plugin installs from the manager.
 
 ## Installation
 

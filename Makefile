@@ -16,7 +16,8 @@ PLUGINS := \
 	sysc-plugin-protonvpn:protonvpn \
 	sysc-plugin-moonbit:moonbit \
 	sysc-plugin-herdr:herdr \
-	sysc-plugin-updates:updates
+	sysc-plugin-updates:updates \
+	sysc-plugin-thinkpad:thinkpad
 
 # Calendar is the only cgo plugin; skip it when its pkg-config modules are
 # missing so one optional plugin's headers do not block the remaining plugins.
@@ -30,7 +31,7 @@ ifeq ($(shell $(PKG_CONFIG) --exists $(CALENDAR_PC) 2>/dev/null && echo yes),)
 endif
 USER_PLUGIN_ROOT := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/sysc-shell/plugins
 
-.PHONY: build install link test vet fmt validate thumbnails capture-check capture captures catalog-validate clean
+.PHONY: build install link test vet fmt validate thumbnails capture-check capture captures catalog-validate thinkpad-screenshots clean
 
 build:
 	@set -e; for entry in $(PLUGINS); do \
@@ -97,6 +98,9 @@ captures: capture-check
 
 catalog-validate:
 	go run ./tools/catalog validate
+
+thinkpad-screenshots:
+	go run ./cmd/sysc-thinkpad-screenshot $(if $(THINKPAD_PREVIEW),-preview "$(THINKPAD_PREVIEW)")
 
 clean:
 	rm -rf plugins/*/bin

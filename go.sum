@@ -1,7 +1,11 @@
 github.com/HugoSmits86/nativewebp v1.3.0 h1:n1egtEzSV4KwFtealr7dzdYq1wI/uj/bOQ/QcTcIyVE=
 github.com/HugoSmits86/nativewebp v1.3.0/go.mod h1:YNQuWenlVmSUUASVNhTDwf4d7FwYQGbGhklC8p72Vr8=
+github.com/Nomadcxx/sysc-metrics v0.7.3-0.20261016183653-ae7bafccf98b h1:ly2SFKKpvDSOtoQfDKDajTzOArDaNzLUiryVO2VHoGc=
+github.com/Nomadcxx/sysc-metrics v0.7.3-0.20261016183653-ae7bafccf98b/go.mod h1:qIgYyJuuD0Ql7wlh3cN0kiHsSG/LEMczrq+vXA7rIQs=
 github.com/Nomadcxx/sysc-shell v0.2.0 h1:pzl827s/Vp/7/gGpD6wtI1xu1XRCfjlzOgIJg9ddaHI=
 github.com/Nomadcxx/sysc-shell v0.2.0/go.mod h1:dAKNkk2QvhBXA1nkmA2wItnO85DeKBI2aUi4+j1lAFU=
+github.com/Nomadcxx/sysc-shell v0.2.1-0.20261016203655-76ea9f054408 h1:RchyJOzl6TNPRVCGqWmEAtTmoQcA9Gvu33nksDAOuQA=
+github.com/Nomadcxx/sysc-shell v0.2.1-0.20261016203655-76ea9f054408/go.mod h1:315SYnHG/dtq64vhL6QH1spAejVeWzybolgM7p+0sz8=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/go-text/typesetting v0.3.5-0.20260729084153-ddb7ff96ad4d h1:eBCCzHDJ79YDC3G7fnGuBbA/o+aEl0hSgRZYVbKzYsk=
