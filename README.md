@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/header.png">
-    <img src="assets/header-light.png" width="920" alt="sysc-plugins">
-  </picture>
+  <img src="assets/header.webp" width="920" alt="sysc-plugins">
 </p>
 
 The official plugins for [sysc-shell](https://github.com/Nomadcxx/sysc-shell). Each one is a small Go
