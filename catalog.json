@@ -1388,16 +1388,16 @@
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
       "screenshot": {
-        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/thinkpad-v0.1.0/plugins/thinkpad/thumbnail.webp",
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/thinkpad-v0.1.1/plugins/thinkpad/thumbnail.webp",
         "sha256": "48bd0789cb95f23895f6f22f1e78b6c63290d9bb9c5a73880cbf4eae5af725c9"
       },
       "readme": {
-        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/thinkpad-v0.1.0/plugins/thinkpad/README.md",
-        "sha256": "9a3e0524a5f3789722baf8c298941e68e0977766cdac2ee04073a3395c679408"
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/thinkpad-v0.1.1/plugins/thinkpad/README.md",
+        "sha256": "2996687e5181edb59ac64309397cda625e260b7aa52cc8b0ce45f00a5948f855"
       },
       "added_at": "2026-10-17T05:06:35.893606042Z",
-      "updated_at": "2026-10-17T05:06:35.893606042Z",
-      "version": "0.1.0",
+      "updated_at": "2026-10-17T05:46:33.40852266Z",
+      "version": "0.1.1",
       "protocol": {
         "major": 1,
         "minor": 17
@@ -1414,17 +1414,49 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/thinkpad-v0.1.0/org.sysc.thinkpad-0.1.0-linux-amd64.tar.gz",
-          "sha256": "011e9110256ca7fde7b2db5f6b71ee07627a78e49a7634ebffd4fb36b76794ce",
-          "size": 3325864
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/thinkpad-v0.1.1/org.sysc.thinkpad-0.1.1-linux-amd64.tar.gz",
+          "sha256": "2bcba2d0ece917771c0efbadb4a8913235321185a37b1404e2b1fc1185927a70",
+          "size": 3315746
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/thinkpad-v0.1.0/org.sysc.thinkpad-0.1.0-linux-arm64.tar.gz",
-          "sha256": "a941876b82d8b73d622607c593f5d40d8770159f78e659bb4c57f6a893f57756",
-          "size": 3150488
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/thinkpad-v0.1.1/org.sysc.thinkpad-0.1.1-linux-arm64.tar.gz",
+          "sha256": "f55bdff6a9e69ffb6382d4257daeee4c07cd753b3da52fa2b4b2df9de80ac242",
+          "size": 3137521
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/thinkpad-v0.1.0"
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/thinkpad-v0.1.1",
+      "releases": [
+        {
+          "version": "0.1.0",
+          "protocol": {
+            "major": 1,
+            "minor": 17
+          },
+          "capabilities": [
+            "panels",
+            "settings",
+            "state",
+            "notifications",
+            "clipboard-write"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/thinkpad-v0.1.0/org.sysc.thinkpad-0.1.0-linux-amd64.tar.gz",
+              "sha256": "011e9110256ca7fde7b2db5f6b71ee07627a78e49a7634ebffd4fb36b76794ce",
+              "size": 3325864
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/thinkpad-v0.1.0/org.sysc.thinkpad-0.1.0-linux-arm64.tar.gz",
+              "sha256": "a941876b82d8b73d622607c593f5d40d8770159f78e659bb4c57f6a893f57756",
+              "size": 3150488
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/thinkpad-v0.1.0"
+        }
+      ]
     },
     {
       "id": "org.sysc.timer",
