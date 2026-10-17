@@ -64,38 +64,6 @@ func ParseConfig(values map[string]any) Config {
 	return cfg
 }
 
-// Instance is one bar widget placement's presentation preferences. Widget
-// settings are per placement, so two widgets can show different things.
-type Instance struct {
-	ShowFan bool
-	ShowKbd bool
-	ShowLid bool
-	ShowRPM bool
-}
-
-// DefaultInstance mirrors the widget defaults.
-func DefaultInstance() Instance {
-	return Instance{ShowFan: true, ShowKbd: true, ShowLid: true, ShowRPM: true}
-}
-
-// ParseInstance reads a widget placement's settings.
-func ParseInstance(values map[string]any) Instance {
-	inst := DefaultInstance()
-	if v, ok := values["show_fan"].(bool); ok {
-		inst.ShowFan = v
-	}
-	if v, ok := values["show_kbd"].(bool); ok {
-		inst.ShowKbd = v
-	}
-	if v, ok := values["show_lid"].(bool); ok {
-		inst.ShowLid = v
-	}
-	if v, ok := values["show_rpm"].(bool); ok {
-		inst.ShowRPM = v
-	}
-	return inst
-}
-
 // clampInt bounds a value to the range the manifest declares, so a hand-edited
 // config file cannot produce a number the UI has no room to show.
 // DurationFromMS converts the manifest's millisecond poll interval.

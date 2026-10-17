@@ -40,7 +40,7 @@ it.
 | **Wallpaper Depth** | Depth masks for image wallpapers, so scenery can sit in front of the shell's centred clock | `python3` |
 | **World Clock** | Labelled clocks for other cities in the bar and panel | |
 
-ThinkPad is source-only until its catalog release. Herdr has no release yet; every other plugin installs from the manager.
+Herdr has no release yet; every other plugin installs from the manager.
 
 ## Installation
 

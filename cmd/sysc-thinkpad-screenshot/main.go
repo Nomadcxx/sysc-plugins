@@ -73,7 +73,7 @@ func run() error {
 	for _, name := range names {
 		snap := states[name]
 		height := thinkpad.PanelPreferredHeight(snap, "")
-		tree := thinkpad.PanelTree(snap, thinkpad.DefaultInstance(), cfg, logo, "")
+		tree := thinkpad.PanelTree(snap, cfg, logo, "")
 
 		blob, err := json.MarshalIndent(tree, "", "  ")
 		if err != nil {
@@ -102,7 +102,7 @@ func run() error {
 		// the same bundled wordmark used by the panel screenshots.
 		cfg.LogoPath = logo
 		bar := &v1.Node{Kind: v1.KindColumn, Children: []*v1.Node{
-			thinkpad.BarTree(states["full"], thinkpad.DefaultInstance(), cfg, 240),
+			thinkpad.BarTree(cfg),
 		}}
 		blob, err := json.MarshalIndent(bar, "", "  ")
 		if err != nil {

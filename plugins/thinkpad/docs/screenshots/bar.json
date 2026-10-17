@@ -29,45 +29,6 @@
               "role": "img"
             }
           ]
-        },
-        {
-          "kind": "gauge",
-          "key": "fan",
-          "value": 0.7386666666666667,
-          "animate": true,
-          "width": 40,
-          "height": 16
-        },
-        {
-          "kind": "text",
-          "key": "bar-rpm",
-          "text": "4432",
-          "size": "mono",
-          "tabular": true,
-          "width": 40
-        },
-        {
-          "kind": "row",
-          "width": 60,
-          "height": 24,
-          "gap": 4,
-          "children": [
-            {
-              "kind": "icon",
-              "icon": "brightness_high",
-              "icon_size": 14,
-              "tone": "accent",
-              "name": "Keyboard backlight"
-            },
-            {
-              "kind": "text",
-              "key": "bar-kbd",
-              "text": "2",
-              "size": "mono",
-              "tabular": true,
-              "width": 32
-            }
-          ]
         }
       ]
     }
