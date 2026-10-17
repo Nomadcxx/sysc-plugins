@@ -3,7 +3,7 @@
   "id": "org.sysc.thinkpad",
   "name": "ThinkPad",
   "description": "Fan, keyboard backlight and logo light controls with CPU temperature and saved profiles.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "protocol": {"major": 1, "minor": 17},
   "exec": "bin/sysc-plugin-thinkpad",
   "capabilities": ["panels", "settings", "state", "notifications", "clipboard-write"],

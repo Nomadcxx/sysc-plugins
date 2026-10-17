@@ -62,6 +62,12 @@ func TestBarLintsAtEveryWidth(t *testing.T) {
 	}
 }
 
+func TestBarFitsCompactHostSlot(t *testing.T) {
+	for _, finding := range lint.Tree(BarTree(DefaultConfig()), v1.ViewBar, 232, 24) {
+		t.Error(finding)
+	}
+}
+
 func TestBarNeverOverrunsItsWidth(t *testing.T) {
 	cfg := DefaultConfig()
 	for _, width := range []int{80, 119, 120, 150, 200, 240, 320, 480} {
@@ -273,8 +279,8 @@ func TestBarUsesTheThinkPadWordmarkAndDeclaresPointerInput(t *testing.T) {
 		t.Errorf("bar wordmark dimensions = %dx%d, want 61x22 as half-size of the panel mark",
 			open.Children[0].ImageW, open.Children[0].ImageH)
 	}
-	if open.Width != 65 || open.Height != 26 || open.Padding != 2 {
-		t.Errorf("bar button size = %dx%d with %dpx padding, want 65x26 with 2px padding",
+	if open.Width != 63 || open.Height != 24 || open.Padding != 1 {
+		t.Errorf("bar button size = %dx%d with %dpx padding, want 63x24 with 1px padding",
 			open.Width, open.Height, open.Padding)
 	}
 

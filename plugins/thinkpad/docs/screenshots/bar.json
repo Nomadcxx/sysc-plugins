@@ -3,15 +3,14 @@
   "children": [
     {
       "kind": "row",
-      "height": 34,
-      "padding": 4,
+      "height": 24,
       "children": [
         {
           "kind": "button",
           "id": "open",
-          "width": 65,
-          "height": 26,
-          "padding": 2,
+          "width": 63,
+          "height": 24,
+          "padding": 1,
           "name": "Open the ThinkPad panel",
           "role": "button",
           "events": [
