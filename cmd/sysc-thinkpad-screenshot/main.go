@@ -117,10 +117,10 @@ func run() error {
 			return nil
 		}
 		pngPath := filepath.Join(*outDir, "bar.png")
-		if err := paint(*preview, pngPath, blob, 240, 32); err != nil {
+		if err := paint(*preview, pngPath, blob, 240, 34); err != nil {
 			return fmt.Errorf("bar: %w", err)
 		}
-		fmt.Printf("%-12s png  -> %s  (%dx%d)\n", "bar", pngPath, 240, 32)
+		fmt.Printf("%-12s png  -> %s  (%dx%d)\n", "bar", pngPath, 240, 34)
 	}
 	return nil
 }

@@ -269,12 +269,12 @@ func TestBarUsesTheThinkPadWordmarkAndDeclaresPointerInput(t *testing.T) {
 	}
 	if len(open.Children) != 1 || open.Children[0].Kind != v1.KindImage || open.Children[0].Path != logo {
 		t.Errorf("bar opener children = %+v, want the ThinkPad wordmark image", open.Children)
-	} else if open.Children[0].ImageW != 55 || open.Children[0].ImageH != 20 {
-		t.Errorf("bar wordmark dimensions = %dx%d, want 55x20 to preserve its proportions",
+	} else if open.Children[0].ImageW != 61 || open.Children[0].ImageH != 22 {
+		t.Errorf("bar wordmark dimensions = %dx%d, want 61x22 as half-size of the panel mark",
 			open.Children[0].ImageW, open.Children[0].ImageH)
 	}
-	if open.Width != 59 || open.Height != 24 || open.Padding != 2 {
-		t.Errorf("bar button size = %dx%d with %dpx padding, want 59x24 with 2px padding",
+	if open.Width != 65 || open.Height != 26 || open.Padding != 2 {
+		t.Errorf("bar button size = %dx%d with %dpx padding, want 65x26 with 2px padding",
 			open.Width, open.Height, open.Padding)
 	}
 
