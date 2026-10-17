@@ -860,7 +860,7 @@ func SettingsPanelTree() *v1.Node {
 // remains the button for opening the panel.
 func BarTree(cfg Config) *v1.Node {
 	return &v1.Node{
-		Kind: v1.KindRow, Height: 34, Padding: 4,
+		Kind: v1.KindRow, Height: 24,
 		Children: []*v1.Node{barLogoButton(LogoPath(cfg, ""))},
 	}
 }
@@ -875,9 +875,8 @@ func barLogoButton(logo string) *v1.Node {
 		button.Icon = "laptop"
 		return button
 	}
-	// Half the panel wordmark's 122×44 size keeps the BAR mark readable and
-	// aligned with the panel's proportions.
-	button.Width, button.Height, button.Padding = 65, 26, 2
+	// Keep the 61×22 mark inside the shell's 24px bar slot without stretching.
+	button.Width, button.Height, button.Padding = 63, 24, 1
 	button.Children = []*v1.Node{{
 		Kind: v1.KindImage, Path: logo, Name: "ThinkPad", Role: "img",
 		ImageW: 61, ImageH: 22,
