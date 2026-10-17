@@ -34,7 +34,7 @@ func run(in, out *os.File) error {
 func runWith(in, out *os.File, roots thinkpad.Roots, storePath string) error {
 	c := v1.NewClient(in, out)
 	_, err := c.Handshake(identity.FromManifest(v1.Identity{
-		ID: "org.sysc.thinkpad", Name: "ThinkPad", Version: "0.1.1",
+		ID: "org.sysc.thinkpad", Name: "ThinkPad", Version: "0.1.2",
 	}))
 	if err != nil {
 		return err

@@ -875,10 +875,10 @@ func barLogoButton(logo string) *v1.Node {
 		button.Icon = "laptop"
 		return button
 	}
-	button.Width, button.Padding = 52, 4
+	button.Width, button.Padding = 59, 2
 	button.Children = []*v1.Node{{
 		Kind: v1.KindImage, Path: logo, Name: "ThinkPad", Role: "img",
-		ImageW: 44, ImageH: 16,
+		ImageW: 55, ImageH: 20,
 	}}
 	return button
 }

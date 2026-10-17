@@ -292,7 +292,7 @@ func startProcessHost(t *testing.T, roots thinkpad.Roots, storePath string) *pro
 	go h.readLoop()
 	h.send(t, &v1.HostHello{
 		Supported:    []v1.Version{{Major: 1, Minor: 17}},
-		Plugin:       v1.Identity{ID: "org.sysc.thinkpad", Name: "ThinkPad", Version: "0.1.1"},
+		Plugin:       v1.Identity{ID: "org.sysc.thinkpad", Name: "ThinkPad", Version: "0.1.2"},
 		Capabilities: []string{"panels", "settings", "notifications", "clipboard-write"},
 		Limits:       v1.DefaultLimits,
 	})
