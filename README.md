@@ -6,15 +6,10 @@ The official plugins for [sysc-shell](https://github.com/Nomadcxx/sysc-shell). E
 program the shell starts and talks to over a pipe, so a plugin that crashes takes nothing else down with
 it.
 
-<details>
-<summary>Plugin screenshot gallery</summary>
-
 <p align="center">
   <img src="assets/gallery.webp" alt="All sixteen official sysc-shell plugin panels" width="920" loading="lazy"><br>
   <sub>AI Usage, Calendar, Cat, Faith, Games, GitHub Notifications, Phone Connect, Mini Docker, Moonbit, Notes, ProtonVPN, Screen Recorder, Screenshot, Pomodoro Timer, Wallpaper Depth and World Clock, captured from fixture data.</sub>
 </p>
-
-</details>
 
 [Documentation site](https://nomadcxx.github.io/sysc/docs/plugins/) · [Plugins](#plugins) · [Installation](#installation) · [Writing plugins](#writing-plugins)
 
