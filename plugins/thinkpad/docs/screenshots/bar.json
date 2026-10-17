@@ -3,16 +3,15 @@
   "children": [
     {
       "kind": "row",
-      "height": 32,
+      "height": 34,
       "padding": 4,
-      "gap": 6,
       "children": [
         {
           "kind": "button",
           "id": "open",
-          "width": 52,
-          "height": 24,
-          "padding": 4,
+          "width": 65,
+          "height": 26,
+          "padding": 2,
           "name": "Open the ThinkPad panel",
           "role": "button",
           "events": [
@@ -22,9 +21,9 @@
           "children": [
             {
               "kind": "image",
-              "path": "/home/nomadx/sysc-plugins/.worktrees/thinkpad-controls/plugins/thinkpad/assets/thinkpad.png",
-              "image_w": 44,
-              "image_h": 16,
+              "path": "/home/nomadx/sysc-plugins/.worktrees/thinkpad-logo-only/plugins/thinkpad/assets/thinkpad.png",
+              "image_w": 61,
+              "image_h": 22,
               "name": "ThinkPad",
               "role": "img"
             }
