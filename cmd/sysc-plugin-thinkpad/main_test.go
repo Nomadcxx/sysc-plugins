@@ -147,17 +147,6 @@ esac
 	}
 }
 
-func TestNegotiateUsesTheHighestSharedProtocolMinor(t *testing.T) {
-	if got := negotiate([]v1.Version{
-		{Major: 1, Minor: 17}, {Major: 1, Minor: 12}, {Major: 2, Minor: 90},
-	}); got != v1.ProtocolMinor {
-		t.Errorf("highest shared minor = %d, want plugin protocol minor %d", got, v1.ProtocolMinor)
-	}
-	if got := negotiate([]v1.Version{{Major: 1, Minor: 12}, {Major: 2, Minor: 90}}); got != 12 {
-		t.Errorf("older host minor = %d, want 12", got)
-	}
-}
-
 // TestSetupScriptDoesNotBlindlyReloadTheDriver pins a fix for a bug found on
 // real hardware. thinkpad_acpi is built into many kernels, and modprobe has no
 // module file to load or unload for those: `modprobe -r` prints

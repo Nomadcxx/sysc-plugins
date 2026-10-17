@@ -39,8 +39,11 @@ func TestRunProcessesPanelSessionAndStopsPublishingClosedViews(t *testing.T) {
 		"show_fan": false, "show_kbd": true, "show_lid": true, "show_rpm": false,
 	}})
 	bar = host.waitSnapshotAfter(t, "bar-1", barCount)
+	if len(bar.Root.Children) != 1 {
+		t.Errorf("bar has %d children, want only the ThinkPad logo button", len(bar.Root.Children))
+	}
 	if wireNode(bar.Root, "fan") != nil {
-		t.Error("instance settings left the fan gauge in the bar")
+		t.Error("fan gauge is still present in the bar")
 	}
 	fan, err := os.ReadFile(roots.FanPath)
 	if err != nil {
@@ -289,7 +292,7 @@ func startProcessHost(t *testing.T, roots thinkpad.Roots, storePath string) *pro
 	go h.readLoop()
 	h.send(t, &v1.HostHello{
 		Supported:    []v1.Version{{Major: 1, Minor: 17}},
-		Plugin:       v1.Identity{ID: "org.sysc.thinkpad", Name: "ThinkPad", Version: "0.1.0"},
+		Plugin:       v1.Identity{ID: "org.sysc.thinkpad", Name: "ThinkPad", Version: "0.1.1"},
 		Capabilities: []string{"panels", "settings", "notifications", "clipboard-write"},
 		Limits:       v1.DefaultLimits,
 	})

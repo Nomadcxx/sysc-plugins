@@ -33,13 +33,12 @@ func run(in, out *os.File) error {
 // profile store without ever writing the developer's ThinkPad.
 func runWith(in, out *os.File, roots thinkpad.Roots, storePath string) error {
 	c := v1.NewClient(in, out)
-	hello, err := c.Handshake(identity.FromManifest(v1.Identity{
-		ID: "org.sysc.thinkpad", Name: "ThinkPad", Version: "0.1.0",
+	_, err := c.Handshake(identity.FromManifest(v1.Identity{
+		ID: "org.sysc.thinkpad", Name: "ThinkPad", Version: "0.1.1",
 	}))
 	if err != nil {
 		return err
 	}
-	minor := negotiate(hello.Supported)
 
 	exe, _ := os.Executable()
 	exeDir := filepath.Dir(exe)
@@ -87,7 +86,7 @@ func runWith(in, out *os.File, roots thinkpad.Roots, storePath string) error {
 	}()
 
 	var (
-		settings    = newSettingsState(minor)
+		settings    = newSettingsState()
 		selected    string
 		pendingName string
 	)
@@ -103,7 +102,7 @@ func runWith(in, out *os.File, roots thinkpad.Roots, storePath string) error {
 			var root *v1.Node
 			switch v.kind {
 			case v1.ViewBar:
-				root = thinkpad.BarTree(snap, settings.instance(v.instance), cfg, v.width)
+				root = thinkpad.BarTree(cfg)
 			case v1.ViewTooltip:
 				// The shell owns this view; a text-only tree is all it paints.
 				root = thinkpad.TooltipTree(snap, cfg)
@@ -134,7 +133,7 @@ func runWith(in, out *os.File, roots thinkpad.Roots, storePath string) error {
 				if v.height <= 0 {
 					v.height = wantHeight
 				}
-				root = thinkpad.PanelTree(snap, settings.instance(v.instance), cfg, logo, selected)
+				root = thinkpad.PanelTree(snap, cfg, logo, selected)
 			}
 			v.rev++
 			views[id] = v
@@ -166,20 +165,7 @@ func runWith(in, out *os.File, roots thinkpad.Roots, storePath string) error {
 				}
 				publish()
 			case *v1.ViewClose:
-				closed := views[m.ViewID]
 				delete(views, m.ViewID)
-				if closed.instance != "" {
-					stillOpen := false
-					for _, v := range views {
-						if v.instance == closed.instance {
-							stillOpen = true
-							break
-						}
-					}
-					if !stillOpen {
-						settings.forgetInstance(closed.instance)
-					}
-				}
 			case *v1.ViewResync:
 				// A resync replaces the host's tree but must not reuse a revision:
 				// queued input from the old tree still carries its old revision.
@@ -190,7 +176,7 @@ func runWith(in, out *os.File, roots thinkpad.Roots, storePath string) error {
 					publish()
 				}
 			case *v1.SettingsChanged:
-				if settings.apply(m, minor) {
+				if settings.apply(m) {
 					controller.Reconfigure(settings.config)
 					poll.Reset(settings.config.PollInterval)
 				} else if m.Scope == v1.ScopeInstance {
@@ -472,58 +458,22 @@ func callPanel(
 	return nil
 }
 
-// settingsState keeps plugin-wide configuration separate from each widget
-// placement's presentation preferences.
+// settingsState keeps plugin-wide configuration for the panel and controller.
 type settingsState struct {
-	config    thinkpad.Config
-	instances map[string]thinkpad.Instance
+	config thinkpad.Config
 }
 
-func newSettingsState(minor int) *settingsState {
-	return &settingsState{
-		config:    resolveConfig(nil),
-		instances: map[string]thinkpad.Instance{},
-	}
+func newSettingsState() *settingsState {
+	return &settingsState{config: resolveConfig(nil)}
 }
 
 // apply returns true only when plugin-wide settings changed.
-func (s *settingsState) apply(m *v1.SettingsChanged, minor int) bool {
-	if m == nil {
+func (s *settingsState) apply(m *v1.SettingsChanged) bool {
+	if m == nil || m.Scope != v1.ScopePlugin {
 		return false
 	}
-	switch m.Scope {
-	case v1.ScopePlugin:
-		s.config = resolveConfig(m.Values)
-		return true
-	case v1.ScopeInstance:
-		if m.Instance != "" {
-			s.instances[m.Instance] = resolveInstance(m.Values)
-		}
-	}
-	return false
-}
-
-func (s *settingsState) instance(id string) thinkpad.Instance {
-	if inst, ok := s.instances[id]; ok {
-		return inst
-	}
-	return thinkpad.DefaultInstance()
-}
-
-func (s *settingsState) forgetInstance(id string) {
-	delete(s.instances, id)
-}
-
-// negotiate picks the highest minor the host offers, capped at the newest wire
-// this plugin speaks.
-func negotiate(supported []v1.Version) int {
-	minor := 0
-	for _, v := range supported {
-		if v.Major == 1 && v.Minor > minor && v.Minor <= v1.ProtocolMinor {
-			minor = v.Minor
-		}
-	}
-	return minor
+	s.config = resolveConfig(m.Values)
+	return true
 }
 
 func resolveConfig(values map[string]any) thinkpad.Config {
@@ -548,21 +498,6 @@ func resolveConfig(values map[string]any) thinkpad.Config {
 		ThermalLimitC:      intFrom(values, "thermal_limit_c", 85),
 		NotifyOnWriteError: b("notify_on_write_error", true),
 	}
-}
-
-func resolveInstance(values map[string]any) thinkpad.Instance {
-	b := func(key string, d bool) bool {
-		if v, ok := values[key].(bool); ok {
-			return v
-		}
-		return d
-	}
-	inst := thinkpad.DefaultInstance()
-	inst.ShowFan = b("show_fan", inst.ShowFan)
-	inst.ShowKbd = b("show_kbd", inst.ShowKbd)
-	inst.ShowLid = b("show_lid", inst.ShowLid)
-	inst.ShowRPM = b("show_rpm", inst.ShowRPM)
-	return inst
 }
 
 func intFrom(values map[string]any, key string, fallback int) int {

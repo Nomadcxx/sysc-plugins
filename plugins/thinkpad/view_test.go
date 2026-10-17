@@ -25,7 +25,7 @@ func eachSnapshot(t *testing.T, fn func(t *testing.T, name string, snap Snapshot
 func TestPanelLintsInEveryBranch(t *testing.T) {
 	cfg := DefaultConfig()
 	eachSnapshot(t, func(t *testing.T, name string, snap Snapshot) {
-		tree := PanelTree(snap, DefaultInstance(), cfg, "", "")
+		tree := PanelTree(snap, cfg, "", "")
 		for _, finding := range lint.Tree(tree, v1.ViewPanel, panelWidth, PanelPreferredHeight(snap, "")) {
 			t.Errorf("panel %s: %s", name, finding)
 		}
@@ -39,7 +39,7 @@ func TestPanelWithLogoLints(t *testing.T) {
 		t.Fatal(err)
 	}
 	eachSnapshot(t, func(t *testing.T, name string, snap Snapshot) {
-		tree := PanelTree(snap, DefaultInstance(), cfg, logo, "night")
+		tree := PanelTree(snap, cfg, logo, "night")
 		for _, finding := range lint.Tree(tree, v1.ViewPanel, panelWidth, PanelPreferredHeight(snap, "night")) {
 			t.Errorf("panel %s with logo: %s", name, finding)
 		}
@@ -54,61 +54,25 @@ func TestSettingsPanelLints(t *testing.T) {
 
 func TestBarLintsAtEveryWidth(t *testing.T) {
 	cfg := DefaultConfig()
-	inst := DefaultInstance()
-	eachSnapshot(t, func(t *testing.T, name string, snap Snapshot) {
-		for _, width := range []int{80, 119, 120, 160, 200, 240, 320, 400} {
-			tree := BarTree(snap, inst, cfg, width)
-			for _, finding := range lint.Tree(tree, v1.ViewBar, width, 32) {
-				t.Errorf("bar %s at %d: %s", name, width, finding)
-			}
+	for _, width := range []int{80, 119, 120, 160, 200, 240, 320, 400} {
+		tree := BarTree(cfg)
+		for _, finding := range lint.Tree(tree, v1.ViewBar, width, 32) {
+			t.Errorf("bar at %d: %s", width, finding)
 		}
-	})
+	}
 }
 
 func TestBarNeverOverrunsItsWidth(t *testing.T) {
 	cfg := DefaultConfig()
-	inst := DefaultInstance()
-	eachSnapshot(t, func(t *testing.T, name string, snap Snapshot) {
-		for _, width := range []int{80, 119, 120, 150, 200, 240, 320, 480} {
-			tree := BarTree(snap, inst, cfg, width)
-			got := barWidth(tree.Children) + 2*tree.Padding
-			if got > width {
-				t.Errorf("bar %s at %d: children need %d", name, width, got)
-			}
+	for _, width := range []int{80, 119, 120, 150, 200, 240, 320, 480} {
+		tree := BarTree(cfg)
+		got := 2 * tree.Padding
+		for _, child := range tree.Children {
+			got += child.Width
 		}
-	})
-}
-
-func TestBarFanGaugeAndRPMVisibilityAreIndependent(t *testing.T) {
-	snap := snapshots()["full"]
-	cfg := DefaultConfig()
-	for _, tc := range []struct {
-		name    string
-		showFan bool
-		showRPM bool
-		width   int
-		wantFan bool
-		wantRPM bool
-	}{
-		{name: "both", showFan: true, showRPM: true, width: 240, wantFan: true, wantRPM: true},
-		{name: "fan gauge only", showFan: true, width: 240, wantFan: true},
-		{name: "RPM only", showRPM: true, width: 240, wantRPM: true},
-		{name: "compact RPM hidden", width: 120},
-		{name: "compact RPM shown", showRPM: true, width: 120, wantRPM: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			inst := Instance{ShowFan: tc.showFan, ShowRPM: tc.showRPM}
-			root := BarTree(snap, inst, cfg, tc.width)
-			gotFan, gotRPM := false, false
-			walk(root, func(node *v1.Node) {
-				gotFan = gotFan || node.Kind == v1.KindGauge
-				gotRPM = gotRPM || node.Key == "bar-rpm"
-			})
-			if gotFan != tc.wantFan || gotRPM != tc.wantRPM {
-				t.Errorf("bar fan visibility = (%v, %v), want (%v, %v)",
-					gotFan, gotRPM, tc.wantFan, tc.wantRPM)
-			}
-		})
+		if got > width {
+			t.Errorf("bar at %d: children need %d", width, got)
+		}
 	}
 }
 
@@ -287,7 +251,10 @@ func TestBarUsesTheThinkPadWordmarkAndDeclaresPointerInput(t *testing.T) {
 	}
 	cfg := DefaultConfig()
 	cfg.LogoPath = logo
-	root := BarTree(snapshots()["full"], DefaultInstance(), cfg, 240)
+	root := BarTree(cfg)
+	if len(root.Children) != 1 {
+		t.Fatalf("bar children = %d, want only the ThinkPad logo button", len(root.Children))
+	}
 	open := findByID(root, "open")
 	if open == nil || open.Name != "Open the ThinkPad panel" || open.Role != "button" {
 		t.Fatalf("bar opener = %+v", open)
@@ -344,7 +311,7 @@ func TestBundledThinkPadWordmarkHasTheOfficialRasterShape(t *testing.T) {
 func TestPanelPreferredHeightMatchesTheTree(t *testing.T) {
 	cfg := DefaultConfig()
 	eachSnapshot(t, func(t *testing.T, name string, snap Snapshot) {
-		tree := PanelTree(snap, DefaultInstance(), cfg, "", "")
+		tree := PanelTree(snap, cfg, "", "")
 		preferred := PanelPreferredHeight(snap, "")
 		if got := measure(t, tree); got > preferred {
 			t.Errorf("panel %s: tree measures %d but only %d was requested",
@@ -389,7 +356,7 @@ func TestNodeCountIsStableAcrossValueChanges(t *testing.T) {
 	base := snapshots()["full"]
 
 	count := func(snap Snapshot) int {
-		return countNodes(PanelTree(snap, DefaultInstance(), cfg, "", ""))
+		return countNodes(PanelTree(snap, cfg, "", ""))
 	}
 	reference := count(base)
 
@@ -421,8 +388,8 @@ func TestNodeCountIsStableAcrossValueChanges(t *testing.T) {
 
 func TestPanelTreeIsDeterministic(t *testing.T) {
 	cfg := DefaultConfig()
-	first := PanelTree(snapshots()["full"], DefaultInstance(), cfg, "", "night")
-	second := PanelTree(snapshots()["full"], DefaultInstance(), cfg, "", "night")
+	first := PanelTree(snapshots()["full"], cfg, "", "night")
+	second := PanelTree(snapshots()["full"], cfg, "", "night")
 	if countNodes(first) != countNodes(second) {
 		t.Errorf("panel is not deterministic: %d then %d nodes",
 			countNodes(first), countNodes(second))
@@ -459,9 +426,9 @@ func TestInteractiveNodesAreNamed(t *testing.T) {
 	cfg := DefaultConfig()
 	eachSnapshot(t, func(t *testing.T, name string, snap Snapshot) {
 		trees := map[string]*v1.Node{
-			"panel":    PanelTree(snap, DefaultInstance(), cfg, "", ""),
+			"panel":    PanelTree(snap, cfg, "", ""),
 			"settings": SettingsPanelTree(),
-			"bar":      BarTree(snap, DefaultInstance(), cfg, 240),
+			"bar":      BarTree(cfg),
 		}
 		for surface, tree := range trees {
 			walk(tree, func(node *v1.Node) {
@@ -521,8 +488,8 @@ func TestEveryInteractiveIdIsHandled(t *testing.T) {
 	cfg := DefaultConfig()
 	snap := snapshots()["full"]
 
-	tree := PanelTree(snap, DefaultInstance(), cfg, "", "")
-	bar := BarTree(snap, DefaultInstance(), cfg, 240)
+	tree := PanelTree(snap, cfg, "", "")
+	bar := BarTree(cfg)
 	for _, root := range []*v1.Node{tree, bar} {
 		walk(root, func(node *v1.Node) {
 			if !interactive(node) || node.ID == "" {
@@ -593,7 +560,7 @@ func TestAbsentBacklightOffersNoLevels(t *testing.T) {
 		t.Errorf("an absent backlight offers slider maximum %d, want none", levels)
 	}
 
-	tree := PanelTree(snap, DefaultInstance(), DefaultConfig(), "", "")
+	tree := PanelTree(snap, DefaultConfig(), "", "")
 	if findByID(tree, "kbd-slider") != nil {
 		t.Error("an absent backlight offers a slider")
 	}

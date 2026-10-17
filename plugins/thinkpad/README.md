@@ -4,19 +4,19 @@ ThinkPad adds a small Lenovo wordmark to the bar. Click it with either mouse but
 
 ![ThinkPad controls panel](docs/screenshots/full.png)
 
-![ThinkPad wordmark and live readings in the bar](docs/screenshots/bar.png)
+![ThinkPad wordmark in the bar](docs/screenshots/bar.png)
 
 The controls follow the hardware each model exposes. The fan uses the levels reported by `thinkpad_acpi`; a numbered level does not map to the same RPM or noise on every model. The keyboard slider follows that LED's `max_brightness` value.
 
 ## Install from source
 
-ThinkPad is source-only until its catalog release. From the repository root, run:
+ThinkPad is available from the sysc-shell plugin manager. To use a source checkout, uninstall the catalog copy first, then run this from the repository root:
 
 ```sh
-make install
+make PLUGINS=sysc-plugin-thinkpad:thinkpad install
 ```
 
-This builds and links the plugins in the checkout. Keep the checkout in place, then enable ThinkPad in the sysc-shell plugin manager. Use a sysc-shell build that supports plugin protocol 1.17, sliders, and bar images.
+This builds and links ThinkPad from the checkout. Keep the checkout in place and enable ThinkPad in the sysc-shell plugin manager. Use a sysc-shell build that supports plugin protocol 1.17, sliders, and bar images.
 
 ## Grant hardware access
 

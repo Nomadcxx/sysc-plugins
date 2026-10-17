@@ -3,22 +3,14 @@
   "id": "org.sysc.thinkpad",
   "name": "ThinkPad",
   "description": "Fan, keyboard backlight and logo light controls with CPU temperature and saved profiles.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "protocol": {"major": 1, "minor": 17},
   "exec": "bin/sysc-plugin-thinkpad",
   "capabilities": ["panels", "settings", "state", "notifications", "clipboard-write"],
   "requires": {"commands": []},
   "services": [{"id": "thinkpad"}],
   "widgets": [
-    {
-      "id": "bar",
-      "settings": [
-        {"key": "show_fan", "type": "bool", "label": "Show fan", "default": true},
-        {"key": "show_kbd", "type": "bool", "label": "Show keyboard backlight", "default": true},
-        {"key": "show_lid", "type": "bool", "label": "Show lid logo", "default": true},
-        {"key": "show_rpm", "type": "bool", "label": "Show fan RPM", "default": true}
-      ]
-    }
+    {"id": "bar"}
   ],
   "panels": [
     {"id": "panel", "width": 758, "height": 564, "placement": "attached"},

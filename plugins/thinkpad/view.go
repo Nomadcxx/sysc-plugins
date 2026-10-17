@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
-
-	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 )
 
 // Panel geometry. Every explicit Height here already includes the padding the
@@ -123,9 +121,9 @@ const (
 // cardContent is the drawable width inside a card of the standard column width.
 func cardContent() int { return columnWidth - 2*cardPad }
 
-// LogoPath resolves the wordmark for the hero: the user's override first, then
-// the asset shipped next to the binary. An empty result means fall back to the
-// material laptop glyph.
+// LogoPath resolves the wordmark for the panel and bar: the user's override
+// first, then the asset shipped next to the binary. An empty result means fall
+// back to the material laptop glyph.
 func LogoPath(cfg Config, exeDir string) string {
 	candidates := make([]string, 0, 2)
 	if cfg.LogoPath != "" {
@@ -797,7 +795,7 @@ func PanelPreferredHeight(snap Snapshot, selected string) int {
 	return total
 }
 
-func PanelTree(snap Snapshot, inst Instance, cfg Config, logo, selected string) *v1.Node {
+func PanelTree(snap Snapshot, cfg Config, logo, selected string) *v1.Node {
 	columns := &v1.Node{
 		Kind: v1.KindRow, Gap: panelGap,
 		Height: maxInt(fanCardHeight+panelGap+profileCardHeight(len(snap.Profiles)),
@@ -858,92 +856,16 @@ func SettingsPanelTree() *v1.Node {
 	}
 }
 
-// Bar segments. Mandatory children survive every squeeze; optional ones are
-// dropped from the tail until the row fits, because the host refuses an entire
-// row when a child overruns it.
-type barSegment struct {
-	node     *v1.Node
-	optional bool
+// BarTree keeps the bar compact: the official wordmark is the only child and
+// remains the button for opening the panel.
+func BarTree(cfg Config) *v1.Node {
+	return &v1.Node{
+		Kind: v1.KindRow, Height: 32, Padding: 4,
+		Children: []*v1.Node{barLogoButton(LogoPath(cfg, ""))},
+	}
 }
 
-func BarTree(snap Snapshot, inst Instance, cfg Config, width int) *v1.Node {
-	logo := LogoPath(cfg, "")
-	if barwidth.Compact(width) {
-		// Too narrow for a gauge, but the reading still matters; let the
-		// fitter decide whether even that fits.
-		segments := []barSegment{{node: barOpenIcon(logo)}}
-		if inst.ShowRPM {
-			segments = append(segments, barSegment{node: barRPMText(snap), optional: true})
-		}
-		return barRow(segments, width)
-	}
-
-	segments := []barSegment{
-		{node: barOpenIcon(logo)},
-	}
-	if inst.ShowFan {
-		segments = append(segments, barSegment{node: barFanGauge(snap), optional: true})
-	}
-	if inst.ShowRPM {
-		segments = append(segments, barSegment{node: barRPMText(snap), optional: true})
-	}
-	if inst.ShowKbd {
-		segments = append(segments, barSegment{node: barKeyboard(snap), optional: true})
-	}
-	if inst.ShowLid {
-		segments = append(segments, barSegment{node: barLid(snap), optional: true})
-	}
-	return barRow(segments, width)
-}
-
-// barRow lays out the mandatory segments, then appends optional ones from the
-// front while they still fit. Fitting is checked against the real padding rule
-// rather than a guess, so the row can never be refused.
-func barRow(segments []barSegment, width int) *v1.Node {
-	const padding, gap = 4, 6
-
-	mandatory := make([]*v1.Node, 0, len(segments))
-	for _, segment := range segments {
-		if !segment.optional {
-			mandatory = append(mandatory, segment.node)
-		}
-	}
-	optional := make([]*v1.Node, 0, len(segments))
-	for _, segment := range segments {
-		if segment.optional {
-			optional = append(optional, segment.node)
-		}
-	}
-
-	children := mandatory
-	// A zero width means the host did not say; keep every segment.
-	if width <= 0 {
-		children = append(children, optional...)
-		return &v1.Node{Kind: v1.KindRow, Height: 32, Padding: padding, Gap: gap, Children: children}
-	}
-	available := width - 2*padding
-	for _, node := range optional {
-		grew := 2*gap + node.Width
-		if barWidth(children)+grew > available {
-			break
-		}
-		children = append(children, node)
-	}
-	return &v1.Node{Kind: v1.KindRow, Height: 32, Padding: padding, Gap: gap, Children: children}
-}
-
-func barWidth(nodes []*v1.Node) int {
-	total := 0
-	for i, node := range nodes {
-		if i > 0 {
-			total += 6
-		}
-		total += node.Width
-	}
-	return total
-}
-
-func barOpenIcon(logo string) *v1.Node {
+func barLogoButton(logo string) *v1.Node {
 	button := &v1.Node{
 		Kind: v1.KindButton, ID: nodeOpen, Name: "Open the ThinkPad panel",
 		Width: 24, Height: 24, Padding: 4,
@@ -959,85 +881,6 @@ func barOpenIcon(logo string) *v1.Node {
 		ImageW: 44, ImageH: 16,
 	}}
 	return button
-}
-
-func barFanGauge(snap Snapshot) *v1.Node {
-	gauge := &v1.Node{
-		Kind: v1.KindGauge, Key: "fan", Width: 40, Height: 16, Animate: true,
-	}
-	if !snap.State.FanValid {
-		gauge.Absent = true
-		return gauge
-	}
-	gauge.Value = fanFraction(snap.State.FanRPM)
-	return gauge
-}
-
-// fanFraction maps RPM onto the gauge's 0..1 range. 6000 RPM is a comfortable
-// ceiling for a healthy ThinkPad; above it the bar simply pins.
-func fanFraction(rpm int) float64 {
-	const ceiling = 6000.0
-	if rpm <= 0 {
-		return 0
-	}
-	if rpm >= ceiling {
-		return 1
-	}
-	return float64(rpm) / ceiling
-}
-
-func barRPMText(snap Snapshot) *v1.Node {
-	value := "----"
-	if snap.State.FanValid {
-		value = fmt.Sprintf("%d", snap.State.FanRPM)
-	}
-	return textNode("bar-rpm", value, sizeMono, "", 40)
-}
-
-func barKeyboard(snap Snapshot) *v1.Node {
-	led := snap.State.Keyboard
-	tone := v1.ToneSubtle
-	if led.On() {
-		tone = v1.ToneAccent
-	}
-	return &v1.Node{
-		Kind: v1.KindRow, Width: 60, Height: 24, Gap: 4,
-		Children: []*v1.Node{
-			iconNode("", "Keyboard backlight", "brightness_high", 14, tone),
-			textNode("bar-kbd", barKeyboardText(snap), sizeMono, "", 32),
-		},
-	}
-}
-
-func barKeyboardText(snap Snapshot) string {
-	led := snap.State.Keyboard
-	if !led.Present {
-		return "off"
-	}
-	if !led.On() {
-		return "0"
-	}
-	return fmt.Sprintf("%d", led.Brightness)
-}
-
-func barLid(snap Snapshot) *v1.Node {
-	led := snap.State.Lid
-	tone := v1.ToneSubtle
-	if led.On() {
-		tone = v1.ToneAccent
-	}
-	name := "Lid light is off"
-	if led.On() {
-		name = "Lid light is on"
-	}
-	if !led.Present {
-		name = "Lid light unavailable"
-	}
-	return &v1.Node{
-		Kind: v1.KindButton, ID: nodeLidToggle, Name: name + ", click to toggle",
-		Icon: "brightness_high", Width: 24, Height: 24, Padding: 5,
-		Tone: tone, Role: "button", Events: activate(),
-	}
 }
 
 // TooltipTree is text-only on purpose: the shell refuses interactive nodes in a
