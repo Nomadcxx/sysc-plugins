@@ -1380,6 +1380,53 @@
       ]
     },
     {
+      "id": "org.sysc.thinkpad",
+      "name": "ThinkPad",
+      "author": "Nomadcxx",
+      "description": "Fan, keyboard backlight and logo light controls with CPU temperature and saved profiles.",
+      "category": "system",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/thinkpad-v0.1.0/plugins/thinkpad/thumbnail.webp",
+        "sha256": "48bd0789cb95f23895f6f22f1e78b6c63290d9bb9c5a73880cbf4eae5af725c9"
+      },
+      "readme": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/thinkpad-v0.1.0/plugins/thinkpad/README.md",
+        "sha256": "9a3e0524a5f3789722baf8c298941e68e0977766cdac2ee04073a3395c679408"
+      },
+      "added_at": "2026-10-17T05:06:35.893606042Z",
+      "updated_at": "2026-10-17T05:06:35.893606042Z",
+      "version": "0.1.0",
+      "protocol": {
+        "major": 1,
+        "minor": 17
+      },
+      "capabilities": [
+        "panels",
+        "settings",
+        "state",
+        "notifications",
+        "clipboard-write"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/thinkpad-v0.1.0/org.sysc.thinkpad-0.1.0-linux-amd64.tar.gz",
+          "sha256": "011e9110256ca7fde7b2db5f6b71ee07627a78e49a7634ebffd4fb36b76794ce",
+          "size": 3325864
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/thinkpad-v0.1.0/org.sysc.thinkpad-0.1.0-linux-arm64.tar.gz",
+          "sha256": "a941876b82d8b73d622607c593f5d40d8770159f78e659bb4c57f6a893f57756",
+          "size": 3150488
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/thinkpad-v0.1.0"
+    },
+    {
       "id": "org.sysc.timer",
       "name": "Pomodoro Timer",
       "author": "Nomadcxx",
