@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -76,8 +77,15 @@ type harness struct {
 }
 
 func start(t *testing.T) *harness {
+	return startWith(t, nil)
+}
+
+// startWith builds the harness and lets a test adjust the environment (extra
+// libraries, injected launchers) before the plugin starts.
+func startWith(t *testing.T, mutate func(*environment)) *harness {
 	t.Helper()
 	dbPath, procRoot := makeFixture(t)
+	home := t.TempDir()
 	input, host := io.Pipe()
 	plugin, output := io.Pipe()
 	h := &harness{t: t, host: host, lines: make(chan []byte, 64), done: make(chan error, 1), ran: make(chan []string, 8), procRoot: procRoot}
@@ -97,6 +105,17 @@ func start(t *testing.T) *harness {
 		callTimeout: 2 * time.Second,
 		dbPath:      dbPath,
 		procRoot:    procRoot,
+		home:        home,
+		// The harness tests the Lutris fixture; every other backend points at
+		// paths that do not exist, so a real Steam/Faugus/Heroic library on
+		// the build machine cannot leak into the fixture.
+		steamRoots:  []string{filepath.Join(home, "steam")},
+		faugusData:  []string{filepath.Join(home, "faugus")},
+		faugusState: []string{filepath.Join(home, "faugus")},
+		heroicDirs:  []string{filepath.Join(home, "heroic")},
+	}
+	if mutate != nil {
+		mutate(&env)
 	}
 	go func() {
 		err := runPlugin(input, output, env)
@@ -338,15 +357,15 @@ func TestPanelFlowAndPrefsPersist(t *testing.T) {
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
 	line := h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "p" && find(s.Root, "card-2") != nil
+		return s.ViewID == "p" && find(s.Root, "card-lutris:2") != nil
 	})
-	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:card-1", Event: v1.EventActivate})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:card-lutris:1", Event: v1.EventActivate})
 	// Hades is running in the fixture, so its primary action is Stop.
 	line = h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "p" && find(s.Root, "stop-1") != nil
+		return s.ViewID == "p" && find(s.Root, "stop-lutris:1") != nil
 	})
-	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:favtoggle-2", Event: v1.EventActivate})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:favtoggle-lutris:2", Event: v1.EventActivate})
 	// favtoggle must round-trip through state.set with the favorites map.
 	for {
 		l := h.next()
@@ -371,7 +390,7 @@ func TestPanelFlowAndPrefsPersist(t *testing.T) {
 			Favorites map[string]bool `json:"favorites"`
 		}
 		h.replyTo(call.ID)
-		if err := json.Unmarshal(p.Value, &prefs); err != nil || !prefs.Favorites["2"] {
+		if err := json.Unmarshal(p.Value, &prefs); err != nil || !prefs.Favorites["lutris:2"] {
 			t.Fatalf("persisted prefs = %s", p.Value)
 		}
 		return
@@ -394,10 +413,10 @@ func TestSearchAndLaunch(t *testing.T) {
 	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: rev, Node: "panel:search", Event: v1.EventChange, Text: "beta"})
 	line = h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "p" && find(s.Root, "card-2") != nil && find(s.Root, "card-1") == nil
+		return s.ViewID == "p" && find(s.Root, "card-lutris:2") != nil && find(s.Root, "card-lutris:1") == nil
 	})
 	h.settleHostCalls(100 * time.Millisecond)
-	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:launch-2", Event: v1.EventActivate})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:launch-lutris:2", Event: v1.EventActivate})
 	select {
 	case got := <-h.ran:
 		if len(got) < 2 || got[0] != "xdg-open" || got[1] != "lutris:rungameid/2" {
@@ -413,14 +432,14 @@ func TestReclickSelectedCardLaunches(t *testing.T) {
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
 	line := h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "p" && find(s.Root, "card-2") != nil
+		return s.ViewID == "p" && find(s.Root, "card-lutris:2") != nil
 	})
-	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:card-2", Event: v1.EventActivate})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:card-lutris:2", Event: v1.EventActivate})
 	line = h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "p" && find(s.Root, "launch-2") != nil
+		return s.ViewID == "p" && find(s.Root, "launch-lutris:2") != nil
 	})
-	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:card-2", Event: v1.EventActivate})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:card-lutris:2", Event: v1.EventActivate})
 	select {
 	case got := <-h.ran:
 		if len(got) < 2 || got[1] != "lutris:rungameid/2" {
@@ -436,14 +455,14 @@ func TestConfigOpensGameYml(t *testing.T) {
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
 	line := h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "p" && find(s.Root, "card-1") != nil
+		return s.ViewID == "p" && find(s.Root, "card-lutris:1") != nil
 	})
-	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:card-1", Event: v1.EventPointer, Button: v1.ButtonSecondary})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:card-lutris:1", Event: v1.EventPointer, Button: v1.ButtonSecondary})
 	line = h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "p" && find(s.Root, "config-1") != nil
+		return s.ViewID == "p" && find(s.Root, "config-lutris:1") != nil
 	})
-	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:config-1", Event: v1.EventActivate})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:config-lutris:1", Event: v1.EventActivate})
 	select {
 	case got := <-h.ran:
 		if len(got) < 2 || got[0] != "xdg-open" || filepath.Base(got[1]) != "hades.yml" {
@@ -499,17 +518,17 @@ func TestBarRightClickOpensSwitcher(t *testing.T) {
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "f", View: v1.ViewFloating, Entry: "switcher"})
 	line := h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "f" && find(s.Root, "sw-stop-1") != nil
+		return s.ViewID == "f" && find(s.Root, "sw-stop-lutris:1") != nil
 	})
 	snap := snapshotOf(line)
-	if find(snap.Root, "sw-open-1") == nil {
+	if find(snap.Root, "sw-open-lutris:1") == nil {
 		t.Fatal("missing sw-open row")
 	}
 	if find(snap.Root, "switcher-list") == nil {
 		t.Fatal("floating view must render the switcher list")
 	}
 
-	h.send(v1.InputEvent{Type: "input.event", ViewID: "f", Revision: snap.Revision, Node: "f:sw-open-1", Event: v1.EventActivate})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "f", Revision: snap.Revision, Node: "f:sw-open-lutris:1", Event: v1.EventActivate})
 	h.nextCall(v1.CallPanelOpen)
 }
 
@@ -531,17 +550,17 @@ func TestCoverQueueIsAsyncAndCoalesced(t *testing.T) {
 	line := h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
 
 	rev := snapshotOf(line).Revision
-	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: rev, Node: "panel:card-2", Event: v1.EventActivate})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: rev, Node: "panel:card-lutris:2", Event: v1.EventActivate})
 	if got := <-calls; got != "beta" {
 		t.Fatalf("first cover job = %q, want beta", got) // worker now parked inside beta's fetch
 	}
 	line = h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
 	rev = snapshotOf(line).Revision
-	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: rev, Node: "panel:card-1", Event: v1.EventActivate})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: rev, Node: "panel:card-lutris:1", Event: v1.EventActivate})
 	line = h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
 	rev = snapshotOf(line).Revision
 	// Re-paint (favtoggle saves prefs) must NOT re-enqueue hades while it is dirty.
-	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: rev, Node: "panel:favtoggle-1", Event: v1.EventActivate})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: rev, Node: "panel:favtoggle-lutris:1", Event: v1.EventActivate})
 	h.pump(func(l []byte) bool { return snapshotOf(l).ViewID == "p" })
 	select {
 	case extra := <-calls:
@@ -594,7 +613,7 @@ func TestViewOpenAndInputStayResponsiveDuringHeldScan(t *testing.T) {
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "cached", View: v1.ViewPanel, Entry: "panel"})
 	h.pump(func(line []byte) bool {
 		snap := snapshotOf(line)
-		return snap.ViewID == "cached" && find(snap.Root, "card-1") != nil
+		return snap.ViewID == "cached" && find(snap.Root, "card-lutris:1") != nil
 	})
 	h.nextCall(v1.CallStateSet)
 
@@ -654,7 +673,7 @@ func TestViewOpenAndInputStayResponsiveDuringHeldScan(t *testing.T) {
 	if line == nil {
 		t.Fatal("ViewOpen waited for the blocked process scan")
 	}
-	if find(snapshotOf(line).Root, "card-1") == nil {
+	if find(snapshotOf(line).Root, "card-lutris:1") == nil {
 		t.Fatal("ViewOpen did not use the cached game list")
 	}
 	if find(snapshotOf(line).Root, "library-refreshing") == nil {
@@ -670,7 +689,7 @@ func TestViewOpenAndInputStayResponsiveDuringHeldScan(t *testing.T) {
 	if line == nil {
 		t.Fatal("input was held behind the blocked process scan")
 	}
-	if find(snapshotOf(line).Root, "card-2") == nil || find(snapshotOf(line).Root, "card-1") != nil {
+	if find(snapshotOf(line).Root, "card-lutris:2") == nil || find(snapshotOf(line).Root, "card-lutris:1") != nil {
 		t.Fatalf("search snapshot did not apply beta filter: %s", line)
 	}
 
@@ -732,19 +751,19 @@ func TestCardClickSelectsWithoutLaunching(t *testing.T) {
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
 	line := h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "p" && find(s.Root, "card-2") != nil
+		return s.ViewID == "p" && find(s.Root, "card-lutris:2") != nil
 	})
-	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:card-2")
+	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:card-lutris:2")
 	line = h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "p" && find(s.Root, "launch-2") != nil
+		return s.ViewID == "p" && find(s.Root, "launch-lutris:2") != nil
 	})
 	select {
 	case got := <-h.ran:
 		t.Fatalf("first click launched: %v", got)
 	case <-time.After(300 * time.Millisecond):
 	}
-	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:card-2")
+	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:card-lutris:2")
 	select {
 	case got := <-h.ran:
 		if len(got) < 2 || got[1] != "lutris:rungameid/2" {
@@ -762,17 +781,17 @@ func TestLaunchShowsTheSpinnerUntilTheGameIsSeen(t *testing.T) {
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
 	line := h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "p" && find(s.Root, "card-2") != nil
+		return s.ViewID == "p" && find(s.Root, "card-lutris:2") != nil
 	})
-	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:card-2")
+	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:card-lutris:2")
 	line = h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		return s.ViewID == "p" && find(s.Root, "launch-2") != nil
+		return s.ViewID == "p" && find(s.Root, "launch-lutris:2") != nil
 	})
-	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:launch-2")
+	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:launch-lutris:2")
 	line = h.pump(func(l []byte) bool {
 		s := snapshotOf(l)
-		b := find(s.Root, "launch-2")
+		b := find(s.Root, "launch-lutris:2")
 		return s.ViewID == "p" && b != nil && b.Disabled && b.Text == "Launching…"
 	})
 	var spinners int
@@ -791,5 +810,125 @@ func TestLaunchShowsTheSpinnerUntilTheGameIsSeen(t *testing.T) {
 	walk(snapshotOf(line).Root)
 	if spinners != 2 {
 		t.Fatalf("launching panel has %d spinners, want the card's and the detail's", spinners)
+	}
+}
+
+// The gear in the deck header opens the host-rendered settings panel, and the
+// settings panel's back button returns to the deck — both as one panel.open
+// with the swapped entry, never a close+open pair.
+func TestSettingsGearOpensHostSettingsPanel(t *testing.T) {
+	h := start(t)
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
+	line := h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "settings") != nil
+	})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:settings", Event: v1.EventActivate})
+	if entry := h.panelEntry(h.nextCall(v1.CallPanelOpen)); entry != "settings" {
+		t.Fatalf("gear opened %q, want the settings entry", entry)
+	}
+
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "s", View: v1.ViewPanel, Entry: "settings"})
+	line = h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "s" && find(s.Root, "back") != nil
+	})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "s", Revision: snapshotOf(line).Revision, Node: "s:back", Event: v1.EventActivate})
+	if entry := h.panelEntry(h.nextCall(v1.CallPanelOpen)); entry != "panel" {
+		t.Fatalf("back opened %q, want the deck entry", entry)
+	}
+}
+
+func (h *harness) panelEntry(params json.RawMessage) string {
+	h.t.Helper()
+	var p struct {
+		Entry string `json:"entry"`
+	}
+	_ = json.Unmarshal(params, &p)
+	return p.Entry
+}
+
+// A Steam game imported into Lutris (service/service_id) and added to Faugus
+// (runner Steam, path = appid) must render as ONE card, and switching the
+// default launcher must switch which library serves and launches it.
+func TestDuplicatesMergeAndFollowTheDefaultLauncher(t *testing.T) {
+	faugusData := t.TempDir()
+	if err := os.WriteFile(filepath.Join(faugusData, "games.json"),
+		[]byte(`[{"gameid": "2", "title": "Portal 2", "path": "620", "runner": "Steam"}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := startWith(t, func(env *environment) {
+		db, err := sql.Open("sqlite", env.dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		if _, err := db.Exec(`INSERT INTO games (name, slug, runner, installed, service, service_id, directory)
+			VALUES ('Portal 2','portal-2','steam',1,'steam','620','/Games/Portal2')`); err != nil {
+			t.Fatal(err)
+		}
+		env.faugusData = []string{faugusData}
+		env.lookPath = func(name string) (string, error) {
+			if name == "faugus-launcher" {
+				return "/usr/bin/faugus-launcher", nil
+			}
+			return "", os.ErrNotExist
+		}
+	})
+	h.send(v1.SettingsChanged{Type: "settings.changed", Values: map[string]any{"default_launcher": "lutris"}})
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel"})
+
+	// Lutris is the default: its copy wins, and Faugus' copy is folded in.
+	line := h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "card-lutris:3") != nil
+	})
+	if find(snapshotOf(line).Root, "card-faugus:2") != nil {
+		t.Fatal("the Faugus copy must not be a second card")
+	}
+	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:card-lutris:3")
+	line = h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "launch-lutris:3") != nil
+	})
+	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:launch-lutris:3")
+	select {
+	case got := <-h.ran:
+		if len(got) < 2 || got[0] != "xdg-open" || got[1] != "lutris:rungameid/3" {
+			t.Fatalf("default-lutris launch = %v", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no launch exec")
+	}
+
+	// Switch the default: the merged card is now served by Faugus and its
+	// launch goes through faugus-launcher with the Faugus gameid.
+	h.send(v1.SettingsChanged{Type: "settings.changed", Values: map[string]any{"default_launcher": "faugus"}})
+	line = h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "card-faugus:2") != nil
+	})
+	if find(snapshotOf(line).Root, "card-lutris:3") != nil {
+		t.Fatal("the Lutris copy must not reappear as a second card")
+	}
+	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:card-faugus:2")
+	line = h.pump(func(l []byte) bool {
+		s := snapshotOf(l)
+		return s.ViewID == "p" && find(s.Root, "launch-faugus:2") != nil && bytes.Contains(l, []byte("Also in Lutris"))
+	})
+	// A Steam import's stored path is an appid, so the installed check must
+	// not disable Launch on the Faugus-served card.
+	if b := find(snapshotOf(line).Root, "launch-faugus:2"); b.Disabled {
+		t.Fatalf("the merged Faugus card's launch button is disabled: %+v", b)
+	}
+	h.clickLikeHost("p", snapshotOf(line).Revision, "panel:launch-faugus:2")
+	select {
+	case got := <-h.ran:
+		want := "faugus-launcher --game 2"
+		if strings.Join(got, " ") != want {
+			t.Fatalf("default-faugus launch = %v, want %q", got, want)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no launch exec")
 	}
 }

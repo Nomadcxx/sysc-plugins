@@ -21,6 +21,11 @@ func (s *session) tree(v view) *v1.Node {
 	case v1.ViewTooltip:
 		return bar.TooltipTree(s.barState(), s.missing, len(s.games), s.env.now())
 	}
+	if v.entry == "settings" {
+		// The host wraps this header in the settings form it renders from the
+		// manifest's settings array; the plugin owns only the way back.
+		return panel.SettingsHeader()
+	}
 	return panel.BuildTree(s.panelState())
 }
 
@@ -73,6 +78,16 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 		_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID})
 	case node == "search" && (m.Event == v1.EventChange || m.Event == v1.EventSubmit):
 		s.query = m.Text
+	case node == "settings":
+		// The host swaps the panel entry in one operation; closing and
+		// reopening raced the surface teardown against the new view.
+		_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{
+			Entry: "settings", Output: m.Output, Generation: m.Generation, Instance: m.ViewID,
+		})
+	case node == "back":
+		_, _ = s.call(ctx, v1.CallPanelOpen, v1.PanelParams{
+			Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: m.ViewID,
+		})
 	case m.Event == v1.EventShortcut && node == "focus-search":
 		_, _ = s.call(ctx, v1.CallViewFocus, v1.ViewFocusParams{View: m.ViewID, Node: "search"})
 	case strings.HasPrefix(node, "section-"):
@@ -92,12 +107,12 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 	case strings.HasPrefix(node, "launch-"):
 		s.doLaunch(ctx, strings.TrimPrefix(node, "launch-"))
 	case strings.HasPrefix(node, "stop-"):
-		if g := s.game(strings.TrimPrefix(node, "stop-")); g != nil && s.src != nil {
-			_ = s.src.Stop(ctx, *g)
+		if g := s.game(strings.TrimPrefix(node, "stop-")); g != nil && s.set != nil {
+			_ = s.set.Stop(ctx, *g)
 		}
 	case strings.HasPrefix(node, "sw-stop-"):
-		if g := s.game(strings.TrimPrefix(node, "sw-stop-")); g != nil && s.src != nil {
-			_ = s.src.Stop(ctx, *g)
+		if g := s.game(strings.TrimPrefix(node, "sw-stop-")); g != nil && s.set != nil {
+			_ = s.set.Stop(ctx, *g)
 		}
 		s.closeSwitcherIfIdle(ctx)
 	case strings.HasPrefix(node, "sw-open-"):
@@ -116,19 +131,30 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 			_ = s.env.run(ctx, "xdg-open", g.Directory)
 		}
 	case strings.HasPrefix(node, "config-"):
-		if g := s.game(strings.TrimPrefix(node, "config-")); g != nil && g.ConfigPath != "" {
+		g := s.game(strings.TrimPrefix(node, "config-"))
+		switch {
+		case g == nil:
+		case g.ConfigPath != "":
 			_ = s.env.run(ctx, "xdg-open", g.ConfigPath)
-		} else {
-			_, _ = s.call(ctx, v1.CallNotify, v1.NotifyParams{Summary: "Open Lutris", Body: "No game config file found"})
+		default:
+			// Steam, Heroic and Faugus have no per-game config file worth
+			// opening; their own app is where a game is configured.
+			_, _ = s.call(ctx, v1.CallNotify, v1.NotifyParams{
+				Summary: "Configure in " + panel.LibraryName(g.Source),
+				Body:    g.Name + " is configured inside " + panel.LibraryName(g.Source) + " itself",
+			})
 		}
 	case strings.HasPrefix(node, "remove-"):
-		// ponytail: Lutris exposes no uninstall URI or CLI flag (verified in
-		// lutris gui/application.py — only rungameid/rungame/install), so
-		// removal stays GUI-side rather than hacking pga.db rows.
-		_, _ = s.call(ctx, v1.CallNotify, v1.NotifyParams{
-			Summary: "Uninstall in Lutris",
-			Body:    "Lutris has no uninstall API — right-click the game there",
-		})
+		// No library exposes an uninstall API this plugin can call: Lutris
+		// has no uninstall URI/CLI (only rungameid/rungame/install), and the
+		// others manage removal in their own UI. Point the user there rather
+		// than hacking library files.
+		if g := s.game(strings.TrimPrefix(node, "remove-")); g != nil {
+			_, _ = s.call(ctx, v1.CallNotify, v1.NotifyParams{
+				Summary: "Uninstall in " + panel.LibraryName(g.Source),
+				Body:    "Right-click the game in " + panel.LibraryName(g.Source) + " to remove it",
+			})
+		}
 	}
 }
 
@@ -173,7 +199,7 @@ func (s *session) setSection(name string) bool {
 
 func (s *session) doLaunch(ctx context.Context, id string) {
 	g := s.game(id)
-	if g == nil || s.src == nil {
+	if g == nil || s.set == nil {
 		return
 	}
 	phase := s.machine.Phase(id)
@@ -182,7 +208,7 @@ func (s *session) doLaunch(ctx context.Context, id string) {
 	}
 	delete(s.failed, id)
 	s.machine.Request(id, s.env.now())
-	if err := s.src.Launch(ctx, *g); err != nil {
+	if err := s.set.Launch(ctx, *g); err != nil {
 		_, _ = s.call(ctx, v1.CallNotify, v1.NotifyParams{Summary: "Launch failed", Body: g.Name + ": " + err.Error()})
 	}
 	s.setPoll(time.Second) // the launching branch of desiredPoll

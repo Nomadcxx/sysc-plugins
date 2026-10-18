@@ -15,7 +15,10 @@ import (
 	"github.com/Nomadcxx/sysc-plugins/plugins/games/covers"
 	"github.com/Nomadcxx/sysc-plugins/plugins/games/panel"
 	"github.com/Nomadcxx/sysc-plugins/plugins/games/source"
+	"github.com/Nomadcxx/sysc-plugins/plugins/games/source/faugus"
+	"github.com/Nomadcxx/sysc-plugins/plugins/games/source/heroic"
 	"github.com/Nomadcxx/sysc-plugins/plugins/games/source/lutris"
+	"github.com/Nomadcxx/sysc-plugins/plugins/games/source/steam"
 	"github.com/Nomadcxx/sysc-plugins/plugins/games/store"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -35,25 +38,55 @@ type environment struct {
 	now         func() time.Time
 	run         func(ctx context.Context, name string, args ...string) error
 	callTimeout time.Duration
-	dbPath      string                                                  // "" = real Lutris pga.db (tests inject a fixture)
+	dbPath      string                                                  // "" = probe real Lutris pga.db locations (tests inject a fixture)
 	procRoot    string                                                  // "" = /proc
 	fetchGrid   func(ctx context.Context, key, slug, dir string) string // "" = default
+	home        string                                                  // "" = os.UserHomeDir; the base of every library path
+	steamRoots  []string                                                // "" = real Steam locations
+	faugusData  []string                                                // "" = real Faugus data locations
+	faugusState []string                                                // "" = real Faugus state locations
+	heroicDirs  []string                                                // "" = real Heroic config locations
+	lookPath    func(string) (string, error)                            // "" = exec.LookPath (tests inject launcher presence)
 }
 
+// launchers is the tie-break order of the backends, independent of which one
+// is the default: Steam's copy of a game is the canonical one when no
+// default is set (or the default's library is not installed).
+var launchers = []string{"steam", "faugus", "heroic", "lutris"}
+
 type settings struct {
+	sourceSteam     bool
 	sourceLutris    bool
+	sourceHeroic    bool
+	sourceFaugus    bool
+	defaultLauncher string
 	steamGridKey    string
 	pollRunning     string // auto|off
 	hideUnavailable bool
 }
 
 func defaultSettings() settings {
-	return settings{sourceLutris: true, pollRunning: "auto"}
+	return settings{
+		sourceSteam: true, sourceLutris: true, sourceHeroic: true, sourceFaugus: true,
+		defaultLauncher: "steam", pollRunning: "auto",
+	}
 }
 
 func (s *settings) apply(values map[string]any) {
+	if v, ok := values["source_steam"].(bool); ok {
+		s.sourceSteam = v
+	}
 	if v, ok := values["source_lutris"].(bool); ok {
 		s.sourceLutris = v
+	}
+	if v, ok := values["source_heroic"].(bool); ok {
+		s.sourceHeroic = v
+	}
+	if v, ok := values["source_faugus"].(bool); ok {
+		s.sourceFaugus = v
+	}
+	if v, ok := values["default_launcher"].(string); ok && knownLauncher(v) {
+		s.defaultLauncher = v
 	}
 	if v, ok := values["steamgriddb_key"].(string); ok {
 		s.steamGridKey = strings.TrimSpace(v)
@@ -66,8 +99,34 @@ func (s *settings) apply(values map[string]any) {
 	}
 }
 
+func knownLauncher(name string) bool {
+	for _, l := range launchers {
+		if l == name {
+			return true
+		}
+	}
+	return false
+}
+
+// launcherOrder lists every library with the default launcher first. The set
+// merges in this order, so a game two libraries both list is served by the
+// default launcher's copy and launches through it.
+func (s *settings) launcherOrder() []string {
+	out := make([]string, 0, len(launchers))
+	if knownLauncher(s.defaultLauncher) {
+		out = append(out, s.defaultLauncher)
+	}
+	for _, l := range launchers {
+		if l != s.defaultLauncher {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 type view struct {
 	kind  v1.ViewKind
+	entry string
 	rev   uint64
 	width int
 }
@@ -78,11 +137,11 @@ type session struct {
 	settings settings
 	views    map[string]view
 
-	src         source.Source
+	set         *source.Set
 	cacheDir    string
 	games       []source.Game
 	running     map[string]time.Time
-	missing     bool // library unavailable (no pga.db / source off)
+	missing     bool // no library is available (none installed, or all disabled)
 	machine     *panel.Machine
 	failed      map[string]bool
 	prefs       store.Prefs
@@ -114,9 +173,16 @@ type coverDone struct {
 	gameID, path string
 }
 
+// library is the slice of the source surface the refresh worker needs; the
+// multi-library set satisfies it, so a job carries every enabled library.
+type library interface {
+	List(ctx context.Context) ([]source.Game, error)
+	Running(ctx context.Context, games []source.Game) (map[string]time.Time, error)
+}
+
 type refreshJob struct {
 	generation, requestID uint64
-	src                   source.Source
+	src                   library
 	scan                  bool
 }
 
@@ -138,7 +204,7 @@ type refreshResult struct {
 
 func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	c := v1.NewClient(in, out)
-	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.games", Name: "Games", Version: "0.2.0"})); err != nil {
+	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.games", Name: "Games", Version: "0.3.0"})); err != nil {
 		return err
 	}
 	cacheDir := ""
@@ -156,11 +222,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	if s.env.fetchGrid == nil {
 		s.env.fetchGrid = defaultFetchGrid
 	}
-	if s.settings.sourceLutris {
-		s.openLutris()
-	} else {
-		s.missing = true
-	}
+	s.openSources()
 	s.prefs.EnsureMaps()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -199,7 +261,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
-				s.views[m.ViewID] = view{kind: m.View, width: m.Width}
+				s.views[m.ViewID] = view{kind: m.View, entry: m.Entry, width: m.Width}
 				s.requestRefresh(true)
 				s.setPoll(s.desiredPoll())
 				s.snapshot(m.ViewID)
@@ -216,13 +278,8 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 				s.snapshotAll()
 			case *v1.SettingsChanged:
 				s.settings.apply(m.Values)
+				s.openSources()
 				s.refreshGeneration++
-				if !s.settings.sourceLutris {
-					s.src, s.running = nil, nil
-					s.missing = true
-				} else if s.src == nil {
-					s.openLutris()
-				}
 				if s.settings.pollRunning == "off" {
 					s.running = nil
 				}
@@ -251,18 +308,81 @@ func (s *session) panelOpen() bool {
 	}
 	return false
 }
-func (s *session) openLutris() {
-	src, err := lutris.New(lutris.Options{DBPath: s.env.dbPath, ProcRoot: s.env.procRoot, Run: s.env.run})
-	if err != nil {
-		s.missing = true
-		return
+
+// openSources builds every enabled library that is actually installed and
+// hands them to the set in preference order (default launcher first). A
+// library that is not installed is skipped silently: the deck works with
+// whichever ones exist, and "missing" only means none do.
+func (s *session) openSources() {
+	home := s.env.home
+	if home == "" {
+		home, _ = os.UserHomeDir()
 	}
-	s.src, s.missing = src, false
+	var srcs []source.Source
+	for _, name := range s.settings.launcherOrder() {
+		var (
+			src source.Source
+			err error
+		)
+		switch name {
+		case "steam":
+			if !s.settings.sourceSteam {
+				continue
+			}
+			src, err = steam.New(steam.Options{Roots: s.env.steamRoots, ProcRoot: s.env.procRoot, Run: s.env.run})
+		case "lutris":
+			if !s.settings.sourceLutris {
+				continue
+			}
+			dbPath := s.env.dbPath
+			if dbPath == "" {
+				dbPath = newestLutrisDB(home)
+			}
+			if dbPath == "" {
+				continue
+			}
+			src, err = lutris.New(lutris.Options{DBPath: dbPath, ProcRoot: s.env.procRoot, Run: s.env.run})
+		case "heroic":
+			if !s.settings.sourceHeroic {
+				continue
+			}
+			src, err = heroic.New(heroic.Options{ConfigDirs: s.env.heroicDirs, ProcRoot: s.env.procRoot, Run: s.env.run})
+		case "faugus":
+			if !s.settings.sourceFaugus {
+				continue
+			}
+			src, err = faugus.New(faugus.Options{
+				DataDirs: s.env.faugusData, StateDirs: s.env.faugusState,
+				Home: home, ProcRoot: s.env.procRoot, Run: s.env.run, LookPath: s.env.lookPath,
+			})
+		}
+		if err == nil && src != nil {
+			srcs = append(srcs, src)
+		}
+	}
+	s.set = source.NewSet(srcs...)
+	s.missing = len(srcs) == 0
+}
+
+// newestLutrisDB prefers the most recently written pga.db, so a machine with
+// both a native and a Flatpak Lutris reads the library in use.
+func newestLutrisDB(home string) string {
+	best, bestMod := "", time.Time{}
+	for _, p := range lutris.DefaultDBPaths(home) {
+		info, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(bestMod) {
+			best, bestMod = p, info.ModTime()
+		}
+	}
+	return best
 }
 
 // requestRefresh keeps one active worker and one replaceable queued request.
 func (s *session) requestRefresh(showProgress bool) {
-	if s.src == nil {
+	if s.set == nil {
 		s.refreshing = false
 		select {
 		case <-s.refreshJobs:
@@ -274,7 +394,7 @@ func (s *session) requestRefresh(showProgress bool) {
 	job := refreshJob{
 		generation: s.refreshGeneration,
 		requestID:  s.refreshRequestID,
-		src:        s.src,
+		src:        s.set,
 		scan:       s.settings.pollRunning != "off",
 	}
 	s.refreshing = s.refreshing || showProgress
@@ -347,7 +467,7 @@ func (s *session) applyRefresh(ctx context.Context, result refreshResult) bool {
 	switch result.stage {
 	case refreshLibrary:
 		if result.err == nil {
-			changed = s.missing || !slices.Equal(s.games, result.games)
+			changed = s.missing || !equalGames(s.games, result.games)
 			s.games = result.games
 			s.missing = false
 		} else if len(s.games) == 0 && !s.missing {
@@ -369,10 +489,25 @@ func (s *session) applyRefresh(ctx context.Context, result refreshResult) bool {
 	return changed
 }
 
+// equalGames reports whether two listings hold the same games, so a refresh
+// that changed nothing skips the repaint. Game is not comparable — the
+// OtherSources list rules out slices.Equal — hence the field-wise compare.
+func equalGames(a, b []source.Game) bool {
+	return slices.EqualFunc(a, b, func(x, y source.Game) bool {
+		return x.ID == y.ID && x.Name == y.Name && x.Slug == y.Slug &&
+			x.Runner == y.Runner && x.Platform == y.Platform && x.Year == y.Year &&
+			x.Installed == y.Installed && x.PlaytimeSec == y.PlaytimeSec &&
+			x.LastPlayed.Equal(y.LastPlayed) && x.Directory == y.Directory &&
+			x.Executable == y.Executable && x.ConfigPath == y.ConfigPath &&
+			x.CoverPath == y.CoverPath && x.Source == y.Source &&
+			x.Identity == y.Identity && slices.Equal(x.OtherSources, y.OtherSources)
+	})
+}
+
 // scan applies running detection on the event-loop owner. It also adopts
-// processes that Lutris launched and updates persisted session accounting.
+// processes the libraries launched and updates persisted session accounting.
 func (s *session) scan(ctx context.Context, running map[string]time.Time) {
-	if s.src == nil || s.settings.pollRunning == "off" || s.missing {
+	if s.set == nil || s.settings.pollRunning == "off" || s.missing {
 		return
 	}
 	s.running = running
@@ -502,6 +637,16 @@ func (s *session) restore(ctx context.Context) {
 			_ = json.Unmarshal(result.Value, &s.sessions)
 		}
 	}
+	// Pre-0.3 state keyed games by their bare Lutris id; keys are namespaced
+	// now. Rewrite once so favorites and history survive the upgrade.
+	migrated := s.prefs.MigrateLegacyKeys("lutris")
+	if s.sessions.MigrateLegacyKeys("lutris") {
+		migrated = true
+	}
+	if migrated {
+		s.save(ctx, "prefs", s.prefs)
+		s.save(ctx, "sessions", s.sessions)
+	}
 }
 
 func (s *session) save(ctx context.Context, key string, value any) {
@@ -548,7 +693,16 @@ func (s *session) panelState() panel.State {
 		Selected: s.selected, Running: s.running, Launching: launching,
 		Failed: s.failed, Sessions: s.sessions, HideUnavailable: s.settings.hideUnavailable,
 		CacheDir: s.cacheDir, LibraryMissing: s.missing, Refreshing: s.refreshing,
+		Libraries: s.libraryNames(),
 	}
+}
+
+// libraryNames lists the available libraries for the deck's badges.
+func (s *session) libraryNames() []string {
+	if s.set == nil {
+		return nil
+	}
+	return s.set.Names()
 }
 
 // enqueueCover queues one async SteamGridDB fetch per game; the panel stays

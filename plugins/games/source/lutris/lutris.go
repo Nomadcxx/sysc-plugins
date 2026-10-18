@@ -75,11 +75,22 @@ func New(o Options) (*Source, error) {
 
 func (s *Source) Name() string { return "lutris" }
 
+// DefaultDBPaths lists where a pga.db lives: the native install first, then
+// the Flatpak sandbox layout. Callers pick the newest existing file so a
+// machine with both a native and a Flatpak Lutris reads the live library.
+func DefaultDBPaths(home string) []string {
+	return []string{
+		filepath.Join(home, ".local/share/lutris/pga.db"),
+		filepath.Join(home, ".var/app/net.lutris.Lutris/data/lutris/pga.db"),
+	}
+}
+
 func (s *Source) List(ctx context.Context) ([]source.Game, error) {
 	rows, err := s.db.QueryContext(ctx, `select id, name, slug,
 		coalesce(runner,''), coalesce(platform,''), coalesce(year,''),
 		coalesce(playtime,0), lastplayed, coalesce(directory,''),
-		coalesce(executable,''), coalesce(configpath,''), coalesce(installed,0)
+		coalesce(executable,''), coalesce(configpath,''), coalesce(installed,0),
+		coalesce(service,''), coalesce(service_id,'')
 		from games order by sortname collate nocase`)
 	if err != nil {
 		return nil, err
@@ -93,9 +104,12 @@ func (s *Source) List(ctx context.Context) ([]source.Game, error) {
 			playtime   float64
 			lastplayed any
 			installed  int
+			service    string
+			serviceID  string
 		)
 		if err := rows.Scan(&id, &g.Name, &g.Slug, &g.Runner, &g.Platform, &g.Year,
-			&playtime, &lastplayed, &g.Directory, &g.Executable, &g.ConfigPath, &installed); err != nil {
+			&playtime, &lastplayed, &g.Directory, &g.Executable, &g.ConfigPath, &installed,
+			&service, &serviceID); err != nil {
 			return nil, err
 		}
 		g.ID = strconv.FormatInt(id, 10)
@@ -103,11 +117,27 @@ func (s *Source) List(ctx context.Context) ([]source.Game, error) {
 		g.LastPlayed = parseEpoch(lastplayed)
 		g.Installed = installed != 0
 		g.Source = "lutris"
+		g.Identity = storeIdentity(service, serviceID)
 		g.CoverPath = s.cover(g.Slug)
 		g.ConfigPath = s.gameConfig(g.ConfigPath)
 		out = append(out, g)
 	}
 	return out, rows.Err()
+}
+
+// storeIdentity names the store game a Lutris import points at, so a Steam
+// game imported into Lutris merges with the Steam copy instead of being a
+// second card. Lutris stores the service and the store's own id when a game
+// came from a store; plain Wine/native entries keep no identity.
+func storeIdentity(service, serviceID string) string {
+	if serviceID == "" {
+		return ""
+	}
+	switch service {
+	case "steam", "epic", "gog", "amazon":
+		return service + ":" + serviceID
+	}
+	return ""
 }
 
 // gameConfig maps the pga.db configpath stem to its games/<stem>.yml file,

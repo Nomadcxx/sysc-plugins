@@ -26,13 +26,13 @@ func TestScanClosesStaleOpenSessionOnce(t *testing.T) {
 	now := time.Now()
 	s := &session{
 		env:      environment{now: func() time.Time { return now }},
-		src:      fakeSource{running: map[string]time.Time{}},
+		set:      source.NewSet(fakeSource{running: map[string]time.Time{}}),
 		machine:  panel.NewMachine(),
-		sessions: store.Log{"g1": {{Start: now.Add(-72 * time.Hour)}}},
+		sessions: store.Log{"fake:g1": {{Start: now.Add(-72 * time.Hour)}}},
 	}
 	s.scan(context.Background(), map[string]time.Time{})
 
-	sessions := s.sessions["g1"]
+	sessions := s.sessions["fake:g1"]
 	if got := sessions[len(sessions)-1].End; got.IsZero() {
 		t.Fatal("stale open session was not closed at startup")
 	} else if !got.Equal(now) {
@@ -40,9 +40,9 @@ func TestScanClosesStaleOpenSessionOnce(t *testing.T) {
 	}
 
 	// A fresh launch then opens a NEW session, not nothing.
-	s.src = fakeSource{running: map[string]time.Time{"g1": now}}
-	s.scan(context.Background(), map[string]time.Time{"g1": now})
-	if got := s.sessions["g1"]; len(got) != 2 || !got[1].End.IsZero() {
+	s.set = source.NewSet(fakeSource{running: map[string]time.Time{"g1": now}})
+	s.scan(context.Background(), map[string]time.Time{"fake:g1": now})
+	if got := s.sessions["fake:g1"]; len(got) != 2 || !got[1].End.IsZero() {
 		t.Fatalf("sessions = %+v, want a fresh open session after the stale one", got)
 	}
 }
@@ -79,7 +79,7 @@ func TestStaleRefreshCannotReplaceLibrary(t *testing.T) {
 
 func TestRefreshRequestsKeepOnlyNewestQueuedWork(t *testing.T) {
 	s := &session{
-		src:         fakeSource{},
+		set:         source.NewSet(fakeSource{}),
 		settings:    defaultSettings(),
 		refreshJobs: make(chan refreshJob, 1),
 	}

@@ -75,7 +75,7 @@ func TooltipTree(running map[string]Run, libraryMissing bool, libraryCount int, 
 	root.Children = append(root.Children, &v1.Node{Kind: v1.KindText, Text: "Games", Bold: true})
 	switch {
 	case libraryMissing:
-		root.Children = append(root.Children, &v1.Node{Kind: v1.KindText, Text: "Lutris library not found", Tone: v1.ToneSubtle})
+		root.Children = append(root.Children, &v1.Node{Kind: v1.KindText, Text: "No game libraries found", Tone: v1.ToneSubtle})
 	case len(running) == 0:
 		root.Children = append(root.Children, &v1.Node{Kind: v1.KindText, Text: "No games running", Tone: v1.ToneSubtle})
 		if libraryCount > 0 {

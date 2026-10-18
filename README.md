@@ -21,7 +21,7 @@ it.
 | **Calendar** | Read-only calendar with event views and details | evolution-data-server |
 | **Cat** | A bar cat that walks and gallops with CPU load, and grooms, stretches and naps when the machine is idle | |
 | **Faith** | A cross in the bar that offers a prayer, and a Scripture panel with cross-references and commentary | |
-| **Games** | Lutris game deck: launch games, see what's running, session history, cover art | Lutris |
+| **Games** | Multi-launcher game deck: Steam, Lutris, Heroic and Faugus — launch games, see what's running, session history, cover art | Steam / Lutris / Heroic / Faugus (any subset) |
 | **GitHub Notifications** | Triage unread GitHub notifications and contribution activity from the panel | `gh` |
 | **Herdr** | Monitor herdr terminal sessions and coding agents from the bar, with a session panel | `herdr` |
 | **Mini Docker** | The Docker whale in the bar, with a panel to manage containers | `docker` |

@@ -179,7 +179,7 @@ func TestTooltipContent(t *testing.T) {
 	if got := TooltipTree(nil, false, 53, now).Children[1].Text; got != "No games running" {
 		t.Fatalf("idle text=%q", got)
 	}
-	if got := TooltipTree(nil, true, 0, now).Children[1].Text; got != "Lutris library not found" {
+	if got := TooltipTree(nil, true, 0, now).Children[1].Text; got != "No game libraries found" {
 		t.Fatalf("missing text=%q", got)
 	}
 	many := map[string]Run{}
