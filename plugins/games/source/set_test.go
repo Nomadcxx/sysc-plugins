@@ -141,6 +141,26 @@ func TestSetDoesNotMergeConflictingIdentities(t *testing.T) {
 	}
 }
 
+func TestSetDoesNotMergeConflictingIdentitiesAfterTitleFallback(t *testing.T) {
+	heroic := &stubSource{name: "heroic", games: []Game{{ID: "side", Name: "Portal", Source: "heroic"}}}
+	steam := &stubSource{name: "steam", games: []Game{{ID: "620", Name: "Portal", Identity: "steam:620"}}}
+	lutris := &stubSource{name: "lutris", games: []Game{{ID: "7", Name: "Portal", Identity: "epic:portal"}}}
+
+	games, err := NewSet(heroic, steam, lutris).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(games) != 2 {
+		t.Fatalf("games = %+v, want the identity-less copy merged with one store copy and the conflicting store copy kept separate", games)
+	}
+	if games[0].Identity != "steam:620" || len(games[0].OtherSources) != 1 || games[0].OtherSources[0] != "steam" {
+		t.Fatalf("identity-less card did not retain the first strong identity and source: %+v", games[0])
+	}
+	if games[1].Identity != "epic:portal" || games[1].Source != "lutris" {
+		t.Fatalf("conflicting store copy was not kept: %+v", games[1])
+	}
+}
+
 func TestSetKeepsSameTitleWithinOneSource(t *testing.T) {
 	lutris := &stubSource{name: "lutris", games: []Game{
 		{ID: "1", Name: "Portal"},
@@ -220,6 +240,31 @@ func TestSetRunningHandsEachLibraryItsOwnGames(t *testing.T) {
 	}
 	if len(lutris.ranGames) != 2 || lutris.ranGames[0].ID != "7" || lutris.ranGames[1].ID != "My Game (v2)" {
 		t.Fatalf("lutris saw %+v", lutris.ranGames)
+	}
+}
+
+func TestSetRunningMapsMergedCopyToCanonicalGame(t *testing.T) {
+	start := time.Now()
+	steam := &stubSource{name: "steam", games: []Game{{ID: "620", Name: "Portal 2", Identity: "steam:620"}}}
+	heroic := &stubSource{
+		name:    "heroic",
+		games:   []Game{{ID: "portal-2", Name: "Portal 2", Identity: "steam:620"}},
+		running: map[string]time.Time{"portal-2": start},
+	}
+	set := NewSet(steam, heroic)
+	games, err := set.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := set.Running(context.Background(), games)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := running["steam:620"]; !got.Equal(start) {
+		t.Fatalf("canonical running state = %v, want %v; running=%v", got, start, running)
+	}
+	if len(heroic.ranGames) != 1 || heroic.ranGames[0].ID != "portal-2" {
+		t.Fatalf("Heroic received games %+v, want its source-local alias", heroic.ranGames)
 	}
 }
 

@@ -500,7 +500,7 @@ func equalGames(a, b []source.Game) bool {
 			x.LastPlayed.Equal(y.LastPlayed) && x.Directory == y.Directory &&
 			x.Executable == y.Executable && x.ConfigPath == y.ConfigPath &&
 			x.CoverPath == y.CoverPath && x.Source == y.Source &&
-			x.Identity == y.Identity && slices.Equal(x.OtherSources, y.OtherSources)
+			x.Identity == y.Identity && slices.Equal(x.OtherSources, y.OtherSources) && slices.Equal(x.Copies, y.Copies)
 	})
 }
 

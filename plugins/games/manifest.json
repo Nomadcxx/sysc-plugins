@@ -58,7 +58,7 @@
     {"key": "source_faugus", "type": "bool", "label": "Faugus library", "default": true},
     {
       "key": "default_launcher", "type": "select", "label": "Default launcher", "default": "steam",
-      "description": "Used when the same game exists in more than one library; its copy is the one launched.",
+      "description": "Used when a game exists in more than one library; if disabled or unavailable, the first enabled library wins.",
       "options": [
         {"value": "steam", "label": "Steam"},
         {"value": "faugus", "label": "Faugus"},

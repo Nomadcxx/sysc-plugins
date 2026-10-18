@@ -196,6 +196,23 @@ func TestLaunchArgv(t *testing.T) {
 	}
 }
 
+func TestLaunchEscapesSideloadID(t *testing.T) {
+	var got string
+	src := mustNew(t, Options{
+		ConfigDirs: []string{t.TempDir()},
+		Run: func(_ context.Context, name string, args ...string) error {
+			got = strings.Join(append([]string{name}, args...), " ")
+			return nil
+		},
+	})
+	if err := src.Launch(context.Background(), source.Game{ID: "Sugar II/100%?", Runner: "sideload"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "xdg-open heroic://launch/sideload/Sugar%20II%2F100%25%3F"; got != want {
+		t.Fatalf("launch argv = %q, want %q", got, want)
+	}
+}
+
 func TestRunningAndStop(t *testing.T) {
 	procRoot := t.TempDir()
 	writeProc(t, procRoot, 4242, "/games/sugar/bin/sugar\x00--fullscreen\x00")

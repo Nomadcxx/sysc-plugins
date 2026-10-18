@@ -20,8 +20,12 @@ func TestSettingsHeaderFits(t *testing.T) {
 			t.Errorf("settings header at %dx%d: %v", box[0], box[1], f)
 		}
 	}
-	if find(t, root, "back") == nil {
+	back := find(t, root, "back")
+	if back == nil {
 		t.Fatal("the settings header needs the back button")
+	}
+	if back.Width < 44 || back.Height < 44 || back.Name == "" {
+		t.Fatalf("back button target/accessible name = %dx%d %q; want at least 44x44 and a name", back.Width, back.Height, back.Name)
 	}
 	if find(t, root, "settings") != nil {
 		t.Fatal("the header is not the settings form; the host renders that")

@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -181,9 +182,9 @@ func (s *Source) sideload() []source.Game {
 // own. The URI is the one launch path shared by every install shape — native
 // package, AppImage and Flatpak — because Heroic registers the scheme itself.
 func (s *Source) Launch(ctx context.Context, g source.Game) error {
-	uri := "heroic://launch/" + g.ID
+	uri := "heroic://launch/" + url.PathEscape(g.ID)
 	if g.Runner == "sideload" {
-		uri = "heroic://launch/sideload/" + g.ID
+		uri = "heroic://launch/sideload/" + url.PathEscape(g.ID)
 	}
 	return s.run(ctx, "xdg-open", uri)
 }

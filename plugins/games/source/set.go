@@ -51,6 +51,7 @@ func (s *Set) List(ctx context.Context) ([]Game, error) {
 			if g.Source == "" {
 				g.Source = src.Name()
 			}
+			localID := g.ID
 			g.ID = Key(g.Source, g.ID)
 
 			idx := -1
@@ -72,6 +73,17 @@ func (s *Set) List(ctx context.Context) ([]Game, error) {
 			if idx >= 0 {
 				if out[idx].Source != g.Source && !contains(out[idx].OtherSources, g.Source) {
 					out[idx].OtherSources = append(out[idx].OtherSources, g.Source)
+				}
+				if out[idx].Identity == "" && g.Identity != "" {
+					out[idx].Identity = g.Identity
+					byIdentity[g.Identity] = idx
+				}
+				_, primaryID := Split(out[idx].ID)
+				if out[idx].Source != g.Source || primaryID != localID {
+					copy := GameCopy{ID: localID, Name: g.Name, Directory: g.Directory, Source: g.Source}
+					if !containsCopy(out[idx].Copies, copy) {
+						out[idx].Copies = append(out[idx].Copies, copy)
+					}
 				}
 				continue
 			}
@@ -120,10 +132,17 @@ func (s *Set) Stop(ctx context.Context, g Game) error {
 // only ever sees its own games, with the namespace stripped.
 func (s *Set) Running(ctx context.Context, games []Game) (map[string]time.Time, error) {
 	perSource := map[string][]Game{}
+	canonical := map[string]string{}
 	for _, g := range games {
 		_, local := Split(g.ID)
-		g.ID = local
-		perSource[g.Source] = append(perSource[g.Source], g)
+		primary := g
+		primary.ID, primary.Copies = local, nil
+		perSource[g.Source] = append(perSource[g.Source], primary)
+		canonical[Key(g.Source, local)] = g.ID
+		for _, c := range g.Copies {
+			perSource[c.Source] = append(perSource[c.Source], Game{ID: c.ID, Name: c.Name, Directory: c.Directory, Source: c.Source})
+			canonical[Key(c.Source, c.ID)] = g.ID
+		}
 	}
 	out := map[string]time.Time{}
 	var errs []error
@@ -134,7 +153,13 @@ func (s *Set) Running(ctx context.Context, games []Game) (map[string]time.Time, 
 			continue
 		}
 		for id, start := range m {
-			out[Key(src.Name(), id)] = start
+			key := Key(src.Name(), id)
+			if target, ok := canonical[key]; ok {
+				key = target
+			}
+			if _, exists := out[key]; !exists {
+				out[key] = start
+			}
 		}
 	}
 	if len(errs) > 0 && len(errs) == len(s.sources) {
@@ -163,6 +188,15 @@ func titleKey(name string) string {
 func contains(list []string, want string) bool {
 	for _, s := range list {
 		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsCopy(list []GameCopy, want GameCopy) bool {
+	for _, got := range list {
+		if got == want {
 			return true
 		}
 	}

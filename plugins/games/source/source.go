@@ -35,6 +35,19 @@ type Game struct {
 	// OtherSources lists the libraries a merged card also exists in, in set
 	// order; the detail pane reads it as "Also in …".
 	OtherSources []string
+	// Copies retains each merged library's local id and running-match fields.
+	// The selected copy still owns launch and stop; aliases let every library
+	// contribute running state to the same card.
+	Copies []GameCopy
+}
+
+// GameCopy is the source-local part of a deduplicated game needed for running
+// detection. IDs stay local so each backend sees the same values it listed.
+type GameCopy struct {
+	ID        string
+	Name      string
+	Directory string
+	Source    string
 }
 
 type Source interface {
