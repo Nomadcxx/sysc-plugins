@@ -2,8 +2,8 @@
   "schema": 1,
   "id": "org.sysc.games",
   "name": "Games",
-  "description": "Lutris game deck: launch, running truth, session history, cover art.",
-  "version": "0.2.0",
+  "description": "Multi-launcher game deck: Steam, Lutris, Heroic and Faugus — launch, running truth, session history, cover art.",
+  "version": "0.3.0",
   "protocol": {
     "major": 1,
     "minor": 13
@@ -42,10 +42,30 @@
           "node": "focus-search"
         }
       ]
+    },
+    {
+      "id": "settings",
+      "width": 720,
+      "height": 720,
+      "placement": "center",
+      "include_settings": true
     }
   ],
   "settings": [
+    {"key": "source_steam", "type": "bool", "label": "Steam library", "default": true},
     {"key": "source_lutris", "type": "bool", "label": "Lutris library", "default": true},
+    {"key": "source_heroic", "type": "bool", "label": "Heroic library (Epic, GOG, Amazon)", "default": true},
+    {"key": "source_faugus", "type": "bool", "label": "Faugus library", "default": true},
+    {
+      "key": "default_launcher", "type": "select", "label": "Default launcher", "default": "steam",
+      "description": "Used when a game exists in more than one library; if disabled or unavailable, the first enabled library wins.",
+      "options": [
+        {"value": "steam", "label": "Steam"},
+        {"value": "faugus", "label": "Faugus"},
+        {"value": "heroic", "label": "Heroic"},
+        {"value": "lutris", "label": "Lutris"}
+      ]
+    },
     {"key": "steamgriddb_key", "type": "string", "label": "SteamGridDB API key", "default": ""},
     {
       "key": "poll_running", "type": "select", "label": "Detect running games", "default": "auto",

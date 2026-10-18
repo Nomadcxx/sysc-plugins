@@ -6,6 +6,7 @@ package store
 import (
 	"encoding/json"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -49,7 +50,47 @@ type Session struct {
 	End   time.Time `json:"e,omitzero"` // zero while the game is still live
 }
 
+// MigrateLegacyKeys rewrites state saved before the deck listed several
+// libraries: keys were bare Lutris ids, keys are now "<source>:<id>". A bare
+// key can only have come from Lutris, the only library that existed then.
+// Idempotent: keys that already carry a namespace are left alone.
+func (p *Prefs) MigrateLegacyKeys(source string) bool {
+	changed := false
+	for _, m := range []map[string]bool{p.Favorites, p.Hidden} {
+		for k, v := range m {
+			if nk, moved := migrateKey(k, source); moved {
+				delete(m, k)
+				m[nk] = v
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func migrateKey(k, source string) (string, bool) {
+	if strings.Contains(k, ":") {
+		return k, false
+	}
+	return source + ":" + k, true
+}
+
 type Log map[string][]Session
+
+// MigrateLegacyKeys rewrites session keys the same way Prefs does.
+func (l *Log) MigrateLegacyKeys(source string) bool {
+	changed := false
+	for k, sessions := range *l {
+		nk, moved := migrateKey(k, source)
+		if !moved {
+			continue
+		}
+		delete(*l, k)
+		(*l)[nk] = sessions
+		changed = true
+	}
+	return changed
+}
 
 func (l *Log) Start(id string, at time.Time) {
 	sessions := (*l)[id]

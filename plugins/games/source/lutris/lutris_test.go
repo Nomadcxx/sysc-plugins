@@ -305,6 +305,42 @@ func TestCoverAndConfigStayUnderLutrisRoot(t *testing.T) {
 	}
 }
 
+// A store game imported into Lutris must carry the store id, so the deck can
+// merge it with the same game listed by the Steam/Heroic/Faugus backend.
+func TestImportedStoreGamesCarryIdentity(t *testing.T) {
+	dbPath := makePGA(t, func(db *sql.DB) {
+		_, err := db.Exec(`INSERT INTO games (name, slug, runner, installed, service, service_id) VALUES
+			('Counter-Strike 2','cs2','steam',1,'steam','730'),
+			('Fortnite','fortnite','wine',1,'epic','Sugar'),
+			('Battlenet Thing','bt','wine',1,'battlenet','x')`)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	src, err := New(Options{DBPath: dbPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"Counter-Strike 2": "steam:730",
+		"Fortnite":         "epic:Sugar",
+		"Battlenet Thing":  "", // a service with no shared store id must not invent one
+	}
+	for _, g := range mustList(t, src) {
+		got, ok := want[g.Name]
+		if !ok {
+			continue
+		}
+		if g.Identity != got {
+			t.Errorf("%s: Identity = %q, want %q", g.Name, g.Identity, got)
+		}
+		delete(want, g.Name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("games not found: %v", want)
+	}
+}
+
 // A Steam game or a Wine prefix has no argv naming its directory; Lutris's
 // wrapper, titled with the game's name, is what shows it running, and
 // stopping it goes through the wrapper rather than a process group.

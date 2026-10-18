@@ -66,6 +66,9 @@ type State struct {
 	CacheDir        string
 	LibraryMissing  bool
 	Refreshing      bool
+	// Libraries names the enabled backends, in preference order; the deck
+	// labels each card with its library only when there is more than one.
+	Libraries []string
 }
 
 // Visible returns the filtered, sorted, capped games for the current
@@ -130,12 +133,12 @@ func matched(s State) []source.Game {
 func BuildTree(s State) *v1.Node {
 	// PinEnd keeps the search field on the right edge of the header.
 	hdr := &v1.Node{Kind: v1.KindRow, Gap: gap, Height: headerH, PinEnd: true}
-	hdr.Children = append(hdr.Children, segmented(s.Prefs.View), searchInput(s.Query))
+	hdr.Children = append(hdr.Children, segmented(s.Prefs.View), searchInput(s.Query), settingsButton())
 
 	list := &v1.Node{Kind: v1.KindList, ID: "game-list", Key: "game-list",
 		Width: listWidth, Height: bodyHeight, Gap: cardGap}
 	if s.Refreshing {
-		progress := subtle("Refreshing Lutris library…")
+		progress := subtle("Refreshing game libraries…")
 		progress.ID = "library-refreshing"
 		list.Children = append(list.Children, progress)
 	}
@@ -143,7 +146,7 @@ func BuildTree(s State) *v1.Node {
 	games := capCards(all)
 	switch {
 	case s.LibraryMissing:
-		list.Children = append(list.Children, subtle("Lutris library not found"))
+		list.Children = append(list.Children, subtle("No game libraries found \u2014 open settings to enable one"))
 	case len(games) == 0 && s.Refreshing:
 	case len(games) == 0:
 		list.Children = append(list.Children, subtle(emptyListText(s)))
@@ -184,7 +187,22 @@ func emptyListText(s State) string {
 	case s.Prefs.View == "hidden":
 		return "No hidden games"
 	}
-	return "No games in your Lutris library"
+	if len(s.Libraries) == 1 {
+		return "No games in your " + LibraryName(s.Libraries[0]) + " library"
+	}
+	return "No games in your enabled libraries"
+}
+
+// settingsButton opens the host-rendered settings panel: library toggles and
+// the default launcher live there, where the shell draws and saves them.
+func settingsButton() *v1.Node {
+	return &v1.Node{
+		Kind: v1.KindButton, ID: "settings", Key: "settings", Icon: "settings",
+		Width: 48, Height: controlH, Padding: 12,
+		Events: []v1.EventKind{v1.EventActivate},
+		Name:   "Game library settings", Role: "button",
+		Tooltip: "Libraries and default launcher",
+	}
 }
 
 func searchInput(q string) *v1.Node {
@@ -261,7 +279,7 @@ func cardCaption(s State, g source.Game) *v1.Node {
 	case !g.Installed:
 		return &v1.Node{Kind: v1.KindText, Text: "Not installed", Size: "caption", Tone: v1.ToneSubtle}
 	}
-	return &v1.Node{Kind: v1.KindText, Text: ellipsis(strings.Join(badges(g), " · "), 22), Size: "caption", Tone: v1.ToneSubtle}
+	return &v1.Node{Kind: v1.KindText, Text: ellipsis(strings.Join(badges(s, g), " · "), 22), Size: "caption", Tone: v1.ToneSubtle}
 }
 
 func detail(s State, games []source.Game) *v1.Node {
@@ -300,7 +318,16 @@ func detail(s State, games []source.Game) *v1.Node {
 		&v1.Node{Kind: v1.KindImage, Path: covers.Resolve(g, s.CacheDir), ImageW: detailCoverW, ImageH: detailCoverH,
 			Radius: 10, Background: true, CenterX: true},
 		&v1.Node{Kind: v1.KindText, Text: ellipsis(title, 26), Size: "title", Bold: true, Tooltip: title},
-		subtle(strings.Join(badges(g), " · ")),
+		subtle(strings.Join(badges(s, g), " · ")),
+	)
+	if len(g.OtherSources) > 0 {
+		names := make([]string, 0, len(g.OtherSources))
+		for _, src := range g.OtherSources {
+			names = append(names, LibraryName(src))
+		}
+		d.Children = append(d.Children, subtle("Also in "+strings.Join(names, ", ")))
+	}
+	d.Children = append(d.Children,
 		subtle(fmt.Sprintf("%s · %s", fmtPlaytime(g.PlaytimeSec), fmtLastPlayed(g.LastPlayed, s.Now))),
 	)
 	if vals := normalized(store.DailyMinutes(store.Log{g.ID: s.Sessions[g.ID]}, 14, s.Now)); len(vals) > 0 {
@@ -377,8 +404,14 @@ func hideLabel(s State, g source.Game) string {
 	return "Hide"
 }
 
-func badges(g source.Game) []string {
+// badges labels a game. The library name leads when the deck merges more
+// than one library, so a deduplicated card says where Launch will send it;
+// with a single library the runner/platform tell the whole story.
+func badges(s State, g source.Game) []string {
 	var b []string
+	if len(s.Libraries) > 1 {
+		b = append(b, LibraryName(g.Source))
+	}
 	if g.Runner != "" {
 		b = append(b, g.Runner)
 	}
@@ -389,7 +422,7 @@ func badges(g source.Game) []string {
 		b = append(b, "not installed")
 	}
 	if len(b) == 0 {
-		b = append(b, "lutris")
+		b = append(b, LibraryName(g.Source))
 	}
 	return b
 }
