@@ -103,6 +103,20 @@ func TestTunnelLossForcesImmediateStatusPoll(t *testing.T) {
 	}
 }
 
+func TestTunnelAppearanceForcesImmediateStatusPoll(t *testing.T) {
+	up := false
+	s := gatedSession(false)
+	s.tunnelUp = func() bool { return up }
+	base := time.Now()
+	prime(s, base)
+
+	up = true
+	s.tick(context.Background(), base.Add(time.Second))
+	if len(s.polls) != 1 {
+		t.Fatal("status poll was not forced immediately after the tunnel appeared")
+	}
+}
+
 func TestTransitionStatusPollRemainsEverySecond(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

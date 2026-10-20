@@ -431,8 +431,8 @@ func (s *session) tick(ctx context.Context, now time.Time) {
 	before := s.machine.Snapshot()
 	transitioning := before.Phase == protonvpn.PhaseConnecting || before.Phase == protonvpn.PhaseDisconnecting
 	tunnelUp := s.tunnelUp()
-	if s.lastTunnelUp && !tunnelUp {
-		// Do not depend on NetworkManager to detect the /sys tunnel-loss edge.
+	if s.lastTunnelUp != tunnelUp {
+		// Do not wait for the slower status interval to notice a /sys tunnel edge.
 		s.lastStatus = time.Time{}
 	}
 	s.lastTunnelUp = tunnelUp
