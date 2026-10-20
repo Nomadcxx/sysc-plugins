@@ -23,6 +23,7 @@ import (
 // must hold.
 func TestPluginKDEConnectGateServesViewsAndSurvivesInput(t *testing.T) {
 	h := startKDEConnect(t)
+	h.waitProtocol(v1.Version{Major: 1, Minor: 18})
 
 	// The bar opens with the offline or the connected pill.
 	h.openBar()
@@ -90,13 +91,14 @@ func kdeconnectPanelLegal(n *v1.Node) bool {
 }
 
 type kdeconnectHost struct {
-	t     *testing.T
-	enc   *v1.Encoder
-	mu    sync.Mutex
-	roots map[string]*v1.Node
-	revs  map[string]uint64
-	slots map[string]viewSlot
-	wake  chan struct{}
+	t        *testing.T
+	enc      *v1.Encoder
+	mu       sync.Mutex
+	protocol v1.Version
+	roots    map[string]*v1.Node
+	revs     map[string]uint64
+	slots    map[string]viewSlot
+	wake     chan struct{}
 	// panelW and panelH are the manifest's panel size, the box a host
 	// opens the panel with; the tree's fixed widths are derived from it.
 	panelW, panelH int
@@ -180,6 +182,14 @@ func startKDEConnect(t *testing.T) *kdeconnectHost {
 				return
 			}
 			switch m := msg.(type) {
+			case *v1.PluginHello:
+				h.mu.Lock()
+				h.protocol = m.Protocol
+				h.mu.Unlock()
+				select {
+				case h.wake <- struct{}{}:
+				default:
+				}
 			case *v1.HostCall:
 				// Reply OK with no payload: a state.get restore reads
 				// nothing, a state.set write is accepted, a notify is
@@ -206,7 +216,7 @@ func startKDEConnect(t *testing.T) *kdeconnectHost {
 		}
 	}()
 	if err := h.send(&v1.HostHello{
-		Supported:    []v1.Version{{Major: 1, Minor: 16}, {Major: 1, Minor: 2}},
+		Supported:    []v1.Version{{Major: 1, Minor: 18}, {Major: 1, Minor: 16}, {Major: 1, Minor: 2}},
 		Plugin:       v1.Identity{ID: "org.sysc.kdeconnect", Name: "Phone Connect", Version: "0.1.0"},
 		Capabilities: []string{"notifications", "panels", "settings", "state", "files"},
 		Limits:       v1.DefaultLimits,
@@ -256,6 +266,31 @@ func (h *kdeconnectHost) revOf(view string) uint64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.revs[view]
+}
+
+func (h *kdeconnectHost) waitProtocol(want v1.Version) {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		got := h.protocol
+		h.mu.Unlock()
+		if got == want {
+			return
+		}
+		wait := time.Until(deadline)
+		if wait > 50*time.Millisecond {
+			wait = 50 * time.Millisecond
+		}
+		select {
+		case <-h.wake:
+		case <-time.After(wait):
+		}
+	}
+	h.mu.Lock()
+	got := h.protocol
+	h.mu.Unlock()
+	h.t.Fatalf("negotiated protocol = %+v, want %+v", got, want)
 }
 
 func (h *kdeconnectHost) waitView(view string, ok func(*v1.Node) bool) {
