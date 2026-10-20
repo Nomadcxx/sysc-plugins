@@ -4,7 +4,7 @@
   "name": "Phone Connect",
   "description": "Connects to a paired phone over KDE Connect, showing battery, notifications, and recent photos in the bar panel.",
   "version": "0.2.0",
-  "protocol": {"major": 1, "minor": 16},
+  "protocol": {"major": 1, "minor": 18},
   "exec": "bin/sysc-plugin-kdeconnect",
   "capabilities": ["notifications", "panels", "settings", "state", "files"],
   "requires": {"commands": ["kdeconnect-cli"]},

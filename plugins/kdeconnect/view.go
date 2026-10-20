@@ -528,13 +528,16 @@ func unpairedCard(dev *Device) *v1.Node {
 // icon, name, status line, battery and network chips, and — always, not
 // only for the selected device — the pairing actions.
 func switcherCardTree(dev *Device, selected bool) *v1.Node {
+	nameAndStatus := &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
+		{Kind: v1.KindText, Text: dev.Name, Bold: true},
+	}}
+	if status := cardStatus(dev); status != "" {
+		nameAndStatus.Children = append(nameAndStatus.Children,
+			&v1.Node{Kind: v1.KindText, Text: status, Size: "caption", Tone: cardStatusTone(dev)})
+	}
 	header := &v1.Node{Kind: v1.KindRow, Gap: 10, Children: []*v1.Node{
 		{Kind: v1.KindIcon, Icon: deviceIcon(dev)},
-		{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: dev.Name, Bold: true},
-			{Kind: v1.KindText, Text: cardStatus(dev), Size: "caption",
-				Tone: cardStatusTone(dev)},
-		}},
+		nameAndStatus,
 	}}
 
 	var chips []*v1.Node
@@ -588,9 +591,7 @@ func switcherCardTree(dev *Device, selected bool) *v1.Node {
 		}}
 }
 
-// cardStatus is the DMS DeviceCard's status line: pairing states first, then
-// Connected, so every card's name sits over a status line at the same
-// height rather than over an empty one.
+// cardStatus is the DMS DeviceCard's status line. Connected devices omit it.
 func cardStatus(dev *Device) string {
 	switch {
 	case dev.PairRequestedByPeer:
@@ -602,12 +603,12 @@ func cardStatus(dev *Device) string {
 	case !dev.Reachable:
 		return "Offline"
 	}
-	return "Connected"
+	return ""
 }
 
 func cardStatusTone(dev *Device) v1.Tone {
 	if dev.PairRequestedByPeer || dev.PairRequested {
-		return v1.ToneAccent
+		return v1.ToneWarning
 	}
 	return v1.ToneSubtle
 }

@@ -475,6 +475,11 @@ func TestDeviceCardChipsAndStatus(t *testing.T) {
 		t.Fatalf("battery chip missing: %v", allTexts(card))
 	}
 	if !walkFindNode(card, func(n *v1.Node) bool {
+		return n.Kind == v1.KindIcon && n.Icon == batteryIconName(&chips.Devices[1])
+	}) {
+		t.Fatal("battery chip icon missing")
+	}
+	if !walkFindNode(card, func(n *v1.Node) bool {
 		return n.Kind == v1.KindIcon && n.Icon == "signal-cellular-3-bar"
 	}) {
 		t.Fatal("network chip icon missing")
@@ -489,17 +494,61 @@ func TestDeviceCardChipsAndStatus(t *testing.T) {
 
 	pairing := pairedSnap()
 	pairing.Devices[1].PairRequested = true
-	pairCard := deviceCard(PanelTreeForState(pairing, testSettings(), ComposerNone, Drafts{}, true), "Galaxy Tab")
+	pairingPanel := PanelTreeForState(pairing, testSettings(), ComposerNone, Drafts{}, true)
+	pairCard := deviceCard(pairingPanel, "Galaxy Tab")
 	if pairCard == nil || !contains(allTexts(pairCard), "Pairing...") {
 		t.Fatal("pairing-in-progress status missing")
+	}
+	var pairingStatus *v1.Node
+	walkFindNode(pairCard, func(n *v1.Node) bool {
+		if n.Kind == v1.KindText && n.Text == "Pairing..." {
+			pairingStatus = n
+			return true
+		}
+		return false
+	})
+	if pairingStatus == nil || pairingStatus.Tone != v1.ToneWarning {
+		t.Fatalf("pairing-in-progress status = %+v, want warning tone", pairingStatus)
+	}
+	if err := v1.Validate(pairingPanel, v1.ViewPanel); err != nil {
+		t.Fatalf("pairing panel rejected by the plugin protocol: %v", err)
+	}
+
+	requested := pairedSnap()
+	requested.Devices[1].PairRequestedByPeer = true
+	requestCard := deviceCard(PanelTreeForState(requested, testSettings(), ComposerNone, Drafts{}, true), "Galaxy Tab")
+	if requestCard == nil || !contains(allTexts(requestCard), "Pairing requested") {
+		t.Fatal("incoming pairing-request status missing")
+	}
+	var requestStatus *v1.Node
+	walkFindNode(requestCard, func(n *v1.Node) bool {
+		if n.Kind == v1.KindText && n.Text == "Pairing requested" {
+			requestStatus = n
+			return true
+		}
+		return false
+	})
+	if requestStatus == nil || requestStatus.Tone != v1.ToneWarning {
+		t.Fatalf("incoming pairing-request status = %+v, want warning tone", requestStatus)
+	}
+
+	unpaired := pairedSnap()
+	unpaired.Devices[1].Paired = false
+	unpairedCard := deviceCard(PanelTreeForState(unpaired, testSettings(), ComposerNone, Drafts{}, true), "Galaxy Tab")
+	if unpairedCard == nil || !contains(allTexts(unpairedCard), "Not paired") {
+		t.Fatal("not-paired status missing")
 	}
 
 	connected := deviceCard(PanelTreeForState(pairedSnap(), testSettings(), ComposerNone, Drafts{}, true), "Galaxy Tab")
 	if contains(allTexts(connected), "Offline") || contains(allTexts(connected), "Not paired") {
 		t.Fatalf("connected card shows a disconnected status: %v", allTexts(connected))
 	}
-	if !contains(allTexts(connected), "Connected") {
-		t.Fatalf("connected card has no status line: %v", allTexts(connected))
+	if contains(allTexts(connected), "Connected") {
+		t.Fatalf("connected card shows a status line: %v", allTexts(connected))
+	}
+	nameAndStatus := connected.Children[0].Children[0].Children[1]
+	if len(nameAndStatus.Children) != 1 || nameAndStatus.Children[0].Text != "Galaxy Tab" {
+		t.Fatalf("connected card name and status nodes = %+v, want name only", nameAndStatus.Children)
 	}
 
 	// The chips must be a row: the host gives a trailing column the rest of
