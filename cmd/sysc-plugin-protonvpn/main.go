@@ -50,14 +50,14 @@ type settings struct {
 }
 
 func defaultSettings() settings {
-	return settings{refreshSeconds: 5, trafficMonitoring: true, notifyOnConnect: true, barMode: "code", quickConnect: "fastest"}
+	return settings{refreshSeconds: 60, trafficMonitoring: true, notifyOnConnect: true, barMode: "code", quickConnect: "fastest"}
 }
 
 // apply takes the values the host sent; a missing or mistyped key keeps its
-// current value, and refresh_seconds is clamped to the manifest's 2–60.
+// current value, and refresh_seconds is clamped to the manifest's 15–60.
 func (s *settings) apply(values map[string]any) {
 	if v, ok := values["refresh_seconds"].(float64); ok {
-		s.refreshSeconds = int(min(max(v, 2), 60))
+		s.refreshSeconds = int(min(max(v, 15), 60))
 	}
 	if v, ok := values["traffic_monitoring"].(bool); ok {
 		s.trafficMonitoring = v
@@ -105,6 +105,10 @@ const cliJobQueueSize = 8
 // refresh_seconds burned ~30% of a core to re-read "Disconnected" (#159).
 const disconnectedPollFloor = 30 * time.Second
 
+// connectedPollFloor is the minimum explicit connected refresh interval. The
+// default is 60s because each protonvpn status call costs ~1.3s of CPU (#203).
+const connectedPollFloor = 15 * time.Second
+
 type session struct {
 	env      environment
 	client   *v1.Client
@@ -139,7 +143,8 @@ type session struct {
 
 	// tunnelUp reports whether the tunnel interface exists. Tests stub it;
 	// production stats /sys directly.
-	tunnelUp func() bool
+	tunnelUp     func() bool
+	lastTunnelUp bool
 
 	lastPhase   protonvpn.Phase
 	lastStatus  time.Time
@@ -425,14 +430,22 @@ func (s *session) tick(ctx context.Context, now time.Time) {
 	}
 	before := s.machine.Snapshot()
 	transitioning := before.Phase == protonvpn.PhaseConnecting || before.Phase == protonvpn.PhaseDisconnecting
+	tunnelUp := s.tunnelUp()
+	if s.lastTunnelUp != tunnelUp {
+		// Do not wait for the slower status interval to notice a /sys tunnel edge.
+		s.lastStatus = time.Time{}
+	}
+	s.lastTunnelUp = tunnelUp
 
 	interval := time.Duration(s.settings.refreshSeconds) * time.Second
 	if transitioning {
 		interval = time.Second
-	} else if !s.tunnelUp() {
+	} else if !tunnelUp {
 		// The phase cannot change on its own while proton0 is absent, so a
 		// slow floor only has to notice an externally initiated connect.
 		interval = disconnectedPollFloor
+	} else {
+		interval = max(interval, connectedPollFloor)
 	}
 	if now.Sub(s.lastStatus) >= interval {
 		s.lastStatus = now
