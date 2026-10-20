@@ -20,7 +20,7 @@
     }
   ],
   "settings": [
-    { "key": "refresh_seconds", "type": "int", "label": "Status refresh (seconds)", "default": 5, "min": 2, "max": 60 },
+    { "key": "refresh_seconds", "type": "int", "label": "Status refresh (seconds)", "default": 60, "min": 15, "max": 60 },
     { "key": "traffic_monitoring", "type": "bool", "label": "Show live traffic", "default": true },
     { "key": "notify_on_connect", "type": "bool", "label": "Notify on connect", "default": true },
     { "key": "bar_mode", "type": "select", "label": "Bar shows", "default": "code",
