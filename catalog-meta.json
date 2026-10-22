@@ -65,6 +65,13 @@
     "license": "MIT",
     "homepage": "https://github.com/Nomadcxx/sysc-plugins"
   },
+  "org.sysc.privacy": {
+    "category": "monitoring",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+    "long_description": "Publishes a bounded read-only privacybit audit snapshot in sysc-shell's Control Centre. privacybit is optional; without it, the plugin reports that an audit is unavailable."
+  },
   "org.sysc.screen-recorder": {
     "category": "media",
     "author": "Nomadcxx",

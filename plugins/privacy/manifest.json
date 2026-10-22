@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "id": "org.sysc.privacy",
+  "name": "Privacy audit",
+  "description": "A read-only privacy audit summary for the Control Centre.",
+  "version": "0.1.0",
+  "protocol": {
+    "major": 1,
+    "minor": 8
+  },
+  "exec": "bin/sysc-plugin-privacy",
+  "capabilities": ["state"],
+  "requires": {
+    "commands": []
+  }
+}
