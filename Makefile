@@ -14,6 +14,7 @@ PLUGINS := \
 	sysc-plugin-cat:cat \
 	sysc-plugin-games:games \
 	sysc-plugin-protonvpn:protonvpn \
+	sysc-plugin-privacy:privacy \
 	sysc-plugin-moonbit:moonbit \
 	sysc-plugin-herdr:herdr \
 	sysc-plugin-updates:updates \

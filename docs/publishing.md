@@ -55,7 +55,7 @@ in `catalog-meta.json` at the repository root, keyed by plugin id:
 |---|---|---|
 | `category` | yes | One of the closed set in `plugin/catalog.Categories`: `utilities`, `monitoring`, `system`, `appearance`, `productivity`, `media`, `audio`, `networking`, `weather`, `finance`, `social`. |
 | `author` | yes | Display name. |
-| `license` | no | SPDX identifier, matching the repository's `LICENSE`. |
+| `license` | no | SPDX identifier matching the plugin's applicable `LICENSE` file. |
 | `homepage` | no | Must be `https`. |
 | `long_description` | no | Plain text, no markup; shown on the detail view. |
 | `screenshot` | no | `{"url": "...", "sha256": "..."}`. Overrides the tagged `thumbnail.webp`; normally omit it (see [Thumbnails](#thumbnails)). |
@@ -63,6 +63,9 @@ in `catalog-meta.json` at the repository root, keyed by plugin id:
 Add or update your plugin's row here before tagging its first release.
 `tools/catalog update` refuses a release whose plugin has no
 `catalog-meta.json` entry.
+
+A plugin may have its own license inside its directory. Include that license
+file in the plugin package and set the catalog row to its SPDX identifier.
 
 ## Validating before you tag
 
