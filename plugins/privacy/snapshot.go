@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nomadcxx
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 package privacy
 
 import (
@@ -183,7 +186,7 @@ func UnavailableSnapshot(reason string, at time.Time) Snapshot {
 	}
 	return Snapshot{
 		Schema: Schema, Available: false, Reason: text(reason, maxSummaryBytes),
-		Hint:        "Install privacybit and make sure it is available on PATH.",
+		Hint:        "Install privacybit and make sure it is on PATH or in ~/.local/bin.",
 		GeneratedAt: at.UTC(), Overall: Overall{Grade: "unknown"},
 		Network:    Network{VPN: VPN{State: "unknown", Defects: []Defect{}}, TelemetryConnectionsUnknown: true},
 		Categories: []Category{}, Findings: []Finding{}, Reduced: []Reduced{},
@@ -306,6 +309,15 @@ func ParseAuditOutput(data []byte) (Snapshot, error) {
 		Detail   string   `json:"detail"`
 		Actions  []Action `json:"actions"`
 	}(nil), input.Findings...)
+	for i := range findings {
+		// The audit leaves factual Flatpak scope findings ungraded; expose that as unknown.
+		if findings[i].Grade == "" && findings[i].Severity == "low" && strings.HasPrefix(findings[i].ID, "flatpak.scope.") {
+			findings[i].Grade = "unknown"
+		}
+		if !validGrade(findings[i].Grade) {
+			return Snapshot{}, fmt.Errorf("privacybit returned invalid grade %q for finding %q", findings[i].Grade, findings[i].ID)
+		}
+	}
 	sort.SliceStable(findings, func(i, j int) bool {
 		if severityRank(findings[i].Severity) != severityRank(findings[j].Severity) {
 			return severityRank(findings[i].Severity) > severityRank(findings[j].Severity)
@@ -316,9 +328,6 @@ func ParseAuditOutput(data []byte) (Snapshot, error) {
 		return findings[i].ID < findings[j].ID
 	})
 	for _, finding := range findings {
-		if !validGrade(finding.Grade) {
-			return Snapshot{}, fmt.Errorf("privacybit returned invalid grade %q for finding %q", finding.Grade, finding.ID)
-		}
 		projected := Finding{
 			ID: text(finding.ID, maxLabelBytes), Severity: text(finding.Severity, maxLabelBytes),
 			Grade: finding.Grade, Category: text(finding.Category, maxLabelBytes),

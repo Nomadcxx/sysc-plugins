@@ -7,4 +7,7 @@ action.
 
 Install `privacybit` separately to see audit results. Without it, the plugin
 still starts and publishes an explicit unavailable state. The plugin does not
-require elevated privileges.
+require elevated privileges. It checks `PATH`, then `~/.local/bin/privacybit`.
+
+The privacy plugin is licensed under GPL-3.0-or-later. The repository's
+existing license remains in effect for its other plugins.

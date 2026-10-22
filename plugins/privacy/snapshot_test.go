@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nomadcxx
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 package privacy
 
 import (
@@ -90,6 +93,29 @@ func TestParseAuditOutputRejectsInvalidAndFutureSnapshots(t *testing.T) {
 	}
 	if _, err := ParseAuditOutput(make([]byte, MaxAuditOutputBytes+1)); err == nil {
 		t.Fatal("oversized privacybit output was accepted")
+	}
+}
+
+func TestParseAuditOutputMapsUngradedFlatpakScopeFindingToUnknown(t *testing.T) {
+	input := `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-20T12:00:00Z","overall":{"grade":"unknown"},"findings":[{"id":"flatpak.scope.freetube","severity":"low","title":"Multiple scopes","detail":"Installed in user and system scopes"}]}}`
+	snapshot, err := ParseAuditOutput([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Findings) != 1 || snapshot.Findings[0].Grade != "unknown" {
+		t.Fatalf("scope finding = %+v, want one finding with unknown grade", snapshot.Findings)
+	}
+}
+
+func TestParseAuditOutputRejectsOtherUngradedFindings(t *testing.T) {
+	for _, finding := range []string{
+		`{"id":"flatpak.scope.freetube","severity":"medium","title":"Multiple scopes"}`,
+		`{"id":"other.finding","severity":"low","title":"Ungraded"}`,
+	} {
+		input := `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-20T12:00:00Z","overall":{"grade":"unknown"},"findings":[` + finding + `]}}`
+		if _, err := ParseAuditOutput([]byte(input)); err == nil {
+			t.Fatalf("accepted unsupported ungraded finding %s", finding)
+		}
 	}
 }
 

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nomadcxx
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Command sysc-plugin-privacy publishes a bounded privacybit audit summary.
 package main
 
@@ -12,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -116,9 +120,9 @@ func refreshSnapshot(ctx context.Context, runAudit auditRunner) privacy.Snapshot
 }
 
 func runPrivacybit(ctx context.Context) ([]byte, error) {
-	binary, err := exec.LookPath("privacybit")
+	binary, err := privacybitExecutable()
 	if err != nil {
-		return nil, fmt.Errorf("privacybit was not found on PATH: %w", err)
+		return nil, err
 	}
 	auditCtx, cancel := context.WithTimeout(ctx, auditTimeout)
 	defer cancel()
@@ -133,6 +137,23 @@ func runPrivacybit(ctx context.Context) ([]byte, error) {
 		return stdout.Bytes(), errors.New("privacybit audit output exceeds 4 MiB")
 	}
 	return stdout.Bytes(), nil
+}
+
+func privacybitExecutable() (string, error) {
+	path, pathErr := exec.LookPath("privacybit")
+	if pathErr == nil {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("privacybit was not found on PATH or in ~/.local/bin: %w", pathErr)
+	}
+	localPath := filepath.Join(home, ".local", "bin", "privacybit")
+	info, err := os.Stat(localPath)
+	if err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+		return localPath, nil
+	}
+	return "", fmt.Errorf("privacybit was not found on PATH or as an executable at %s: %w", localPath, pathErr)
 }
 
 type limitedBuffer struct {

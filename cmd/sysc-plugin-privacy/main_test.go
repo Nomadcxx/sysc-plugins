@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nomadcxx
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 package main
 
 import (
@@ -16,7 +19,7 @@ import (
 )
 
 func validAuditOutput() []byte {
-	return []byte(`{"t":"done","grade":"unknown","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-20T12:00:00Z","overall":{"grade":"unknown"},"network":{"vpn":{"state":"unknown"}},"categories":[],"findings":[],"reduced":[]}}`)
+	return []byte(`{"t":"done","grade":"unknown","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-20T12:00:00Z","overall":{"grade":"unknown"},"network":{"vpn":{"state":"unknown"}},"categories":[{"id":"browser","name":"Browser","grade":"unknown","installed":[],"installed_total":0}],"findings":[],"reduced":[]}}`)
 }
 
 func TestRunPrivacybitUsesSingleSnapshotCommand(t *testing.T) {
@@ -40,8 +43,39 @@ func TestRunPrivacybitUsesSingleSnapshotCommand(t *testing.T) {
 	if string(args) != "audit\n--snapshot\n" {
 		t.Fatalf("privacybit args = %q, want audit --snapshot", args)
 	}
-	if _, err := privacy.ParseAuditOutput(data); err != nil {
+	snapshot, err := privacy.ParseAuditOutput(data)
+	if err != nil {
 		t.Fatalf("privacybit output did not parse: %v", err)
+	}
+	if len(snapshot.Categories) != 1 {
+		t.Fatalf("privacybit snapshot has %d categories, want a host-accepted category", len(snapshot.Categories))
+	}
+}
+
+func TestRunPrivacybitFallsBackToUserLocalBin(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := filepath.Join(home, "args")
+	binary := filepath.Join(dir, "privacybit")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PRIVACYBIT_ARGS\"\nprintf '%s\\n' '" + string(validAuditOutput()) + "'\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("PRIVACYBIT_ARGS", argsPath)
+	if _, err := runPrivacybit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(args) != "audit\n--snapshot\n" {
+		t.Fatalf("privacybit args = %q, want audit --snapshot", args)
 	}
 }
 
@@ -117,7 +151,7 @@ func TestRunPluginPublishesBoundedStateSnapshot(t *testing.T) {
 	if err := json.Unmarshal(params.Value, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if !snapshot.Available || !snapshot.Network.TelemetryConnectionsUnknown {
+	if !snapshot.Available || !snapshot.Network.TelemetryConnectionsUnknown || len(snapshot.Categories) != 1 {
 		t.Fatalf("published state lost availability or telemetry unknown: %+v", snapshot)
 	}
 	reply, err := json.Marshal(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true})
