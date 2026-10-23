@@ -4,6 +4,7 @@
 package minidocker
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -94,6 +95,7 @@ type RunOpts struct {
 // without a docker daemon.
 type Docker interface {
 	List(ctx context.Context) ([]Container, int, error)
+	Events(ctx context.Context) (<-chan struct{}, error)
 	Images(ctx context.Context) ([]Image, int, error)
 	Volumes(ctx context.Context) ([]Volume, int, error)
 	Networks(ctx context.Context) ([]Network, int, error)
@@ -130,6 +132,37 @@ func (CLI) List(ctx context.Context) ([]Container, int, error) {
 	}
 	containers, skipped := parseContainers(out)
 	return containers, skipped, nil
+}
+
+// Events streams container lifecycle changes and coalesces them for the caller.
+// The process is scoped to ctx; closing the channel follows Wait, so the caller
+// can safely reconnect without leaving a child behind.
+func (CLI) Events(ctx context.Context) (<-chan struct{}, error) {
+	cmd := exec.CommandContext(ctx, "docker", "events", "--filter", "type=container", "--format", "{{.Action}}")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, diagnose(err, "")
+	}
+
+	events := make(chan struct{}, 1)
+	go func() {
+		defer close(events)
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			select {
+			case events <- struct{}{}:
+			default:
+			}
+		}
+		if scanner.Err() != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	}()
+	return events, nil
 }
 
 func (CLI) Images(ctx context.Context) ([]Image, int, error) {

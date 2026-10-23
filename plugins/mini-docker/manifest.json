@@ -41,7 +41,7 @@
     {
       "key": "refresh_interval_seconds",
       "type": "int",
-      "label": "Refresh interval (s)",
+      "label": "Refresh interval while panel is open (s)",
       "default": 5,
       "min": 1,
       "max": 30
