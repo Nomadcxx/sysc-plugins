@@ -136,6 +136,26 @@ func TestPrivacyPanelScanButtonIsDisabledWhileScanning(t *testing.T) {
 	}
 }
 
+func TestPrivacyPanelKeepsWorstAppAndSuggestionCountsWhenListsAreTruncated(t *testing.T) {
+	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	snapshot := testSnapshot("red", now)
+	snapshot.Categories[0].Installed = snapshot.Categories[0].Installed[:1]
+	snapshot.Categories[0].InstalledShown = 1
+	snapshot.Categories[0].InstalledTotal = 8
+	snapshot.Categories[0].InstalledTruncated = true
+	snapshot.Categories[0].Worst = &App{ID: "firefox-nightly", Name: "Firefox Nightly", Grade: "red", Scope: "system"}
+	snapshot.Findings[0].ActionsShown = 1
+	snapshot.Findings[0].ActionsTotal = 4
+	snapshot.Findings[0].ActionsTruncated = true
+
+	root := PanelTree(snapshot, now, false, "")
+	for _, want := range []string{"Highest risk app", "Firefox Nightly", "Showing 1 of 4 suggestions."} {
+		if !treeHasText(root, want) {
+			t.Errorf("panel omitted %q", want)
+		}
+	}
+}
+
 func testSnapshot(grade string, generated time.Time) Snapshot {
 	trueValue := true
 	falseValue := false

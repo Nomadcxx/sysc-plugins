@@ -156,15 +156,41 @@ func categorySection(snapshot Snapshot) *v1.Node {
 			gradeChip(category.Grade, fmt.Sprintf("grade-category-%d", categoryIndex)),
 		}}}
 		rows = append(rows, &v1.Node{Kind: v1.KindText, Text: shownCount(category.InstalledShown, category.InstalledTotal, "app"), Size: "caption", Tone: v1.ToneSubtle})
+		worstShown := false
 		for appIndex, app := range category.Installed {
 			appName := text(app.Name, maxLabelBytes)
 			if app.Scope != "" {
 				appName += " · " + text(app.Scope, maxLabelBytes)
 			}
+			if category.Worst != nil && app.Scope == category.Worst.Scope {
+				matchesWorst := false
+				if app.ID != "" && category.Worst.ID != "" {
+					matchesWorst = app.ID == category.Worst.ID
+				} else {
+					matchesWorst = app.Name == category.Worst.Name
+				}
+				if matchesWorst {
+					worstShown = true
+					appName = "Highest risk · " + appName
+				}
+			}
 			rows = append(rows, &v1.Node{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
 				{Kind: v1.KindText, Text: appName, MaxWidth: 400},
 				gradeChip(app.Grade, fmt.Sprintf("grade-app-%d-%d", categoryIndex, appIndex)),
 			}})
+		}
+		if category.Worst != nil && !worstShown {
+			worstName := text(category.Worst.Name, maxLabelBytes)
+			if category.Worst.Scope != "" {
+				worstName += " · " + text(category.Worst.Scope, maxLabelBytes)
+			}
+			rows = append(rows,
+				&v1.Node{Kind: v1.KindText, Text: "Highest risk app", Size: "caption", Tone: v1.ToneSubtle},
+				&v1.Node{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
+					{Kind: v1.KindText, Text: worstName, MaxWidth: 400},
+					gradeChip(category.Worst.Grade, fmt.Sprintf("grade-app-worst-%d", categoryIndex)),
+				}},
+			)
 		}
 		if category.InstalledTruncated {
 			rows = append(rows, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d apps.", category.InstalledShown, category.InstalledTotal), Size: "caption", Tone: v1.ToneSubtle})
@@ -226,7 +252,7 @@ func findingSection(snapshot Snapshot) *v1.Node {
 			rows = append(rows, &v1.Node{Kind: v1.KindText, Text: "Suggested: " + text(action.Label, maxLabelBytes), Size: "caption", Tone: v1.ToneSubtle})
 		}
 		if finding.ActionsTruncated {
-			rows = append(rows, &v1.Node{Kind: v1.KindText, Text: "Some suggestions are omitted.", Size: "caption", Tone: v1.ToneSubtle})
+			rows = append(rows, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d suggestions.", finding.ActionsShown, finding.ActionsTotal), Size: "caption", Tone: v1.ToneSubtle})
 		}
 		children = append(children, card(fmt.Sprintf("finding-%d", findingIndex), rows...))
 	}

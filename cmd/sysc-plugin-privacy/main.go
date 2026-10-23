@@ -199,10 +199,6 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 	}
 }
 
-func publishAudit(ctx context.Context, client *v1.Client, runAudit auditRunner) error {
-	return publishSnapshot(ctx, client, refreshSnapshot(ctx, runAudit))
-}
-
 func publishSnapshot(ctx context.Context, client *v1.Client, snapshot privacy.Snapshot) error {
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
