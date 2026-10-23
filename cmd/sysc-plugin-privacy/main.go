@@ -42,6 +42,15 @@ func main() {
 
 type auditRunner func(context.Context) ([]byte, error)
 
+type openedView struct {
+	kind       v1.ViewKind
+	width      int
+	instance   string
+	output     string
+	generation uint32
+	revision   uint64
+}
+
 func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditRunner) error {
 	client := v1.NewClient(in, out)
 	if _, err := client.Handshake(v1.Identity{ID: "org.sysc.privacy", Name: "Privacy audit", Version: "0.1.0"}); err != nil {
@@ -49,12 +58,22 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 	}
 	pluginCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	incoming := make(chan v1.Message, 16)
 	receiveError := make(chan error, 1)
 	go func() {
 		for {
-			if _, err := client.Recv(); err != nil {
-				receiveError <- err
+			message, err := client.Recv()
+			if err != nil {
+				select {
+				case receiveError <- err:
+				default:
+				}
 				cancel()
+				return
+			}
+			select {
+			case incoming <- message:
+			case <-pluginCtx.Done():
 				return
 			}
 		}
@@ -64,31 +83,123 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 	}
 	ticker := time.NewTicker(refreshInterval)
 	defer ticker.Stop()
-	for {
-		if err := publishAudit(pluginCtx, client, runAudit); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) && pluginCtx.Err() == nil {
-				log.Printf("privacybit state publish timed out: %v", err)
-			} else if pluginCtx.Err() != nil {
-				return nil
-			} else {
-				return err
-			}
+	snapshot := refreshSnapshot(pluginCtx, runAudit)
+	if pluginCtx.Err() != nil {
+		return nil
+	}
+	if err := publishSnapshot(pluginCtx, client, snapshot); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && pluginCtx.Err() == nil {
+			log.Printf("privacybit state publish timed out: %v", err)
+		} else if pluginCtx.Err() != nil {
+			return nil
+		} else {
+			return err
 		}
+	}
+	views := make(map[string]openedView)
+	scanning := false
+	scanMessage := ""
+	for {
 		select {
 		case <-pluginCtx.Done():
+			select {
+			case err := <-receiveError:
+				if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+					return err
+				}
+			default:
+			}
 			return nil
 		case err := <-receiveError:
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 				return nil
 			}
 			return err
+		case message := <-incoming:
+			switch message := message.(type) {
+			case *v1.ViewOpen:
+				view := openedView{kind: message.View, width: message.Width, instance: message.Instance,
+					output: message.Output, generation: message.Generation}
+				views[message.ViewID] = view
+				if err := publishView(pluginCtx, client, views, message.ViewID, snapshot, scanning, scanMessage); err != nil {
+					return err
+				}
+			case *v1.ViewClose:
+				delete(views, message.ViewID)
+			case *v1.ViewResync:
+				if _, ok := views[message.ViewID]; ok {
+					if err := publishView(pluginCtx, client, views, message.ViewID, snapshot, scanning, scanMessage); err != nil {
+						return err
+					}
+				}
+			case *v1.InputEvent:
+				view, ok := views[message.ViewID]
+				if !ok || message.Revision != view.revision || message.Event != v1.EventActivate {
+					continue
+				}
+				if view.kind == v1.ViewBar && message.Node == "privacy-open" {
+					callCtx, callCancel := context.WithTimeout(pluginCtx, callTimeout)
+					reply, err := client.Call(callCtx, v1.CallPanelOpen, v1.PanelParams{
+						Entry: "panel", Instance: view.instance, Output: view.output, Generation: view.generation,
+					})
+					callCancel()
+					if err != nil {
+						if pluginCtx.Err() != nil {
+							return nil
+						}
+						log.Printf("open privacy panel failed: %s", cleanError(err.Error()))
+					} else if !reply.OK {
+						log.Printf("open privacy panel failed: %s", cleanError(reply.Error))
+					}
+					continue
+				}
+				if view.kind != v1.ViewPanel || message.Node != "privacy-scan" || scanning {
+					continue
+				}
+				scanning, scanMessage = true, "Checking installed apps"
+				if err := publishViews(pluginCtx, client, views, snapshot, scanning, scanMessage); err != nil {
+					return err
+				}
+				snapshot = refreshSnapshot(pluginCtx, runAudit)
+				if pluginCtx.Err() != nil {
+					return nil
+				}
+				scanning, scanMessage = false, ""
+				if err := publishSnapshot(pluginCtx, client, snapshot); err != nil {
+					if errors.Is(err, context.DeadlineExceeded) && pluginCtx.Err() == nil {
+						log.Printf("privacybit state publish timed out: %v", err)
+					} else if pluginCtx.Err() != nil {
+						return nil
+					} else {
+						return err
+					}
+				}
+				if err := publishViews(pluginCtx, client, views, snapshot, scanning, scanMessage); err != nil {
+					return err
+				}
+			}
 		case <-ticker.C:
+			snapshot = refreshSnapshot(pluginCtx, runAudit)
+			if pluginCtx.Err() != nil {
+				return nil
+			}
+			if err := publishSnapshot(pluginCtx, client, snapshot); err != nil {
+				if errors.Is(err, context.DeadlineExceeded) && pluginCtx.Err() == nil {
+					log.Printf("privacybit state publish timed out: %v", err)
+				} else if pluginCtx.Err() != nil {
+					return nil
+				} else {
+					return err
+				}
+			}
+			if err := publishViews(pluginCtx, client, views, snapshot, scanning, scanMessage); err != nil {
+				return err
+			}
 		}
 	}
 }
 
-func publishAudit(ctx context.Context, client *v1.Client, runAudit auditRunner) error {
-	snapshot := refreshSnapshot(ctx, runAudit)
+func publishSnapshot(ctx context.Context, client *v1.Client, snapshot privacy.Snapshot) error {
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		return fmt.Errorf("encode privacy snapshot: %w", err)
@@ -102,6 +213,43 @@ func publishAudit(ctx context.Context, client *v1.Client, runAudit auditRunner) 
 	if !reply.OK {
 		log.Printf("privacybit state publish failed: %s", cleanError(reply.Error))
 	}
+	return nil
+}
+
+func publishViews(ctx context.Context, client *v1.Client, views map[string]openedView, snapshot privacy.Snapshot, scanning bool, scanMessage string) error {
+	for id := range views {
+		if err := publishView(ctx, client, views, id, snapshot, scanning, scanMessage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func publishView(ctx context.Context, client *v1.Client, views map[string]openedView, id string, snapshot privacy.Snapshot, scanning bool, scanMessage string) error {
+	view, ok := views[id]
+	if !ok {
+		return nil
+	}
+	now := time.Now()
+	var root *v1.Node
+	switch view.kind {
+	case v1.ViewBar:
+		root = privacy.BarTree(snapshot, now, view.width)
+	case v1.ViewTooltip:
+		root = privacy.TooltipTree(snapshot, now)
+	case v1.ViewPanel:
+		root = privacy.PanelTree(snapshot, now, scanning, scanMessage)
+	default:
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	view.revision++
+	if err := client.Snapshot(id, view.revision, root); err != nil {
+		return fmt.Errorf("publish privacy view %q: %w", id, err)
+	}
+	views[id] = view
 	return nil
 }
 

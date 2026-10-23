@@ -35,10 +35,12 @@ type manifest struct {
 	} `json:"services"`
 	Widgets []struct {
 		ID       string    `json:"id"`
+		Label    string    `json:"label"`
 		Settings []setting `json:"settings"`
 	} `json:"widgets"`
 	Panels []struct {
 		ID              string `json:"id"`
+		Label           string `json:"label"`
 		Width           int    `json:"width"`
 		Height          int    `json:"height"`
 		Placement       string `json:"placement"`

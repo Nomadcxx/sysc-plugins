@@ -1,13 +1,24 @@
-# Privacy audit
+# Privacybit
 
-This state-only plugin runs `privacybit audit --snapshot` on a five-minute
-interval and publishes a bounded summary for sysc-shell's Control Centre →
-Privacy page. The host renders the page and owns its separate **Run scan**
-action.
+Privacybit adds a user-placeable bar item and a read-only desktop privacy audit
+panel to sysc-shell.
 
-Install `privacybit` separately to see audit results. Without it, the plugin
-still starts and publishes an explicit unavailable state. The plugin does not
-require elevated privileges. It checks `PATH`, then `~/.local/bin/privacybit`.
+![Privacybit audit panel](screenshot.png)
 
-The privacy plugin is licensed under GPL-3.0-or-later. The repository's
-existing license remains in effect for its other plugins.
+## Open the panel
+
+In **Settings → Bar**, add **Privacybit** from the plugin widgets. Click its
+shield and grade label in the bar to open the panel. The Control Centre's
+**Privacy** page also has an **Open full audit** button.
+
+The panel shows the overall grade, app categories, VPN observations, findings,
+and coverage limits. Use **Scan now** to refresh the audit. The bar and Control
+Centre read the same published result. Older or unavailable results appear as
+**Unrated**, and capped lists say how many entries are hidden.
+
+Install `privacybit` separately. The plugin checks `PATH`, then
+`~/.local/bin/privacybit`; if neither is executable, it shows an explicit
+unavailable state. Scans run as the current user and do not use root.
+
+This plugin is licensed under GPL-3.0-or-later. The repository's existing
+license remains in effect for its other plugins.
