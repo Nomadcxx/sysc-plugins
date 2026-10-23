@@ -2,14 +2,29 @@
   "schema": 1,
   "id": "org.sysc.privacy",
   "name": "Privacy audit",
-  "description": "A read-only privacy audit summary for the Control Centre.",
+  "description": "A read-only privacy audit with a bar widget and detailed panel.",
   "version": "0.1.0",
   "protocol": {
     "major": 1,
     "minor": 8
   },
   "exec": "bin/sysc-plugin-privacy",
-  "capabilities": ["state"],
+  "capabilities": ["panels", "state"],
+  "widgets": [
+    {
+      "id": "bar",
+      "label": "Privacybit"
+    }
+  ],
+  "panels": [
+    {
+      "id": "panel",
+      "label": "Privacy audit",
+      "width": 620,
+      "height": 720,
+      "placement": "attached"
+    }
+  ],
   "requires": {
     "commands": []
   }

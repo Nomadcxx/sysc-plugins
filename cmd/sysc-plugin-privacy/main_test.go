@@ -11,8 +11,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	privacy "github.com/Nomadcxx/sysc-plugins/plugins/privacy"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -177,4 +180,255 @@ func TestLimitedBufferCapsMemory(t *testing.T) {
 	if buffer.Len() != 8 || !buffer.exceeded {
 		t.Fatalf("buffer size=%d exceeded=%v, want 8 and true", buffer.Len(), buffer.exceeded)
 	}
+}
+
+func TestPrivacyManifestDeclaresBarWidgetAndAttachedPanel(t *testing.T) {
+	raw, err := os.ReadFile("../../plugins/privacy/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		ID           string   `json:"id"`
+		Capabilities []string `json:"capabilities"`
+		Widgets      []struct {
+			ID    string `json:"id"`
+			Label string `json:"label"`
+		} `json:"widgets"`
+		Panels []struct {
+			ID        string `json:"id"`
+			Width     int    `json:"width"`
+			Height    int    `json:"height"`
+			Placement string `json:"placement"`
+		} `json:"panels"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.ID != "org.sysc.privacy" || !slices.Contains(manifest.Capabilities, "state") || !slices.Contains(manifest.Capabilities, "panels") {
+		t.Fatalf("manifest identity/capabilities = %q %v", manifest.ID, manifest.Capabilities)
+	}
+	if len(manifest.Widgets) != 1 || manifest.Widgets[0].ID != "bar" || manifest.Widgets[0].Label == "" {
+		t.Fatalf("manifest widgets = %+v, want one labelled bar widget", manifest.Widgets)
+	}
+	if len(manifest.Panels) != 1 || manifest.Panels[0].ID != "panel" || manifest.Panels[0].Width != 620 || manifest.Panels[0].Height != 720 || manifest.Panels[0].Placement != "attached" {
+		t.Fatalf("manifest panels = %+v, want one 620x720 attached panel", manifest.Panels)
+	}
+}
+
+func TestRunPluginBarActivationOpensDeclaredPanel(t *testing.T) {
+	hostInput, reader, stop := startPrivacyPlugin(t, func(context.Context) ([]byte, error) {
+		return currentAuditOutput(), nil
+	})
+	defer stop()
+	ackStateCall(t, hostInput, reader)
+
+	sendPrivacyMessage(t, hostInput, map[string]any{
+		"type": v1.TypeViewOpen, "view_id": "bar-1", "view": v1.ViewBar,
+		"entry": "bar", "instance": "privacy-placement", "output": "DP-1", "generation": 7, "width": 240,
+	})
+	var view v1.ViewSnapshot
+	readPrivacyMessage(t, reader, &view)
+	if view.Type != v1.TypeViewSnapshot || view.ViewID != "bar-1" || findPrivacyNode(view.Root, "privacy-open") == nil {
+		t.Fatalf("bar view = %+v", view)
+	}
+	sendPrivacyMessage(t, hostInput, map[string]any{
+		"type": v1.TypeInputEvent, "view_id": "bar-1", "revision": view.Revision,
+		"node": "privacy-open", "event": v1.EventActivate, "output": "DP-1", "generation": 7,
+	})
+	var call v1.HostCall
+	readPrivacyMessage(t, reader, &call)
+	if call.Call != v1.CallPanelOpen {
+		t.Fatalf("bar activation call = %q, want panel.open", call.Call)
+	}
+	var params v1.PanelParams
+	if err := json.Unmarshal(call.Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params.Entry != "panel" || params.Instance != "privacy-placement" || params.Output != "DP-1" || params.Generation != 7 {
+		t.Fatalf("panel.open params = %+v", params)
+	}
+	replyPrivacyCall(t, hostInput, call.ID)
+}
+
+func TestRunPluginPanelRefreshPublishesOneFreshScanAndDropsStaleClicks(t *testing.T) {
+	var runs atomic.Int32
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	hostInput, reader, stop := startPrivacyPlugin(t, func(ctx context.Context) ([]byte, error) {
+		if runs.Add(1) == 2 {
+			started <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return currentAuditOutput(), nil
+	})
+	defer stop()
+	ackStateCall(t, hostInput, reader)
+
+	sendPrivacyMessage(t, hostInput, map[string]any{
+		"type": v1.TypeViewOpen, "view_id": "panel-1", "view": v1.ViewPanel,
+		"entry": "panel", "instance": "privacy-placement", "output": "DP-1", "generation": 7,
+	})
+	var initial v1.ViewSnapshot
+	readPrivacyMessage(t, reader, &initial)
+	if initial.Type != v1.TypeViewSnapshot || findPrivacyNode(initial.Root, "privacy-scan") == nil {
+		t.Fatalf("initial panel view = %+v", initial)
+	}
+	sendPrivacyMessage(t, hostInput, map[string]any{
+		"type": v1.TypeInputEvent, "view_id": "panel-1", "revision": initial.Revision,
+		"node": "privacy-scan", "event": v1.EventActivate, "output": "DP-1", "generation": 7,
+	})
+	var busy v1.ViewSnapshot
+	readPrivacyMessage(t, reader, &busy)
+	button := findPrivacyNode(busy.Root, "privacy-scan")
+	if busy.Type != v1.TypeViewSnapshot || busy.Revision <= initial.Revision || button == nil || !button.Disabled || button.Text != "Scanning…" {
+		t.Fatalf("busy view = %+v; button = %+v", busy, button)
+	}
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("manual refresh did not start a second audit")
+	}
+	sendPrivacyMessage(t, hostInput, map[string]any{
+		"type": v1.TypeInputEvent, "view_id": "panel-1", "revision": initial.Revision,
+		"node": "privacy-scan", "event": v1.EventActivate, "output": "DP-1", "generation": 7,
+	})
+	close(release)
+	var stateCall v1.HostCall
+	readPrivacyMessage(t, reader, &stateCall)
+	if stateCall.Call != v1.CallStateSet {
+		t.Fatalf("after scan call = %q, want state.set", stateCall.Call)
+	}
+	var state v1.StateSetParams
+	if err := json.Unmarshal(stateCall.Params, &state); err != nil {
+		t.Fatal(err)
+	}
+	var snapshot privacy.Snapshot
+	if err := json.Unmarshal(state.Value, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Available || snapshot.GeneratedAt.IsZero() || !snapshot.GeneratedAt.After(time.Now().Add(-time.Minute)) {
+		t.Fatalf("manual scan did not publish a fresh snapshot: %+v", snapshot)
+	}
+	replyPrivacyCall(t, hostInput, stateCall.ID)
+	var refreshed v1.ViewSnapshot
+	readPrivacyMessage(t, reader, &refreshed)
+	if refreshed.Type != v1.TypeViewSnapshot || refreshed.Revision <= busy.Revision {
+		t.Fatalf("refreshed panel = %+v", refreshed)
+	}
+	sendPrivacyMessage(t, hostInput, map[string]any{"type": v1.TypeViewResync, "view_id": "panel-1"})
+	var barrier v1.ViewSnapshot
+	readPrivacyMessage(t, reader, &barrier)
+	if barrier.Type != v1.TypeViewSnapshot || barrier.Revision <= refreshed.Revision {
+		t.Fatalf("resync barrier = %+v", barrier)
+	}
+	if got := runs.Load(); got != 2 {
+		t.Fatalf("stale queued click started %d audits, want exactly 2 including startup", got)
+	}
+}
+
+func startPrivacyPlugin(t *testing.T, runAudit auditRunner) (*io.PipeWriter, *bufio.Reader, func()) {
+	t.Helper()
+	pluginInput, hostInput := io.Pipe()
+	hostOutput, pluginOutput := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runPlugin(ctx, pluginInput, pluginOutput, runAudit) }()
+	reader := bufio.NewReader(hostOutput)
+	sendPrivacyMessage(t, hostInput, map[string]any{
+		"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 18}},
+		"capabilities": []string{"panels", "state"},
+	})
+	var hello map[string]any
+	readPrivacyMessage(t, reader, &hello)
+	if hello["type"] != "plugin.hello" {
+		t.Fatalf("first plugin message = %#v", hello)
+	}
+	return hostInput, reader, func() {
+		cancel()
+		_ = hostInput.Close()
+		_ = pluginOutput.Close()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("privacy plugin did not stop")
+		}
+	}
+}
+
+func sendPrivacyMessage(t *testing.T, w *io.PipeWriter, message any) {
+	t.Helper()
+	raw, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(append(raw, '\n')); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readPrivacyMessage(t *testing.T, reader *bufio.Reader, target any) {
+	t.Helper()
+	line := make(chan struct {
+		data []byte
+		err  error
+	}, 1)
+	go func() {
+		data, err := reader.ReadBytes('\n')
+		line <- struct {
+			data []byte
+			err  error
+		}{data: data, err: err}
+	}()
+	select {
+	case result := <-line:
+		if result.err != nil {
+			t.Fatalf("read plugin message: %v", result.err)
+		}
+		if err := json.Unmarshal(result.data, target); err != nil {
+			t.Fatalf("decode plugin message %s: %v", result.data, err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for plugin message")
+	}
+}
+
+func ackStateCall(t *testing.T, hostInput *io.PipeWriter, reader *bufio.Reader) {
+	t.Helper()
+	var call v1.HostCall
+	readPrivacyMessage(t, reader, &call)
+	if call.Call != v1.CallStateSet {
+		t.Fatalf("startup call = %q, want state.set", call.Call)
+	}
+	replyPrivacyCall(t, hostInput, call.ID)
+}
+
+func replyPrivacyCall(t *testing.T, hostInput *io.PipeWriter, id string) {
+	t.Helper()
+	if id == "" {
+		t.Fatal("plugin host call has no id")
+	}
+	sendPrivacyMessage(t, hostInput, v1.HostReply{Type: v1.TypeHostReply, ID: id, OK: true})
+}
+
+func currentAuditOutput() []byte {
+	return []byte(strings.Replace(string(validAuditOutput()), "2026-10-20T12:00:00Z", time.Now().UTC().Format(time.RFC3339Nano), 1))
+}
+
+func findPrivacyNode(root *v1.Node, id string) *v1.Node {
+	if root == nil {
+		return nil
+	}
+	if root.ID == id {
+		return root
+	}
+	for _, child := range root.Children {
+		if found := findPrivacyNode(child, id); found != nil {
+			return found
+		}
+	}
+	return nil
 }
