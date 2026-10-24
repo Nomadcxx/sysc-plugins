@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	"github.com/Nomadcxx/sysc-plugins/plugins/thinkpad"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -227,6 +228,42 @@ func TestViewResyncKeepsInputRevisionsMonotonic(t *testing.T) {
 	}
 }
 
+func TestTheLoopKeepsServingWhenTheHostNeverAnswersACall(t *testing.T) {
+	// A short bound keeps the check quick. The point is that the call carries a
+	// deadline at all, not how long the deadline is.
+	restore := hostcall.SetTimeout(300 * time.Millisecond)
+	t.Cleanup(restore)
+	roots := processTestRoots(t)
+	host := startProcessHost(t, roots, filepath.Join(t.TempDir(), "profiles.json"))
+	host.silence(v1.CallPanelOpen)
+	t.Cleanup(func() { host.cleanup(t) })
+	host.waitHello(t)
+
+	host.send(t, &v1.ViewOpen{
+		ViewID: "bar", View: v1.ViewBar, Entry: "bar", Instance: "bar-instance",
+		Output: "DP-1", Generation: 1, Width: 240, Height: 32,
+	})
+	bar := host.waitSnapshotAfter(t, "bar", 0)
+
+	// The host takes this call and never answers it.
+	host.send(t, &v1.InputEvent{
+		ViewID: "bar", Revision: bar.Revision, Node: "open", Event: v1.EventActivate,
+		Output: "DP-1", Generation: 1,
+	})
+	host.waitCall(t, v1.CallPanelOpen, 0)
+
+	// The loop has to come back and keep publishing.
+	count := host.snapshotCount("bar")
+	host.send(t, &v1.SettingsChanged{Scope: v1.ScopeInstance, Instance: "bar-instance", Values: map[string]any{
+		"show_fan": false, "show_kbd": true, "show_lid": true, "show_rpm": false,
+	}})
+	host.waitSnapshotAfter(t, "bar", count)
+
+	if err := host.shutdown(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func processTestRoots(t *testing.T) thinkpad.Roots {
 	t.Helper()
 	root := t.TempDir()
@@ -262,6 +299,7 @@ type processHost struct {
 	mu        sync.Mutex
 	snapshots map[string][]*v1.ViewSnapshot
 	calls     []v1.HostCall
+	silent    map[v1.CallKind]bool
 	changed   chan struct{}
 	hello     chan *v1.PluginHello
 	runDone   chan error
@@ -319,6 +357,9 @@ func (h *processHost) readLoop() {
 			h.calls = append(h.calls, *m)
 			h.mu.Unlock()
 			h.wake()
+			if h.isSilent(m.Call) {
+				continue
+			}
 			result := json.RawMessage(`{"width":758,"height":564}`)
 			if m.Call != v1.CallPanelResize {
 				result = nil
@@ -417,6 +458,21 @@ func (h *processHost) allSnapshots() map[string][]*v1.ViewSnapshot {
 		copyOf[id] = append([]*v1.ViewSnapshot(nil), items...)
 	}
 	return copyOf
+}
+
+func (h *processHost) silence(kind v1.CallKind) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.silent == nil {
+		h.silent = map[v1.CallKind]bool{}
+	}
+	h.silent[kind] = true
+}
+
+func (h *processHost) isSilent(kind v1.CallKind) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.silent[kind]
 }
 
 func (h *processHost) wake() {
