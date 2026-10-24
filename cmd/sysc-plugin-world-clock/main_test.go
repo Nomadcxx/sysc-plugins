@@ -704,6 +704,32 @@ func TestFailedLoadRetriesBeforeSaving(t *testing.T) {
 	h.send(v1.HostReply{Type: "host.reply", ID: set.ID, OK: true})
 }
 
+func TestFailedLoadWithQueuedInputIsRetried(t *testing.T) {
+	// The startup load is left unanswered, so the user input that follows is
+	// queued while the load is still in flight. The load then fails, which is
+	// the order that used to strand the plugin: the queued change was never
+	// replayed and never saved.
+	var pending v1.HostCall
+	h := startWith(t, nil, func(call v1.HostCall) v1.HostReply {
+		pending = call
+		return v1.HostReply{}
+	})
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "bar:Asia/Tokyo", Event: v1.EventActivate})
+	h.send(failGet(pending))
+
+	get := h.nextCall(v1.CallStateGet)
+	raw, _ := json.Marshal(v1.StateGetResult{Found: true, Value: json.RawMessage(`["Asia/Tokyo","Europe/Oslo"]`)})
+	h.send(v1.HostReply{Type: "host.reply", ID: get.ID, OK: true, Result: raw})
+	set := h.nextCall(v1.CallStateSet)
+	var params v1.StateSetParams
+	_ = json.Unmarshal(set.Params, &params)
+	if strings.Contains(string(params.Value), "UTC") || !strings.Contains(string(params.Value), "Europe/Oslo") {
+		t.Fatalf("the queued change was not saved: %s", params.Value)
+	}
+	h.send(v1.HostReply{Type: "host.reply", ID: set.ID, OK: true})
+}
+
 func TestUnloadedListIsNeverSaved(t *testing.T) {
 	h := startWith(t, nil, failGet)
 	p := h.openPanel()
