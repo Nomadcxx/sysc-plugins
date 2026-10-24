@@ -17,8 +17,11 @@ import (
 )
 
 // mockupArtDir holds the album-art composites, beside the recent-image
-// thumbnails. Tests point it at a temp directory.
-var mockupArtDir = filepath.Join(filepath.Dir(recentImageThumbDir), "mockups")
+// thumbnails. Tests point it at a temp directory. It is filled in by the
+// init() that fixes recentImageThumbDir: a package-level initialiser runs
+// before every init() and would derive the path from the temporary
+// fallback, which would put the composites in a shared directory.
+var mockupArtDir string
 
 // composeMockup draws the album art at art into the screen of the kind's
 // mockup and returns the cached PNG. The wire has no overlay, so the
@@ -49,11 +52,11 @@ func composeMockup(kind, art string) (string, error) {
 		return cached, nil
 	}
 
-	frame, err := decodeFile(asset)
+	frame, err := decodeBoundedFile(asset, "mockup artwork")
 	if err != nil {
 		return "", err
 	}
-	cover, err := decodeFile(art)
+	cover, err := decodeBoundedFile(art, "album art")
 	if err != nil {
 		return "", err
 	}
@@ -150,19 +153,6 @@ func coverCrop(src image.Rectangle, w, h int) image.Rectangle {
 	ch := sw * h / w
 	y := src.Min.Y + (sh-ch)/2
 	return image.Rect(src.Min.X, y, src.Max.X, y+ch)
-}
-
-func decodeFile(path string) (image.Image, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("kdeconnect: open %s: %w", path, err)
-	}
-	defer f.Close()
-	img, _, err := image.Decode(f)
-	if err != nil {
-		return nil, fmt.Errorf("kdeconnect: decode %s: %w", path, err)
-	}
-	return img, nil
 }
 
 // localFilePath turns the daemon's file:// album-art URL into a path; any
