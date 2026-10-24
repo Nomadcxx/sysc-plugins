@@ -704,6 +704,35 @@ func TestFailedLoadRetriesBeforeSaving(t *testing.T) {
 	h.send(v1.HostReply{Type: "host.reply", ID: set.ID, OK: true})
 }
 
+// An input that arrives while the startup read is in flight is waiting on
+// that read. When the read fails, the plugin has to try again: without a
+// retry the queue never drains, the session stays unloaded and the queued
+// change is lost.
+func TestQueuedInputSurvivesAFailedStartupLoad(t *testing.T) {
+	var stateRead v1.HostCall
+	h := startWith(t, nil, func(call v1.HostCall) v1.HostReply {
+		stateRead = call
+		return v1.HostReply{} // the startup read stays in flight
+	})
+	p := h.openPanel()
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: p.Revision, Node: "search", Event: v1.EventChange, Text: "syd"})
+	searching := h.snapshotWhere(func(n *v1.Node) bool { return find(n, "pick:Australia/Sydney") != nil })
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: searching.Revision, Node: "add", Event: v1.EventActivate})
+	// The load the queued input is waiting on fails.
+	h.send(v1.HostReply{Type: "host.reply", ID: stateRead.ID, OK: false, Error: "busy"})
+	// The plugin has to ask again, and the retry succeeds.
+	get := h.nextCall(v1.CallStateGet)
+	raw, _ := json.Marshal(v1.StateGetResult{Found: true, Value: json.RawMessage(`[]`)})
+	h.send(v1.HostReply{Type: "host.reply", ID: get.ID, OK: true, Result: raw})
+	set := h.nextCall(v1.CallStateSet)
+	var params v1.StateSetParams
+	_ = json.Unmarshal(set.Params, &params)
+	if !strings.Contains(string(params.Value), `"id":"Australia/Sydney"`) {
+		t.Fatalf("the queued add was lost after the failed load: %s", params.Value)
+	}
+	h.send(v1.HostReply{Type: "host.reply", ID: set.ID, OK: true})
+}
+
 func TestUnloadedListIsNeverSaved(t *testing.T) {
 	h := startWith(t, nil, failGet)
 	p := h.openPanel()

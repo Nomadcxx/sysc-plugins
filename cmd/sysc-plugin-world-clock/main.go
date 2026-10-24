@@ -20,6 +20,11 @@ import (
 
 const maxSuggestions = 5
 
+// maxLoadRetries bounds how often a failed zone load is retried for the
+// inputs waiting on it. A host that refuses the read outright would
+// otherwise be asked again and again.
+const maxLoadRetries = 3
+
 // wallCheck is how often the loop compares the wall-clock minute with the
 // last one drawn. A timer armed for the next minute would run on the monotonic
 // clock, which stops during suspend and leaves a stale time after resume.
@@ -154,6 +159,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	}()
 	loadRequests <- struct{}{}
 	loadingZones := true
+	loadRetries := 0
 	s.addErr = "Loading zones"
 	var pendingInputs []*v1.InputEvent
 	s.lastMinute = env.now().Truncate(time.Minute)
@@ -207,9 +213,24 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 			if !loaded {
 				s.addErr = "Couldn't load zones"
 				s.snapshotAll()
+				// Inputs queued while the load was in flight are waiting on
+				// it. Retrying is the only way that queue drains: without it
+				// the session stays unloaded, the queued change is lost and
+				// nothing the user does brings the list back.
+				if len(pendingInputs) > 0 && loadRetries < maxLoadRetries {
+					loadRetries++
+					loadingZones = true
+					select {
+					case loadRequests <- struct{}{}:
+					default:
+					}
+				}
 				continue
 			}
-			wasLoading := s.addErr == "Loading zones"
+			loadRetries = 0
+			// A load that follows a failure also has to redraw: the panel
+			// still shows the failure the last attempt left behind.
+			wasLoading := s.addErr == "Loading zones" || s.addErr == "Couldn't load zones"
 			if s.addErr == "Couldn't load zones" || s.addErr == "Loading zones" {
 				s.addErr = ""
 			}
