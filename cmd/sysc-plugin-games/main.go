@@ -468,7 +468,12 @@ func (s *session) applyRefresh(ctx context.Context, result refreshResult) bool {
 	case refreshLibrary:
 		if result.err == nil {
 			changed = s.missing || !equalGames(s.games, result.games)
-			s.games = result.games
+			// The refresh worker keeps the listing it published and still
+			// copies its games while it asks every source what is running,
+			// so the session takes its own copy: applyCover writes a cover
+			// path into the session's games, and that write must not land
+			// in memory the worker reads.
+			s.games = append([]source.Game(nil), result.games...)
 			s.missing = false
 		} else if len(s.games) == 0 && !s.missing {
 			s.missing = true
