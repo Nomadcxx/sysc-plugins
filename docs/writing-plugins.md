@@ -44,6 +44,46 @@ Notes the hard way taught us:
 - The wire vocabulary has no grid or desktop-widget view kind; compose grids
   from rows/columns, and note that noctalia desktop widgets are not portable.
 
+## Process lifetime
+
+The host starts a plugin in its own process group, not the shell's. That group
+is what a forced stop signals, so a plugin has to know which of its processes
+may outlive it.
+
+An orderly exit is the plugin's responsibility. When the shell closes a plugin
+it writes `host.shutdown` to the plugin's standard input and waits four
+seconds for the process to exit. A plugin that exits inside that window is an
+orderly exit. A plugin that ignores the message is stopped the hard way: once
+the four seconds are up the whole group gets `SIGTERM`, and `SIGKILL` a
+quarter of a second later. The same group is signalled when the handshake is
+rejected and when the shell's own context is cancelled, so a plugin that never
+got as far as a handshake falls under the same rule.
+
+```go
+for {
+    msg, err := c.Recv()
+    if err != nil {
+        return err
+    }
+    if _, ok := msg.(*v1.HostShutdown); ok {
+        stopTheChildrenYouStarted()
+        return nil
+    }
+}
+```
+
+The host does not touch the children of a plugin that exits on its own. A
+plugin may therefore hand a process to the session on purpose, as long as that
+process is not in the plugin's group:
+
+- start it through the `open-url` host call, which goes through the session's
+  own launcher, or
+- start it with `setsid` when it is the plugin's own binary.
+
+What the plugin owns stays the plugin's business: stop the children it started
+itself, and keep the state that should survive a restart in `state.set`, which
+the host stores under the plugin's own namespace.
+
 ## Protocol history
 
 The protocol grew for this work: plugin/v1 minor 1 adds `subtle` and
