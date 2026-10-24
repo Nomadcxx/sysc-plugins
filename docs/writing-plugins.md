@@ -77,7 +77,7 @@ plugin may therefore hand a process to the session on purpose, as long as that
 process is not in the plugin's group:
 
 - start it through the `open-url` host call, which goes through the session's
-  own launcher, or
+  own launcher and needs the `open-url` capability, or
 - start it with `setsid` when it is the plugin's own binary.
 
 What the plugin owns stays the plugin's business: stop the children it started

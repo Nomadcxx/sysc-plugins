@@ -67,6 +67,55 @@ Add or update your plugin's row here before tagging its first release.
 A plugin may have its own license inside its directory. Include that license
 file in the plugin package and set the catalog row to its SPDX identifier.
 
+## Capability classes
+
+A plugin declares what it may ask the host for in the `capabilities` list of
+its `manifest.json`. The host turns that list into the host calls the plugin
+is allowed to make, and refuses the rest.
+
+The broad classes grant a whole area:
+
+| Capability | Grants |
+|---|---|
+| `notifications` | `notify` |
+| `panels` | `panel.open`, `panel.close`, `panel.resize`, `view.focus`, `output.context` |
+| `settings` | the plugin's own committed settings |
+| `state` | `state.get`, `state.list`, `state.set` |
+| `floating_surfaces` | `surface.open`, `surface.close`, `surface.pin`, `output.context` |
+| `wallpaper` | `wallpaper.snapshot`, `wallpaper.mask.set` |
+| `screenshot` | `screenshot.start`, `screenshot.directory` |
+| `files` | `files.browse` |
+| `clipboard-read` | `clipboard.read` |
+| `clipboard-write` | `clipboard.write` |
+| `open-url` | `open-url` |
+
+The narrowed classes say whether a plugin may read or change something, which
+is the decision a user is actually making. They arrived in plugin protocol
+minor 19:
+
+| Capability | Grants |
+|---|---|
+| `state-read` | `state.get`, `state.list` |
+| `state-write` | `state.set` |
+| `wallpaper-read` | `wallpaper.snapshot` |
+| `wallpaper-write` | `wallpaper.mask.set` |
+| `screenshot-capture` | `screenshot.start` |
+| `screenshot-read` | `screenshot.directory` |
+| `outputs-read` | `output.context` |
+| `files:browser` | `files.browse`, scoped to the host-owned browser root |
+
+A manifest that names a narrowed class has to declare protocol minor 19 or
+higher; the host refuses anything older with `capabilities[i]: "state-read"
+requires protocol minor 19`. The broad names keep working and grant exactly
+the union of their parts: `state` is `state-read` plus `state-write`,
+`wallpaper` is `wallpaper-read` plus `wallpaper-write`, `screenshot` is
+`screenshot-capture` plus `screenshot-read`, and `panels` and
+`floating_surfaces` both carry `outputs-read` with them.
+
+The narrowed classes need a shell that speaks plugin protocol minor 19. The
+tagged shell releases speak minor 16, so a plugin that uses them needs a shell
+from the main line.
+
 ## Validating before you tag
 
 Run the same check CI runs:
