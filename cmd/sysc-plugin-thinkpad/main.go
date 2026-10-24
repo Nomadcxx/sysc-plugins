@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	"github.com/Nomadcxx/sysc-plugins/plugins/thinkpad"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -50,19 +51,25 @@ func runWith(in, out *os.File, roots thinkpad.Roots, storePath string) error {
 		fmt.Fprintf(os.Stderr, "thinkpad: profile store problem: %s\n", issue)
 	}
 
+	// The loop context bounds every host call the plugin makes. A call made
+	// from the event loop waits for a reply that only the reader goroutine can
+	// decode, and that reader cannot drain the queue while the loop is parked
+	// in the call, so an unbounded call can wedge the plugin for good.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	controller := thinkpad.NewController(thinkpad.NewHardware(roots), store,
 		func(n thinkpad.Notify) {
 			urgency := v1.UrgencyNormal
 			if n.Critical {
 				urgency = v1.UrgencyCritical
 			}
-			_, _ = c.Call(context.Background(), v1.CallNotify, v1.NotifyParams{
+			hostcall.Async(ctx, c, v1.CallNotify, v1.NotifyParams{
 				Summary: n.Summary, Body: n.Body, Urgency: urgency, TimeoutMS: 20000,
 			})
 		})
 
 	views := map[string]view{}
-	ctx, cancel := context.WithCancel(context.Background())
 	incoming := make(chan v1.Message, 8)
 	readerDone := make(chan struct{})
 	go func() {
@@ -222,6 +229,12 @@ func handleInput(
 	if controller == nil {
 		return
 	}
+	// panelCall is the only way the loop reaches the host: it adds the shared
+	// host call bound, so a host that never answers costs one bound instead of
+	// wedging the loop for the lifetime of the process.
+	panelCall := func(ctx context.Context, kind v1.CallKind, params any) (v1.HostReply, error) {
+		return boundedCall(ctx, c, kind, params)
+	}
 	source, ok := currentInputView(m, views)
 	if !ok {
 		return
@@ -274,7 +287,7 @@ func handleInput(
 	if m.Node == "open" && (m.Event == v1.EventActivate ||
 		(m.Event == v1.EventPointer && m.Button == v1.ButtonSecondary)) {
 		if c != nil {
-			_, _ = c.Call(ctx, v1.CallPanelOpen, v1.PanelParams{
+			_, _ = boundedCall(ctx, c, v1.CallPanelOpen, v1.PanelParams{
 				Entry: "panel", Output: m.Output, Generation: m.Generation, Instance: source.instance,
 			})
 		}
@@ -286,14 +299,14 @@ func handleInput(
 
 	switch {
 	case m.Node == "settings" || m.Node == "back":
-		if err := switchPanel(ctx, c.Call, m.Node, v1.PanelParams{
+		if err := switchPanel(ctx, panelCall, m.Node, v1.PanelParams{
 			Entry: source.entry, Output: m.Output,
 			Generation: m.Generation, Instance: source.instance,
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "thinkpad: panel action %q failed: %v\n", m.Node, err)
 		}
 	case m.Node == "close":
-		if err := callPanel(ctx, c.Call, v1.CallPanelClose, v1.PanelParams{
+		if err := callPanel(ctx, panelCall, v1.CallPanelClose, v1.PanelParams{
 			Entry: source.entry, Output: m.Output,
 			Generation: m.Generation, Instance: source.instance,
 		}); err != nil {
@@ -302,7 +315,7 @@ func handleInput(
 	case m.Node == "recheck":
 		controller.Recheck()
 	case m.Node == "setup:copy":
-		_, _ = c.Call(ctx, v1.CallClipboardWrite, v1.ClipboardWriteParams{Text: setupScript})
+		_, _ = boundedCall(ctx, c, v1.CallClipboardWrite, v1.ClipboardWriteParams{Text: setupScript})
 	case strings.HasPrefix(m.Node, "fan:"):
 		report(controller.SetFanLevel(strings.TrimPrefix(m.Node, "fan:")))
 	case strings.HasPrefix(m.Node, "kbd:"):
@@ -420,6 +433,14 @@ func panelEntryForAction(action string) string {
 	default:
 		return ""
 	}
+}
+
+// boundedCall makes one host call with the shared host call bound. The event
+// loop must use it for every call: a call without a bound waits for a reply
+// that only the reader goroutine can decode, and that reader cannot drain the
+// queue while the loop is parked in the call.
+func boundedCall(ctx context.Context, c *v1.Client, kind v1.CallKind, params any) (v1.HostReply, error) {
+	return hostcall.Call(ctx, c, kind, params)
 }
 
 func switchPanel(
