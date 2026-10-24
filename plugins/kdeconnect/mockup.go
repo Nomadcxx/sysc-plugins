@@ -18,6 +18,9 @@ import (
 
 // mockupArtDir holds the album-art composites, beside the recent-image
 // thumbnails. Tests point it at a temp directory.
+//
+// Go initialises recentImageThumbDir before this one, so the path follows
+// the resolved cache directory rather than the temporary fallback.
 var mockupArtDir = filepath.Join(filepath.Dir(recentImageThumbDir), "mockups")
 
 // composeMockup draws the album art at art into the screen of the kind's

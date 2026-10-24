@@ -32,16 +32,26 @@ const recentImageMaxSourceBytes = 32 << 20
 const recentImageMaxPixels = 16_000_000
 const recentImageStageTTL = 24 * time.Hour
 
-// recentImageThumbDir lives under os.UserCacheDir()/sysc-plugins/kdeconnect/
-// so per-thumb filenames stay short (sysc-shell's icons.FileResolver rejects
-// paths past 4096 bytes; a SHA-1 hex + .jpg stays well under that).
-var recentImageThumbDir = filepath.Join(os.TempDir(), "sysc-kdeconnect-thumbs")
-
-func init() {
+// cacheDir returns the base directory for cached plugin data: the user's
+// own cache directory when the environment names one, the temporary
+// directory otherwise.
+func cacheDir() string {
 	if base, err := os.UserCacheDir(); err == nil {
-		recentImageThumbDir = filepath.Join(base, "sysc-plugins", "kdeconnect", "thumbs")
+		return base
 	}
+	return os.TempDir()
 }
+
+// recentImageThumbDir lives under <cache>/sysc-plugins/kdeconnect/ so
+// per-thumb filenames stay short (sysc-shell's icons.FileResolver rejects
+// paths past 4096 bytes; a SHA-1 hex + .jpg stays well under that).
+//
+// The cache directory is resolved here, in the initialiser, and not in an
+// init function: a package-level initialiser of another variable runs
+// before every init function, so a directory derived from this one in a
+// variable initialiser would keep the temporary fallback and land in a
+// directory shared with every other user of the machine.
+var recentImageThumbDir = filepath.Join(cacheDir(), "sysc-plugins", "kdeconnect", "thumbs")
 
 // The service owns one connection to the daemon. It reconnects for as long
 // as it lives: a fresh session-bus connection every cycle, an unavailable

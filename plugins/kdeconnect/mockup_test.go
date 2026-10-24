@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,6 +61,24 @@ func readPNG(t *testing.T, path string) image.Image {
 		t.Fatal(err)
 	}
 	return img
+}
+
+// The composites belong in the user's own cache directory, beside the
+// recent-image thumbnails. A package-level initialiser for the composite
+// directory would have kept the temporary fallback, because variable
+// initialisers run before every init function.
+func TestMockupArtDirFollowsTheCacheDirectory(t *testing.T) {
+	want := filepath.Join(filepath.Dir(recentImageThumbDir), "mockups")
+	if mockupArtDir != want {
+		t.Fatalf("mockup art dir = %q, want %q", mockupArtDir, want)
+	}
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return
+	}
+	if !strings.HasPrefix(mockupArtDir, base) {
+		t.Fatalf("mockup art dir = %q, want it under the cache directory %q", mockupArtDir, base)
+	}
 }
 
 func TestComposeMockupFillsOnlyTheScreen(t *testing.T) {
