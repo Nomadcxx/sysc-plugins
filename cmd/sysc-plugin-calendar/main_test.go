@@ -174,16 +174,19 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 	_ = waitProcessSnapshot(t, lines, details.ViewID, "Opening meeting link")
 
 	sendHostJSON(t, hostOut, v1.HostShutdown{Type: "host.shutdown"})
-	_ = host.Close()
-	_ = input.Close()
 	select {
 	case err := <-finished:
 		if err != nil {
 			t.Fatal(err)
 		}
 	case <-time.After(2 * time.Second):
+		_ = host.Close()
+		_ = input.Close()
+		_ = output.Close()
 		t.Fatal("calendar process did not stop")
 	}
+	_ = host.Close()
+	_ = input.Close()
 	_ = output.Close()
 }
 
