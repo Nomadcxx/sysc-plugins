@@ -25,6 +25,12 @@ const maxSuggestions = 5
 // clock, which stops during suspend and leaves a stale time after resume.
 const wallCheck = 5 * time.Second
 
+// maxLoadRetries is how often a failed zone load is retried while user
+// input waits for it. The list comes from the host, so a failure is
+// usually transient; the cap keeps a host that cannot serve it from
+// spinning the loop.
+const maxLoadRetries = 3
+
 func main() {
 	env := environment{now: time.Now, local: time.Local, index: worldclock.OpenSystemIndex("/usr/share/zoneinfo"), callTimeout: 5 * time.Second}
 	if err := runPlugin(os.Stdin, os.Stdout, env); err != nil {
@@ -156,6 +162,7 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 	loadingZones := true
 	s.addErr = "Loading zones"
 	var pendingInputs []*v1.InputEvent
+	loadRetries := 0
 	s.lastMinute = env.now().Truncate(time.Minute)
 
 	minute := time.NewTicker(wallCheck)
@@ -206,9 +213,31 @@ func runPlugin(in io.Reader, out io.Writer, env environment) error {
 			loaded, changed := s.restoreResult(result.reply, result.err)
 			if !loaded {
 				s.addErr = "Couldn't load zones"
+				// A load that failed while user input was queued has to be
+				// retried: the queued change would otherwise never be
+				// replayed and never saved, and the plugin would sit on
+				// "Couldn't load zones" for the rest of its life. The retry
+				// is capped, so a host that cannot serve the zone list does
+				// not spin.
+				if len(pendingInputs) > 0 && loadRetries < maxLoadRetries {
+					loadRetries++
+					loadingZones = true
+					select {
+					case loadRequests <- struct{}{}:
+					default:
+						loadingZones = false
+					}
+					s.snapshotAll()
+					continue
+				}
+				if len(pendingInputs) > 0 {
+					pendingInputs = nil
+					s.addErr = "Couldn't load zones; try that change again"
+				}
 				s.snapshotAll()
 				continue
 			}
+			loadRetries = 0
 			wasLoading := s.addErr == "Loading zones"
 			if s.addErr == "Couldn't load zones" || s.addErr == "Loading zones" {
 				s.addErr = ""
