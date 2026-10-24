@@ -41,6 +41,11 @@ func init() {
 	if base, err := os.UserCacheDir(); err == nil {
 		recentImageThumbDir = filepath.Join(base, "sysc-plugins", "kdeconnect", "thumbs")
 	}
+	// The composite cache sits beside the thumbnails, so it is derived after
+	// the cache directory is fixed. A package-level initialiser would run
+	// before this and would derive it from the temporary fallback, which
+	// would leave the composites in a directory every local user can write.
+	mockupArtDir = filepath.Join(filepath.Dir(recentImageThumbDir), "mockups")
 }
 
 // The service owns one connection to the daemon. It reconnects for as long
@@ -1227,23 +1232,9 @@ func thumbnail(src, cacheDir, mount string) (string, error) {
 	if body, err := os.ReadFile(cached); err == nil && len(body) >= 4 && body[0] == 0xff && body[1] == 0xd8 {
 		return cached, nil
 	}
-	raw, err := io.ReadAll(io.LimitReader(file, recentImageMaxSourceBytes+1))
+	img, err := decodeBoundedFile(src, "thumbnail")
 	if err != nil {
-		return "", fmt.Errorf("kdeconnect: read %s: %w", src, err)
-	}
-	if len(raw) > recentImageMaxSourceBytes {
-		return "", fmt.Errorf("kdeconnect: %s exceeds the %d-byte thumbnail source limit", src, recentImageMaxSourceBytes)
-	}
-	config, _, err := image.DecodeConfig(bytes.NewReader(raw))
-	if err != nil {
-		return "", fmt.Errorf("kdeconnect: read image dimensions for %s: %w", src, err)
-	}
-	if config.Width <= 0 || config.Height <= 0 || int64(config.Width) > recentImageMaxPixels/int64(config.Height) {
-		return "", fmt.Errorf("kdeconnect: %s exceeds the %d-pixel thumbnail limit", src, recentImageMaxPixels)
-	}
-	img, _, err := image.Decode(bytes.NewReader(raw))
-	if err != nil {
-		return "", fmt.Errorf("kdeconnect: decode %s: %w", src, err)
+		return "", err
 	}
 	dw, dh := thumbnailSize(img.Bounds().Dx(), img.Bounds().Dy(), recentImageMaxLongEdge)
 	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
