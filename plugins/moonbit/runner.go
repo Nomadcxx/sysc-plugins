@@ -46,6 +46,11 @@ const (
 	maxEventLine = 4 << 20
 )
 
+// stderrGrace bounds the wait for sudo's last words after moonbit's output
+// closed. The two pipes close independently, so the refusal can still be on
+// its way when the run is already over.
+var stderrGrace = 2 * time.Second
+
 // cancelGrace bounds the wait for moonbit's terminal event after Cancel.
 var cancelGrace = 10 * time.Second
 
@@ -124,7 +129,11 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 
 	prompts := make(chan struct{}, 4)
 	tail := &lastLine{}
-	go watchStderr(stderr, prompts, tail)
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		watchStderr(stderr, prompts, tail)
+	}()
 
 	events := make(chan Event, 32)
 	ready := make(chan struct{})
@@ -173,7 +182,7 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 			return &Op{Events: events, stdin: stdin, kill: kill}, nil
 		case _, open := <-events:
 			if !open {
-				return nil, startError(tail.get())
+				return nil, refusalReason(stderrDone, tail)
 			}
 		case <-deadline.C:
 			kill()
@@ -201,6 +210,18 @@ func stopCommand(cmd *exec.Cmd, stdout io.Closer, pgid int) {
 	if stdout != nil {
 		_ = stdout.Close()
 	}
+}
+
+// refusalReason is why a run never started. sudo's refusal arrives on
+// stderr and moonbit's output closes independently, so the watcher may still
+// be draining the pipe when the run is already over; the wait gives it the
+// moment it needs, and the grace bounds it.
+func refusalReason(stderrDone <-chan struct{}, tail *lastLine) error {
+	select {
+	case <-stderrDone:
+	case <-time.After(stderrGrace):
+	}
+	return startError(tail.get())
 }
 
 // startError turns sudo's or moonbit's last words into the reason a run
