@@ -109,16 +109,18 @@ func TestReconfigOffStopsRunningReplay(t *testing.T) {
 	waitMode(t, r, Idle)
 }
 
-func TestRecorderRepeatedToggleDoesNotRestart(t *testing.T) {
+// A toggle after the stop completes is a new recording request. Waiting for
+// Idle keeps this separate from toggles queued while the previous command runs.
+func TestRecorderToggleAfterStopStartsAgain(t *testing.T) {
 	r := testRecorder(t, nil, "hang")
 	r.ToggleRecord("DP-1")
 	waitMode(t, r, Recording)
 	r.ToggleRecord("DP-1")
+	waitMode(t, r, Idle)
+	r.ToggleRecord("DP-1")
+	waitMode(t, r, Recording)
 	r.ToggleRecord("DP-1")
 	waitMode(t, r, Idle)
-	if got := r.Snapshot().Mode; got != Idle {
-		t.Fatalf("mode = %s after repeated stop", got)
-	}
 }
 
 func TestRecorderProcessExitFails(t *testing.T) {
