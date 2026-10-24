@@ -135,7 +135,7 @@ func (h *fakeHost) input(view, node string, ev v1.EventKind, button v1.PointerBu
 
 func (h *fakeHost) waitFor(what string, ok func() bool) {
 	h.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(waitBudget)
 	for time.Now().Before(deadline) {
 		h.mu.Lock()
 		good := ok()
@@ -446,7 +446,7 @@ func TestTranslationLoadsOffInputLoopAndDropsStaleSelection(t *testing.T) {
 		if id != "KJV" {
 			t.Fatalf("second load = %s, want newest selection KJV", id)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(waitBudget):
 		t.Fatal("KJV load did not start")
 	}
 	h.mu.Lock()
