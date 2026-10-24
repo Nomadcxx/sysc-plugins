@@ -48,6 +48,70 @@ func TestRefreshReplacesQueriedRangeAndKeepsPriorEventsOnOtherDates(t *testing.T
 	}
 }
 
+// closePipes closes every end of the plugin's pipes.
+//
+// Closing a pipe more than once is harmless, so a test can close them once
+// the plugin has stopped and still leave the cleanup to cover a failure that
+// never got there.
+func closePipes(host *io.PipeWriter, input *io.PipeReader, plugin *io.PipeReader, output *io.PipeWriter) {
+	_ = host.Close()
+	_ = input.Close()
+	_ = plugin.Close()
+	_ = output.Close()
+}
+
+// TestCalendarExitsCleanlyWhenTheHostClosesThePipe proves a closed host pipe
+// ends the plugin instead of failing it.
+//
+// The host closes a plugin's pipes when it stops the plugin, and a plugin
+// that reports the closed pipe as an error exits non-zero. The shell reads a
+// non-zero exit as a crash and restarts a plugin that was stopped on
+// purpose, so the plugin has to leave the way the other plugins in this
+// repository do: quietly, on the end of the stream.
+func TestCalendarExitsCleanlyWhenTheHostClosesThePipe(t *testing.T) {
+	now := time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC)
+	input, host := io.Pipe()
+	plugin, output := io.Pipe()
+	hostOut := &lockedWriter{w: host}
+	t.Cleanup(func() { closePipes(host, input, plugin, output) })
+	finished := make(chan error, 1)
+	go func() {
+		finished <- runPlugin(input, output, func() time.Time { return now }, func(_ context.Context, _, _ time.Time) (calendar.EDSResult, error) {
+			return calendar.EDSResult{}, nil
+		})
+	}()
+	// The plugin's output is drained so a snapshot cannot block it, and the
+	// preference calls it makes are answered.
+	go func() {
+		scanner := bufio.NewScanner(plugin)
+		for scanner.Scan() {
+			var call v1.HostCall
+			if json.Unmarshal(scanner.Bytes(), &call) != nil || call.Type != v1.TypeHostCall {
+				continue
+			}
+			result := json.RawMessage(`{}`)
+			if call.Call == v1.CallStateGet {
+				result, _ = json.Marshal(v1.StateGetResult{Found: false})
+			}
+			reply, _ := json.Marshal(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: result})
+			_, _ = hostOut.Write(append(reply, '\n'))
+		}
+	}()
+
+	sendHostJSON(t, hostOut, map[string]any{"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 8}}, "capabilities": []string{"panels", "state"}})
+	// The host stops the plugin by closing the pipe it reads from. The
+	// plugin has to treat that as the end of the stream.
+	_ = input.Close()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatalf("plugin reported the closed host pipe as a failure: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("calendar process did not stop after the host closed the pipe")
+	}
+}
+
 func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 	zone, err := time.LoadLocation("Australia/Melbourne")
 	if err != nil {
@@ -180,14 +244,14 @@ func TestCalendarProcessOpensPopulatedMonthAndShowsEventDetails(t *testing.T) {
 			t.Fatal(err)
 		}
 	case <-time.After(2 * time.Second):
-		_ = host.Close()
-		_ = input.Close()
-		_ = output.Close()
+		closePipes(host, input, plugin, output)
 		t.Fatal("calendar process did not stop")
 	}
-	_ = host.Close()
-	_ = input.Close()
-	_ = output.Close()
+	// The pipes are closed after the plugin has stopped. Closing them while
+	// it is still running turns the shutdown into a race: the plugin can see
+	// the closed pipe instead of the shutdown it was sent, and report the
+	// pipe as a failure (#15).
+	closePipes(host, input, plugin, output)
 }
 
 func TestCalendarProcessKeepsGoodEventsWhenOneEventIsUnreadable(t *testing.T) {
@@ -266,8 +330,6 @@ func TestCalendarProcessKeepsGoodEventsWhenOneEventIsUnreadable(t *testing.T) {
 	}
 
 	sendHostJSON(t, hostOut, v1.HostShutdown{Type: "host.shutdown"})
-	_ = host.Close()
-	_ = input.Close()
 	select {
 	case err := <-finished:
 		if err != nil {
@@ -276,7 +338,7 @@ func TestCalendarProcessKeepsGoodEventsWhenOneEventIsUnreadable(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("calendar process did not stop")
 	}
-	_ = output.Close()
+	closePipes(host, input, plugin, output)
 }
 
 func TestCalendarHostCallDoesNotBlockLaterInputOrShutdown(t *testing.T) {
@@ -302,17 +364,13 @@ func TestCalendarHostCallDoesNotBlockLaterInputOrShutdown(t *testing.T) {
 				_, _ = hostOut.Write(append(data, '\n'))
 			}
 			_ = sendHostJSONNoFail(hostOut, v1.HostShutdown{Type: "host.shutdown"})
-		}
-		_ = host.Close()
-		_ = input.Close()
-		_ = output.Close()
-		if !ended {
 			select {
 			case <-finished:
 			case <-time.After(2 * time.Second):
 				t.Error("calendar process did not stop during cleanup")
 			}
 		}
+		closePipes(host, input, plugin, output)
 	})
 
 	stamped := make(chan []byte, 32)
@@ -405,17 +463,13 @@ func TestCalendarShutdownFlushesPendingHiddenCalendarPreference(t *testing.T) {
 	t.Cleanup(func() {
 		if !ended {
 			_ = sendHostJSONNoFail(hostOut, v1.HostShutdown{Type: "host.shutdown"})
-		}
-		_ = host.Close()
-		_ = input.Close()
-		if !ended {
 			select {
 			case <-finished:
 			case <-time.After(2 * time.Second):
 				t.Error("calendar process did not stop during cleanup")
 			}
 		}
-		_ = output.Close()
+		closePipes(host, input, plugin, output)
 	})
 
 	stamped := make(chan []byte, 64)
