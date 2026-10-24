@@ -1,12 +1,14 @@
 package kdeconnect
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
 	"image/png"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -53,7 +55,7 @@ func composeMockup(kind, art string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cover, err := decodeFile(art)
+	cover, err := decodeBoundedFile(art)
 	if err != nil {
 		return "", err
 	}
@@ -159,6 +161,37 @@ func decodeFile(path string) (image.Image, error) {
 	}
 	defer f.Close()
 	img, _, err := image.Decode(f)
+	if err != nil {
+		return nil, fmt.Errorf("kdeconnect: decode %s: %w", path, err)
+	}
+	return img, nil
+}
+
+// decodeBoundedFile decodes an image that arrived from a paired device. It
+// applies the same source byte and pixel limits as the recent-image path, so
+// a small file that declares a huge canvas cannot park the service goroutine
+// in a decode that allocates hundreds of megabytes.
+func decodeBoundedFile(path string) (image.Image, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("kdeconnect: open %s: %w", path, err)
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, recentImageMaxSourceBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("kdeconnect: read %s: %w", path, err)
+	}
+	if len(raw) > recentImageMaxSourceBytes {
+		return nil, fmt.Errorf("kdeconnect: %s exceeds the %d-byte image source limit", path, recentImageMaxSourceBytes)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("kdeconnect: read image dimensions for %s: %w", path, err)
+	}
+	if config.Width <= 0 || config.Height <= 0 || int64(config.Width) > recentImageMaxPixels/int64(config.Height) {
+		return nil, fmt.Errorf("kdeconnect: %s exceeds the %d-pixel image limit", path, recentImageMaxPixels)
+	}
+	img, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("kdeconnect: decode %s: %w", path, err)
 	}
