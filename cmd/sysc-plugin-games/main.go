@@ -459,6 +459,19 @@ func (s *session) refreshWorker(ctx context.Context) {
 	}
 }
 
+// copyGames gives the session its own copy of a published listing. The
+// refresh worker keeps the listing it published and asks every source what is
+// running with that same listing, so a cover path written into the session's
+// games would land in memory the worker reads.
+func copyGames(games []source.Game) []source.Game {
+	if games == nil {
+		return nil
+	}
+	out := make([]source.Game, len(games))
+	copy(out, games)
+	return out
+}
+
 func (s *session) applyRefresh(ctx context.Context, result refreshResult) bool {
 	if result.generation != s.refreshGeneration {
 		return false
@@ -468,7 +481,7 @@ func (s *session) applyRefresh(ctx context.Context, result refreshResult) bool {
 	case refreshLibrary:
 		if result.err == nil {
 			changed = s.missing || !equalGames(s.games, result.games)
-			s.games = result.games
+			s.games = copyGames(result.games)
 			s.missing = false
 		} else if len(s.games) == 0 && !s.missing {
 			s.missing = true
