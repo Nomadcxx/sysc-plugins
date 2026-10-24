@@ -537,18 +537,18 @@ func TestHeldStatusDoesNotBlockInputOrOverwriteNewConnect(t *testing.T) {
 
 	started := time.Now()
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel", Width: 460, Height: 580})
-	p := h.nextSnapshotWithin(50 * time.Millisecond)
-	if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
+	p := h.nextSnapshotWithin(heldStatusBudget)
+	if elapsed := time.Since(started); elapsed > heldStatusDeadline {
 		t.Fatalf("ViewOpen took %v with status held", elapsed)
 	}
 
 	started = time.Now()
 	h.input("p", p, "action", v1.EventActivate, "", "")
-	connecting := h.nextSnapshotWithin(50 * time.Millisecond)
+	connecting := h.nextSnapshotWithin(heldStatusBudget)
 	if action := find(connecting.Root, "action"); action == nil || action.Text != "Cancel" {
 		t.Fatalf("held status blocked connect input or transition feedback: action=%+v", action)
 	}
-	if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
+	if elapsed := time.Since(started); elapsed > heldStatusDeadline {
 		t.Fatalf("connect input took %v with status held", elapsed)
 	}
 	args, err := os.ReadFile(os.Getenv("PROTON_ARGS"))
@@ -595,10 +595,10 @@ func TestShutdownDoesNotWaitForHeldStatus(t *testing.T) {
 	h := startWithHeldStatus(t, true)
 	h.waitForStatusBlocked(2 * time.Second)
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel", Width: 460, Height: 580})
-	_ = h.nextSnapshotWithin(50 * time.Millisecond)
+	_ = h.nextSnapshotWithin(heldStatusBudget)
 	h.send(v1.ViewClose{Type: "view.close", ViewID: "p"})
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: "p", View: v1.ViewPanel, Entry: "panel", Width: 460, Height: 580})
-	if snap := h.nextSnapshotWithin(50 * time.Millisecond); snap.Revision != 1 {
+	if snap := h.nextSnapshotWithin(heldStatusBudget); snap.Revision != 1 {
 		t.Fatalf("reopened view revision = %d, want 1 after ViewClose", snap.Revision)
 	}
 	started := time.Now()
@@ -610,10 +610,10 @@ func TestShutdownDoesNotWaitForHeldStatus(t *testing.T) {
 		if err != nil {
 			t.Fatalf("runPlugin: %v", err)
 		}
-		if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
+		if elapsed := time.Since(started); elapsed > heldStatusDeadline {
 			t.Fatalf("shutdown took %v with status held", elapsed)
 		}
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(heldStatusBudget):
 		t.Fatal("shutdown waited for the held status command")
 	}
 }
