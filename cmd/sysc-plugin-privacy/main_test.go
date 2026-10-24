@@ -172,6 +172,62 @@ func TestRunPluginPublishesBoundedStateSnapshot(t *testing.T) {
 	_ = pluginOutput.Close()
 }
 
+// A host that closes the plugin's pipe stops the plugin. The plugin must
+// leave cleanly, or the shell reads the non-zero exit as a crash and
+// restarts a plugin that was stopped on purpose.
+func TestRunPluginExitsCleanlyWhenTheHostClosesThePipe(t *testing.T) {
+	pluginInput, hostInput := io.Pipe()
+	hostOutput, pluginOutput := io.Pipe()
+	defer hostInput.Close()
+	defer hostOutput.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runPlugin(ctx, pluginInput, pluginOutput, func(context.Context) ([]byte, error) {
+			return validAuditOutput(), nil
+		})
+	}()
+	if _, err := io.WriteString(hostInput, `{"type":"host.hello","supported":[{"major":1,"minor":8}],"capabilities":["state"]}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(hostOutput)
+	if _, err := reader.ReadBytes('\n'); err != nil {
+		t.Fatal(err)
+	}
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var call v1.HostCall
+	if err := json.Unmarshal(line, &call); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := json.Marshal(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hostInput.Write(append(reply, '\n')); err != nil {
+		t.Fatal(err)
+	}
+
+	// The host closes the pipe under the plugin. The plugin reads the
+	// closed pipe as io.ErrClosedPipe rather than io.EOF.
+	if err := pluginInput.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("the plugin reported the closed host pipe as a failure: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the plugin did not stop after the host closed the pipe")
+	}
+	_ = hostInput.Close()
+	_ = pluginOutput.Close()
+}
+
 func TestLimitedBufferCapsMemory(t *testing.T) {
 	buffer := &limitedBuffer{limit: 8}
 	if n, err := buffer.Write([]byte(strings.Repeat("x", 1024))); n != 1024 || err != nil {
@@ -327,6 +383,53 @@ func TestRunPluginPanelRefreshPublishesOneFreshScanAndDropsStaleClicks(t *testin
 	}
 	if got := runs.Load(); got != 2 {
 		t.Fatalf("stale queued click started %d audits, want exactly 2 including startup", got)
+	}
+}
+
+// TestPrivacyExitsCleanlyWhenTheHostClosesThePipe proves a closed host pipe
+// ends the plugin instead of failing it.
+//
+// The host closes a plugin's pipes when it stops the plugin, and a plugin
+// reading a pipe that was closed under it sees io.ErrClosedPipe rather than
+// io.EOF. A plugin that reports that as an error exits non-zero, and the
+// shell reads a non-zero exit as a crash and restarts a plugin that was
+// stopped on purpose. The plugin has to leave the way the other plugins in
+// this repository do: quietly, on the end of the stream.
+func TestPrivacyExitsCleanlyWhenTheHostClosesThePipe(t *testing.T) {
+	pluginInput, hostInput := io.Pipe()
+	hostOutput, pluginOutput := io.Pipe()
+	t.Cleanup(func() {
+		_ = hostInput.Close()
+		_ = pluginOutput.Close()
+	})
+	finished := make(chan error, 1)
+	go func() {
+		finished <- runPlugin(context.Background(), pluginInput, pluginOutput, func(context.Context) ([]byte, error) {
+			return currentAuditOutput(), nil
+		})
+	}()
+	reader := bufio.NewReader(hostOutput)
+	sendPrivacyMessage(t, hostInput, map[string]any{
+		"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 18}},
+		"capabilities": []string{"panels", "state"},
+	})
+	var hello map[string]any
+	readPrivacyMessage(t, reader, &hello)
+	if hello["type"] != "plugin.hello" {
+		t.Fatalf("first plugin message = %#v", hello)
+	}
+	// The startup snapshot is published with a state.set call, and the
+	// plugin waits for the answer before it serves anything.
+	ackStateCall(t, hostInput, reader)
+	// The host stops the plugin by closing the pipe the plugin reads from.
+	_ = pluginInput.Close()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatalf("plugin reported the closed host pipe as a failure: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("privacy plugin did not stop after the host closed the pipe")
 	}
 }
 
