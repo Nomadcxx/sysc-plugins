@@ -41,6 +41,10 @@ func (f *fakeDocker) List(ctx context.Context) ([]Container, int, error) {
 	return f.containers, f.skippedLines, f.listErr
 }
 
+func (*fakeDocker) Events(context.Context) (<-chan struct{}, error) {
+	return make(chan struct{}), nil
+}
+
 func (f *fakeDocker) Images(context.Context) ([]Image, int, error) {
 	return f.images, f.imageSkipped, f.imagesErr
 }
@@ -1585,6 +1589,54 @@ func TestCLIArgv(t *testing.T) {
 	}
 }
 
+func TestCLIEventsCancelAndWaitForDockerProcess(t *testing.T) {
+	type eventSource interface {
+		Events(context.Context) (<-chan struct{}, error)
+	}
+	cli, ok := any(CLI{}).(eventSource)
+	if !ok {
+		t.Fatal("CLI does not provide a Docker event stream")
+	}
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv")
+	writeFakeDocker(t, dir, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_FILE\"\nprintf 'start\\n'\nexec /bin/sleep 60\n")
+	t.Setenv("ARGV_FILE", argvFile)
+	ctx, cancel := context.WithCancel(context.Background())
+	events, err := cli.Events(ctx)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	select {
+	case _, open := <-events:
+		if !open {
+			cancel()
+			t.Fatal("event stream closed before its first event")
+		}
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("Docker event was not forwarded")
+	}
+	argv, err := os.ReadFile(argvFile)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	if got, want := strings.Split(strings.TrimSuffix(string(argv), "\n"), "\n"), []string{"events", "--filter", "type=container", "--format", "{{.Action}}"}; !slices.Equal(got, want) {
+		cancel()
+		t.Fatalf("Docker events argv = %q, want %q", got, want)
+	}
+	cancel()
+	select {
+	case _, open := <-events:
+		if open {
+			t.Fatal("event stream stayed open after cancellation")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Docker event process was not reaped after cancellation")
+	}
+}
+
 func TestCLIRejectsOversizedOutput(t *testing.T) {
 	bin := t.TempDir()
 	writeFakeDocker(t, bin, "#!/bin/sh\nexec /usr/bin/head -c 2097152 /dev/zero\n")
@@ -1734,6 +1786,9 @@ type failStartCLI struct {
 }
 
 func (f *failStartCLI) List(context.Context) ([]Container, int, error) { return f.list, 0, nil }
+func (*failStartCLI) Events(context.Context) (<-chan struct{}, error) {
+	return make(chan struct{}), nil
+}
 func (*failStartCLI) Images(context.Context) ([]Image, int, error)     { return nil, 0, nil }
 func (*failStartCLI) Volumes(context.Context) ([]Volume, int, error)   { return nil, 0, nil }
 func (*failStartCLI) Networks(context.Context) ([]Network, int, error) { return nil, 0, nil }

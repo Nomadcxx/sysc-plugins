@@ -36,6 +36,10 @@ func (fakeCLI) List(context.Context) ([]minidocker.Container, int, error) {
 	}, 0, nil
 }
 
+func (fakeCLI) Events(context.Context) (<-chan struct{}, error) {
+	return make(chan struct{}), nil
+}
+
 func (fakeCLI) Start(context.Context, string) error   { return nil }
 func (fakeCLI) Stop(context.Context, string) error    { return nil }
 func (fakeCLI) Restart(context.Context, string) error { return nil }
@@ -77,6 +81,10 @@ func (s slowCLI) List(context.Context) ([]minidocker.Container, int, error) {
 	return []minidocker.Container{
 		{ID: "a1", Names: "web", Image: "nginx:latest", State: "running", Status: "Up"},
 	}, 0, nil
+}
+
+func (slowCLI) Events(context.Context) (<-chan struct{}, error) {
+	return make(chan struct{}), nil
 }
 
 func (slowCLI) Start(context.Context, string) error   { return nil }
@@ -498,12 +506,12 @@ func TestViewResyncResetsRevisionAndRepublishes(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- run(inR, outW) }()
 
-	h.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "v1", View: v1.ViewBar, Entry: "bar"})
+	h.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "v1", View: v1.ViewPanel, Entry: "panel"})
 	if !waitFor(func() bool { return firstRevision.Load() >= 1 }, 5*time.Second) {
 		t.Fatal("no first snapshot within 5s")
 	}
-	// The daemon goes down: the bar tone flips, so the refresh publishes a
-	// new digest and the revision climbs.
+	// The daemon goes down: an explicit panel refresh changes the state, so the
+	// snapshot digest changes and the revision climbs.
 	cli.fail.Store(true)
 	h.send(&v1.InputEvent{Type: v1.TypeInputEvent, ViewID: "v1", Revision: latest.Load(),
 		Node: "refresh", Event: v1.EventActivate})
@@ -540,6 +548,10 @@ func (c *interactionCLI) List(context.Context) ([]minidocker.Container, int, err
 	return []minidocker.Container{{ID: "a1", Names: "web", Image: "nginx:latest", State: "running", Status: "Up"}}, 0, nil
 }
 
+func (*interactionCLI) Events(context.Context) (<-chan struct{}, error) {
+	return make(chan struct{}), nil
+}
+
 func (*interactionCLI) Start(context.Context, string) error   { return nil }
 func (*interactionCLI) Stop(context.Context, string) error    { return nil }
 func (*interactionCLI) Restart(context.Context, string) error { return nil }
@@ -567,6 +579,29 @@ func (c *interactionCLI) Run(_ context.Context, opts minidocker.RunOpts) error {
 		c.runs <- opts
 	}
 	return nil
+}
+
+type dockerEventsCLI struct {
+	*interactionCLI
+	events     <-chan struct{}
+	eventCalls atomic.Int64
+}
+
+func (c *dockerEventsCLI) Events(context.Context) (<-chan struct{}, error) {
+	c.eventCalls.Add(1)
+	return c.events, nil
+}
+
+type closedDockerEventsCLI struct {
+	*interactionCLI
+	eventCalls atomic.Int64
+}
+
+func (c *closedDockerEventsCLI) Events(context.Context) (<-chan struct{}, error) {
+	c.eventCalls.Add(1)
+	events := make(chan struct{})
+	close(events)
+	return events, nil
 }
 
 type blockedActionCLI struct {
@@ -879,10 +914,97 @@ func TestRunResetsPollTimerWhenIntervalChanges(t *testing.T) {
 	if !waitFor(func() bool { return cli.listCalls.Load() >= 1 }, 2*time.Second) {
 		t.Fatal("startup poll did not run")
 	}
+	h.host.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "panel", View: v1.ViewPanel, Entry: "panel"})
+	if !waitFor(func() bool { return cli.listCalls.Load() >= 2 }, time.Second) {
+		t.Fatal("panel-open refresh did not run")
+	}
 	h.host.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
 		Values: map[string]any{"refresh_interval_seconds": 1.0}})
-	if !waitFor(func() bool { return cli.listCalls.Load() >= 2 }, 1800*time.Millisecond) {
+	baseline := cli.listCalls.Load()
+	if !waitFor(func() bool { return cli.listCalls.Load() > baseline }, 1800*time.Millisecond) {
 		t.Fatal("poll timer kept the old five-second interval after the setting changed")
+	}
+}
+
+func TestRunDoesNotPollAtPanelCadenceWithOnlyBarOpen(t *testing.T) {
+	cli := &interactionCLI{}
+	h := startPluginHarness(t, cli)
+	if !waitFor(func() bool { return cli.listCalls.Load() >= 1 }, 2*time.Second) {
+		t.Fatal("startup poll did not run")
+	}
+	h.host.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
+		Values: map[string]any{"refresh_interval_seconds": 1.0}})
+	h.host.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "bar", View: v1.ViewBar, Entry: "bar"})
+	h.nextSnapshot(t, "bar", func(s wireSnapshot) bool { return nodeByID(s.Root, "open") != nil })
+	baseline := cli.listCalls.Load()
+	time.Sleep(1200 * time.Millisecond)
+	if got := cli.listCalls.Load(); got != baseline {
+		t.Fatalf("container polls with only the bar open = %d, want no panel-cadence poll", got-baseline)
+	}
+}
+
+func TestRunUsesIdleCadenceAfterLastPanelCloses(t *testing.T) {
+	cli := &interactionCLI{}
+	h := startPluginHarness(t, cli)
+	if !waitFor(func() bool { return cli.listCalls.Load() >= 1 }, 2*time.Second) {
+		t.Fatal("startup poll did not run")
+	}
+	h.host.send(&v1.SettingsChanged{Type: v1.TypeSettingsChanged, Scope: v1.ScopePlugin,
+		Values: map[string]any{"refresh_interval_seconds": 1.0}})
+	h.host.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "panel", View: v1.ViewPanel, Entry: "panel"})
+	h.nextSnapshot(t, "panel", func(s wireSnapshot) bool { return nodeByID(s.Root, "select:a1") != nil })
+	if !waitFor(func() bool { return cli.listCalls.Load() >= 2 }, time.Second) {
+		t.Fatal("panel-open refresh did not run")
+	}
+	baseline := cli.listCalls.Load()
+	h.host.send(&v1.ViewClose{Type: v1.TypeViewClose, ViewID: "panel"})
+	h.host.send(&v1.ViewOpen{Type: v1.TypeViewOpen, ViewID: "bar", View: v1.ViewBar, Entry: "bar"})
+	h.nextSnapshot(t, "bar", func(s wireSnapshot) bool { return nodeByID(s.Root, "open") != nil })
+	time.Sleep(1200 * time.Millisecond)
+	if got := cli.listCalls.Load(); got != baseline {
+		t.Fatalf("container polls after the last panel closed = %d, want no panel-cadence poll", got-baseline)
+	}
+}
+
+func TestRunRefreshesContainerListFromDockerEvents(t *testing.T) {
+	events := make(chan struct{}, 64)
+	cli := &dockerEventsCLI{interactionCLI: &interactionCLI{}, events: events}
+	startPluginHarness(t, cli)
+	if !waitFor(func() bool { return cli.interactionCLI.listCalls.Load() >= 1 }, 2*time.Second) {
+		t.Fatal("startup poll did not run")
+	}
+	if !waitFor(func() bool { return cli.eventCalls.Load() == 1 }, time.Second) {
+		t.Fatal("Docker event stream did not start")
+	}
+	baseline := cli.interactionCLI.listCalls.Load()
+	for range 50 {
+		events <- struct{}{}
+	}
+	if !waitFor(func() bool { return cli.interactionCLI.listCalls.Load() > baseline }, 2*time.Second) {
+		t.Fatal("container event did not refresh the list")
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := cli.interactionCLI.listCalls.Load() - baseline; got > 2 {
+		t.Fatalf("container polls for one event burst = %d, want at most 2", got)
+	}
+}
+
+func TestRunRetriesClosedDockerEventStreamWithBackoff(t *testing.T) {
+	cli := &closedDockerEventsCLI{interactionCLI: &interactionCLI{}}
+	startPluginHarness(t, cli)
+	if !waitFor(func() bool { return cli.eventCalls.Load() == 1 }, time.Second) {
+		t.Fatal("Docker event stream did not start")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := cli.eventCalls.Load(); got != 1 {
+		t.Fatalf("event stream retries before backoff = %d, want 1", got)
+	}
+	if !waitFor(func() bool { return cli.eventCalls.Load() >= 2 }, 1500*time.Millisecond) {
+		t.Fatal("closed Docker event stream was not retried")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := cli.eventCalls.Load(); got != 2 {
+		t.Fatalf("event stream retries before the next backoff = %d, want 2", got)
 	}
 }
 

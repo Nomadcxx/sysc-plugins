@@ -22,6 +22,11 @@ import (
 // run, tests); TestHandshakeFallbackMatchesManifest pins it to the manifest.
 const fallbackVersion = "0.4.1"
 
+const (
+	idleSafetyPoll = 60 * time.Second
+	eventDebounce  = 250 * time.Millisecond
+)
+
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {
 		os.Exit(1)
@@ -84,6 +89,22 @@ func run(in *os.File, out *os.File) error {
 		defer mu.Unlock()
 		return settings.interval
 	}
+	panelOpen := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, current := range views {
+			if current.kind == v1.ViewPanel {
+				return true
+			}
+		}
+		return false
+	}
+	pollInterval := func() time.Duration {
+		if panelOpen() {
+			return interval()
+		}
+		return idleSafetyPoll
+	}
 
 	publish := func(forceViewID string) {
 		mu.Lock()
@@ -118,7 +139,10 @@ func run(in *os.File, out *os.File) error {
 	// ponytail: one queued request coalesces bursts; widen only if users need
 	// distinct refreshes to survive a Docker operation already in progress.
 	refresh := make(chan refreshRequest, 1)
+	var queueRefreshMu sync.Mutex
 	queueRefresh := func(request refreshRequest) {
+		queueRefreshMu.Lock()
+		defer queueRefreshMu.Unlock()
 		select {
 		case refresh <- request:
 			return
@@ -154,10 +178,17 @@ func run(in *os.File, out *os.File) error {
 		publish("")
 	}
 
-	intervalChanged := make(chan struct{}, 1)
+	pollIntervalChanged := make(chan struct{}, 1)
+	notifyPollIntervalChanged := func() {
+		select {
+		case pollIntervalChanged <- struct{}{}:
+		default:
+		}
+	}
+	go watchDockerEvents(ctx, session, queueRefresh)
 	go func() {
 		refreshNow(refreshRequest{containers: true, active: true})
-		timer := time.NewTimer(interval())
+		timer := time.NewTimer(pollInterval())
 		defer timer.Stop()
 		resetTimer := func(delay time.Duration) {
 			if !timer.Stop() {
@@ -172,14 +203,18 @@ func run(in *os.File, out *os.File) error {
 			select {
 			case <-ctx.Done():
 				return
-			case <-intervalChanged:
-				resetTimer(interval())
+			case <-pollIntervalChanged:
+				resetTimer(pollInterval())
 			case request := <-refresh:
 				refreshNow(request)
-				resetTimer(interval())
+				resetTimer(pollInterval())
 			case <-timer.C:
-				refreshNow(refreshRequest{containers: true, active: true})
-				timer.Reset(interval())
+				request := refreshRequest{containers: true}
+				if panelOpen() {
+					request.active = true
+				}
+				refreshNow(request)
+				timer.Reset(pollInterval())
 			}
 		}
 	}()
@@ -199,13 +234,20 @@ func run(in *os.File, out *os.File) error {
 				mu.Unlock()
 				publish(msg.ViewID)
 				if msg.View == v1.ViewPanel {
+					notifyPollIntervalChanged()
 					queueRefresh(refreshRequest{active: true})
+				} else if msg.View == v1.ViewTooltip {
+					queueRefresh(refreshRequest{containers: true})
 				}
 			case *v1.ViewClose:
 				mu.Lock()
+				current, exists := views[msg.ViewID]
 				delete(views, msg.ViewID)
 				delete(lastTree, msg.ViewID)
 				mu.Unlock()
+				if exists && current.kind == v1.ViewPanel {
+					notifyPollIntervalChanged()
+				}
 			case *v1.ViewResync:
 				mu.Lock()
 				if current, ok := views[msg.ViewID]; ok {
@@ -329,13 +371,91 @@ func run(in *os.File, out *os.File) error {
 					session.SetDefaultNetwork(defaultNetwork)
 				}
 				if intervalWasChanged {
-					select {
-					case intervalChanged <- struct{}{}:
-					default:
-					}
+					notifyPollIntervalChanged()
 				}
 			}
 		}
+	}
+}
+
+func watchDockerEvents(ctx context.Context, session *minidocker.Session, enqueue func(refreshRequest)) {
+	retryDelay := time.Second
+	for {
+		events, err := session.Events(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		sawEvent := false
+		if err == nil && events != nil {
+			sawEvent = watchDockerEventStream(ctx, events, enqueue)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if sawEvent {
+			retryDelay = time.Second
+		}
+		if !waitForDockerEventRetry(ctx, retryDelay) {
+			return
+		}
+		if retryDelay < idleSafetyPoll {
+			retryDelay *= 2
+			if retryDelay > idleSafetyPoll {
+				retryDelay = idleSafetyPoll
+			}
+		}
+	}
+}
+
+func watchDockerEventStream(ctx context.Context, events <-chan struct{}, enqueue func(refreshRequest)) bool {
+	var debounceTimer *time.Timer
+	var debounce <-chan time.Time
+	sawEvent := false
+	defer func() {
+		if debounceTimer != nil {
+			debounceTimer.Stop()
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return sawEvent
+		case _, ok := <-events:
+			if !ok {
+				if debounce != nil && ctx.Err() == nil {
+					enqueue(refreshRequest{containers: true})
+				}
+				return sawEvent
+			}
+			sawEvent = true
+			if debounceTimer == nil {
+				debounceTimer = time.NewTimer(eventDebounce)
+			} else {
+				if !debounceTimer.Stop() {
+					select {
+					case <-debounceTimer.C:
+					default:
+					}
+				}
+				debounceTimer.Reset(eventDebounce)
+			}
+			debounce = debounceTimer.C
+		case <-debounce:
+			debounce = nil
+			enqueue(refreshRequest{containers: true})
+		}
+	}
+}
+
+func waitForDockerEventRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

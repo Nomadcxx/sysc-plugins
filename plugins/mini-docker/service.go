@@ -125,6 +125,11 @@ func NewSession(d Docker) *Session {
 	}
 }
 
+// Events exposes the Docker container event stream to the plugin process.
+func (s *Session) Events(ctx context.Context) (<-chan struct{}, error) {
+	return s.docker.Events(ctx)
+}
+
 func (s *Session) SetScope(scope Scope) bool {
 	if !validScope(scope) {
 		return false
