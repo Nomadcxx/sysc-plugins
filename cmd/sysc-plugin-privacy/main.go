@@ -104,14 +104,14 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 		case <-pluginCtx.Done():
 			select {
 			case err := <-receiveError:
-				if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+				if !isEndOfStream(err) {
 					return err
 				}
 			default:
 			}
 			return nil
 		case err := <-receiveError:
-			if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
+			if isEndOfStream(err) {
 				return nil
 			}
 			return err
@@ -197,6 +197,18 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 			}
 		}
 	}
+}
+
+// isEndOfStream reports whether err means the host stopped talking rather
+// than that something went wrong.
+//
+// The host closes a plugin's pipes when it stops the plugin, and a plugin
+// reading a pipe that was closed under it sees io.ErrClosedPipe rather than
+// io.EOF. That is the end of the stream, not a failure: reporting it as one
+// makes the plugin exit non-zero, and the shell reads a non-zero exit as a
+// crash and restarts a plugin that was stopped on purpose.
+func isEndOfStream(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled)
 }
 
 func publishSnapshot(ctx context.Context, client *v1.Client, snapshot privacy.Snapshot) error {
