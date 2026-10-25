@@ -41,6 +41,11 @@ type view struct {
 	kind     v1.ViewKind
 	rev      uint64
 	instance string
+	// contentRev is the newest revision at which the view's addressed
+	// content changed. A refresh that only redraws the status lines moves
+	// rev but not contentRev, so an event aimed at a revision in between
+	// still names content the plugin has.
+	contentRev uint64
 }
 
 type refreshRequest struct {
@@ -60,6 +65,7 @@ func run(in *os.File, out *os.File) error {
 	session := newSession()
 	views := map[string]view{}
 	lastTree := map[string][sha256.Size]byte{}
+	lastAction := map[string]string{}
 	settings := struct {
 		interval time.Duration
 	}{interval: 5 * time.Second}
@@ -126,12 +132,17 @@ func run(in *os.File, out *os.File) error {
 			if previous, exists := lastTree[id]; id != forceViewID && exists && previous == digest {
 				continue
 			}
+			signature := actionSignature(root)
 			revision := current.rev + 1
+			if previous, exists := lastAction[id]; !exists || previous != signature {
+				current.contentRev = revision
+			}
 			err = c.Snapshot(id, revision, root)
 			if err == nil {
 				current.rev = revision
 				views[id] = current
 				lastTree[id] = digest
+				lastAction[id] = signature
 			}
 		}
 	}
@@ -231,6 +242,7 @@ func run(in *os.File, out *os.File) error {
 				mu.Lock()
 				views[msg.ViewID] = view{kind: msg.View, instance: msg.Instance}
 				delete(lastTree, msg.ViewID)
+				delete(lastAction, msg.ViewID)
 				mu.Unlock()
 				publish(msg.ViewID)
 				if msg.View == v1.ViewPanel {
@@ -244,6 +256,7 @@ func run(in *os.File, out *os.File) error {
 				current, exists := views[msg.ViewID]
 				delete(views, msg.ViewID)
 				delete(lastTree, msg.ViewID)
+				delete(lastAction, msg.ViewID)
 				mu.Unlock()
 				if exists && current.kind == v1.ViewPanel {
 					notifyPollIntervalChanged()
@@ -252,15 +265,23 @@ func run(in *os.File, out *os.File) error {
 				mu.Lock()
 				if current, ok := views[msg.ViewID]; ok {
 					current.rev = 0
+					current.contentRev = 0
 					views[msg.ViewID] = current
 					delete(lastTree, msg.ViewID)
+					delete(lastAction, msg.ViewID)
 				}
 				mu.Unlock()
 				publish(msg.ViewID)
 			case *v1.InputEvent:
 				mu.Lock()
 				current, exists := views[msg.ViewID]
-				validRevision := exists && current.rev == msg.Revision
+				// The event carries the revision the operator actually saw.
+				// A refresh that only redraws the status lines climbs the
+				// view's revision without changing the nodes an event
+				// addresses, so an event aimed anywhere between the last
+				// content change and the current revision still names
+				// content the plugin has.
+				validRevision := exists && msg.Revision >= current.contentRev && msg.Revision <= current.rev
 				mu.Unlock()
 				if !validRevision {
 					continue
