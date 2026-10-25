@@ -143,12 +143,22 @@ func (p *Proc) Stop(wait time.Duration) error {
 	case <-p.done:
 		return nil
 	case <-time.After(wait):
-		if err := proc.Kill(); err != nil {
+		if err := killProcess(proc); err != nil {
 			return err
 		}
 		<-p.done
 		return nil
 	}
+}
+
+// killProcess kills a process and treats an already finished process as the
+// state the caller asked for: a process that exited and was reaped reports
+// os.ErrProcessDone, and a stop that finds it gone has nothing left to do.
+func killProcess(proc *os.Process) error {
+	if err := proc.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	return nil
 }
 
 func (p *Proc) reap() {

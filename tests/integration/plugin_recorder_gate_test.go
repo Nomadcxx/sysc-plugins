@@ -193,20 +193,21 @@ func TestPluginRecorderGateAdoptionAndAmbiguous(t *testing.T) {
 }
 
 type recorderHost struct {
-	t      *testing.T
-	dir    string
-	binDir string
-	cmd    *exec.Cmd
-	enc    *v1.Encoder
-	mu     sync.Mutex
-	roots  map[string]*v1.Node
-	slots  map[string]viewSlot
-	notify []v1.NotifyParams
-	args   []string
-	own    recorder.Ownership
-	seed   *recorder.Ownership
-	wake   chan struct{}
-	done   chan struct{}
+	t        *testing.T
+	dir      string
+	binDir   string
+	cmd      *exec.Cmd
+	enc      *v1.Encoder
+	mu       sync.Mutex
+	roots    map[string]*v1.Node
+	slots    map[string]viewSlot
+	notify   []v1.NotifyParams
+	args     []string
+	argvPath string
+	own      recorder.Ownership
+	seed     *recorder.Ownership
+	wake     chan struct{}
+	done     chan struct{}
 }
 
 func startRecorder(t *testing.T, behavior string) *recorderHost {
@@ -255,7 +256,7 @@ func startRecorderWithState(t *testing.T, behavior, binDir string, seed recorder
 	h := &recorderHost{
 		t: t, dir: dir, binDir: binDir, cmd: cmd,
 		enc: v1.NewEncoder(stdin), roots: map[string]*v1.Node{}, wake: make(chan struct{}, 8), done: make(chan struct{}),
-		seed: &seedCopy,
+		seed: &seedCopy, argvPath: argvPath,
 	}
 	if seed.PID == 0 {
 		h.seed = nil
@@ -315,14 +316,6 @@ func startRecorderWithState(t *testing.T, behavior, binDir string, seed recorder
 						h.mu.Unlock()
 					}
 				}
-				h.mu.Lock()
-				if raw, err := os.ReadFile(argvPath); err == nil {
-					var args []string
-					if json.Unmarshal(raw, &args) == nil {
-						h.args = args
-					}
-				}
-				h.mu.Unlock()
 				_ = h.send(&reply)
 				select {
 				case h.wake <- struct{}{}:
@@ -415,6 +408,17 @@ func (h *recorderHost) waitArgs(ok func([]string) bool) []string {
 	h.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
+		// Read the file the fake backend writes instead of a copy taken from a
+		// host call: the backend can write its argv after the last host call
+		// the plugin makes, so such a copy can stay empty for the whole wait.
+		if raw, err := os.ReadFile(h.argvPath); err == nil {
+			var args []string
+			if json.Unmarshal(raw, &args) == nil {
+				h.mu.Lock()
+				h.args = args
+				h.mu.Unlock()
+			}
+		}
 		h.mu.Lock()
 		args := append([]string(nil), h.args...)
 		h.mu.Unlock()

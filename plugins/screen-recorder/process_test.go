@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -71,6 +72,29 @@ func TestProcessKillAfterStopTimeout(t *testing.T) {
 	}
 	if p.Running() {
 		t.Fatal("kill after timeout left the process running")
+	}
+}
+
+// A process that exited and was reaped reports os.ErrProcessDone from a
+// kill. A stop that finds the process gone has nothing left to do, so that
+// must not be reported as a failure: the stop and the reaper can reach the
+// end of the process at the same moment.
+func TestProcessStopToleratesAnAlreadyFinishedProcess(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	p := &Proc{pid: pid, cmd: cmd, running: true, done: make(chan struct{})}
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		close(p.done)
+	}()
+	if err := p.Stop(50 * time.Millisecond); err != nil {
+		t.Fatalf("stopping a process that already finished reported %v", err)
 	}
 }
 
