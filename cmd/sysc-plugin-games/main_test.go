@@ -69,6 +69,7 @@ type harness struct {
 	t        *testing.T
 	host     io.WriteCloser
 	lines    chan []byte
+	calls    chan v1.HostCall
 	done     chan error
 	ran      chan []string
 	procRoot string
@@ -88,7 +89,7 @@ func startWith(t *testing.T, mutate func(*environment)) *harness {
 	home := t.TempDir()
 	input, host := io.Pipe()
 	plugin, output := io.Pipe()
-	h := &harness{t: t, host: host, lines: make(chan []byte, 64), done: make(chan error, 1), ran: make(chan []string, 8), procRoot: procRoot}
+	h := &harness{t: t, host: host, lines: make(chan []byte, 64), calls: make(chan v1.HostCall, 256), done: make(chan error, 1), ran: make(chan []string, 8), procRoot: procRoot}
 	ran := h.ran
 	env := environment{
 		now: time.Now, // fake /proc dir is born "now", so elapsed = 0m
@@ -123,12 +124,18 @@ func startWith(t *testing.T, mutate func(*environment)) *harness {
 		h.done <- err
 	}()
 	go func() {
+		defer close(h.lines)
+		defer close(h.calls)
 		sc := bufio.NewScanner(plugin)
 		sc.Buffer(make([]byte, 1<<20), 1<<20)
 		for sc.Scan() {
-			h.lines <- append([]byte(nil), sc.Bytes()...)
+			line := append([]byte(nil), sc.Bytes()...)
+			if messageType(line) == v1.TypeHostCall {
+				h.answer(line)
+				continue
+			}
+			h.lines <- line
 		}
-		close(h.lines)
 	}()
 	h.send(map[string]any{"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 7}}, "capabilities": []string{"panels", "settings", "state"}})
 	if got := h.next(); messageType(got) != "plugin.hello" {
@@ -163,8 +170,32 @@ func (h *harness) next() []byte {
 	}
 }
 
-// pump answers every host.call with "state absent, ok" and returns the first
-// message satisfying want.
+// answer replies to a host.call as soon as it arrives and keeps a copy for
+// tests that inspect calls. Replying from the reader, not from pump, keeps the
+// plugin's event loop moving between two events: a call that lands while a
+// test waits on a launch channel used to block the plugin until the next pump
+// or until the call timed out, which made the card tests flaky.
+func (h *harness) answer(line []byte) {
+	var call v1.HostCall
+	if json.Unmarshal(line, &call) != nil {
+		return
+	}
+	raw, _ := json.Marshal(v1.StateGetResult{Found: false})
+	reply, err := json.Marshal(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: raw})
+	if err != nil {
+		return
+	}
+	// The plugin reads its input on a separate goroutine, so this write
+	// cannot wait for the event loop that is waiting for the reply.
+	_, _ = h.host.Write(append(reply, '\n'))
+	select {
+	case h.calls <- call:
+	default:
+	}
+}
+
+// pump returns the first view message satisfying want. Host calls are already
+// answered by the reader.
 func (h *harness) pump(want func(line []byte) bool) []byte {
 	h.t.Helper()
 	for {
@@ -173,12 +204,6 @@ func (h *harness) pump(want func(line []byte) bool) []byte {
 		case v1.TypeViewSnapshot, v1.TypeViewPatch:
 			if want(line) {
 				return line
-			}
-		case v1.TypeHostCall:
-			var call v1.HostCall
-			if json.Unmarshal(line, &call) == nil {
-				raw, _ := json.Marshal(v1.StateGetResult{Found: false})
-				h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: raw})
 			}
 		}
 	}
@@ -191,15 +216,9 @@ func (h *harness) snapshotWithin(timeout time.Duration, want func(v1.ViewSnapsho
 	for {
 		select {
 		case line := <-h.lines:
-			switch messageType(line) {
-			case v1.TypeViewSnapshot:
+			if messageType(line) == v1.TypeViewSnapshot {
 				if snap := snapshotOf(line); want(snap) {
 					return line
-				}
-			case v1.TypeHostCall:
-				var call v1.HostCall
-				if json.Unmarshal(line, &call) == nil {
-					h.replyTo(call.ID)
 				}
 			}
 		case <-timer.C:
@@ -208,19 +227,15 @@ func (h *harness) snapshotWithin(timeout time.Duration, want func(v1.ViewSnapsho
 	}
 }
 
+// settleHostCalls waits for quiet host traffic. Calls are answered by the
+// reader, so this only drains the observation channel.
 func (h *harness) settleHostCalls(timeout time.Duration) {
 	h.t.Helper()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
 		select {
-		case line := <-h.lines:
-			if messageType(line) == v1.TypeHostCall {
-				var call v1.HostCall
-				if json.Unmarshal(line, &call) == nil {
-					h.replyTo(call.ID)
-				}
-			}
+		case <-h.calls:
 		case <-timer.C:
 			return
 		}
@@ -242,19 +257,13 @@ func (h *harness) stop() {
 				h.t.Fatal(err)
 			}
 			return
-		case line, ok := <-h.lines:
+		case _, ok := <-h.lines:
 			if !ok {
 				err := <-h.done
 				if err != nil {
 					h.t.Fatal(err)
 				}
 				return
-			}
-			if messageType(line) == v1.TypeHostCall {
-				var call v1.HostCall
-				if json.Unmarshal(line, &call) == nil {
-					h.replyTo(call.ID)
-				}
 			}
 		case <-timer.C:
 			h.t.Fatal("plugin did not stop")
@@ -367,39 +376,32 @@ func TestPanelFlowAndPrefsPersist(t *testing.T) {
 	})
 	h.send(v1.InputEvent{Type: "input.event", ViewID: "p", Revision: snapshotOf(line).Revision, Node: "panel:favtoggle-lutris:2", Event: v1.EventActivate})
 	// favtoggle must round-trip through state.set with the favorites map.
+	deadline := time.After(5 * time.Second)
 	for {
-		l := h.next()
-		if messageType(l) != v1.TypeHostCall {
-			continue
+		select {
+		case call := <-h.calls:
+			if call.Call != v1.CallStateSet {
+				continue
+			}
+			var p struct {
+				Key   string          `json:"key"`
+				Value json.RawMessage `json:"value"`
+			}
+			_ = json.Unmarshal(call.Params, &p)
+			if p.Key != "prefs" {
+				continue
+			}
+			var prefs struct {
+				Favorites map[string]bool `json:"favorites"`
+			}
+			if err := json.Unmarshal(p.Value, &prefs); err != nil || !prefs.Favorites["lutris:2"] {
+				t.Fatalf("persisted prefs = %s", p.Value)
+			}
+			return
+		case <-deadline:
+			t.Fatal("no state.set for prefs")
 		}
-		var call v1.HostCall
-		if json.Unmarshal(l, &call) != nil || call.Call != v1.CallStateSet {
-			h.replyTo(call.ID)
-			continue
-		}
-		var p struct {
-			Key   string          `json:"key"`
-			Value json.RawMessage `json:"value"`
-		}
-		_ = json.Unmarshal(call.Params, &p)
-		if p.Key != "prefs" {
-			h.replyTo(call.ID)
-			continue
-		}
-		var prefs struct {
-			Favorites map[string]bool `json:"favorites"`
-		}
-		h.replyTo(call.ID)
-		if err := json.Unmarshal(p.Value, &prefs); err != nil || !prefs.Favorites["lutris:2"] {
-			t.Fatalf("persisted prefs = %s", p.Value)
-		}
-		return
 	}
-}
-
-func (h *harness) replyTo(id string) {
-	raw, _ := json.Marshal(v1.StateGetResult{Found: false})
-	h.send(v1.HostReply{Type: "host.reply", ID: id, OK: true, Result: raw})
 }
 
 func TestSearchAndLaunch(t *testing.T) {
@@ -477,22 +479,20 @@ func TestConfigOpensGameYml(t *testing.T) {
 // the wanted kind, returning its params.
 func (h *harness) nextCall(kind v1.CallKind) json.RawMessage {
 	h.t.Helper()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
 	for {
-		line := h.next()
-		if messageType(line) != v1.TypeHostCall {
-			continue
+		select {
+		case call, ok := <-h.calls:
+			if !ok {
+				h.t.Fatal("plugin output closed")
+			}
+			if call.Call == kind {
+				return call.Params
+			}
+		case <-timer.C:
+			h.t.Fatalf("no %s call", kind)
 		}
-		var call v1.HostCall
-		if json.Unmarshal(line, &call) != nil {
-			continue
-		}
-		if call.Call != kind {
-			h.replyTo(call.ID)
-			continue
-		}
-		raw, _ := json.Marshal(v1.SurfaceResult{ViewID: "f"})
-		h.send(v1.HostReply{Type: "host.reply", ID: call.ID, OK: true, Result: raw})
-		return call.Params
 	}
 }
 
@@ -580,13 +580,7 @@ func TestCoverQueueIsAsyncAndCoalesced(t *testing.T) {
 	for !(seenBeta && seenHades) {
 		select {
 		case l := <-h.lines:
-			switch messageType(l) {
-			case v1.TypeHostCall:
-				var call v1.HostCall
-				if json.Unmarshal(l, &call) == nil {
-					h.replyTo(call.ID)
-				}
-			case v1.TypeViewSnapshot:
+			if messageType(l) == v1.TypeViewSnapshot {
 				if bytes.Contains(l, []byte("beta.png")) {
 					seenBeta = true
 				}
@@ -725,16 +719,9 @@ func TestBarClickOpensPanelOnce(t *testing.T) {
 	deadline := time.After(700 * time.Millisecond)
 	for {
 		select {
-		case l := <-h.lines:
-			if messageType(l) != v1.TypeHostCall {
-				continue
-			}
-			var call v1.HostCall
-			if json.Unmarshal(l, &call) == nil {
-				if call.Call == v1.CallPanelOpen {
-					opens++
-				}
-				h.replyTo(call.ID)
+		case call := <-h.calls:
+			if call.Call == v1.CallPanelOpen {
+				opens++
 			}
 		case <-deadline:
 			if opens != 1 {
