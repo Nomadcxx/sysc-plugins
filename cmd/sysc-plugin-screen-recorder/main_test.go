@@ -360,7 +360,7 @@ func TestOutputContextCallDoesNotBlockInputQueue(t *testing.T) {
 		}
 		_ = send(&v1.ViewOpen{ViewID: "bar-after", View: v1.ViewBar, Output: "DP-1", Width: 120})
 	}()
-	responsive := waitSnapshot("bar-after", 50*time.Millisecond)
+	responsive := waitSnapshot("bar-after", inputResponsivenessBudget)
 	// The output-context reply stays held. On the broken implementation its
 	// bounded timeout releases the event loop so shutdown can finish.
 	_ = send(&v1.HostShutdown{})
