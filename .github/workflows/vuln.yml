@@ -32,6 +32,10 @@ jobs:
       # commit, which is how a gate starts failing for reasons that have
       # nothing to do with the tree. v1.9.0 is the newest release and the one
       # the tree was last scanned with.
+      # The calendar plugin reads Evolution Data Server through cgo, so the
+      # scanner type-checks it with libecal's headers, like the test job does.
+      - name: install libecal
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libecal2.0-dev libjson-glib-dev
       - name: install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
       - name: scan reachable dependency flaws
