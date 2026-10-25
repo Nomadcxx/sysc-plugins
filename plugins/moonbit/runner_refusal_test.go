@@ -52,3 +52,16 @@ func TestNoWordsAtAllStillGiveAReason(t *testing.T) {
 		t.Fatalf("err = %v, want the fallback reason", err)
 	}
 }
+
+// Start reads the refusal through a pipe the same process reaps, and Wait
+// closes that pipe. Draining the watcher before Wait is what keeps sudo's
+// words; this repeats the run because the ordering only loses them sometimes.
+func TestSudoRefusalSurvivesRepeatedRuns(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		r := fakeSudo(t, "refused")
+		_, err := r.Start([]byte("hunter2"), Request{Cmd: "scan"})
+		if err == nil || !strings.Contains(err.Error(), "may not run moonbit with sudo") {
+			t.Fatalf("run %d: err = %v, want sudo's refusal", i, err)
+		}
+	}
+}

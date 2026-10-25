@@ -156,6 +156,13 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 			}
 			events <- ev
 		}
+		// Wait closes the pipes it made for the child, so let the stderr
+		// watcher take sudo's last words first. Bounded: a descendant can
+		// hold stderr open after stdout has gone.
+		select {
+		case <-stderrDone:
+		case <-time.After(stderrGrace):
+		}
 		_ = cmd.Wait()
 	}()
 
