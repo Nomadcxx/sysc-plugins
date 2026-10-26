@@ -1,0 +1,10 @@
+name: CI setup
+
+description: Install Evolution Data Server headers required by sysc-plugins.
+
+runs:
+  using: composite
+  steps:
+    - name: Install libecal development packages
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libecal2.0-dev libjson-glib-dev
