@@ -1,0 +1,22 @@
+# The review path per area.
+#
+# There is one owner, so every path below names the same reviewer. The value of this file is the map:
+# which paths belong to which repository, and which of them are cross-repository contracts. A change to
+# a contract needs the repositories that consume it, not only the one that holds it.
+
+# The default owner for everything in this repository.
+/* @Nomadcxx
+
+# The catalogue. The shell reads it to list the plugins it can install, and the release
+# workflow opens a pull request carrying the regenerated file.
+/catalog.json @Nomadcxx
+/catalog-meta.json @Nomadcxx
+/tools/catalog/ @Nomadcxx
+
+# The plugins themselves. Each one is a separate program the shell runs as a
+# supervised process.
+/plugins/ @Nomadcxx
+
+# The manifest schema and the validation that goes with it.
+/internal/ @Nomadcxx
+/tools/validate-manifests/ @Nomadcxx

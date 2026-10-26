@@ -98,7 +98,7 @@ jobs:
           else
             gh release create "$tag" dist/* \
               --title "$tag" \
-              --notes "Automated release for $tag." \
+              --generate-notes \
               --verify-tag
           fi
 
