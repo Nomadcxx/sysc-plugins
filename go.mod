@@ -1,6 +1,12 @@
 module github.com/Nomadcxx/sysc-plugins
 
-go 1.26.4
+// The module calls x509.Certificate.Verify through kdeconnect's image fetch
+// and http.Client.Do through the usage collectors, so it needs a standard
+// library without GO-2026-6809 (fixed in go1.26.10) and the net/http and
+// mime/multipart flaws fixed in go1.26.9 (GO-2026-6617, -6613, -6612, -6611,
+// -6610, -6608). CI reads this directive for the toolchain it installs, so
+// the floor here is the floor everywhere.
+go 1.26.10
 
 require (
 	github.com/HugoSmits86/nativewebp v1.3.0
