@@ -27,8 +27,8 @@ jobs:
       matrix:
         arch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       # Same package the CI job installs; only calendar's cgo build uses it,
@@ -66,7 +66,7 @@ jobs:
             -plugin "${{ steps.tag.outputs.dir }}" \
             -arch "${{ matrix.arch }}" \
             -out dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.arch }}
           path: dist/*
@@ -79,8 +79,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: dist-*
@@ -98,7 +98,7 @@ jobs:
           else
             gh release create "$tag" dist/* \
               --title "$tag" \
-              --notes "Automated release for $tag." \
+              --generate-notes \
               --verify-tag
           fi
 
@@ -109,13 +109,13 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: dist-*
