@@ -83,22 +83,33 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 	}
 	ticker := time.NewTicker(refreshInterval)
 	defer ticker.Stop()
-	snapshot := refreshSnapshot(pluginCtx, runAudit)
-	if pluginCtx.Err() != nil {
-		return nil
-	}
-	if err := publishSnapshot(pluginCtx, client, snapshot); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && pluginCtx.Err() == nil {
-			log.Printf("privacybit state publish timed out: %v", err)
-		} else if pluginCtx.Err() != nil {
-			return nil
-		} else {
-			return err
-		}
-	}
 	views := make(map[string]openedView)
 	scanning := false
 	scanMessage := ""
+	// snapshot is the last audit result the views render. It starts empty:
+	// the first audit runs off the loop and lands in the audits channel.
+	var snapshot privacy.Snapshot
+
+	// The audit is an external command that can run for a minute. It runs
+	// off the event loop: a loop that waits for the audit answers nothing,
+	// the incoming buffer fills, and the host's calls time out.
+	audits := make(chan privacy.Snapshot, 1)
+	auditRunning := false
+	startAudit := func() {
+		if auditRunning {
+			return
+		}
+		auditRunning = true
+		go func() {
+			snapshot := refreshSnapshot(pluginCtx, runAudit)
+			select {
+			case audits <- snapshot:
+			case <-pluginCtx.Done():
+			}
+		}()
+	}
+	startAudit()
+
 	for {
 		select {
 		case <-pluginCtx.Done():
@@ -115,6 +126,24 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 				return nil
 			}
 			return err
+		case audited := <-audits:
+			// The audit finished: the panel leaves the scanning state and
+			// the fresh snapshot goes to the host.
+			auditRunning = false
+			snapshot = audited
+			scanning, scanMessage = false, ""
+			if err := publishSnapshot(pluginCtx, client, snapshot); err != nil {
+				if errors.Is(err, context.DeadlineExceeded) && pluginCtx.Err() == nil {
+					log.Printf("privacybit state publish timed out: %v", err)
+				} else if pluginCtx.Err() != nil {
+					return nil
+				} else {
+					return err
+				}
+			}
+			if err := publishViews(pluginCtx, client, views, snapshot, scanning, scanMessage); err != nil {
+				return publishFailure(pluginCtx, err)
+			}
 		case message := <-incoming:
 			switch message := message.(type) {
 			case *v1.ViewOpen:
@@ -122,14 +151,14 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 					output: message.Output, generation: message.Generation}
 				views[message.ViewID] = view
 				if err := publishView(pluginCtx, client, views, message.ViewID, snapshot, scanning, scanMessage); err != nil {
-					return err
+					return publishFailure(pluginCtx, err)
 				}
 			case *v1.ViewClose:
 				delete(views, message.ViewID)
 			case *v1.ViewResync:
 				if _, ok := views[message.ViewID]; ok {
 					if err := publishView(pluginCtx, client, views, message.ViewID, snapshot, scanning, scanMessage); err != nil {
-						return err
+						return publishFailure(pluginCtx, err)
 					}
 				}
 			case *v1.InputEvent:
@@ -158,45 +187,25 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 				}
 				scanning, scanMessage = true, "Checking installed apps"
 				if err := publishViews(pluginCtx, client, views, snapshot, scanning, scanMessage); err != nil {
-					return err
+					return publishFailure(pluginCtx, err)
 				}
-				snapshot = refreshSnapshot(pluginCtx, runAudit)
-				if pluginCtx.Err() != nil {
-					return nil
-				}
-				scanning, scanMessage = false, ""
-				if err := publishSnapshot(pluginCtx, client, snapshot); err != nil {
-					if errors.Is(err, context.DeadlineExceeded) && pluginCtx.Err() == nil {
-						log.Printf("privacybit state publish timed out: %v", err)
-					} else if pluginCtx.Err() != nil {
-						return nil
-					} else {
-						return err
-					}
-				}
-				if err := publishViews(pluginCtx, client, views, snapshot, scanning, scanMessage); err != nil {
-					return err
-				}
+				startAudit()
 			}
 		case <-ticker.C:
-			snapshot = refreshSnapshot(pluginCtx, runAudit)
-			if pluginCtx.Err() != nil {
-				return nil
-			}
-			if err := publishSnapshot(pluginCtx, client, snapshot); err != nil {
-				if errors.Is(err, context.DeadlineExceeded) && pluginCtx.Err() == nil {
-					log.Printf("privacybit state publish timed out: %v", err)
-				} else if pluginCtx.Err() != nil {
-					return nil
-				} else {
-					return err
-				}
-			}
-			if err := publishViews(pluginCtx, client, views, snapshot, scanning, scanMessage); err != nil {
-				return err
-			}
+			startAudit()
 		}
 	}
+}
+
+// publishFailure turns a publish failure into the plugin's next move. The
+// host stopping the plugin cancels the context, and a cancelled context is
+// not a failure: the plugin leaves quietly, the way the shell expects a
+// stopped plugin to leave.
+func publishFailure(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
 }
 
 // isEndOfStream reports whether err means the host stopped talking rather

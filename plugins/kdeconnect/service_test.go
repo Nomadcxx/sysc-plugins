@@ -1,6 +1,7 @@
 package kdeconnect
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -762,10 +763,10 @@ func TestSMSSendGoesThroughTheCLITransport(t *testing.T) {
 
 	var gotDevice, gotNumber, gotBody string
 	var fail error
-	svc.smsSender = func(deviceID, number, body string) error {
+	svc.setSMSTransport(func(ctx context.Context, deviceID, number, body string) error {
 		gotDevice, gotNumber, gotBody = deviceID, number, body
 		return fail
-	}
+	})
 
 	svc.Do(Action{Kind: ActionSendSMS, DeviceID: "devA", Arg: "+1 555 0100", Arg2: "hello"})
 	e := waitForEvent(t, svc, func(e Event) bool { return e.Kind == EventActionResult && e.Message == "SMS sent successfully" })
@@ -784,6 +785,37 @@ func TestSMSSendGoesThroughTheCLITransport(t *testing.T) {
 	if e.Err == nil {
 		t.Fatalf("cli failure not surfaced: %+v", e)
 	}
+}
+
+// A hung CLI must not hold the serve loop.
+//
+// The serve loop owns the reconcile cycle and every other action. The SMS
+// transport is an external process, and a kdeconnect-cli that never returns
+// used to freeze the whole service: no reconcile, no other action, nothing.
+// The command runs off the loop and is bounded, so the loop keeps serving.
+func TestAHungCLIDoesNotFreezeTheServeLoop(t *testing.T) {
+	bus := testBus()
+	svc := newService(singleConnect(bus))
+	defer svc.Close()
+
+	waitForSnapshot(t, svc, func(s Snapshot) bool { return s.Available && len(s.Devices) == 2 })
+
+	started := make(chan struct{})
+	svc.setSMSTransport(func(ctx context.Context, deviceID, number, body string) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	svc.Do(Action{Kind: ActionSendSMS, DeviceID: "devA", Arg: "+1 555 0100", Arg2: "hello"})
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the SMS action never reached the CLI transport")
+	}
+
+	// The refresh has to be served while the CLI is still stuck.
+	svc.Refresh()
+	waitForSnapshot(t, svc, func(Snapshot) bool { return true })
 }
 
 func TestClipboardBrowseAndSMSAppActions(t *testing.T) {
