@@ -64,6 +64,14 @@ const (
 	// loop, so a hung kdeconnect-cli cannot stop the reconcile cycle or the
 	// other actions, but it still must not outlive the service.
 	smsTimeout = 15 * time.Second
+	// The daemon deadlines bound one D-Bus call. A daemon that never
+	// answers must not hold the serve loop, and the plugin must not outlive
+	// the host's shutdown grace because of it. The service context ends
+	// when the service closes, so a call in flight at that moment is
+	// abandoned rather than waited for.
+	daemonReadTimeout   = 3 * time.Second
+	daemonActionTimeout = 15 * time.Second
+	daemonMountTimeout  = 60 * time.Second
 )
 
 var (
@@ -292,7 +300,7 @@ func (s *Service) smsTransport() func(context.Context, string, string, string) e
 func (s *Service) sendSMS(deviceID, number, body, name string) {
 	sender := s.smsTransport()
 	go func() {
-		ctx, cancel := context.WithTimeout(s.ctx, smsTimeout)
+		ctx, cancel := context.WithTimeout(s.serviceContext(), smsTimeout)
 		defer cancel()
 		err := sender(ctx, deviceID, number, body)
 		if err != nil && ctx.Err() != nil {
@@ -347,6 +355,25 @@ func (s *Service) Close() {
 	s.cancel()
 	close(s.stop)
 	<-s.done
+}
+
+// callDaemon makes one daemon call under a deadline. The service context
+// ends when the service closes, so a call in flight when the plugin is asked
+// to stop is abandoned instead of holding the process past the host's grace.
+func (s *Service) callDaemon(obj daemonObject, timeout time.Duration, method string, flags dbus.Flags, args ...any) *dbus.Call {
+	ctx, cancel := context.WithTimeout(s.serviceContext(), timeout)
+	defer cancel()
+	return obj.Call(ctx, method, flags, args...)
+}
+
+// serviceContext is the context that bounds the service's work. A service
+// built by hand (the tests) has no context of its own, so the background
+// context stands in for it.
+func (s *Service) serviceContext() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
 }
 
 func offer[T any](ch chan T, value T) {
@@ -554,13 +581,13 @@ func (st *daemonState) reconcileNow(bus daemonBus) error {
 	// announcedName and selfId are Qt property getters, exposed as DBus
 	// methods on the daemon interface; the property dictionary does not
 	// carry them (the live smoke against a real daemon proved it).
-	if call := obj.Call(kdeDaemonIface+".announcedName", 0); call.Err == nil && len(call.Body) > 0 {
+	if call := st.svc.callDaemon(obj, daemonReadTimeout, kdeDaemonIface+".announcedName", 0); call.Err == nil && len(call.Body) > 0 {
 		st.announced, _ = call.Body[0].(string)
 	}
-	if call := obj.Call(kdeDaemonIface+".selfId", 0); call.Err == nil && len(call.Body) > 0 {
+	if call := st.svc.callDaemon(obj, daemonReadTimeout, kdeDaemonIface+".selfId", 0); call.Err == nil && len(call.Body) > 0 {
 		st.selfID, _ = call.Body[0].(string)
 	}
-	call := obj.Call(kdeDaemonIface+".devices", 0, false, false)
+	call := st.svc.callDaemon(obj, daemonReadTimeout, kdeDaemonIface+".devices", 0, false, false)
 	if call.Err != nil {
 		return call.Err
 	}
@@ -594,7 +621,7 @@ func (st *daemonState) reconcileNow(bus daemonBus) error {
 // fetchDevice re-reads one device and, when it is paired and reachable, its
 // battery, connectivity, and notification readings.
 func (st *daemonState) fetchDevice(bus daemonBus, id string) {
-	props, err := getAllProps(bus.object(kdeService, devicePath(id)), kdeDeviceIface)
+	props, err := st.svc.getAllProps(bus.object(kdeService, devicePath(id)), kdeDeviceIface)
 	if err != nil {
 		return // keep the last known state of a device mid-restart
 	}
@@ -641,7 +668,7 @@ func (st *daemonState) fetchBattery(bus daemonBus, dev *Device) {
 	if !hasPlugin(dev, "battery") {
 		return
 	}
-	props, err := getAllProps(bus.object(kdeService, pluginPath(dev.ID, "battery")), batteryIface)
+	props, err := st.svc.getAllProps(bus.object(kdeService, pluginPath(dev.ID, "battery")), batteryIface)
 	if err != nil {
 		return
 	}
@@ -654,7 +681,7 @@ func (st *daemonState) fetchConnectivity(bus daemonBus, dev *Device) {
 	if !hasPlugin(dev, "connectivity_report") {
 		return
 	}
-	props, err := getAllProps(bus.object(kdeService, pluginPath(dev.ID, "connectivity_report")), connectivityIface)
+	props, err := st.svc.getAllProps(bus.object(kdeService, pluginPath(dev.ID, "connectivity_report")), connectivityIface)
 	if err != nil {
 		return
 	}
@@ -672,7 +699,7 @@ func (st *daemonState) fetchMedia(bus daemonBus, dev *Device) {
 		dev.MockupArt = ""
 		return
 	}
-	props, err := getAllProps(bus.object(kdeService, pluginPath(dev.ID, "mprisremote")), mprisremoteIface)
+	props, err := st.svc.getAllProps(bus.object(kdeService, pluginPath(dev.ID, "mprisremote")), mprisremoteIface)
 	if err != nil {
 		// Clear so applyIdleMockup can fill from SFTP. Leaving a stale
 		// path here freezes the mockup on the last cover forever.
@@ -695,7 +722,7 @@ func (st *daemonState) fetchNotifications(bus daemonBus, dev *Device) {
 	}
 	exported, probed := st.exported[dev.ID]
 	if !probed {
-		call := bus.object(kdeService, devicePath(dev.ID)).Call(introspectIface+".Introspect", 0)
+		call := st.svc.callDaemon(bus.object(kdeService, devicePath(dev.ID)), daemonReadTimeout, introspectIface+".Introspect", 0)
 		if call.Err != nil {
 			return
 		}
@@ -706,7 +733,7 @@ func (st *daemonState) fetchNotifications(bus daemonBus, dev *Device) {
 	if !exported {
 		return
 	}
-	call := bus.object(kdeService, pluginPath(dev.ID, "notifications")).Call(notificationsIface+"."+notificationsMember, 0)
+	call := st.svc.callDaemon(bus.object(kdeService, pluginPath(dev.ID, "notifications")), daemonReadTimeout, notificationsIface+"."+notificationsMember, 0)
 	if call.Err != nil || len(call.Body) == 0 {
 		return
 	}
@@ -788,7 +815,13 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 	if plugin != "" {
 		path = pluginPath(a.DeviceID, plugin)
 	}
-	call := bus.object(kdeService, path).Call(method, 0, args...)
+	timeout := daemonActionTimeout
+	if a.Kind == ActionBrowse {
+		// mountAndWait waits for the daemon to mount the share, which can
+		// take a while; every other action answers at once.
+		timeout = daemonMountTimeout
+	}
+	call := st.svc.callDaemon(bus.object(kdeService, path), timeout, method, 0, args...)
 	if call.Err != nil {
 		st.emit(Event{
 			Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
@@ -804,7 +837,7 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 		// mountAndWait mounts without a window; the host file browser
 		// then opens on the mount point. False means the phone refused.
 		if !replyTrue(call) {
-			reason := sftpMountReason(bus.object(kdeService, path), call)
+			reason := st.svc.sftpMountReason(bus.object(kdeService, path), call)
 			dev.SFTPError = reason
 			st.emit(Event{
 				Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
@@ -813,7 +846,7 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 			})
 			return
 		}
-		mp := bus.object(kdeService, path).Call(sftpIface+".mountPoint", 0)
+		mp := st.svc.callDaemon(bus.object(kdeService, path), daemonReadTimeout, sftpIface+".mountPoint", 0)
 		if mp.Err != nil || len(mp.Body) == 0 {
 			dev.SFTPError = "SFTP mounted with no mount point"
 			st.emit(Event{
@@ -833,7 +866,7 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 			})
 			return
 		}
-		mount = sftpBrowseRoot(bus.object(kdeService, path), mount)
+		mount = st.svc.sftpBrowseRoot(bus.object(kdeService, path), mount)
 		dev.SFTPError = ""
 	}
 	st.emit(Event{
@@ -1431,14 +1464,14 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 	// mountAndWait mounts without a window; startBrowsing would also open
 	// the file manager, on every background refresh. mountPoint then reads
 	// where the share landed.
-	if call := obj.Call(sftpIface+".mountAndWait", 0); call.Err != nil || !replyTrue(call) {
+	if call := st.svc.callDaemon(obj, daemonMountTimeout, sftpIface+".mountAndWait", 0); call.Err != nil || !replyTrue(call) {
 		st.sftpScanFailedFor = selected
 		if gridPath != "" {
-			dev.SFTPError = sftpMountReason(obj, call)
+			dev.SFTPError = st.svc.sftpMountReason(obj, call)
 		}
 		return
 	}
-	call := obj.Call(sftpIface+".mountPoint", 0)
+	call := st.svc.callDaemon(obj, daemonReadTimeout, sftpIface+".mountPoint", 0)
 	if call.Err != nil || len(call.Body) == 0 {
 		if gridPath != "" {
 			dev.SFTPError = "SFTP mounted with no mount point"
@@ -1504,8 +1537,8 @@ func newestIdleImage(mount string) []string {
 // sftpBrowseRoot prefers a getDirectories share under mount. The sshfs
 // root is the phone's /, which Android will not list; the daemon names
 // the readable "Internal shared storage" path instead.
-func sftpBrowseRoot(obj daemonObject, mount string) string {
-	call := obj.Call(sftpIface+".getDirectories", 0)
+func (s *Service) sftpBrowseRoot(obj daemonObject, mount string) string {
+	call := s.callDaemon(obj, daemonActionTimeout, sftpIface+".getDirectories", 0)
 	if call.Err != nil || len(call.Body) == 0 {
 		return mount
 	}
@@ -1540,12 +1573,12 @@ func sftpBrowseRoot(obj daemonObject, mount string) string {
 	return mount
 }
 
-func sftpMountReason(obj daemonObject, call *dbus.Call) string {
+func (s *Service) sftpMountReason(obj daemonObject, call *dbus.Call) string {
 	if call != nil && call.Err != nil {
 		return call.Err.Error()
 	}
 	reason := "the device refused the mount"
-	if r := obj.Call(sftpIface+".getMountError", 0); r.Err == nil && len(r.Body) > 0 {
+	if r := s.callDaemon(obj, daemonReadTimeout, sftpIface+".getMountError", 0); r.Err == nil && len(r.Body) > 0 {
 		if text, _ := r.Body[0].(string); text != "" {
 			return text
 		}
@@ -1638,8 +1671,9 @@ func pluginPath(id, plugin string) dbus.ObjectPath {
 }
 
 // getAllProps reads one interface's property dictionary in one round trip.
-func getAllProps(obj daemonObject, iface string) (map[string]dbus.Variant, error) {
-	call := obj.Call(getAllMethod, 0, iface)
+// The call is bounded like every other daemon call.
+func (s *Service) getAllProps(obj daemonObject, iface string) (map[string]dbus.Variant, error) {
+	call := s.callDaemon(obj, daemonReadTimeout, getAllMethod, 0, iface)
 	if call.Err != nil {
 		return nil, call.Err
 	}

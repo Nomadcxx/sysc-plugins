@@ -42,9 +42,16 @@ type fakeObject struct {
 	mountError string
 	// directories is getDirectories: path → label. Empty means no shares.
 	directories map[string]dbus.Variant
+	// stall makes the object answer nothing: the call waits for its
+	// context to end, like a daemon that stopped talking. The channel
+	// receives once, so the test knows the call is in flight.
+	stall chan struct{}
 }
 
-func (f *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Call {
+func (f *fakeObject) Call(ctx context.Context, method string, flags dbus.Flags, args ...any) *dbus.Call {
+	if err := ctx.Err(); err != nil {
+		return &dbus.Call{Err: err}
+	}
 	f.calls = append(f.calls, method)
 	if f.args == nil {
 		f.args = map[string][]any{}
@@ -52,6 +59,14 @@ func (f *fakeObject) Call(method string, flags dbus.Flags, args ...any) *dbus.Ca
 	f.args[method] = args
 	if f.failWith != nil {
 		return &dbus.Call{Err: f.failWith}
+	}
+	if f.stall != nil {
+		select {
+		case f.stall <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return &dbus.Call{Err: ctx.Err()}
 	}
 	if f.actions[method] {
 		return &dbus.Call{}
@@ -1869,5 +1884,33 @@ func TestStageRecentImageRejectsFIFOWithoutBlocking(t *testing.T) {
 			t.Fatal("stager did not finish after the test FIFO was released")
 		}
 		t.Fatal("staging a FIFO blocked in open instead of rejecting it")
+	}
+}
+
+// A daemon that stops answering must not hold the plugin past the host's
+// shutdown grace. The host asks the plugin to stop and waits a few seconds
+// for it; a call with no deadline would keep the plugin alive past that
+// window, so the service abandons the call when it closes.
+func TestCloseAbandonsAStalledDaemonCall(t *testing.T) {
+	stalled := make(chan struct{}, 1)
+	daemon := &fakeObject{stall: stalled}
+	bus := &fakeBus{objects: map[dbus.ObjectPath]*fakeObject{kdeDaemonPath: daemon}}
+	svc := newService(singleConnect(bus))
+
+	select {
+	case <-stalled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the serve loop never reached the daemon")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		svc.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not return: the stalled daemon call was not abandoned")
 	}
 }

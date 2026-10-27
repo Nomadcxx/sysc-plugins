@@ -1,6 +1,7 @@
 package kdeconnect
 
 import (
+	"context"
 	"reflect"
 	"strings"
 
@@ -44,7 +45,10 @@ const (
 // objects. The sole implementation wraps one *dbus.Conn; the seam lets the
 // whole daemon protocol run against a deterministic fake in the tests.
 type daemonObject interface {
-	Call(method string, flags dbus.Flags, args ...any) *dbus.Call
+	// Call makes one daemon call under the caller's context. godbus's own
+	// Call waits for the reply with no deadline, so a stalled daemon would
+	// otherwise hold the plugin past the host's shutdown grace.
+	Call(ctx context.Context, method string, flags dbus.Flags, args ...any) *dbus.Call
 }
 
 type daemonBus interface {
@@ -59,7 +63,16 @@ type daemonBus interface {
 type sessionBus struct{ conn *dbus.Conn }
 
 func (b *sessionBus) object(destination string, path dbus.ObjectPath) daemonObject {
-	return b.conn.Object(destination, path)
+	return sessionObject{obj: b.conn.Object(destination, path)}
+}
+
+// sessionObject is the godbus object behind the seam. It carries the
+// context-aware call, which is the only way to bound a call that never gets
+// a reply.
+type sessionObject struct{ obj dbus.BusObject }
+
+func (o sessionObject) Call(ctx context.Context, method string, flags dbus.Flags, args ...any) *dbus.Call {
+	return o.obj.CallWithContext(ctx, method, flags, args...)
 }
 
 func (b *sessionBus) addMatch(options ...dbus.MatchOption) error {
