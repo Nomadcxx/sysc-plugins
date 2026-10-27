@@ -186,7 +186,64 @@ func manifestMismatches(m pluginManifest, e catalog.Entry) []string {
 	if !catalog.SameSet(m.Requires.Commands, e.Requires.Commands) {
 		mismatches = append(mismatches, fmt.Sprintf("requires.commands: manifest %v, catalog %v", m.Requires.Commands, e.Requires.Commands))
 	}
+	mismatches = append(mismatches, filesystemMismatches(m.Filesystem, e.Release.Filesystem)...)
 	return mismatches
+}
+
+// filesystemMismatches compares the release's filesystem declaration in the
+// tagged manifest with the one the catalog row carries. The comparison
+// mirrors the host's install-time check (internal/plugin/store
+// matchFilesystem): the path lists are compared as sets, and the signals
+// flag as the host reads it, so a catalog and a manifest that agree the way
+// the host sees it are not reported as a disagreement.
+func filesystemMismatches(manifest, listed *catalog.Filesystem) []string {
+	switch {
+	case manifest == nil && listed == nil:
+		return nil
+	case manifest == nil:
+		return []string{fmt.Sprintf("filesystem: the manifest declares none, the catalog declares %s", describeFilesystem(listed))}
+	case listed == nil:
+		return []string{fmt.Sprintf("filesystem: the manifest declares %s, the catalog declares none", describeFilesystem(manifest))}
+	}
+	var mismatches []string
+	if !catalog.SameSet(manifest.Read, listed.Read) {
+		mismatches = append(mismatches, fmt.Sprintf("filesystem.read: manifest %v, catalog %v", manifest.Read, listed.Read))
+	}
+	if !catalog.SameSet(manifest.ReadWrite, listed.ReadWrite) {
+		mismatches = append(mismatches, fmt.Sprintf("filesystem.read_write: manifest %v, catalog %v", manifest.ReadWrite, listed.ReadWrite))
+	}
+	if !catalog.SameSet(manifest.Sockets, listed.Sockets) {
+		mismatches = append(mismatches, fmt.Sprintf("filesystem.sockets: manifest %v, catalog %v", manifest.Sockets, listed.Sockets))
+	}
+	if manifest.SignalAny() != listed.SignalAny() {
+		mismatches = append(mismatches, fmt.Sprintf("filesystem.signals: manifest %q, catalog %q", manifest.Signals, listed.Signals))
+	}
+	return mismatches
+}
+
+// describeFilesystem renders a filesystem declaration for a mismatch
+// message.
+func describeFilesystem(f *catalog.Filesystem) string {
+	if f == nil {
+		return "none"
+	}
+	var parts []string
+	if len(f.Read) > 0 {
+		parts = append(parts, fmt.Sprintf("read %v", f.Read))
+	}
+	if len(f.ReadWrite) > 0 {
+		parts = append(parts, fmt.Sprintf("read_write %v", f.ReadWrite))
+	}
+	if len(f.Sockets) > 0 {
+		parts = append(parts, fmt.Sprintf("sockets %v", f.Sockets))
+	}
+	if f.SignalAny() {
+		parts = append(parts, "signals any")
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // fetchEntry downloads every asset and screenshot a row names, across its
