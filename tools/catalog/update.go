@@ -172,6 +172,11 @@ func updateCatalog(repoRoot, repo, tag, dist string, now time.Time) error {
 		Requires:     catalog.Requires{Commands: manifest.Requires.Commands},
 		Assets:       assets,
 		ReleaseNotes: fmt.Sprintf("https://github.com/%s/releases/tag/%s", repo, tag),
+		// The row repeats the release's filesystem declaration so the
+		// consent can show the boundary before the plugin is downloaded.
+		// Without it the host's install check refuses a confined plugin and
+		// the store shows the plugin as unconfined.
+		Filesystem: manifest.Filesystem,
 	}
 
 	var existing *catalog.Entry

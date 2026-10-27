@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/Nomadcxx/sysc-shell/plugin/catalog"
 )
 
 // pluginManifest is the subset of a plugins/<dir>/manifest.json this tool
@@ -27,6 +29,12 @@ type pluginManifest struct {
 	Requires     struct {
 		Commands []string `json:"commands"`
 	} `json:"requires"`
+	// Filesystem is the plugin's declared reach into the user's files, the
+	// sockets it may connect to and whether it may signal processes it did
+	// not start. The catalog repeats it so the consent can show the boundary
+	// before the plugin is downloaded; a manifest that declares none leaves
+	// it nil.
+	Filesystem *catalog.Filesystem `json:"filesystem,omitempty"`
 }
 
 // readManifest reads and lightly sanity-checks pluginDir/manifest.json.
