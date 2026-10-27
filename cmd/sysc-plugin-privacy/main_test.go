@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -431,6 +432,84 @@ func TestPrivacyExitsCleanlyWhenTheHostClosesThePipe(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("privacy plugin did not stop after the host closed the pipe")
 	}
+}
+
+// A long audit must not hold the event loop.
+//
+// The audit is an external command that can take a minute. When it ran on
+// the loop, the loop answered nothing while it ran: the incoming buffer
+// filled and the host's calls timed out. A view the host asks for has to
+// come back while the audit is still running.
+func TestALongAuditDoesNotHoldTheEventLoop(t *testing.T) {
+	pluginInput, hostInput := io.Pipe()
+	hostOutput, pluginOutput := io.Pipe()
+	defer hostInput.Close()
+	defer hostOutput.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	done := make(chan error, 1)
+	go func() {
+		done <- runPlugin(ctx, pluginInput, pluginOutput, func(ctx context.Context) ([]byte, error) {
+			once.Do(func() { close(started) })
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return validAuditOutput(), nil
+		})
+	}()
+	reader := bufio.NewReader(hostOutput)
+	sendPrivacyMessage(t, hostInput, map[string]any{
+		"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 18}},
+		"capabilities": []string{"panels", "state"},
+	})
+	var hello map[string]any
+	readPrivacyMessage(t, reader, &hello)
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the audit never started")
+	}
+
+	// The host opens a view while the audit runs: the view must come back.
+	sendPrivacyMessage(t, hostInput, map[string]any{
+		"type": v1.TypeViewOpen, "view_id": "bar-1", "view": v1.ViewBar,
+		"entry": "bar", "instance": "privacy-placement", "output": "DP-1", "generation": 7, "width": 240,
+	})
+	var view v1.ViewSnapshot
+	readPrivacyMessage(t, reader, &view)
+	if view.Type != v1.TypeViewSnapshot || view.ViewID != "bar-1" {
+		t.Fatalf("view while the audit ran = %+v", view)
+	}
+
+	// The audit finishes and its snapshot reaches the host.
+	close(release)
+	var call v1.HostCall
+	readPrivacyMessage(t, reader, &call)
+	if call.Call != v1.CallStateSet {
+		t.Fatalf("after the audit call = %q, want state.set", call.Call)
+	}
+	replyPrivacyCall(t, hostInput, call.ID)
+	// The refreshed view follows the state.
+	var refreshed v1.ViewSnapshot
+	readPrivacyMessage(t, reader, &refreshed)
+	if refreshed.Type != v1.TypeViewSnapshot || refreshed.ViewID != "bar-1" {
+		t.Fatalf("refreshed view = %+v", refreshed)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("plugin error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the plugin did not stop")
+	}
+	_ = pluginOutput.Close()
 }
 
 func startPrivacyPlugin(t *testing.T, runAudit auditRunner) (*io.PipeWriter, *bufio.Reader, func()) {

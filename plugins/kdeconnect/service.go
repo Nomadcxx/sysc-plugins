@@ -2,6 +2,7 @@ package kdeconnect
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -58,6 +60,10 @@ const (
 	minRefreshGap = time.Second
 	signalBuffer  = 64
 	busSender     = "org.freedesktop.DBus"
+	// smsTimeout bounds the CLI transport. The command runs off the serve
+	// loop, so a hung kdeconnect-cli cannot stop the reconcile cycle or the
+	// other actions, but it still must not outlive the service.
+	smsTimeout = 15 * time.Second
 )
 
 var (
@@ -206,9 +212,19 @@ type Event struct {
 
 // Service publishes daemon snapshots on Updates.
 type Service struct {
-	connect   func() (daemonBus, error)
-	smsSender func(deviceID, number, body string) error
-	settings  Settings
+	connect  func() (daemonBus, error)
+	settings Settings
+
+	// smsMu guards the SMS transport seam. The transport is read by the
+	// goroutine that sends the message and swapped by the tests, so the
+	// swap needs the lock the read does not.
+	smsMu     sync.RWMutex
+	smsSender func(context.Context, string, string, string) error
+
+	// ctx ends the work the service started, so a bounded command does not
+	// outlive the service that started it.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	updates   chan Snapshot
 	events    chan Event
@@ -224,10 +240,13 @@ type Service struct {
 func New() *Service { return newService(connectDaemon) }
 
 func newService(connect func() (daemonBus, error)) *Service {
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
 		connect:   connect,
 		smsSender: sendSMSViaCLI,
 		settings:  DefaultSettings(),
+		ctx:       ctx,
+		cancel:    cancel,
 		updates:   make(chan Snapshot, 1),
 		events:    make(chan Event, 16),
 		actions:   make(chan Action, 8),
@@ -244,10 +263,61 @@ func newService(connect func() (daemonBus, error)) *Service {
 // sendSMSViaCLI mirrors the reference shell's transport: SMS goes through
 // kdeconnect-cli, not the daemon's sms DBus method, which has never worked
 // reliably on the kdeconnect backend. Arguments are passed as separate exec
-// arguments, never through a shell.
-func sendSMSViaCLI(deviceID, number, body string) error {
-	return exec.Command("kdeconnect-cli",
+// arguments, never through a shell. The context bounds the command: a
+// kdeconnect-cli that hangs is killed instead of holding the caller.
+func sendSMSViaCLI(ctx context.Context, deviceID, number, body string) error {
+	return exec.CommandContext(ctx, "kdeconnect-cli",
 		"-d", deviceID, "--send-sms", body, "--destination", number).Run()
+}
+
+// setSMSTransport swaps the SMS transport. The tests use it to keep the
+// command out of the way.
+func (s *Service) setSMSTransport(sender func(context.Context, string, string, string) error) {
+	s.smsMu.Lock()
+	defer s.smsMu.Unlock()
+	s.smsSender = sender
+}
+
+// smsTransport returns the SMS transport the service sends with.
+func (s *Service) smsTransport() func(context.Context, string, string, string) error {
+	s.smsMu.RLock()
+	defer s.smsMu.RUnlock()
+	return s.smsSender
+}
+
+// sendSMS runs the CLI transport off the serve loop. The serve loop owns the
+// reconcile cycle and every other action, so it must not wait for an
+// external command that may never finish. The result is reported as an
+// event, like every other action outcome.
+func (s *Service) sendSMS(deviceID, number, body, name string) {
+	sender := s.smsTransport()
+	go func() {
+		ctx, cancel := context.WithTimeout(s.ctx, smsTimeout)
+		defer cancel()
+		err := sender(ctx, deviceID, number, body)
+		if err != nil && ctx.Err() != nil {
+			err = fmt.Errorf("kdeconnect-cli did not finish within %s: %w", smsTimeout, ctx.Err())
+		}
+		if err != nil {
+			s.emit(Event{
+				Kind: EventActionResult, DeviceID: deviceID, DeviceName: name,
+				Message: actionFailureText(ActionSendSMS, name), Err: err,
+			})
+			return
+		}
+		s.emit(Event{
+			Kind: EventActionResult, DeviceID: deviceID, DeviceName: name,
+			Message: actionSuccessText(ActionSendSMS, name),
+		})
+	}()
+}
+
+// emit delivers an event without ever blocking the caller.
+func (s *Service) emit(e Event) {
+	select {
+	case s.events <- e:
+	default:
+	}
 }
 
 // Updates streams snapshots, one value buffered, latest wins.
@@ -274,6 +344,7 @@ func (s *Service) SetSelected(id string) { offer(s.selectReq, id) }
 
 // Close stops the service and waits for its goroutine to finish.
 func (s *Service) Close() {
+	s.cancel()
 	close(s.stop)
 	<-s.done
 }
@@ -658,19 +729,10 @@ func (st *daemonState) performAction(bus daemonBus, a Action) {
 	}
 	name := displayName(dev)
 	// SMS travels through the CLI (see sendSMSViaCLI), never the daemon's
-	// sms DBus method.
+	// sms DBus method. The command runs off the serve loop: it is an
+	// external process and must not hold the loop while it runs.
 	if a.Kind == ActionSendSMS {
-		if err := st.svc.smsSender(a.DeviceID, a.Arg, a.Arg2); err != nil {
-			st.emit(Event{
-				Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
-				Message: actionFailureText(a.Kind, name), Err: err,
-			})
-			return
-		}
-		st.emit(Event{
-			Kind: EventActionResult, DeviceID: a.DeviceID, DeviceName: name,
-			Message: actionSuccessText(a.Kind, name),
-		})
+		st.svc.sendSMS(a.DeviceID, a.Arg, a.Arg2, name)
 		return
 	}
 	// Pairing is the device object's own interface; every other action is a
