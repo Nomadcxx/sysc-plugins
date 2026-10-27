@@ -49,9 +49,14 @@ func (ts *testSub) emit(t *testing.T, typ string, payload map[string]any) {
 	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	_ = ts.srv.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	// The write blocks until the service reads the event, so it needs the
+	// same budget as the other waits.
+	_ = ts.srv.SetWriteDeadline(time.Now().Add(waitBudget))
 	if _, err := ts.srv.Write(append(line, '\n')); err != nil {
-		t.Logf("emit %s: %v", typ, err)
+		// A failed write means the service never saw the event, so the
+		// test cannot pass. Failing here names that cause instead of a
+		// later timeout that points at the wrong thing.
+		t.Fatalf("emit %s: %v", typ, err)
 	}
 }
 
@@ -187,9 +192,19 @@ func (h *harness) start() {
 	})
 }
 
+// waitBudget bounds how long a harness wait may take. It bounds the test,
+// not the service: the service rediscovers a session every
+// sessionRefreshInterval, so a wait that outlived that interval could be
+// satisfied by the periodic refresh instead of the event under test. The
+// budget therefore stays well under the refresh interval, while leaving
+// room for the scheduler. The CI runner runs the whole suite in parallel
+// under the race detector, and a goroutine can wait seconds for the
+// scheduler there.
+const waitBudget = 10 * time.Second
+
 func (h *harness) waitSub(n int) *testSub {
 	h.t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(waitBudget)
 	for time.Now().Before(deadline) {
 		h.mu.Lock()
 		if len(h.subs) >= n {
@@ -206,7 +221,7 @@ func (h *harness) waitSub(n int) *testSub {
 
 func (h *harness) waitModel(cond func(*Model) bool) *Model {
 	h.t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(waitBudget)
 	for time.Now().Before(deadline) {
 		m := h.svc.Model()
 		if cond(m) {
@@ -223,7 +238,7 @@ func (h *harness) waitNotification() Notification {
 	select {
 	case n := <-h.svc.Notifications():
 		return n
-	case <-time.After(3 * time.Second):
+	case <-time.After(waitBudget):
 		h.t.Fatal("timed out waiting for notification")
 		return Notification{}
 	}
