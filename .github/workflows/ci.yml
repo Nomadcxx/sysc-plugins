@@ -19,31 +19,22 @@ on:
       - 'plugins/**/assets/**'
       - 'internal/thumbnail/assets/**'
       - '**/testdata/**'
+  # No path filter on pull requests. The base branch policy requires the
+  # check-run names this workflow produces, and a workflow that a path filter
+  # holds back never reports them, so a pull request that touched only a
+  # Markdown file waited for a verdict that could never arrive. The push
+  # trigger keeps its filter: a merge to main is already gated by the pull
+  # request that carried it.
+  #
+  # Catalog pull requests are opened by the release workflow with
+  # GITHUB_TOKEN. That token cannot start pull_request workflows, so no check
+  # runs on those pull requests at all, and the maintainer merges them under
+  # the recorded bypass. They are already checked with `catalog validate
+  # -fetch` in release.yml.
   pull_request:
-    paths:
-      - '**'
-      - '!**/*.md'
-      - '!docs/**'
-      - '!LICENSE'
-      - '!**/*.png'
-      - '!**/*.jpg'
-      - '!**/*.jpeg'
-      - '!**/*.gif'
-      - '!**/*.svg'
-      - '!**/*.webp'
-      - '!catalog.json'
-      - 'plugins/*/screenshot.*'
-      - 'plugins/*/thumbnail.*'
-      - 'plugins/**/assets/**'
-      - 'internal/thumbnail/assets/**'
-      - '**/testdata/**'
-      # Catalog-only PRs are opened by the release workflow with GITHUB_TOKEN.
-      # That token cannot start pull_request workflows, so GitHub records a
-      # failed empty run ("workflow file issue") for every catalog PR. Those
-      # PRs are already checked with `catalog validate -fetch` in release.yml.
   # The release workflow calls this one to re-run the same checks against the
   # tagged commit. A called run is pinned to the tag, so the tree under test
-  # is the tree that ships. The path filters above do not apply here.
+  # is the tree that ships. A path filter does not apply to a called run.
   workflow_call:
 
 # Supersede in-flight runs for the same branch or PR so a burst of pushes does
