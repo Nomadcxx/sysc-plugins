@@ -4,10 +4,23 @@ on:
   push:
     tags:
       - '*-v*'
+  # A dispatch rehearses the release path for a tag that is not pushed yet.
+  # It runs the gate, the checks and the build at the head of the dispatched
+  # ref, and it publishes nothing:
+  # gh workflow run release.yml --ref main -f tag=world-clock-v2.0.2
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The tag to rehearse, for example world-clock-v2.0.2.'
+        required: true
+        type: string
 
 # A release must never be cancelled mid-flight, so superseded runs queue.
+# The suffix names the workflow file rather than the run: a called workflow
+# sees the caller's workflow name, so the checks this run calls need groups
+# of their own or they would cancel this run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -15,10 +28,85 @@ permissions:
   pull-requests: write
 
 jobs:
+  # The gate proves two things before anything is built: the tag has the
+  # shape this project publishes, and it points at a commit that reached the
+  # default branch. Nothing is built or published until the gate passes.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      dir: ${{ steps.tag.outputs.dir }}
+      version: ${{ steps.tag.outputs.version }}
+      commit: ${{ steps.tag.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The whole history and every tag: the ancestry check needs the
+          # merge that carried the tagged commit onto the default branch.
+          fetch-depth: 0
+      - name: Parse tag
+        id: tag
+        env:
+          # A dispatch names the tag it rehearses; a tag push carries it in
+          # the ref.
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          if [[ ! "$tag" =~ ^([a-z0-9][a-z0-9-]*)-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "tag '$tag' is not <dir>-v<version>" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "dir=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          echo "version=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # Fetch the tag itself. The checkout does not follow tags unless
+            # the run was triggered by one, and the commit under the tag is
+            # what the gate has to reason about.
+            git fetch --no-tags --force origin "refs/tags/$tag:refs/tags/$tag"
+            echo "commit=$(git rev-list -n1 "$tag")" >> "$GITHUB_OUTPUT"
+          else
+            # A rehearsal runs at the head of the dispatched ref, which is
+            # the commit the planned tag will point at.
+            echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify the tagged commit reached the default branch
+        run: |
+          set -euo pipefail
+          commit="${{ steps.tag.outputs.commit }}"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "the commit $commit under ${{ steps.tag.outputs.tag }} never reached main" >&2
+            exit 1
+          fi
+
+  # The checks the branch protection requires, re-run against the tagged
+  # commit. Calling the workflows the branch already trusts keeps one test
+  # policy: a check added to ci.yml reaches the release gate without a second
+  # edit here. A called run is pinned to the tag, so it tests the tree that
+  # ships.
+  checks:
+    needs: gate
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  scan:
+    needs: gate
+    uses: ./.github/workflows/vuln.yml
+    permissions:
+      contents: read
+
   # Builds the tagged plugin for both arches and uploads each archive as a
   # workflow artifact. The tag itself, "<dir>-v<version>", names the plugin
-  # and version; every later job re-derives them the same way.
+  # and version; the gate parsed it, and every later job uses its output.
   build:
+    needs: [gate, checks, scan]
     # Native runner per arch: calendar's cgo build links the host's
     # libecal-2.0, so a cross-compile from amd64 would need an arm64
     # sysroot and toolchain. Pure-Go plugins cross-build fine from either.
@@ -36,23 +124,11 @@ jobs:
       # (tools/catalog's cgoPlugins map) instead of duplicated here.
       - name: install libecal
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libecal2.0-dev libjson-glib-dev
-      - name: Parse tag
-        id: tag
-        run: |
-          set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          if [[ "$tag" =~ ^([a-z0-9][a-z0-9-]*)-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "dir=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
-            echo "version=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag '$tag' is not <dir>-v<version>" >&2
-            exit 1
-          fi
       - name: Verify manifest version
         run: |
           set -euo pipefail
-          dir="${{ steps.tag.outputs.dir }}"
-          version="${{ steps.tag.outputs.version }}"
+          dir="${{ needs.gate.outputs.dir }}"
+          version="${{ needs.gate.outputs.version }}"
           manifest="$(jq -r '.version' "plugins/$dir/manifest.json")"
           if [[ "$manifest" != "$version" ]]; then
             echo "tag $dir-v$version does not match manifest version $manifest" >&2
@@ -63,7 +139,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           go run ./tools/catalog package \
-            -plugin "${{ steps.tag.outputs.dir }}" \
+            -plugin "${{ needs.gate.outputs.dir }}" \
             -arch "${{ matrix.arch }}" \
             -out dist
       - uses: actions/upload-artifact@v7
@@ -76,7 +152,9 @@ jobs:
   # refuses to create the release if the tag this workflow ran for has
   # somehow gone missing by the time this job runs.
   release:
-    needs: build
+    needs: [gate, build]
+    # A manual run rehearses the gate and the build without publishing.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -107,6 +185,8 @@ jobs:
   # decisions): the catalog PR always needs a human merge.
   catalog:
     needs: release
+    # A manual run rehearses the gate and the build without publishing.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
