@@ -1,7 +1,7 @@
 github.com/HugoSmits86/nativewebp v1.3.0 h1:n1egtEzSV4KwFtealr7dzdYq1wI/uj/bOQ/QcTcIyVE=
 github.com/HugoSmits86/nativewebp v1.3.0/go.mod h1:YNQuWenlVmSUUASVNhTDwf4d7FwYQGbGhklC8p72Vr8=
-github.com/Nomadcxx/sysc-metrics v0.7.3 h1:34D6JptNqKUw/pOuL2Yoo2yAe7wDI5i1GKkvSkAqaVo=
-github.com/Nomadcxx/sysc-metrics v0.7.3/go.mod h1:qIgYyJuuD0Ql7wlh3cN0kiHsSG/LEMczrq+vXA7rIQs=
+github.com/Nomadcxx/sysc-metrics v0.7.4 h1:7SaqEqSCKIa28JoZDkpM576PXhsBCOBPmvCDtMZNTdw=
+github.com/Nomadcxx/sysc-metrics v0.7.4/go.mod h1:qIgYyJuuD0Ql7wlh3cN0kiHsSG/LEMczrq+vXA7rIQs=
 github.com/Nomadcxx/sysc-shell v0.2.1-0.20261027083719-7076a164f64a h1:0TmbQqR/5QeWmbgBcVvJb+qE+IBZzKklfZpIpwPBGTo=
 github.com/Nomadcxx/sysc-shell v0.2.1-0.20261027083719-7076a164f64a/go.mod h1:pmb0Tt6tK5qTfEfoYvs01xiWaax/rsfJhMgY3ivpOs4=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=

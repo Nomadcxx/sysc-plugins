@@ -23,7 +23,7 @@ require (
 )
 
 require (
-	github.com/Nomadcxx/sysc-metrics v0.7.3
+	github.com/Nomadcxx/sysc-metrics v0.7.4
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
 	github.com/google/uuid v1.6.0 // indirect
