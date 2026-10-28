@@ -10,12 +10,7 @@ go 1.26.10
 
 require (
 	github.com/HugoSmits86/nativewebp v1.3.0
-	// hold: the plugin contract moves with the shell's main and no tag
-	// covers the generation the plugins are written against (see sysc-1691).
-	// The catalog tool reads the shell's catalog schema, which carries the
-	// release's filesystem declaration, so the pin has to name a commit that
-	// has it.
-	github.com/Nomadcxx/sysc-shell v0.2.1-0.20261027083719-7076a164f64a
+	github.com/Nomadcxx/sysc-shell v0.2.1
 	github.com/godbus/dbus/v5 v5.2.4
 	golang.org/x/image v0.47.0
 	golang.org/x/sys v0.49.0
