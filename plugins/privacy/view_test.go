@@ -124,6 +124,26 @@ func TestPrivacyPanelKeepsUnavailableStaleAndPartialStatesUnrated(t *testing.T) 
 	}
 }
 
+func TestPrivacyPanelStaleRefreshDoesNotAskForAnotherScan(t *testing.T) {
+	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	snapshot := testSnapshot("red", now.Add(-16*time.Minute))
+	root := PanelTree(snapshot, now, true, "Checking installed apps")
+
+	if !treeHasText(root, "A scan is in progress. The panel will update when it finishes.") {
+		t.Fatal("stale panel did not explain that a refresh is already running")
+	}
+	if treeHasText(root, "Scan again to see current results.") {
+		t.Fatal("stale panel asked for another scan while one is running")
+	}
+	button := findNode(root, "privacy-scan")
+	if button == nil || !button.Disabled || button.Text != "Scanning…" {
+		t.Fatalf("stale refresh button = %+v, want disabled Scanning…", button)
+	}
+	if !treeHasText(root, "Previous grade: Risky") {
+		t.Fatal("stale panel omitted the previous grade while refreshing")
+	}
+}
+
 func TestPrivacyPanelScanButtonIsDisabledWhileScanning(t *testing.T) {
 	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
 	root := PanelTree(testSnapshot("green", now), now, true, "Checking installed apps")
