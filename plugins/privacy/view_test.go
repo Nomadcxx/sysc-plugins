@@ -136,6 +136,27 @@ func TestPrivacyPanelScanButtonIsDisabledWhileScanning(t *testing.T) {
 	}
 }
 
+func TestPrivacyPanelShowsPendingStateForFirstScan(t *testing.T) {
+	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	root := PanelTree(Snapshot{Schema: Schema}, now, true, "Checking installed apps")
+	if err := v1.Validate(root, v1.ViewPanel); err != nil {
+		t.Fatal(err)
+	}
+	if findings := lint.Tree(root, v1.ViewPanel, panelWidth, panelHeight); len(findings) != 0 {
+		t.Fatalf("pending panel does not fit: %+v", findings)
+	}
+	if !treeHasText(root, "First audit in progress") {
+		t.Fatal("panel omitted the first-scan pending state")
+	}
+	if treeHasText(root, "Audit unavailable") {
+		t.Fatal("panel presented its zero-value initial snapshot as an audit failure")
+	}
+	button := findNode(root, "privacy-scan")
+	if button == nil || !button.Disabled || button.Text != "Scanning…" {
+		t.Fatalf("first-scan button = %+v, want disabled Scanning…", button)
+	}
+}
+
 func TestPrivacyPanelFilledSurfacesUseTheirPairedForeground(t *testing.T) {
 	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
 	snapshot := testSnapshot("unknown", now)

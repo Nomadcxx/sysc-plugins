@@ -387,6 +387,166 @@ func TestRunPluginPanelRefreshPublishesOneFreshScanAndDropsStaleClicks(t *testin
 	}
 }
 
+func TestRunPluginShowsFirstAuditProgressUntilItCompletes(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		runAudit      auditRunner
+		wantAvailable bool
+		wantText      string
+	}{
+		{
+			name: "success",
+			runAudit: func(context.Context) ([]byte, error) {
+				return currentAuditOutput(), nil
+			},
+			wantAvailable: true,
+			wantText:      "Browser",
+		},
+		{
+			name: "error",
+			runAudit: func(context.Context) ([]byte, error) {
+				return nil, errors.New("privacybit permission scan failed")
+			},
+			wantText: "privacybit permission scan failed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			started := make(chan struct{})
+			release := make(chan struct{})
+			hostInput, reader, stop := startPrivacyPlugin(t, func(ctx context.Context) ([]byte, error) {
+				close(started)
+				select {
+				case <-release:
+					return tc.runAudit(ctx)
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			})
+			defer stop()
+			select {
+			case <-started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("the initial audit did not start")
+			}
+
+			sendPrivacyMessage(t, hostInput, map[string]any{
+				"type": v1.TypeViewOpen, "view_id": "panel-1", "view": v1.ViewPanel,
+				"entry": "panel", "instance": "privacy-placement", "output": "DP-1", "generation": 7,
+			})
+			var pending v1.ViewSnapshot
+			readPrivacyMessage(t, reader, &pending)
+			button := findPrivacyNode(pending.Root, "privacy-scan")
+			if pending.Type != v1.TypeViewSnapshot || !privacyTreeHasText(pending.Root, "First audit in progress") {
+				t.Fatalf("initial panel did not show pending audit progress: %+v", pending.Root)
+			}
+			if privacyTreeHasText(pending.Root, "Audit unavailable") {
+				t.Fatal("initial panel showed an empty unavailable card while the audit was running")
+			}
+			if button == nil || !button.Disabled || button.Text != "Scanning…" {
+				t.Fatalf("initial scan button = %+v, want disabled Scanning…", button)
+			}
+
+			close(release)
+			var stateCall v1.HostCall
+			readPrivacyMessage(t, reader, &stateCall)
+			if stateCall.Call != v1.CallStateSet {
+				t.Fatalf("completion call = %q, want state.set", stateCall.Call)
+			}
+			var state v1.StateSetParams
+			if err := json.Unmarshal(stateCall.Params, &state); err != nil {
+				t.Fatal(err)
+			}
+			var snapshot privacy.Snapshot
+			if err := json.Unmarshal(state.Value, &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Available != tc.wantAvailable {
+				t.Fatalf("completion availability = %t, want %t (%+v)", snapshot.Available, tc.wantAvailable, snapshot)
+			}
+			replyPrivacyCall(t, hostInput, stateCall.ID)
+
+			var refreshed v1.ViewSnapshot
+			readPrivacyMessage(t, reader, &refreshed)
+			button = findPrivacyNode(refreshed.Root, "privacy-scan")
+			if !privacyTreeHasText(refreshed.Root, tc.wantText) {
+				t.Fatalf("completed panel omitted %q: %+v", tc.wantText, refreshed.Root)
+			}
+			if button == nil || button.Disabled || button.Text != "Scan now" {
+				t.Fatalf("completed scan button = %+v, want enabled Scan now", button)
+			}
+		})
+	}
+}
+
+func TestRunPluginTimerRefreshShowsProgressInOpenPanel(t *testing.T) {
+	initialRelease := make(chan struct{})
+	refreshRelease := make(chan struct{})
+	initialStarted := make(chan struct{})
+	refreshStarted := make(chan struct{})
+	var runs atomic.Int32
+	hostInput, reader, stop := startPrivacyPluginWithInterval(t, func(ctx context.Context) ([]byte, error) {
+		switch runs.Add(1) {
+		case 1:
+			close(initialStarted)
+			select {
+			case <-initialRelease:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		case 2:
+			close(refreshStarted)
+			select {
+			case <-refreshRelease:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return currentAuditOutput(), nil
+	}, 20*time.Millisecond)
+	defer stop()
+	select {
+	case <-initialStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the initial audit did not start")
+	}
+
+	sendPrivacyMessage(t, hostInput, map[string]any{
+		"type": v1.TypeViewOpen, "view_id": "panel-1", "view": v1.ViewPanel,
+		"entry": "panel", "instance": "privacy-placement", "output": "DP-1", "generation": 7,
+	})
+	var pending v1.ViewSnapshot
+	readPrivacyMessage(t, reader, &pending)
+	close(initialRelease)
+	ackStateCall(t, hostInput, reader)
+	var current v1.ViewSnapshot
+	readPrivacyMessage(t, reader, &current)
+	button := findPrivacyNode(current.Root, "privacy-scan")
+	if button == nil || button.Disabled || button.Text != "Scan now" {
+		t.Fatalf("completed initial scan button = %+v, want enabled Scan now", button)
+	}
+
+	select {
+	case <-refreshStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the timer did not start a refresh")
+	}
+	var busy v1.ViewSnapshot
+	readPrivacyMessage(t, reader, &busy)
+	button = findPrivacyNode(busy.Root, "privacy-scan")
+	if button == nil || !button.Disabled || button.Text != "Scanning…" || !privacyTreeHasText(busy.Root, "Checking installed apps") {
+		t.Fatalf("timer refresh view = %+v; button = %+v", busy.Root, button)
+	}
+
+	close(refreshRelease)
+	ackStateCall(t, hostInput, reader)
+	var refreshed v1.ViewSnapshot
+	readPrivacyMessage(t, reader, &refreshed)
+	button = findPrivacyNode(refreshed.Root, "privacy-scan")
+	if button == nil || button.Disabled || button.Text != "Scan now" {
+		t.Fatalf("completed timer refresh button = %+v, want enabled Scan now", button)
+	}
+}
+
 // TestPrivacyExitsCleanlyWhenTheHostClosesThePipe proves a closed host pipe
 // ends the plugin instead of failing it.
 //
@@ -513,12 +673,16 @@ func TestALongAuditDoesNotHoldTheEventLoop(t *testing.T) {
 }
 
 func startPrivacyPlugin(t *testing.T, runAudit auditRunner) (*io.PipeWriter, *bufio.Reader, func()) {
+	return startPrivacyPluginWithInterval(t, runAudit, refreshInterval)
+}
+
+func startPrivacyPluginWithInterval(t *testing.T, runAudit auditRunner, interval time.Duration) (*io.PipeWriter, *bufio.Reader, func()) {
 	t.Helper()
 	pluginInput, hostInput := io.Pipe()
 	hostOutput, pluginOutput := io.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- runPlugin(ctx, pluginInput, pluginOutput, runAudit) }()
+	go func() { done <- runPluginWithInterval(ctx, pluginInput, pluginOutput, runAudit, interval) }()
 	reader := bufio.NewReader(hostOutput)
 	sendPrivacyMessage(t, hostInput, map[string]any{
 		"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 18}},
@@ -613,4 +777,19 @@ func findPrivacyNode(root *v1.Node, id string) *v1.Node {
 		}
 	}
 	return nil
+}
+
+func privacyTreeHasText(root *v1.Node, want string) bool {
+	if root == nil {
+		return false
+	}
+	if strings.Contains(root.Text, want) {
+		return true
+	}
+	for _, child := range root.Children {
+		if privacyTreeHasText(child, want) {
+			return true
+		}
+	}
+	return false
 }
