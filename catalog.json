@@ -1090,16 +1090,16 @@
       "license": "GPL-3.0-or-later",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
       "screenshot": {
-        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/privacy-v0.1.1/plugins/privacy/thumbnail.webp",
-        "sha256": "fdc956dec103b0140d109e3cbabd33e3e52aa43c20a9de2b41dc94cc6344fe90"
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/privacy-v0.1.2/plugins/privacy/thumbnail.webp",
+        "sha256": "076872bc00e931ed55a991f317d5428ca1bf04529d77ad7e5b5e678c7dc057bc"
       },
       "readme": {
-        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/privacy-v0.1.1/plugins/privacy/README.md",
-        "sha256": "1e72466ca68e418f6507e691bb6a10371f0288e03ca08a9df1d1bca66bf81dac"
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/privacy-v0.1.2/plugins/privacy/README.md",
+        "sha256": "ff47bae48474200b1a435426ab91f1b3c7cd9e9240e28d107248d1abb014bdd3"
       },
       "added_at": "2026-10-22T08:44:27.531583066Z",
-      "updated_at": "2026-10-29T11:35:18.17015433Z",
-      "version": "0.1.1",
+      "updated_at": "2026-10-29T17:27:08.260885073Z",
+      "version": "0.1.2",
       "protocol": {
         "major": 1,
         "minor": 8
@@ -1113,18 +1113,45 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/privacy-v0.1.1/org.sysc.privacy-0.1.1-linux-amd64.tar.gz",
-          "sha256": "d0933b38535e0158cb070427d0e951f39fd1c375b32cb38e76ab991322fc789c",
-          "size": 2375374
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/privacy-v0.1.2/org.sysc.privacy-0.1.2-linux-amd64.tar.gz",
+          "sha256": "0d8c537a3d75a6931476bd44c14ab946353a2da56079f2fe6cf920f38068c985",
+          "size": 2393815
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/privacy-v0.1.1/org.sysc.privacy-0.1.1-linux-arm64.tar.gz",
-          "sha256": "31ddfdae6584941ce82961a2422aa1611a83506359c5c48e9eab093fb1bf2f5a",
-          "size": 2198730
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/privacy-v0.1.2/org.sysc.privacy-0.1.2-linux-arm64.tar.gz",
+          "sha256": "fe10678d2ac6e832e65906d5c7caf8933e161c3b736cb7cd7830975aa8f1f8e2",
+          "size": 2213639
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/privacy-v0.1.1",
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/privacy-v0.1.2",
       "releases": [
+        {
+          "version": "0.1.1",
+          "protocol": {
+            "major": 1,
+            "minor": 8
+          },
+          "capabilities": [
+            "panels",
+            "state"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/privacy-v0.1.1/org.sysc.privacy-0.1.1-linux-amd64.tar.gz",
+              "sha256": "d0933b38535e0158cb070427d0e951f39fd1c375b32cb38e76ab991322fc789c",
+              "size": 2375374
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/privacy-v0.1.1/org.sysc.privacy-0.1.1-linux-arm64.tar.gz",
+              "sha256": "31ddfdae6584941ce82961a2422aa1611a83506359c5c48e9eab093fb1bf2f5a",
+              "size": 2198730
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/privacy-v0.1.1"
+        },
         {
           "version": "0.1.0",
           "protocol": {
