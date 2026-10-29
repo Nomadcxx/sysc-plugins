@@ -83,6 +83,24 @@ func TestPrivacyPanelUsesDistinctGradeFillsAndExplainsCoverage(t *testing.T) {
 	}
 }
 
+func TestPrivacyPanelShowsSourcesBehindReducedCoverage(t *testing.T) {
+	input := auditOutputWithReduced(t, []any{map[string]any{
+		"fact": "licence", "effect": "not supported by the listed sources",
+		"sources": []string{"desktop", "dpkg"},
+	}})
+	snapshot, err := ParseAuditOutput(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := PanelTree(snapshot, time.Date(2026, 10, 30, 0, 1, 0, 0, time.UTC), false, "")
+	if !treeHasText(root, "licence (desktop, dpkg) · not supported by the listed sources") {
+		t.Fatal("coverage card did not identify sources missing the licence fact")
+	}
+	if findings := lint.Tree(root, v1.ViewPanel, panelWidth, panelHeight); len(findings) != 0 {
+		t.Fatalf("coverage panel does not fit: %+v", findings)
+	}
+}
+
 func TestPrivacyPanelKeepsUnavailableStaleAndPartialStatesUnrated(t *testing.T) {
 	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {

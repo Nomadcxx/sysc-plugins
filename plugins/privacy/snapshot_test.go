@@ -80,6 +80,73 @@ func TestParseAuditOutputBoundsListsAndPreservesUnknownTelemetry(t *testing.T) {
 	}
 }
 
+func TestParseAuditOutputProjectsBoundedReducedSources(t *testing.T) {
+	sources := []string{"\x1b[31m" + strings.Repeat("界", 40) + "\n"}
+	for i := 0; i < 9; i++ {
+		sources = append(sources, fmt.Sprintf("repo-%02d", i))
+	}
+	input := auditOutputWithReduced(t, []any{map[string]any{
+		"fact": "licence", "effect": "not supported by the listed sources", "sources": sources,
+	}})
+	snapshot, err := ParseAuditOutput(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Reduced []struct {
+			Sources          []string `json:"sources"`
+			SourcesShown     int      `json:"sources_shown"`
+			SourcesTotal     int      `json:"sources_total"`
+			SourcesTruncated bool     `json:"sources_truncated"`
+		} `json:"reduced"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Reduced) != 2 || got.Reduced[1].SourcesShown != 8 || got.Reduced[1].SourcesTotal != 10 || !got.Reduced[1].SourcesTruncated {
+		t.Fatalf("source projection = %+v, want 8 of 10 after telemetry note", got.Reduced)
+	}
+	for _, source := range got.Reduced[1].Sources {
+		if len(source) > 80 || !utf8.ValidString(source) || strings.ContainsAny(source, "\n\r\x1b") {
+			t.Errorf("unsafe reduced source %q (%d bytes)", source, len(source))
+		}
+	}
+}
+
+func TestParseAuditOutputAcceptsLegacyReducedNotesWithoutSources(t *testing.T) {
+	input := auditOutputWithReduced(t, []any{map[string]any{
+		"fact": "licence", "effect": "unavailable",
+	}})
+	snapshot, err := ParseAuditOutput(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Reduced) != 2 || snapshot.Reduced[1].Fact != "licence" || len(snapshot.Reduced[1].Sources) != 0 {
+		t.Fatalf("legacy reduced note = %+v", snapshot.Reduced)
+	}
+}
+
+func auditOutputWithReduced(t *testing.T, reduced []any) []byte {
+	t.Helper()
+	snapshot := map[string]any{
+		"schema": 1, "available": true, "generated_at": "2026-10-30T00:00:00Z",
+		"overall": map[string]any{"grade": "green"},
+		"network": map[string]any{
+			"vpn": map[string]any{"state": "unknown"}, "telemetry_connections_unknown": true,
+		},
+		"categories": []any{}, "findings": []any{}, "reduced": reduced,
+	}
+	data, err := json.Marshal(map[string]any{"t": "done", "snapshot": snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func TestParseAuditOutputProjectsBoundedOrigins(t *testing.T) {
 	const maxOrigins = 8
 	const maxOriginBytes = 80

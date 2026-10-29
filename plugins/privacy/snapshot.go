@@ -17,21 +17,23 @@ import (
 )
 
 const (
-	Schema               = 1
-	MaxAuditOutputBytes  = 4 << 20
-	maxCategories        = 16
-	maxInstalledPerCat   = 4
-	maxFindings          = 5
-	maxActionsPerFinding = 2
-	maxDefects           = 4
-	maxReduced           = 12
-	maxSandboxApps       = 4
-	maxSandboxEvidence   = 8
-	maxUnmatchedApps     = 12
-	maxOriginsPerApp     = 8
-	maxOriginSourceBytes = 80
-	maxLabelBytes        = 160
-	maxSummaryBytes      = 320
+	Schema                = 1
+	MaxAuditOutputBytes   = 4 << 20
+	maxCategories         = 16
+	maxInstalledPerCat    = 4
+	maxFindings           = 5
+	maxActionsPerFinding  = 2
+	maxDefects            = 4
+	maxReduced            = 12
+	maxSandboxApps        = 4
+	maxSandboxEvidence    = 8
+	maxUnmatchedApps      = 12
+	maxOriginsPerApp      = 8
+	maxReducedSources     = 8
+	maxOriginSourceBytes  = 80
+	maxReducedSourceBytes = 80
+	maxLabelBytes         = 160
+	maxSummaryBytes       = 320
 )
 
 type Snapshot struct {
@@ -170,8 +172,12 @@ type Action struct {
 }
 
 type Reduced struct {
-	Fact   string `json:"fact"`
-	Effect string `json:"effect"`
+	Fact             string   `json:"fact"`
+	Effect           string   `json:"effect"`
+	Sources          []string `json:"sources,omitempty"`
+	SourcesShown     int      `json:"sources_shown,omitempty"`
+	SourcesTotal     int      `json:"sources_total,omitempty"`
+	SourcesTruncated bool     `json:"sources_truncated,omitempty"`
 }
 
 type auditEnvelope struct {
@@ -484,8 +490,11 @@ func ParseAuditOutput(data []byte) (Snapshot, error) {
 	out.FindingsTruncated = out.FindingsTruncated || out.FindingsShown < out.FindingsTotal
 
 	for _, item := range input.Reduced {
+		sources, sourcesTotal, sourcesTruncated := projectReducedSources(item.Sources)
 		out.Reduced = append(out.Reduced, Reduced{
 			Fact: text(item.Fact, maxLabelBytes), Effect: text(item.Effect, maxSummaryBytes),
+			Sources: sources, SourcesShown: len(sources), SourcesTotal: sourcesTotal,
+			SourcesTruncated: sourcesTruncated,
 		})
 	}
 	ensureTelemetryUnknown(&out.Reduced)
@@ -666,6 +675,28 @@ func ensureTelemetryUnknown(reduced *[]Reduced) {
 	*reduced = append(*reduced, Reduced{
 		Fact: "network.telemetry", Effect: "live telemetry endpoint attribution is unavailable",
 	})
+}
+
+func projectReducedSources(values []string) ([]string, int, bool) {
+	seen := make(map[string]struct{}, len(values))
+	sources := make([]string, 0, len(values))
+	for _, value := range values {
+		source := strings.Join(strings.Fields(text(value, maxReducedSourceBytes)), " ")
+		if source == "" {
+			continue
+		}
+		if _, exists := seen[source]; exists {
+			continue
+		}
+		seen[source] = struct{}{}
+		sources = append(sources, source)
+	}
+	sort.Strings(sources)
+	total := len(sources)
+	if total > maxReducedSources {
+		sources = sources[:maxReducedSources]
+	}
+	return sources, total, total > len(sources)
 }
 
 func prioritizeTelemetry(reduced *[]Reduced) {
