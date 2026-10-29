@@ -85,7 +85,7 @@ func PanelTree(snapshot Snapshot, now time.Time, scanning bool, scanMessage stri
 		return root
 	}
 	if !snapshotCurrent(snapshot, now) {
-		root.Children = append(root.Children, staleCard(snapshot, now))
+		root.Children = append(root.Children, staleCard(snapshot, now, scanning))
 		return root
 	}
 	sections := []*v1.Node{categorySection(snapshot)}
@@ -149,9 +149,11 @@ func unavailableCard(snapshot Snapshot) *v1.Node {
 	return card("privacy-unavailable", children...)
 }
 
-func staleCard(snapshot Snapshot, now time.Time) *v1.Node {
+func staleCard(snapshot Snapshot, now time.Time, scanning bool) *v1.Node {
 	message := "The last scan timestamp is in the future. Check the system clock and scan again."
-	if snapshot.GeneratedAt.IsZero() {
+	if scanning {
+		message = "A scan is in progress. The panel will update when it finishes."
+	} else if snapshot.GeneratedAt.IsZero() {
 		message = "No completed scan has a usable timestamp. Scan again to see current results."
 	} else if now.Sub(snapshot.GeneratedAt) >= staleAfter {
 		message = "The last scan is stale. Scan again to see current results."
