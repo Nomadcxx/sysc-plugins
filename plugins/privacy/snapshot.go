@@ -342,6 +342,9 @@ func ParseAuditOutput(data []byte) (Snapshot, error) {
 		if !validGrade(category.Grade) {
 			return Snapshot{}, fmt.Errorf("privacybit returned invalid grade %q for category %q", category.Grade, category.ID)
 		}
+		if gradeRank(out.Overall.Grade) < gradeRank(category.Grade) {
+			return Snapshot{}, fmt.Errorf("privacybit returned an overall grade safer than category %q", category.ID)
+		}
 		installedTotal := category.InstalledTotal
 		if installedTotal < len(category.Installed) {
 			installedTotal = len(category.Installed)
@@ -355,6 +358,9 @@ func ParseAuditOutput(data []byte) (Snapshot, error) {
 			if !validGrade(app.Grade) {
 				return Snapshot{}, fmt.Errorf("privacybit returned invalid grade %q for app %q", app.Grade, app.Name)
 			}
+			if gradeRank(category.Grade) < gradeRank(app.Grade) {
+				return Snapshot{}, fmt.Errorf("privacybit returned a category grade safer than app %q in category %q", app.Name, category.ID)
+			}
 			projectedApp, err := projectApp(app)
 			if err != nil {
 				return Snapshot{}, fmt.Errorf("privacybit returned invalid origin context for app %q: %w", app.Name, err)
@@ -364,6 +370,9 @@ func ParseAuditOutput(data []byte) (Snapshot, error) {
 		if category.Worst != nil {
 			if !validGrade(category.Worst.Grade) {
 				return Snapshot{}, fmt.Errorf("privacybit returned invalid grade %q for worst app %q", category.Worst.Grade, category.Worst.Name)
+			}
+			if gradeRank(category.Grade) < gradeRank(category.Worst.Grade) {
+				return Snapshot{}, fmt.Errorf("privacybit returned a category grade safer than worst app %q in category %q", category.Worst.Name, category.ID)
 			}
 			worst, err := projectApp(*category.Worst)
 			if err != nil {
