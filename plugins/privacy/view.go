@@ -77,7 +77,11 @@ func PanelTree(snapshot Snapshot, now time.Time, scanning bool, scanMessage stri
 		}}
 
 	if !snapshot.Available {
-		root.Children = append(root.Children, unavailableCard(snapshot))
+		if scanning && snapshot.GeneratedAt.IsZero() && snapshot.Reason == "" {
+			root.Children = append(root.Children, firstAuditPendingCard())
+		} else {
+			root.Children = append(root.Children, unavailableCard(snapshot))
+		}
 		return root
 	}
 	if !snapshotCurrent(snapshot, now) {
@@ -98,6 +102,13 @@ func PanelTree(snapshot Snapshot, now time.Time, scanning bool, scanMessage stri
 	)
 	root.Children = append(root.Children, sections...)
 	return root
+}
+
+func firstAuditPendingCard() *v1.Node {
+	return card("privacy-pending",
+		sectionTitle("First audit in progress"),
+		&v1.Node{Kind: v1.KindText, Text: "Results will appear when the first audit finishes.", Tone: v1.ToneSubtle},
+	)
 }
 
 func panelSummary(snapshot Snapshot, now time.Time, grade string, scanning bool, scanMessage string) *v1.Node {

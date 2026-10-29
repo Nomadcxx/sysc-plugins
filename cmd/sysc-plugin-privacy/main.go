@@ -53,6 +53,10 @@ type openedView struct {
 }
 
 func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditRunner) error {
+	return runPluginWithInterval(ctx, in, out, runAudit, refreshInterval)
+}
+
+func runPluginWithInterval(ctx context.Context, in io.Reader, out io.Writer, runAudit auditRunner, interval time.Duration) error {
 	client := v1.NewClient(in, out)
 	if _, err := client.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.privacy", Name: "Privacy audit", Version: "0.1.2"})); err != nil {
 		return err
@@ -82,7 +86,7 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 	if runAudit == nil {
 		runAudit = runPrivacybit
 	}
-	ticker := time.NewTicker(refreshInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	views := make(map[string]openedView)
 	scanning := false
@@ -96,11 +100,12 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 	// the incoming buffer fills, and the host's calls time out.
 	audits := make(chan privacy.Snapshot, 1)
 	auditRunning := false
-	startAudit := func() {
+	startAudit := func() bool {
 		if auditRunning {
-			return
+			return false
 		}
 		auditRunning = true
+		scanning, scanMessage = true, "Checking installed apps"
 		go func() {
 			snapshot := refreshSnapshot(pluginCtx, runAudit)
 			select {
@@ -108,6 +113,7 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 			case <-pluginCtx.Done():
 			}
 		}()
+		return true
 	}
 	startAudit()
 
@@ -186,14 +192,19 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 				if view.kind != v1.ViewPanel || message.Node != "privacy-scan" || scanning {
 					continue
 				}
-				scanning, scanMessage = true, "Checking installed apps"
+				if !startAudit() {
+					continue
+				}
 				if err := publishViews(pluginCtx, client, views, snapshot, scanning, scanMessage); err != nil {
 					return publishFailure(pluginCtx, err)
 				}
-				startAudit()
 			}
 		case <-ticker.C:
-			startAudit()
+			if startAudit() {
+				if err := publishViews(pluginCtx, client, views, snapshot, scanning, scanMessage); err != nil {
+					return publishFailure(pluginCtx, err)
+				}
+			}
 		}
 	}
 }
