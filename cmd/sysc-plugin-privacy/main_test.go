@@ -127,6 +127,49 @@ func TestRefreshSnapshotKeepsValidUnknownSnapshotAfterNoCoverageExit(t *testing.
 	}
 }
 
+func TestPluginFallbackIdentityMatchesManifest(t *testing.T) {
+	manifest, err := os.ReadFile(filepath.Join("..", "..", "plugins", "privacy", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var declared struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(manifest, &declared); err != nil {
+		t.Fatal(err)
+	}
+
+	pluginInput, hostInput := io.Pipe()
+	hostOutput, pluginOutput := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runPlugin(ctx, pluginInput, pluginOutput, func(context.Context) ([]byte, error) {
+			return nil, nil
+		})
+	}()
+	defer func() {
+		cancel()
+		_ = hostInput.Close()
+		_ = pluginOutput.Close()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("privacy plugin did not stop")
+		}
+	}()
+
+	sendPrivacyMessage(t, hostInput, map[string]any{
+		"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 18}},
+		"capabilities": []string{"panels", "state"},
+	})
+	var hello v1.PluginHello
+	readPrivacyMessage(t, bufio.NewReader(hostOutput), &hello)
+	if hello.Plugin.Version != declared.Version {
+		t.Fatalf("fallback identity version = %q, manifest version = %q", hello.Plugin.Version, declared.Version)
+	}
+}
+
 func TestRunPluginPublishesBoundedStateSnapshot(t *testing.T) {
 	pluginInput, hostInput := io.Pipe()
 	hostOutput, pluginOutput := io.Pipe()
