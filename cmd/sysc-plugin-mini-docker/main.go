@@ -60,7 +60,6 @@ func run(in *os.File, out *os.File) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	session := newSession()
 	views := map[string]view{}
@@ -73,6 +72,18 @@ func run(in *os.File, out *os.File) error {
 	// mu guards views, rendered-tree digests, and settings. The client encoder
 	// serializes snapshots from the main loop and poller.
 	var mu sync.Mutex
+	var workers sync.WaitGroup
+	launchWorker := func(work func()) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			work()
+		}()
+	}
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
 
 	incoming := make(chan v1.Message, 8)
 	go func() {
@@ -196,8 +207,8 @@ func run(in *os.File, out *os.File) error {
 		default:
 		}
 	}
-	go watchDockerEvents(ctx, session, queueRefresh)
-	go func() {
+	launchWorker(func() { watchDockerEvents(ctx, session, queueRefresh) })
+	launchWorker(func() {
 		refreshNow(refreshRequest{containers: true, active: true})
 		timer := time.NewTimer(pollInterval())
 		defer timer.Stop()
@@ -228,7 +239,7 @@ func run(in *os.File, out *os.File) error {
 				timer.Reset(pollInterval())
 			}
 		}
-	}()
+	})
 
 	for {
 		select {
@@ -322,15 +333,15 @@ func run(in *os.File, out *os.File) error {
 					session.CancelRunForm()
 					publish("")
 				case msg.Node == "run-submit" && current.kind == v1.ViewPanel:
-					go func() {
+					launchWorker(func() {
 						session.SubmitRunWithStart(ctx, func() { publish("") })
 						publish("")
-					}()
+					})
 				case msg.Node == "confirm" && current.kind == v1.ViewPanel:
-					go func() {
+					launchWorker(func() {
 						session.ConfirmRemovalWithStart(ctx, func() { publish("") })
 						publish("")
-					}()
+					})
 				case msg.Node == "cancel" && current.kind == v1.ViewPanel:
 					session.CancelRemoval()
 					publish("")
@@ -348,10 +359,10 @@ func run(in *os.File, out *os.File) error {
 					}
 				case current.kind == v1.ViewPanel && strings.HasPrefix(msg.Node, "run:"):
 					id := strings.TrimPrefix(msg.Node, "run:")
-					go func(id string) {
+					launchWorker(func() {
 						session.OpenRunForm(ctx, id)
 						publish("")
-					}(id)
+					})
 				default:
 					if current.kind != v1.ViewPanel {
 						continue
@@ -359,10 +370,10 @@ func run(in *os.File, out *os.File) error {
 					if action, id, ok := minidocker.ParseAction(msg.Node); ok {
 						switch action {
 						case "start", "stop", "restart":
-							go func(action, id string) {
+							launchWorker(func() {
 								session.ActWithStart(ctx, action, id, func() { publish("") })
 								publish("")
-							}(action, id)
+							})
 						case "remove", "rmi", "volrm", "netrm":
 							session.ArmRemoval(id)
 							publish("")
@@ -403,9 +414,6 @@ func watchDockerEvents(ctx context.Context, session *minidocker.Session, enqueue
 	retryDelay := time.Second
 	for {
 		events, err := session.Events(ctx)
-		if ctx.Err() != nil {
-			return
-		}
 		sawEvent := false
 		if err == nil && events != nil {
 			sawEvent = watchDockerEventStream(ctx, events, enqueue)
@@ -429,6 +437,9 @@ func watchDockerEvents(ctx context.Context, session *minidocker.Session, enqueue
 }
 
 func watchDockerEventStream(ctx context.Context, events <-chan struct{}, enqueue func(refreshRequest)) bool {
+	if events == nil {
+		return false
+	}
 	var debounceTimer *time.Timer
 	var debounce <-chan time.Time
 	sawEvent := false
@@ -441,6 +452,8 @@ func watchDockerEventStream(ctx context.Context, events <-chan struct{}, enqueue
 	for {
 		select {
 		case <-ctx.Done():
+			for range events {
+			}
 			return sawEvent
 		case _, ok := <-events:
 			if !ok {
