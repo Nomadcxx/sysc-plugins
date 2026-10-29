@@ -83,15 +83,36 @@ func TestRunPrivacybitFallsBackToUserLocalBin(t *testing.T) {
 	}
 }
 
-func TestRefreshSnapshotPublishesUnavailableForMissingOrInvalidOutput(t *testing.T) {
-	for name, run := range map[string]auditRunner{
-		"missing binary":   func(context.Context) ([]byte, error) { return nil, errors.New("not found") },
-		"malformed output": func(context.Context) ([]byte, error) { return []byte("not json"), nil },
+func TestRefreshSnapshotPublishesUnavailableWithoutMisleadingInstallHint(t *testing.T) {
+	for name, test := range map[string]struct {
+		run        auditRunner
+		wantReason string
+	}{
+		"missing binary": {
+			run:        func(context.Context) ([]byte, error) { return nil, errors.New("privacybit was not found on PATH") },
+			wantReason: "privacybit was not found on PATH",
+		},
+		"command failure": {
+			run: func(context.Context) ([]byte, error) {
+				return nil, errors.New("privacybit audit --snapshot failed: exit status 1")
+			},
+			wantReason: "audit --snapshot failed",
+		},
+		"malformed output": {
+			run:        func(context.Context) ([]byte, error) { return []byte("not json"), nil },
+			wantReason: "decode privacybit event",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			snapshot := refreshSnapshot(context.Background(), run)
+			snapshot := refreshSnapshot(context.Background(), test.run)
 			if snapshot.Available || snapshot.Reason == "" || snapshot.Overall.Grade != "unknown" || !snapshot.Network.TelemetryConnectionsUnknown {
 				t.Fatalf("invalid audit did not publish explicit unavailable state: %+v", snapshot)
+			}
+			if !strings.Contains(snapshot.Reason, test.wantReason) {
+				t.Fatalf("unavailable reason = %q, want it to contain %q", snapshot.Reason, test.wantReason)
+			}
+			if snapshot.Hint != "" {
+				t.Fatalf("unavailable audit showed generic installation hint: %q", snapshot.Hint)
 			}
 		})
 	}

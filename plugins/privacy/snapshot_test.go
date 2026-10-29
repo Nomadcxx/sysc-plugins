@@ -374,7 +374,7 @@ func TestParseAuditOutputRejectsOtherUngradedFindings(t *testing.T) {
 func TestUnavailableSnapshotIsExplicit(t *testing.T) {
 	at := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	snapshot := UnavailableSnapshot("privacybit was not found", at)
-	if snapshot.Available || snapshot.Reason == "" || snapshot.Hint == "" || snapshot.Overall.Grade != "unknown" || !snapshot.Network.TelemetryConnectionsUnknown {
+	if snapshot.Available || snapshot.Reason == "" || snapshot.Hint != "" || snapshot.Overall.Grade != "unknown" || !snapshot.Network.TelemetryConnectionsUnknown {
 		t.Fatalf("unavailable snapshot is not explicit: %+v", snapshot)
 	}
 	if snapshot.Network.VPN.Defects == nil {
