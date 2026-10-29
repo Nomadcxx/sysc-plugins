@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestParseAuditOutputBoundsListsAndPreservesUnknownTelemetry(t *testing.T) {
@@ -79,6 +80,92 @@ func TestParseAuditOutputBoundsListsAndPreservesUnknownTelemetry(t *testing.T) {
 	}
 }
 
+func TestParseAuditOutputProjectsBoundedOrigins(t *testing.T) {
+	const maxOrigins = 8
+	const maxOriginBytes = 80
+	type inputOrigin struct {
+		Source   string `json:"source"`
+		Official bool   `json:"official"`
+	}
+	origins := []inputOrigin{
+		{Source: "alpha", Official: true},
+		{Source: "alpha", Official: true},
+		{Source: "alpha", Official: false},
+		{Source: "repo\nname"},
+	}
+	for i := range 8 {
+		origins = append(origins, inputOrigin{Source: fmt.Sprintf("repo-%02d", i), Official: true})
+	}
+	origins = append(origins, inputOrigin{Source: "0" + strings.Repeat("界", 40)})
+	encodedOrigins, err := json.Marshal(origins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := fmt.Sprintf(`{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-23T10:00:00Z","overall":{"grade":"green"},"categories":[{"id":"browser","name":"Browser","grade":"green","installed":[{"id":"brave-origin","name":"Brave Origin","grade":"green","origins":%s,"origins_shown":12,"origins_total":12}]}]}}`, encodedOrigins)
+	snapshot, err := ParseAuditOutput([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Categories []struct {
+			Installed []struct {
+				Origins   []inputOrigin `json:"origins"`
+				Shown     int           `json:"origins_shown"`
+				Total     int           `json:"origins_total"`
+				Truncated bool          `json:"origins_truncated"`
+			} `json:"installed"`
+		} `json:"categories"`
+	}
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	app := got.Categories[0].Installed[0]
+	if len(app.Origins) != maxOrigins || app.Shown != maxOrigins || app.Total != 12 || !app.Truncated {
+		t.Fatalf("origin projection = %+v, want %d shown of 12 and truncated", app, maxOrigins)
+	}
+	if !strings.HasPrefix(app.Origins[0].Source, "0") || !utf8.ValidString(app.Origins[0].Source) || len(app.Origins[0].Source) > maxOriginBytes {
+		t.Fatalf("long origin was not safely bounded: %q (%d bytes)", app.Origins[0].Source, len(app.Origins[0].Source))
+	}
+	foundSanitized := false
+	alphaStatuses := map[bool]bool{}
+	for _, origin := range app.Origins {
+		if origin.Source == "repo name" {
+			foundSanitized = true
+		}
+		if origin.Source == "alpha" {
+			alphaStatuses[origin.Official] = true
+		}
+		if !utf8.ValidString(origin.Source) || len(origin.Source) > maxOriginBytes || strings.ContainsAny(origin.Source, "\n\r\x1b") {
+			t.Errorf("unsafe origin source %q (%d bytes)", origin.Source, len(origin.Source))
+		}
+	}
+	if !foundSanitized {
+		t.Fatalf("newline in origin source was not sanitized: %+v", app.Origins)
+	}
+	if !alphaStatuses[true] || !alphaStatuses[false] {
+		t.Fatalf("origin status variants collapsed: %+v", app.Origins)
+	}
+}
+
+func TestParseAuditOutputAcceptsLegacyAppWithoutOriginContext(t *testing.T) {
+	input := `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-23T10:00:00Z","overall":{"grade":"green"},"categories":[{"id":"browser","name":"Browser","grade":"green","installed":[{"id":"firefox","name":"Firefox","grade":"green"}]}]}}`
+	snapshot, err := ParseAuditOutput([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"origins"`) {
+		t.Fatalf("legacy app without provenance gained an origin: %s", encoded)
+	}
+}
+
 func TestParseAuditOutputBoundsFlatpakSandboxEvidence(t *testing.T) {
 	labels := make([]string, maxSandboxEvidence+2)
 	for i := range labels {
@@ -135,6 +222,7 @@ func TestParseAuditOutputRejectsInvalidAndFutureSnapshots(t *testing.T) {
 		"invalid grade":                              `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-20T12:00:00Z","overall":{"grade":"perfect"}}}`,
 		"invalid sandbox grade":                      `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-20T12:00:00Z","overall":{"grade":"unknown"},"sandbox":{"applicable":true,"grade":"perfect"}}}`,
 		"invalid sandbox app grade":                  `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-20T12:00:00Z","overall":{"grade":"unknown"},"sandbox":{"applicable":true,"grade":"unknown","apps":[{"id":"com.example.App","scope":"user","grade":"perfect"}]}}}`,
+		"negative app origin count":                  `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-20T12:00:00Z","overall":{"grade":"green"},"categories":[{"id":"browser","name":"Browser","grade":"green","installed":[{"id":"firefox","name":"Firefox","grade":"green","origins_total":-1}]}]}}`,
 		"negative sandbox count":                     `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-20T12:00:00Z","overall":{"grade":"unknown"},"sandbox":{"applicable":true,"grade":"unknown","apps_total":-1}}}`,
 		"green sandbox with incomplete coverage":     `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-20T12:00:00Z","overall":{"grade":"green"},"sandbox":{"applicable":true,"grade":"green","apps":[{"id":"com.example.App","scope":"user","grade":"green"}],"apps_shown":1,"apps_total":2,"apps_truncated":true,"apps_checked":1,"apps_incomplete":1}}}`,
 		"red sandbox with incomplete coverage":       `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-20T12:00:00Z","overall":{"grade":"red"},"sandbox":{"applicable":true,"grade":"red","apps":[{"id":"com.example.App","scope":"user","grade":"red","grants":["host filesystem"]}],"apps_shown":1,"apps_total":2,"apps_truncated":true,"apps_checked":1,"apps_incomplete":1,"partial_coverage":true}}}`,

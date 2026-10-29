@@ -14,6 +14,9 @@ import (
 func TestCapturePanel(t *testing.T) {
 	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
 	snapshot := testSnapshot("unknown", now)
+	app := &snapshot.Categories[0].Installed[0]
+	app.Origins = []AppOrigin{{Source: "flathub", Official: true}, {Source: "community"}}
+	app.OriginsShown, app.OriginsTotal = len(app.Origins), len(app.Origins)
 	snapshot.Sandbox = &Sandbox{
 		Applicable: true, Grade: "unknown", AppsTotal: 1, AppsChecked: 1,
 		AppsIncomplete: 1, PartialCoverage: true,

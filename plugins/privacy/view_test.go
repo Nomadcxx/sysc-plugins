@@ -210,6 +210,41 @@ func TestPrivacyPanelShowsSeparateFlatpakSandboxGradesAndCoverage(t *testing.T) 
 	}
 }
 
+func TestPrivacyPanelShowsOriginAsContext(t *testing.T) {
+	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	input := `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-23T10:00:00Z","overall":{"grade":"green"},"categories":[{"id":"browser","name":"Browser","grade":"green","installed":[{"id":"brave-origin","name":"Brave Origin","grade":"green","origins":[{"source":"flathub","official":true},{"source":"aur","official":false}],"origins_shown":2,"origins_total":2}]}]}}`
+	snapshot, err := ParseAuditOutput([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := PanelTree(snapshot, now, false, "")
+	for _, want := range []string{"Origin context", "flathub (official)", "aur (not marked official)"} {
+		if !treeHasText(root, want) {
+			t.Errorf("panel omitted %q", want)
+		}
+	}
+	if got := snapshot.Categories[0].Installed[0].Grade; got != "green" {
+		t.Fatalf("origin context changed app grade to %q", got)
+	}
+}
+
+func TestPrivacyPanelShowsOriginForWorstAppOutsideTheVisibleList(t *testing.T) {
+	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	snapshot := testSnapshot("green", now)
+	snapshot.Categories[0].Installed = []App{{ID: "shown", Name: "Shown app", Grade: "green"}}
+	snapshot.Categories[0].InstalledShown = 1
+	snapshot.Categories[0].InstalledTotal = 5
+	snapshot.Categories[0].InstalledTruncated = true
+	snapshot.Categories[0].Worst = &App{
+		ID: "hidden", Name: "Highest risk app", Grade: "red",
+		Origins: []AppOrigin{{Source: "community", Official: false}}, OriginsShown: 1, OriginsTotal: 1,
+	}
+	root := PanelTree(snapshot, now, false, "")
+	if !treeHasText(root, "Origin context: community (not marked official)") {
+		t.Fatal("panel omitted origin context for its separately displayed highest-risk app")
+	}
+}
+
 func TestPrivacyPanelExplainsWhenNoFlatpakAppsAreInstalled(t *testing.T) {
 	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
 	input := `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-23T10:00:00Z","overall":{"grade":"green"},"sandbox":{"applicable":false,"grade":"unknown","apps":[],"apps_shown":0,"apps_total":0,"reason":"No Flatpak applications are installed."}}}`

@@ -182,6 +182,7 @@ func categorySection(snapshot Snapshot) *v1.Node {
 				{Kind: v1.KindText, Text: appName, MaxWidth: 400},
 				gradeChip(app.Grade, fmt.Sprintf("grade-app-%d-%d", categoryIndex, appIndex)),
 			}})
+			rows = appendOriginContext(rows, app)
 		}
 		if category.Worst != nil && !worstShown {
 			worstName := text(category.Worst.Name, maxLabelBytes)
@@ -195,6 +196,7 @@ func categorySection(snapshot Snapshot) *v1.Node {
 					gradeChip(category.Worst.Grade, fmt.Sprintf("grade-app-worst-%d", categoryIndex)),
 				}},
 			)
+			rows = appendOriginContext(rows, *category.Worst)
 		}
 		if category.InstalledTruncated {
 			rows = append(rows, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d apps.", category.InstalledShown, category.InstalledTotal), Size: "caption", Tone: v1.ToneSubtle})
@@ -205,6 +207,27 @@ func categorySection(snapshot Snapshot) *v1.Node {
 		children = append(children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d categories.", snapshot.CategoriesShown, snapshot.CategoriesTotal), Size: "caption", Tone: v1.ToneSubtle})
 	}
 	return &v1.Node{Kind: v1.KindColumn, Key: "privacy-categories", Gap: 8, Children: children}
+}
+
+func originStatus(official bool) string {
+	if official {
+		return "official"
+	}
+	return "not marked official"
+}
+
+func appendOriginContext(rows []*v1.Node, app App) []*v1.Node {
+	for _, origin := range app.Origins {
+		rows = append(rows, &v1.Node{Kind: v1.KindText,
+			Text: "Origin context: " + text(origin.Source, maxOriginSourceBytes) + " (" + originStatus(origin.Official) + ")",
+			Size: "caption", Tone: v1.ToneSubtle})
+	}
+	if app.OriginsTruncated {
+		rows = append(rows, &v1.Node{Kind: v1.KindText,
+			Text: fmt.Sprintf("Showing %d of %d origins.", app.OriginsShown, app.OriginsTotal),
+			Size: "caption", Tone: v1.ToneSubtle})
+	}
+	return rows
 }
 
 func sandboxSection(sandbox *Sandbox) *v1.Node {
