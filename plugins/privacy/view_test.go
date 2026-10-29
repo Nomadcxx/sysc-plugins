@@ -136,6 +136,36 @@ func TestPrivacyPanelScanButtonIsDisabledWhileScanning(t *testing.T) {
 	}
 }
 
+func TestPrivacyPanelFilledSurfacesUseTheirPairedForeground(t *testing.T) {
+	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	snapshot := testSnapshot("unknown", now)
+	snapshot.Sandbox = &Sandbox{
+		Applicable: true, Grade: "unknown", AppsTotal: 1, AppsChecked: 1,
+		AppsIncomplete: 1, PartialCoverage: true,
+		Apps: []SandboxApp{{
+			ID: "com.example.Editor", Scope: "system", Grade: "unknown",
+			Grants: []string{"all devices"}, Unknown: []string{"unclassified filesystem permission"},
+		}},
+		AppsShown: 1,
+	}
+	root := PanelTree(snapshot, now, false, "")
+
+	var check func(*v1.Node, bool)
+	check = func(node *v1.Node, filled bool) {
+		if node == nil {
+			return
+		}
+		filled = filled || node.Fill == "container" || node.Fill == "soft"
+		if filled && node.Kind == v1.KindText && node.Tone == v1.ToneSubtle {
+			t.Errorf("subtle text %q overrides the foreground paired with its filled surface", node.Text)
+		}
+		for _, child := range node.Children {
+			check(child, filled)
+		}
+	}
+	check(root, false)
+}
+
 func TestPrivacyPanelKeepsWorstAppAndSuggestionCountsWhenListsAreTruncated(t *testing.T) {
 	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
 	snapshot := testSnapshot("red", now)

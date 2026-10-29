@@ -104,10 +104,10 @@ func panelSummary(snapshot Snapshot, now time.Time, grade string, scanning bool,
 			{Kind: v1.KindText, Text: "Overall assessment", Size: "label", Bold: true},
 			gradeChip(grade, "privacy-grade"),
 		}},
-		{Kind: v1.KindText, Text: scanAge(snapshot.GeneratedAt, now), Size: "caption", Tone: v1.ToneSubtle},
+		{Kind: v1.KindText, Text: scanAge(snapshot.GeneratedAt, now), Size: "caption"},
 	}
 	if snapshot.Available && snapshotCurrent(snapshot, now) {
-		rows = append(rows, &v1.Node{Kind: v1.KindText, Text: findingCount(snapshot), Size: "caption", Tone: v1.ToneSubtle})
+		rows = append(rows, &v1.Node{Kind: v1.KindText, Text: findingCount(snapshot), Size: "caption"})
 	}
 	label := "Scan now"
 	if scanning {
@@ -118,7 +118,7 @@ func panelSummary(snapshot Snapshot, now time.Time, grade string, scanning bool,
 		Events: []v1.EventKind{v1.EventActivate},
 	})
 	if scanMessage != "" {
-		rows = append(rows, &v1.Node{Kind: v1.KindText, Text: text(scanMessage, maxSummaryBytes), Size: "caption", Tone: v1.ToneSubtle})
+		rows = append(rows, &v1.Node{Kind: v1.KindText, Text: text(scanMessage, maxSummaryBytes), Size: "caption"})
 	}
 	return &v1.Node{Kind: v1.KindColumn, Key: "privacy-summary", Gap: 8, Fill: "container", Shape: "large", Padding: 14, Children: rows,
 		Tooltip: "Overall: " + style.word}
@@ -364,7 +364,24 @@ func sectionTitle(label string) *v1.Node {
 }
 
 func card(key string, children ...*v1.Node) *v1.Node {
+	for _, child := range children {
+		cardForeground(child)
+	}
 	return &v1.Node{Kind: v1.KindColumn, Key: key, Gap: 7, Fill: "soft", Shape: "card", Padding: 12, Children: children}
+}
+
+// Soft cards supply their own high-contrast foreground; ToneSubtle switches
+// back to the surface-only muted role and can become unreadable on the accent wash.
+func cardForeground(node *v1.Node) {
+	if node == nil {
+		return
+	}
+	if node.Kind == v1.KindText && node.Tone == v1.ToneSubtle {
+		node.Tone = v1.ToneNormal
+	}
+	for _, child := range node.Children {
+		cardForeground(child)
+	}
 }
 
 func valueRow(label, value string) *v1.Node {
