@@ -24,8 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   # The gate proves two things before anything is built: the tag has the
@@ -153,6 +152,8 @@ jobs:
   # somehow gone missing by the time this job runs.
   release:
     needs: [gate, build]
+    permissions:
+      contents: write
     # A manual run rehearses the gate and the build without publishing.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -185,6 +186,9 @@ jobs:
   # decisions): the catalog PR always needs a human merge.
   catalog:
     needs: release
+    permissions:
+      contents: write
+      pull-requests: write
     # A manual run rehearses the gate and the build without publishing.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
