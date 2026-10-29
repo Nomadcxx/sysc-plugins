@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,15 @@ func (c pagedCLI) List(context.Context) ([]minidocker.Container, int, error) {
 	return c.containers, 0, nil
 }
 
+func eventStreamUntilCancelled(ctx context.Context) <-chan struct{} {
+	events := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		close(events)
+	}()
+	return events
+}
+
 func (fakeCLI) List(context.Context) ([]minidocker.Container, int, error) {
 	return []minidocker.Container{
 		{ID: "a1", Names: "web", Image: "nginx:latest", State: "running", Status: "Up 2 hours"},
@@ -36,8 +46,8 @@ func (fakeCLI) List(context.Context) ([]minidocker.Container, int, error) {
 	}, 0, nil
 }
 
-func (fakeCLI) Events(context.Context) (<-chan struct{}, error) {
-	return make(chan struct{}), nil
+func (fakeCLI) Events(ctx context.Context) (<-chan struct{}, error) {
+	return eventStreamUntilCancelled(ctx), nil
 }
 
 func (fakeCLI) Start(context.Context, string) error   { return nil }
@@ -83,8 +93,8 @@ func (s slowCLI) List(context.Context) ([]minidocker.Container, int, error) {
 	}, 0, nil
 }
 
-func (slowCLI) Events(context.Context) (<-chan struct{}, error) {
-	return make(chan struct{}), nil
+func (slowCLI) Events(ctx context.Context) (<-chan struct{}, error) {
+	return eventStreamUntilCancelled(ctx), nil
 }
 
 func (slowCLI) Start(context.Context, string) error   { return nil }
@@ -307,6 +317,118 @@ func TestRefreshClickDoesNotBlockMainLoop(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("run did not exit after host.shutdown")
+	}
+}
+
+type shutdownCLI struct {
+	fakeCLI
+	started  chan struct{}
+	canceled chan struct{}
+	release  <-chan struct{}
+}
+
+func (c shutdownCLI) List(ctx context.Context) ([]minidocker.Container, int, error) {
+	close(c.started)
+	<-ctx.Done()
+	close(c.canceled)
+	<-c.release
+	return nil, 0, ctx.Err()
+}
+
+func TestRunWaitsForRefreshBeforeReturningOnShutdown(t *testing.T) {
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inR.Close()
+	defer inW.Close()
+	defer outR.Close()
+	defer outW.Close()
+	go func() { _, _ = io.Copy(io.Discard, outR) }()
+
+	h := host{w: bufio.NewWriter(inW)}
+	h.send(&v1.HostHello{
+		Type:      v1.TypeHostHello,
+		Supported: []v1.Version{{Major: 1, Minor: 4}},
+		Plugin:    v1.Identity{ID: "org.sysc.mini-docker", Name: "Mini Docker", Version: "0.4.0"},
+		Limits:    v1.DefaultLimits,
+	})
+
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	cli := shutdownCLI{
+		started:  make(chan struct{}),
+		canceled: make(chan struct{}),
+		release:  release,
+	}
+	newSession = func() *minidocker.Session { return minidocker.NewSession(cli) }
+	defer func() { newSession = func() *minidocker.Session { return minidocker.NewSession(minidocker.CLI{}) } }()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- run(inR, outW) }()
+	select {
+	case <-cli.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial refresh did not start")
+	}
+
+	h.send(&v1.HostShutdown{Type: v1.TypeHostShutdown})
+	select {
+	case <-cli.canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not cancel the initial refresh")
+	}
+	select {
+	case err := <-errCh:
+		t.Fatalf("run returned before the refresh worker exited: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	unblock()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after the refresh worker exited")
+	}
+}
+
+func TestWatchDockerEventStreamWaitsForProcessExitAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan struct{}, 1)
+	events <- struct{}{}
+	enqueued := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() {
+		watchDockerEventStream(ctx, events, func(refreshRequest) { enqueued <- struct{}{} })
+		close(done)
+	}()
+
+	select {
+	case <-enqueued:
+	case <-time.After(5 * time.Second):
+		t.Fatal("event watcher did not consume the stream event")
+	}
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("event watcher returned before its stream closed")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(events)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("event watcher did not return after its stream closed")
 	}
 }
 
@@ -548,8 +670,8 @@ func (c *interactionCLI) List(context.Context) ([]minidocker.Container, int, err
 	return []minidocker.Container{{ID: "a1", Names: "web", Image: "nginx:latest", State: "running", Status: "Up"}}, 0, nil
 }
 
-func (*interactionCLI) Events(context.Context) (<-chan struct{}, error) {
-	return make(chan struct{}), nil
+func (*interactionCLI) Events(ctx context.Context) (<-chan struct{}, error) {
+	return eventStreamUntilCancelled(ctx), nil
 }
 
 func (*interactionCLI) Start(context.Context, string) error   { return nil }
@@ -587,9 +709,27 @@ type dockerEventsCLI struct {
 	eventCalls atomic.Int64
 }
 
-func (c *dockerEventsCLI) Events(context.Context) (<-chan struct{}, error) {
+func (c *dockerEventsCLI) Events(ctx context.Context) (<-chan struct{}, error) {
 	c.eventCalls.Add(1)
-	return c.events, nil
+	events := make(chan struct{}, 1)
+	go func() {
+		defer close(events)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case _, ok := <-c.events:
+				if !ok {
+					return
+				}
+				select {
+				case events <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+	return events, nil
 }
 
 type closedDockerEventsCLI struct {

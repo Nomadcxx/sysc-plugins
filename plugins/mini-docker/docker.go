@@ -95,6 +95,8 @@ type RunOpts struct {
 // without a docker daemon.
 type Docker interface {
 	List(ctx context.Context) ([]Container, int, error)
+	// Events returns a stream that closes after ctx is canceled and its source
+	// has stopped, so the caller can wait for any child process to exit.
 	Events(ctx context.Context) (<-chan struct{}, error)
 	Images(ctx context.Context) ([]Image, int, error)
 	Volumes(ctx context.Context) ([]Volume, int, error)
