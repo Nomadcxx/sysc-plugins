@@ -27,6 +27,9 @@ const (
 	maxReduced           = 12
 	maxSandboxApps       = 4
 	maxSandboxEvidence   = 8
+	maxUnmatchedApps     = 12
+	maxOriginsPerApp     = 8
+	maxOriginSourceBytes = 80
 	maxLabelBytes        = 160
 	maxSummaryBytes      = 320
 )
@@ -45,6 +48,10 @@ type Snapshot struct {
 	CategoriesShown     int        `json:"categories_shown"`
 	CategoriesTotal     int        `json:"categories_total"`
 	CategoriesTruncated bool       `json:"categories_truncated"`
+	Unmatched           []App      `json:"unmatched,omitempty"`
+	UnmatchedShown      int        `json:"unmatched_shown,omitempty"`
+	UnmatchedTotal      int        `json:"unmatched_total,omitempty"`
+	UnmatchedTruncated  bool       `json:"unmatched_truncated,omitempty"`
 	Findings            []Finding  `json:"findings"`
 	FindingsShown       int        `json:"findings_shown"`
 	FindingsTotal       int        `json:"findings_total"`
@@ -125,10 +132,19 @@ type Category struct {
 }
 
 type App struct {
-	ID    string `json:"id,omitempty"`
-	Name  string `json:"name"`
-	Grade string `json:"grade"`
-	Scope string `json:"scope,omitempty"`
+	ID               string      `json:"id,omitempty"`
+	Name             string      `json:"name"`
+	Grade            string      `json:"grade"`
+	Scope            string      `json:"scope,omitempty"`
+	Origins          []AppOrigin `json:"origins,omitempty"`
+	OriginsShown     int         `json:"origins_shown,omitempty"`
+	OriginsTotal     int         `json:"origins_total,omitempty"`
+	OriginsTruncated bool        `json:"origins_truncated,omitempty"`
+}
+
+type AppOrigin struct {
+	Source   string `json:"source"`
+	Official bool   `json:"official"`
 }
 
 type Finding struct {
@@ -196,7 +212,10 @@ type auditSnapshot struct {
 		InstalledTruncated bool   `json:"installed_truncated"`
 		Worst              *App   `json:"worst"`
 	} `json:"categories"`
-	Findings []struct {
+	Unmatched          []App `json:"unmatched"`
+	UnmatchedTotal     int   `json:"unmatched_total"`
+	UnmatchedTruncated bool  `json:"unmatched_truncated"`
+	Findings           []struct {
 		ID       string   `json:"id"`
 		Severity string   `json:"severity"`
 		Grade    string   `json:"grade"`
@@ -336,13 +355,20 @@ func ParseAuditOutput(data []byte) (Snapshot, error) {
 			if !validGrade(app.Grade) {
 				return Snapshot{}, fmt.Errorf("privacybit returned invalid grade %q for app %q", app.Grade, app.Name)
 			}
-			projected.Installed = append(projected.Installed, projectApp(app))
+			projectedApp, err := projectApp(app)
+			if err != nil {
+				return Snapshot{}, fmt.Errorf("privacybit returned invalid origin context for app %q: %w", app.Name, err)
+			}
+			projected.Installed = append(projected.Installed, projectedApp)
 		}
 		if category.Worst != nil {
 			if !validGrade(category.Worst.Grade) {
 				return Snapshot{}, fmt.Errorf("privacybit returned invalid grade %q for worst app %q", category.Worst.Grade, category.Worst.Name)
 			}
-			worst := projectApp(*category.Worst)
+			worst, err := projectApp(*category.Worst)
+			if err != nil {
+				return Snapshot{}, fmt.Errorf("privacybit returned invalid origin context for worst app %q: %w", category.Worst.Name, err)
+			}
 			projected.Worst = &worst
 		}
 		projected.InstalledTotal = max(projected.InstalledTotal, len(projected.Installed))
@@ -360,6 +386,27 @@ func ParseAuditOutput(data []byte) (Snapshot, error) {
 	}
 	out.CategoriesShown = len(out.Categories)
 	out.CategoriesTruncated = out.CategoriesTruncated || out.CategoriesShown < out.CategoriesTotal
+	if input.UnmatchedTotal < 0 {
+		return Snapshot{}, errors.New("privacybit returned a negative unmatched app count")
+	}
+	out.UnmatchedTotal = max(input.UnmatchedTotal, len(input.Unmatched))
+	out.UnmatchedTruncated = input.UnmatchedTruncated
+	for _, app := range input.Unmatched {
+		if app.Grade != "unknown" {
+			return Snapshot{}, fmt.Errorf("privacybit returned non-unknown grade %q for unmatched app %q", app.Grade, app.Name)
+		}
+		projectedApp, err := projectApp(app)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("privacybit returned invalid origin context for unmatched app %q: %w", app.Name, err)
+		}
+		out.Unmatched = append(out.Unmatched, projectedApp)
+	}
+	if len(out.Unmatched) > maxUnmatchedApps {
+		out.Unmatched = out.Unmatched[:maxUnmatchedApps]
+		out.UnmatchedTruncated = true
+	}
+	out.UnmatchedShown = len(out.Unmatched)
+	out.UnmatchedTruncated = out.UnmatchedTruncated || out.UnmatchedShown < out.UnmatchedTotal
 
 	out.FindingsTotal = input.FindingsTotal
 	if out.FindingsTotal < len(input.Findings) {
@@ -443,8 +490,53 @@ func ParseAuditOutput(data []byte) (Snapshot, error) {
 	return out, nil
 }
 
-func projectApp(app App) App {
-	return App{ID: text(app.ID, maxLabelBytes), Name: text(app.Name, maxLabelBytes), Grade: app.Grade, Scope: text(app.Scope, maxLabelBytes)}
+func projectApp(app App) (App, error) {
+	if app.OriginsShown < 0 || app.OriginsTotal < 0 {
+		return App{}, errors.New("negative origin count")
+	}
+	out := App{ID: text(app.ID, maxLabelBytes), Name: text(app.Name, maxLabelBytes), Grade: app.Grade, Scope: text(app.Scope, maxLabelBytes)}
+	seen := make(map[AppOrigin]struct{}, len(app.Origins))
+	for _, origin := range app.Origins {
+		origin.Source = originSource(origin.Source)
+		if origin.Source == "" {
+			continue
+		}
+		if _, exists := seen[origin]; exists {
+			continue
+		}
+		seen[origin] = struct{}{}
+		out.Origins = append(out.Origins, origin)
+	}
+	sort.Slice(out.Origins, func(i, j int) bool {
+		if out.Origins[i].Source != out.Origins[j].Source {
+			return out.Origins[i].Source < out.Origins[j].Source
+		}
+		return !out.Origins[i].Official && out.Origins[j].Official
+	})
+	if app.OriginsShown > 0 && app.OriginsShown < len(out.Origins) {
+		return App{}, errors.New("origin shown count is below its list length")
+	}
+	out.OriginsTotal = max(app.OriginsTotal, len(out.Origins))
+	if len(out.Origins) > maxOriginsPerApp {
+		out.Origins = out.Origins[:maxOriginsPerApp]
+		out.OriginsTruncated = true
+	}
+	out.OriginsShown = len(out.Origins)
+	out.OriginsTruncated = out.OriginsTruncated || app.OriginsTruncated || out.OriginsShown < out.OriginsTotal
+	return out, nil
+}
+
+func originSource(value string) string {
+	value = strings.ToValidUTF8(value, "�")
+	var clean strings.Builder
+	for _, r := range value {
+		if unicode.IsPrint(r) {
+			clean.WriteRune(r)
+		} else {
+			clean.WriteByte(' ')
+		}
+	}
+	return text(strings.Join(strings.Fields(clean.String()), " "), maxOriginSourceBytes)
 }
 
 func projectSandbox(input auditSandbox) (*Sandbox, error) {
