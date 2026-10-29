@@ -55,7 +55,7 @@ func argAfter(flag string) string {
 	return ""
 }
 
-func TestPluginToggleOpensPanel(t *testing.T) {
+func TestPluginCameraOpensPanel(t *testing.T) {
 	h := startPlugin(t, recorder.Options{
 		Exe:      os.Args[0],
 		LookPath: func(string) (string, error) { return os.Args[0], nil },
@@ -63,10 +63,9 @@ func TestPluginToggleOpensPanel(t *testing.T) {
 		StopWait: 250 * time.Millisecond,
 	})
 	h.open("bar-a", v1.ViewBar, "DP-1")
-	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "camera") != nil })
 	if err := h.send(&v1.InputEvent{
-		ViewID: "bar-a", Node: "toggle", Event: v1.EventPointer,
-		Button: v1.ButtonSecondary, Output: "DP-1",
+		ViewID: "bar-a", Node: "camera", Event: v1.EventActivate, Output: "DP-1",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -76,19 +75,18 @@ func TestPluginToggleOpensPanel(t *testing.T) {
 	}
 }
 
-func TestPluginRightClickOpensPanelWhenUnavailable(t *testing.T) {
+func TestPluginCameraOpensPanelWhenUnavailable(t *testing.T) {
 	h := startPlugin(t, recorder.Options{
 		LookPath: func(string) (string, error) { return "", os.ErrNotExist },
 	})
 	h.open("bar-a", v1.ViewBar, "DP-1")
-	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "camera") != nil })
 	h.open("panel-a", v1.ViewPanel, "DP-1")
 	h.wait("panel-a", func(n *v1.Node) bool {
 		return n != nil && strings.Contains(treeText(n), "not installed")
 	})
 	if err := h.send(&v1.InputEvent{
-		ViewID: "bar-a", Node: "toggle", Event: v1.EventPointer,
-		Button: v1.ButtonSecondary, Output: "DP-1",
+		ViewID: "bar-a", Node: "camera", Event: v1.EventActivate, Output: "DP-1",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -142,8 +140,8 @@ func TestPluginSettingsRebuildAndNotifyAndShutdown(t *testing.T) {
 	})
 	h.open("bar-a", v1.ViewBar, "DP-1")
 	h.open("bar-b", v1.ViewBar, "HDMI-1")
-	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
-	h.wait("bar-b", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "camera") != nil })
+	h.wait("bar-b", func(n *v1.Node) bool { return findNode(n, "camera") != nil })
 
 	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: map[string]any{
 		"directory": h.dir, "frame_rate": 30.0,
@@ -151,13 +149,13 @@ func TestPluginSettingsRebuildAndNotifyAndShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "record", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 		t.Fatal(err)
 	}
 	h.wait("bar-a", barCapturing)
 	h.wait("bar-b", barCapturing)
 
-	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "stop", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 		t.Fatal(err)
 	}
 	h.wait("bar-a", barIdle)
@@ -197,8 +195,8 @@ func TestPluginFailureNotifyIncludesLogs(t *testing.T) {
 		StopWait: 250 * time.Millisecond,
 	})
 	h.open("bar-a", v1.ViewBar, "DP-1")
-	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
-	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "camera") != nil })
+	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "record", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 		t.Fatal(err)
 	}
 	h.wait("bar-a", barFailed)
@@ -346,7 +344,7 @@ func TestOutputContextCallDoesNotBlockInputQueue(t *testing.T) {
 	if !waitSnapshot("bar-before", time.Second) {
 		t.Fatal("plugin did not enter its input loop")
 	}
-	if err := send(&v1.InputEvent{ViewID: "bar-before", Node: "toggle", Event: v1.EventActivate}); err != nil {
+	if err := send(&v1.InputEvent{ViewID: "bar-before", Node: "record", Event: v1.EventActivate}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -386,7 +384,7 @@ func TestViewOpenDoesNotOverwriteOwnershipBeforeRestore(t *testing.T) {
 		t.Fatal("plugin did not request saved ownership")
 	}
 	h.open("bar-a", v1.ViewBar, "DP-1")
-	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "camera") != nil })
 
 	time.Sleep(60 * time.Millisecond)
 	h.mu.Lock()
@@ -417,10 +415,9 @@ func TestPanelOpenDoesNotSuppressOwnershipRestore(t *testing.T) {
 		t.Fatal("plugin did not request saved ownership")
 	}
 	h.open("bar-a", v1.ViewBar, "DP-1")
-	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
+	h.wait("bar-a", func(n *v1.Node) bool { return findNode(n, "camera") != nil })
 	if err := h.send(&v1.InputEvent{
-		ViewID: "bar-a", Node: "toggle", Event: v1.EventPointer,
-		Button: v1.ButtonSecondary, Output: "DP-1",
+		ViewID: "bar-a", Node: "camera", Event: v1.EventActivate, Output: "DP-1",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -727,18 +724,18 @@ func findNode(n *v1.Node, id string) *v1.Node {
 }
 
 func barCapturing(n *v1.Node) bool {
-	tog := findNode(n, "toggle")
-	return tog != nil && tog.Icon == "stop" && tog.Tone == v1.ToneError
+	camera := findNode(n, "camera")
+	return camera != nil && camera.Icon == "camera" && camera.Tone == v1.ToneError && findNode(n, "stop") != nil
 }
 
 func barFailed(n *v1.Node) bool {
-	tog := findNode(n, "toggle")
-	return tog != nil && tog.Icon == "camera-off"
+	camera := findNode(n, "camera")
+	return camera != nil && camera.Icon == "camera-off"
 }
 
 func barIdle(n *v1.Node) bool {
-	tog := findNode(n, "toggle")
-	return tog != nil && tog.Icon == "record" && tog.Tone == v1.ToneNormal
+	camera := findNode(n, "camera")
+	return camera != nil && camera.Icon == "camera" && camera.Tone == v1.ToneNormal && findNode(n, "record") != nil
 }
 
 func TestPluginHideInactive(t *testing.T) {
@@ -753,7 +750,7 @@ func TestPluginHideInactive(t *testing.T) {
 	}
 	h.open("bar-a", v1.ViewBar, "DP-1")
 	h.wait("bar-a", func(n *v1.Node) bool {
-		return n != nil && n.Kind == v1.KindRow && len(n.Children) == 0
+		return n != nil && n.Kind == v1.KindRow && findNode(n, "camera") != nil && findNode(n, "record") == nil && findNode(n, "stop") == nil
 	})
 }
 

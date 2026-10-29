@@ -9,73 +9,49 @@ import (
 )
 
 const (
-	nodeToggle = "toggle"
+	nodeCamera = "camera"
 	nodeRecord = "record"
 	nodeStop   = "stop"
 	nodeReplay = "replay"
 	nodeSave   = "save"
 )
 
-// barPresentation mirrors the noctalia widget: a glyph that follows the
-// recorder state, the elapsed time while a recording runs, and nothing
-// otherwise. Recording paints in the error colour -- the universal "this is
-// live" signal -- and a failed recorder paints its broken glyph.
-func barPresentation(snap Snapshot) (icon string, tone v1.Tone, text string) {
-	switch snap.Mode {
-	case Unavailable, Failed:
-		return "camera-off", v1.ToneError, ""
-	case Recording, Adopted:
-		return "stop", v1.ToneError, FormatElapsed(snap.Elapsed)
-	case Stopping:
-		return "stop", v1.ToneNormal, ""
-	case ReplayActive:
-		return "record", v1.ToneNormal, ""
-	default:
-		return "record", v1.ToneNormal, ""
-	}
-}
-
-// BarTree is one control: the glyph beside the elapsed time, the whole thing
-// toggling the recording. A running replay grows a save control beside it.
+// BarTree shows the compact identity control and, when there is room, the
+// separate transport controls.
 func BarTree(snap Snapshot, cfg Config) *v1.Node {
 	return BarTreeAtWidth(snap, cfg, barwidth.StandardWidth)
 }
 
 func BarTreeAtWidth(snap Snapshot, cfg Config, width int) *v1.Node {
-	compact := barwidth.Compact(width)
-	icon, tone, text := barPresentation(snap)
-	if compact {
-		text = ""
+	icon, tone := cameraPresentation(snap)
+	camera := &v1.Node{
+		Kind: v1.KindButton, ID: nodeCamera, Key: nodeCamera,
+		Icon: icon, Name: "Open screen recorder", Role: "button", Tone: tone,
+		Events: []v1.EventKind{v1.EventActivate},
 	}
-	// The glyph starts or stops recording but also stops a running replay,
-	// so the accessible name follows the mode instead of saying "recording".
-	toggleName := "Toggle recording"
+	children := []*v1.Node{camera}
+	// ponytail: below 120px, the bar keeps the camera entry point; transport
+	// actions remain available in the panel.
+	if barwidth.Compact(width) || (snap.Mode == Idle && cfg.HideInactive) {
+		return &v1.Node{Kind: v1.KindRow, Children: children}
+	}
+
+	record := &v1.Node{
+		Kind: v1.KindButton, ID: nodeRecord, Key: nodeRecord,
+		Text: "Record", Name: "Record", Role: "button",
+		Events: []v1.EventKind{v1.EventActivate},
+	}
+	stopName := "Stop"
 	if snap.Mode == ReplayActive {
-		toggleName = "Stop replay"
+		stopName = "Stop replay"
 	}
-	children := []*v1.Node{{
-		Kind: v1.KindButton, ID: nodeToggle, Key: nodeToggle,
-		Icon: icon, Text: text, Name: toggleName, Role: "button",
-		Tone: tone, Tabular: true,
-		Events: []v1.EventKind{v1.EventActivate, v1.EventPointer},
-	}}
-	// ponytail: below 64px, keep one accessible control; the panel retains Save.
-	if snap.Mode == ReplayActive && (!compact || width >= 64) {
-		save := &v1.Node{
-			Kind: v1.KindButton, ID: nodeSave, Key: nodeSave,
-			Text: "Save", Name: "Save replay", Role: "button",
-			Events: []v1.EventKind{v1.EventActivate},
-		}
-		if compact {
-			save.Text, save.Icon = "", "download"
-		}
-		children = append(children, save)
+	stop := &v1.Node{
+		Kind: v1.KindButton, ID: nodeStop, Key: nodeStop,
+		Text: "Stop", Name: stopName, Role: "button",
+		Events: []v1.EventKind{v1.EventActivate},
 	}
-	// Hide when idle collapses the widget to nothing rather than a dead glyph.
-	if snap.Mode == Idle && cfg.HideInactive {
-		children = nil
-	}
-	return &v1.Node{Kind: v1.KindRow, Children: children}
+	children = append(children, record, stop)
+	return &v1.Node{Kind: v1.KindRow, Gap: 8, Children: children}
 }
 
 func TooltipTree(snap Snapshot) *v1.Node {
@@ -179,33 +155,18 @@ func presentation(snap Snapshot) (string, v1.Tone) {
 	}
 }
 
-// HandleInput routes one input event against the recorder mode. The bar
-// control toggles: a live recording stops, an idle one starts. The panel
-// keeps explicit record, stop, replay, and save controls; a secondary click
-// anywhere opens the panel.
+// HandleInput routes one activation against the recorder mode. The camera
+// opens the panel; recording and replay actions stay on their named controls.
 func HandleInput(ev *v1.InputEvent, mode Mode) (open, record, stop, replay, save bool) {
 	if ev == nil {
 		return false, false, false, false, false
-	}
-	if ev.Event == v1.EventPointer && ev.Button == v1.ButtonSecondary {
-		return true, false, false, false, false
 	}
 	if ev.Event != v1.EventActivate {
 		return false, false, false, false, false
 	}
 	switch ev.Node {
-	case nodeToggle:
-		switch mode {
-		case Recording, Adopted, Stopping:
-			return false, false, true, false, false
-		case Idle, Failed:
-			return false, true, false, false, false
-		case ReplayActive:
-			// The glyph is the only bar control, so it has to stop the
-			// replay too; ToggleReplay owns the active branch.
-			return false, false, false, true, false
-		}
-		return false, false, false, false, false
+	case nodeCamera:
+		return true, false, false, false, false
 	case nodeRecord:
 		if mode == Idle || mode == Failed {
 			return false, true, false, false, false
@@ -215,7 +176,7 @@ func HandleInput(ev *v1.InputEvent, mode Mode) (open, record, stop, replay, save
 		case Recording, Adopted, Stopping:
 			return false, false, true, false, false
 		case ReplayActive:
-			// Stop stays a stop, whatever is capturing.
+			// The bar's Stop button also stops a running replay.
 			return false, false, false, true, false
 		}
 	case nodeReplay:
