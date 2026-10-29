@@ -25,6 +25,8 @@ const (
 	maxActionsPerFinding = 2
 	maxDefects           = 4
 	maxReduced           = 12
+	maxSandboxApps       = 4
+	maxSandboxEvidence   = 8
 	maxLabelBytes        = 160
 	maxSummaryBytes      = 320
 )
@@ -38,6 +40,7 @@ type Snapshot struct {
 	CatalogRev          string     `json:"catalog_rev,omitempty"`
 	Overall             Overall    `json:"overall"`
 	Network             Network    `json:"network"`
+	Sandbox             *Sandbox   `json:"sandbox,omitempty"`
 	Categories          []Category `json:"categories"`
 	CategoriesShown     int        `json:"categories_shown"`
 	CategoriesTotal     int        `json:"categories_total"`
@@ -62,6 +65,33 @@ type Overall struct {
 type Network struct {
 	VPN                         VPN  `json:"vpn"`
 	TelemetryConnectionsUnknown bool `json:"telemetry_connections_unknown"`
+}
+
+type Sandbox struct {
+	Applicable      bool         `json:"applicable"`
+	Grade           string       `json:"grade"`
+	Apps            []SandboxApp `json:"apps"`
+	AppsShown       int          `json:"apps_shown"`
+	AppsTotal       int          `json:"apps_total"`
+	AppsTruncated   bool         `json:"apps_truncated"`
+	AppsChecked     int          `json:"apps_checked"`
+	AppsIncomplete  int          `json:"apps_incomplete"`
+	PartialCoverage bool         `json:"partial_coverage"`
+	Reason          string       `json:"reason,omitempty"`
+}
+
+type SandboxApp struct {
+	ID               string   `json:"id"`
+	Scope            string   `json:"scope"`
+	Grade            string   `json:"grade"`
+	Grants           []string `json:"grants,omitempty"`
+	GrantsShown      int      `json:"grants_shown,omitempty"`
+	GrantsTotal      int      `json:"grants_total,omitempty"`
+	GrantsTruncated  bool     `json:"grants_truncated,omitempty"`
+	Unknown          []string `json:"unknown,omitempty"`
+	UnknownShown     int      `json:"unknown_shown,omitempty"`
+	UnknownTotal     int      `json:"unknown_total,omitempty"`
+	UnknownTruncated bool     `json:"unknown_truncated,omitempty"`
 }
 
 type VPN struct {
@@ -155,6 +185,7 @@ type auditSnapshot struct {
 		} `json:"vpn"`
 		TelemetryConnectionsUnknown bool `json:"telemetry_connections_unknown"`
 	} `json:"network"`
+	Sandbox    *auditSandbox `json:"sandbox"`
 	Categories []struct {
 		ID                 string `json:"id"`
 		Name               string `json:"name"`
@@ -178,6 +209,31 @@ type auditSnapshot struct {
 	FindingsTruncated bool      `json:"findings_truncated"`
 	Reduced           []Reduced `json:"reduced"`
 	EntryPoint        string    `json:"entry_point"`
+}
+
+type auditSandbox struct {
+	Applicable      bool              `json:"applicable"`
+	Grade           string            `json:"grade"`
+	Apps            []auditSandboxApp `json:"apps"`
+	AppsShown       int               `json:"apps_shown"`
+	AppsTotal       int               `json:"apps_total"`
+	AppsTruncated   bool              `json:"apps_truncated"`
+	AppsChecked     int               `json:"apps_checked"`
+	AppsIncomplete  int               `json:"apps_incomplete"`
+	PartialCoverage bool              `json:"partial_coverage"`
+	Reason          string            `json:"reason"`
+}
+
+type auditSandboxApp struct {
+	ID               string   `json:"id"`
+	Scope            string   `json:"scope"`
+	Grade            string   `json:"grade"`
+	Grants           []string `json:"grants"`
+	GrantsTotal      int      `json:"grants_total"`
+	GrantsTruncated  bool     `json:"grants_truncated"`
+	Unknown          []string `json:"unknown"`
+	UnknownTotal     int      `json:"unknown_total"`
+	UnknownTruncated bool     `json:"unknown_truncated"`
 }
 
 func UnavailableSnapshot(reason string, at time.Time) Snapshot {
@@ -245,6 +301,16 @@ func ParseAuditOutput(data []byte) (Snapshot, error) {
 				KillSwitchNote: text(input.Network.VPN.KillSwitchNote, maxSummaryBytes)},
 			TelemetryConnectionsUnknown: true,
 		},
+	}
+	if input.Sandbox != nil {
+		sandbox, err := projectSandbox(*input.Sandbox)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if sandbox.Applicable && gradeRank(out.Overall.Grade) < gradeRank(sandbox.Grade) {
+			return Snapshot{}, errors.New("privacybit returned an overall grade safer than its Flatpak sandbox grade")
+		}
+		out.Sandbox = sandbox
 	}
 	if out.Network.VPN.State == "" {
 		out.Network.VPN.State = "unknown"
@@ -379,6 +445,104 @@ func ParseAuditOutput(data []byte) (Snapshot, error) {
 
 func projectApp(app App) App {
 	return App{ID: text(app.ID, maxLabelBytes), Name: text(app.Name, maxLabelBytes), Grade: app.Grade, Scope: text(app.Scope, maxLabelBytes)}
+}
+
+func projectSandbox(input auditSandbox) (*Sandbox, error) {
+	if !validGrade(input.Grade) {
+		return nil, fmt.Errorf("privacybit returned invalid Flatpak sandbox grade %q", input.Grade)
+	}
+	if input.AppsShown < 0 || input.AppsTotal < 0 || input.AppsChecked < 0 || input.AppsIncomplete < 0 {
+		return nil, errors.New("privacybit returned negative Flatpak sandbox counts")
+	}
+	appsTotal := max(input.AppsTotal, len(input.Apps))
+	if input.AppsChecked > appsTotal || input.AppsIncomplete > appsTotal {
+		return nil, errors.New("privacybit returned inconsistent Flatpak sandbox counts")
+	}
+	if (input.Applicable && appsTotal > 0 && len(input.Apps) == 0) || (!input.Applicable && appsTotal > 0) {
+		return nil, errors.New("privacybit returned inconsistent Flatpak sandbox applicability")
+	}
+	out := &Sandbox{
+		Applicable: input.Applicable, Grade: input.Grade,
+		AppsTotal: appsTotal, AppsChecked: input.AppsChecked,
+		AppsIncomplete: input.AppsIncomplete,
+		Reason:         text(input.Reason, maxSummaryBytes),
+	}
+	out.PartialCoverage = input.PartialCoverage || input.AppsIncomplete > 0 || (input.Applicable && input.Grade == "unknown")
+	assessedApps, incompleteApps := 0, 0
+	apps := append([]auditSandboxApp(nil), input.Apps...)
+	sort.Slice(apps, func(i, j int) bool {
+		if gradeRank(apps[i].Grade) != gradeRank(apps[j].Grade) {
+			return gradeRank(apps[i].Grade) > gradeRank(apps[j].Grade)
+		}
+		if apps[i].ID != apps[j].ID {
+			return apps[i].ID < apps[j].ID
+		}
+		return apps[i].Scope < apps[j].Scope
+	})
+	for i, app := range apps {
+		id, scope := text(app.ID, maxLabelBytes), text(app.Scope, maxLabelBytes)
+		if id == "" || scope == "" || !validGrade(app.Grade) {
+			return nil, fmt.Errorf("privacybit returned an invalid Flatpak sandbox app %q", id)
+		}
+		grants, grantsTotal, grantsTruncated, err := projectSandboxLabels(app.Grants, app.GrantsTotal, app.GrantsTruncated)
+		if err != nil {
+			return nil, fmt.Errorf("privacybit returned invalid grants for Flatpak app %q: %w", id, err)
+		}
+		unknown, unknownTotal, unknownTruncated, err := projectSandboxLabels(app.Unknown, app.UnknownTotal, app.UnknownTruncated)
+		if err != nil {
+			return nil, fmt.Errorf("privacybit returned invalid unknown permissions for Flatpak app %q: %w", id, err)
+		}
+		if unknownTotal > 0 && app.Grade != "unknown" {
+			return nil, fmt.Errorf("privacybit returned a known Flatpak grade with unclassified evidence for %q", id)
+		}
+		if gradeRank(out.Grade) < gradeRank(app.Grade) {
+			return nil, fmt.Errorf("privacybit returned a Flatpak grade safer than app %q", id)
+		}
+		if app.Grade == "unknown" || unknownTotal > 0 {
+			incompleteApps++
+			out.PartialCoverage = true
+		}
+		if app.Grade != "unknown" {
+			assessedApps++
+		}
+		if i < maxSandboxApps {
+			out.Apps = append(out.Apps, SandboxApp{
+				ID: id, Scope: scope, Grade: app.Grade,
+				Grants: grants, GrantsShown: len(grants), GrantsTotal: grantsTotal, GrantsTruncated: grantsTruncated,
+				Unknown: unknown, UnknownShown: len(unknown), UnknownTotal: unknownTotal, UnknownTruncated: unknownTruncated,
+			})
+		}
+	}
+	if input.AppsChecked < assessedApps || input.AppsIncomplete < incompleteApps {
+		return nil, errors.New("privacybit returned Flatpak sandbox counts below the visible evidence")
+	}
+	if input.Applicable && appsTotal == 0 && input.Grade != "unknown" {
+		return nil, errors.New("privacybit graded Flatpak sandbox without installed app evidence")
+	}
+	if out.PartialCoverage && input.Grade != "unknown" {
+		return nil, errors.New("privacybit returned a known Flatpak sandbox grade with incomplete coverage")
+	}
+	if !input.Applicable && (input.Grade != "unknown" || out.PartialCoverage) {
+		return nil, errors.New("privacybit returned a grade for an inapplicable Flatpak sandbox")
+	}
+	out.AppsShown = len(out.Apps)
+	out.AppsTruncated = input.AppsTruncated || out.AppsShown < out.AppsTotal
+	if out.Apps == nil {
+		out.Apps = []SandboxApp{}
+	}
+	return out, nil
+}
+
+func projectSandboxLabels(values []string, total int, truncated bool) ([]string, int, bool, error) {
+	if total < 0 {
+		return nil, 0, false, errors.New("negative item count")
+	}
+	total = max(total, len(values))
+	shown := make([]string, 0, min(len(values), maxSandboxEvidence))
+	for _, value := range values[:min(len(values), maxSandboxEvidence)] {
+		shown = append(shown, text(value, maxLabelBytes))
+	}
+	return shown, total, truncated || len(shown) < total, nil
 }
 
 func capDefects(defects []Defect) ([]Defect, int, bool) {

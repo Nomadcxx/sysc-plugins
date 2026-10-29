@@ -156,6 +156,48 @@ func TestPrivacyPanelKeepsWorstAppAndSuggestionCountsWhenListsAreTruncated(t *te
 	}
 }
 
+func TestPrivacyPanelShowsSeparateFlatpakSandboxGradesAndCoverage(t *testing.T) {
+	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	input := `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-23T10:00:00Z","overall":{"grade":"unknown"},"sandbox":{"applicable":true,"grade":"unknown","apps":[{"id":"com.example.App","scope":"system","grade":"red","grants":["all devices"],"unknown":[]}],"apps_shown":1,"apps_total":2,"apps_truncated":true,"apps_checked":1,"apps_incomplete":1,"partial_coverage":true,"reason":"one permission query failed"}}}`
+	snapshot, err := ParseAuditOutput([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := PanelTree(snapshot, now, false, "")
+	if err := v1.Validate(root, v1.ViewPanel); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Flatpak sandbox", "Risky", "com.example.App · system", "all devices", "Partial coverage", "1 of 2", "one permission query failed"} {
+		if !treeHasText(root, want) {
+			t.Errorf("panel omitted %q", want)
+		}
+	}
+	if findNodeByKey(root, "privacy-sandbox") == nil {
+		t.Fatal("panel has no dedicated sandbox section")
+	}
+	if grade := findNodeByKey(root, "grade-sandbox"); grade == nil || !treeHasText(grade, "Unrated") {
+		t.Fatalf("partial sandbox grade = %+v, want Unrated", grade)
+	}
+}
+
+func TestPrivacyPanelExplainsWhenNoFlatpakAppsAreInstalled(t *testing.T) {
+	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	input := `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-23T10:00:00Z","overall":{"grade":"green"},"sandbox":{"applicable":false,"grade":"unknown","apps":[],"apps_shown":0,"apps_total":0,"reason":"No Flatpak applications are installed."}}}`
+	snapshot, err := ParseAuditOutput([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := PanelTree(snapshot, now, false, "")
+	if err := v1.Validate(root, v1.ViewPanel); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Flatpak sandbox", "Unrated", "No Flatpak applications are installed."} {
+		if !treeHasText(root, want) {
+			t.Errorf("panel omitted %q", want)
+		}
+	}
+}
+
 func testSnapshot(grade string, generated time.Time) Snapshot {
 	trueValue := true
 	falseValue := false

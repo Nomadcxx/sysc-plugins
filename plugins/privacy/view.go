@@ -84,12 +84,16 @@ func PanelTree(snapshot Snapshot, now time.Time, scanning bool, scanMessage stri
 		root.Children = append(root.Children, staleCard(snapshot, now))
 		return root
 	}
-	root.Children = append(root.Children,
-		categorySection(snapshot),
+	sections := []*v1.Node{categorySection(snapshot)}
+	if sandbox := sandboxSection(snapshot.Sandbox); sandbox != nil {
+		sections = append(sections, sandbox)
+	}
+	sections = append(sections,
 		networkSection(snapshot.Network),
 		findingSection(snapshot),
 		coverageSection(snapshot),
 	)
+	root.Children = append(root.Children, sections...)
 	return root
 }
 
@@ -201,6 +205,65 @@ func categorySection(snapshot Snapshot) *v1.Node {
 		children = append(children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d categories.", snapshot.CategoriesShown, snapshot.CategoriesTotal), Size: "caption", Tone: v1.ToneSubtle})
 	}
 	return &v1.Node{Kind: v1.KindColumn, Key: "privacy-categories", Gap: 8, Children: children}
+}
+
+func sandboxSection(sandbox *Sandbox) *v1.Node {
+	if sandbox == nil {
+		return nil
+	}
+	children := []*v1.Node{
+		sectionTitle("Flatpak sandbox"),
+		{Kind: v1.KindRow, Height: 30, PinEnd: true, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: "Overall permission grade", Size: "label", Bold: true},
+			gradeChip(sandbox.Grade, "grade-sandbox"),
+		}},
+	}
+	if !sandbox.Applicable {
+		reason := sandbox.Reason
+		if reason == "" {
+			reason = "No Flatpak applications were detected."
+		}
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: text(reason, maxSummaryBytes), Tone: v1.ToneSubtle})
+		return card("privacy-sandbox", children...)
+	}
+	if sandbox.AppsTotal > 0 {
+		children = append(children, &v1.Node{Kind: v1.KindText,
+			Text: fmt.Sprintf("Permission queries: %d of %d; %d incomplete.", sandbox.AppsChecked, sandbox.AppsTotal, sandbox.AppsIncomplete),
+			Size: "caption", Tone: v1.ToneSubtle})
+	} else if sandbox.Reason == "" {
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: "Flatpak inventory coverage is incomplete.", Tone: v1.ToneSubtle})
+	}
+	if sandbox.PartialCoverage {
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: "Partial coverage", Size: "caption", Tone: v1.ToneSubtle})
+	} else if sandbox.AppsTotal > 0 {
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: "Permission evidence is complete.", Size: "caption", Tone: v1.ToneSubtle})
+	}
+	if sandbox.Reason != "" {
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: text(sandbox.Reason, maxSummaryBytes), Size: "caption", Tone: v1.ToneSubtle})
+	}
+	for appIndex, app := range sandbox.Apps {
+		rows := []*v1.Node{{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: text(app.ID, maxLabelBytes) + " · " + text(app.Scope, maxLabelBytes), MaxWidth: 400},
+			gradeChip(app.Grade, fmt.Sprintf("grade-sandbox-app-%d", appIndex)),
+		}}}
+		if len(app.Grants) > 0 {
+			rows = append(rows, &v1.Node{Kind: v1.KindText, Text: "Access detected: " + strings.Join(app.Grants, ", "), Size: "caption"})
+		}
+		if app.GrantsTruncated {
+			rows = append(rows, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d recognized grants.", app.GrantsShown, app.GrantsTotal), Size: "caption", Tone: v1.ToneSubtle})
+		}
+		if len(app.Unknown) > 0 {
+			rows = append(rows, &v1.Node{Kind: v1.KindText, Text: "Unclassified evidence: " + strings.Join(app.Unknown, "; "), Size: "caption", Tone: v1.ToneSubtle})
+		}
+		if app.UnknownTruncated {
+			rows = append(rows, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d unclassified items.", app.UnknownShown, app.UnknownTotal), Size: "caption", Tone: v1.ToneSubtle})
+		}
+		children = append(children, card(fmt.Sprintf("privacy-sandbox-app-%d", appIndex), rows...))
+	}
+	if sandbox.AppsTruncated {
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d installed Flatpak copies.", sandbox.AppsShown, sandbox.AppsTotal), Size: "caption", Tone: v1.ToneSubtle})
+	}
+	return card("privacy-sandbox", children...)
 }
 
 func networkSection(network Network) *v1.Node {

@@ -11,10 +11,12 @@ In **Settings → Bar**, add **Privacybit** from the plugin widgets. Click its
 shield and grade label in the bar to open the panel. The Control Centre's
 **Privacy** page also has an **Open full audit** button.
 
-The panel shows the overall grade, app categories, VPN observations, findings,
-and coverage limits. Use **Scan now** to refresh the audit. The bar and Control
-Centre read the same published result. Older or unavailable results appear as
-**Unrated**, and capped lists say how many entries are hidden.
+The panel shows the overall grade, app categories, a separate Flatpak sandbox
+grade with bounded per-installation evidence, VPN observations, findings, and
+coverage limits. When the app list is capped, highest-risk copies appear first.
+Use **Scan now** to refresh the audit. The bar and Control Centre read the same
+published result. Older or unavailable results appear as **Unrated**, and
+capped lists say how many entries are hidden.
 
 Install `privacybit` separately. The plugin checks `PATH`, then
 `~/.local/bin/privacybit`; if neither is executable, it shows an explicit
