@@ -269,7 +269,6 @@ func UnavailableSnapshot(reason string, at time.Time) Snapshot {
 	}
 	return Snapshot{
 		Schema: Schema, Available: false, Reason: text(reason, maxSummaryBytes),
-		Hint:        "Install privacybit and make sure it is on PATH or in ~/.local/bin.",
 		GeneratedAt: at.UTC(), Overall: Overall{Grade: "unknown"},
 		Network:    Network{VPN: VPN{State: "unknown", Defects: []Defect{}}, TelemetryConnectionsUnknown: true},
 		Categories: []Category{}, Findings: []Finding{}, Reduced: []Reduced{},
