@@ -396,10 +396,16 @@ func coverageSection(snapshot Snapshot) *v1.Node {
 			continue
 		}
 		label := text(item.Fact, maxLabelBytes)
+		if len(item.Sources) > 0 {
+			label += " (" + text(strings.Join(item.Sources, ", "), maxSummaryBytes) + ")"
+		}
 		if item.Effect != "" {
 			label += " · " + text(item.Effect, maxSummaryBytes)
 		}
 		children = append(children, &v1.Node{Kind: v1.KindText, Text: label, Size: "caption", Tone: v1.ToneSubtle})
+		if item.SourcesTruncated {
+			children = append(children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d sources for %s.", item.SourcesShown, item.SourcesTotal, text(item.Fact, maxLabelBytes)), Size: "caption", Tone: v1.ToneSubtle})
+		}
 	}
 	if snapshot.ReducedTruncated {
 		children = append(children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d coverage notes.", snapshot.ReducedShown, snapshot.ReducedTotal), Size: "caption", Tone: v1.ToneSubtle})
