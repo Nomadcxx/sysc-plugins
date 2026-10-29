@@ -3,7 +3,7 @@
   "id": "org.sysc.privacy",
   "name": "Privacy audit",
   "description": "A read-only privacy audit with a bar widget and detailed panel.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "protocol": {
     "major": 1,
     "minor": 8
