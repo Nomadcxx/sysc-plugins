@@ -21,13 +21,13 @@ func TestPluginRecorderGateRecordArgsNotifyAndDisable(t *testing.T) {
 	h := startRecorder(t, "hang")
 	h.open("bar-a", v1.ViewBar, "DP-1")
 	h.open("bar-b", v1.ViewBar, "HDMI-1")
-	h.waitView("bar-a", func(n *v1.Node) bool { return findNode(n, "toggle") != nil })
+	h.waitView("bar-a", func(n *v1.Node) bool { return findNode(n, "camera") != nil })
 	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: map[string]any{
 		"directory": h.dir, "video_source": "focused", "frame_rate": 30.0,
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "record", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 		t.Fatal(err)
 	}
 	h.waitView("bar-a", barCapturing)
@@ -41,7 +41,7 @@ func TestPluginRecorderGateRecordArgsNotifyAndDisable(t *testing.T) {
 		t.Fatal("recording left no backend pid")
 	}
 
-	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "stop", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 		t.Fatal(err)
 	}
 	h.waitView("bar-a", barIdle)
@@ -67,7 +67,7 @@ func TestPluginRecorderGateCrashHungZeroFloodAndRejectedConfig(t *testing.T) {
 		if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: map[string]any{"directory": h.dir}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "record", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 			t.Fatal(err)
 		}
 		h.waitView("bar-a", barFailed)
@@ -79,11 +79,11 @@ func TestPluginRecorderGateCrashHungZeroFloodAndRejectedConfig(t *testing.T) {
 		if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: map[string]any{"directory": h.dir}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "record", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 			t.Fatal(err)
 		}
 		h.waitView("bar-a", barCapturing)
-		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "stop", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 			t.Fatal(err)
 		}
 		h.waitView("bar-a", barFailed)
@@ -94,12 +94,12 @@ func TestPluginRecorderGateCrashHungZeroFloodAndRejectedConfig(t *testing.T) {
 		if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: map[string]any{"directory": h.dir}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "record", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 			t.Fatal(err)
 		}
 		h.waitView("bar-a", barCapturing)
 		pid := h.recorderPID()
-		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "stop", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 			t.Fatal(err)
 		}
 		h.waitView("bar-a", func(n *v1.Node) bool { return barFailed(n) || barIdle(n) })
@@ -117,11 +117,11 @@ func TestPluginRecorderGateCrashHungZeroFloodAndRejectedConfig(t *testing.T) {
 		if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: map[string]any{"directory": h.dir}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "record", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 			t.Fatal(err)
 		}
 		h.waitView("bar-a", barCapturing)
-		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "stop", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 			t.Fatal(err)
 		}
 		h.waitView("bar-a", barIdle)
@@ -134,7 +134,7 @@ func TestPluginRecorderGateCrashHungZeroFloodAndRejectedConfig(t *testing.T) {
 		}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+		if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "record", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 			t.Fatal(err)
 		}
 		h.waitArgs(func(a []string) bool { return hasArg(a, "-f", "60") })
@@ -147,7 +147,7 @@ func TestPluginRecorderGateAdoptionAndAmbiguous(t *testing.T) {
 	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: map[string]any{"directory": h.dir}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+	if err := h.send(&v1.InputEvent{ViewID: "bar-a", Node: "record", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 		t.Fatal(err)
 	}
 	h.waitView("bar-a", barCapturing)
@@ -168,7 +168,7 @@ func TestPluginRecorderGateAdoptionAndAmbiguous(t *testing.T) {
 	h2 := startRecorderWithState(t, "hang", h.binDir, own)
 	h2.open("bar-a", v1.ViewBar, "DP-1")
 	h2.waitView("bar-a", barCapturing)
-	if err := h2.send(&v1.InputEvent{ViewID: "bar-a", Node: "toggle", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
+	if err := h2.send(&v1.InputEvent{ViewID: "bar-a", Node: "stop", Event: v1.EventActivate, Output: "DP-1"}); err != nil {
 		t.Fatal(err)
 	}
 	h2.waitView("bar-a", barIdle)

@@ -82,17 +82,15 @@ func TestBarTreeStates(t *testing.T) {
 		mode     Mode
 		icon     string
 		tone     v1.Tone
-		wantText string
-		wantName string
-		save     bool
+		stopName string
 	}{
-		{Idle, "record", v1.ToneNormal, "", "Toggle recording", false},
-		{Recording, "stop", v1.ToneError, "00:00", "Toggle recording", false},
-		{Adopted, "stop", v1.ToneError, "00:00", "Toggle recording", false},
-		{Stopping, "stop", v1.ToneNormal, "", "Toggle recording", false},
-		{ReplayActive, "record", v1.ToneNormal, "", "Stop replay", true},
-		{Unavailable, "camera-off", v1.ToneError, "", "Toggle recording", false},
-		{Failed, "camera-off", v1.ToneError, "", "Toggle recording", false},
+		{Idle, "camera", v1.ToneNormal, "Stop"},
+		{Recording, "camera", v1.ToneError, "Stop"},
+		{Adopted, "camera", v1.ToneError, "Stop"},
+		{Stopping, "camera", v1.ToneNormal, "Stop"},
+		{ReplayActive, "replay", v1.ToneNormal, "Stop replay"},
+		{Unavailable, "camera-off", v1.ToneError, "Stop"},
+		{Failed, "camera-off", v1.ToneError, "Stop"},
 	}
 	for _, tc := range cases {
 		root := BarTree(Snapshot{Mode: tc.mode}, Config{})
@@ -102,100 +100,87 @@ func TestBarTreeStates(t *testing.T) {
 		if root.Kind != v1.KindRow {
 			t.Fatalf("%s root = kind %q", tc.mode, root.Kind)
 		}
-		toggle := childByID(root, nodeToggle)
-		if toggle == nil {
-			t.Fatalf("%s missing toggle", tc.mode)
+		camera := childByID(root, "camera")
+		if camera == nil {
+			t.Fatalf("%s missing camera control", tc.mode)
 		}
-		if toggle.Icon != tc.icon {
-			t.Fatalf("%s toggle icon = %q, want %q", tc.mode, toggle.Icon, tc.icon)
+		if camera.Icon != tc.icon {
+			t.Fatalf("%s camera icon = %q, want %q", tc.mode, camera.Icon, tc.icon)
 		}
-		if toggle.Tone != tc.tone {
-			t.Fatalf("%s toggle tone = %q, want %q", tc.mode, toggle.Tone, tc.tone)
+		if camera.Tone != tc.tone {
+			t.Fatalf("%s camera tone = %q, want %q", tc.mode, camera.Tone, tc.tone)
 		}
-		if toggle.Text != tc.wantText {
-			t.Fatalf("%s toggle text = %q, want %q", tc.mode, toggle.Text, tc.wantText)
+		if camera.Name != "Open screen recorder" || camera.Role != "button" || len(camera.Events) != 1 || camera.Events[0] != v1.EventActivate {
+			t.Fatalf("%s camera interaction = %+v", tc.mode, camera)
 		}
-		if toggle.Name != tc.wantName {
-			t.Fatalf("%s toggle name = %q, want %q", tc.mode, toggle.Name, tc.wantName)
+		record := childByID(root, nodeRecord)
+		if record == nil || record.Text != "Record" || record.Name != "Record" {
+			t.Fatalf("%s Record = %+v", tc.mode, record)
 		}
-		save := childByID(root, nodeSave)
-		if tc.save && save == nil {
-			t.Fatalf("%s missing save control", tc.mode)
+		stop := childByID(root, nodeStop)
+		if stop == nil || stop.Text != "Stop" || stop.Name != tc.stopName {
+			t.Fatalf("%s Stop = %+v", tc.mode, stop)
 		}
-		if !tc.save && save != nil {
-			t.Fatalf("%s has save control: %+v", tc.mode, save)
+		if childByID(root, nodeSave) != nil {
+			t.Fatalf("%s exposes replay save on the bar", tc.mode)
 		}
 	}
 }
 
 func TestBarTreeFitsSideWidths(t *testing.T) {
-	// The bar glyph stops a running replay too, so its accessible name
-	// tracks the mode. Both bar tests want the same expectation.
-	wantToggleName := func(m Mode) string {
-		if m == ReplayActive {
-			return "Stop replay"
-		}
-		return "Toggle recording"
-	}
 	for _, state := range []Snapshot{
 		{Mode: Idle}, {Mode: Recording, Elapsed: 72 * time.Second}, {Mode: ReplayActive}, {Mode: Failed},
 	} {
-		for _, width := range []int{shelllint.BarWidth, 28, 32, 64} {
-			bar := BarTree(state, Config{})
-			if width != shelllint.BarWidth {
-				bar = BarTreeAtWidth(state, Config{}, width)
-			}
+		for _, width := range []int{shelllint.BarWidth, 28, 32, 64, 120} {
+			bar := BarTreeAtWidth(state, Config{}, width)
 			for _, finding := range shelllint.Tree(bar, v1.ViewBar, width, shelllint.BarHeight) {
 				t.Errorf("mode %s width %d: %s", state.Mode, width, finding)
 			}
-			if toggle := childByID(bar, nodeToggle); width <= 64 && toggle != nil && toggle.Text != "" {
-				t.Errorf("mode %s width %d retains elapsed text", state.Mode, width)
+			camera := childByID(bar, "camera")
+			if camera == nil {
+				t.Fatalf("mode %s width %d lost camera", state.Mode, width)
 			}
-			if toggle := childByID(bar, nodeToggle); state.Mode == Idle || state.Mode == Recording || state.Mode == ReplayActive || state.Mode == Failed {
-				if toggle == nil || toggle.Name != wantToggleName(state.Mode) || toggle.Role != "button" || len(toggle.Events) != 2 || toggle.Events[0] != v1.EventActivate || toggle.Events[1] != v1.EventPointer {
-					t.Fatalf("mode %s width %d toggle interaction = %+v", state.Mode, width, toggle)
+			if width < 120 {
+				if childByID(bar, nodeRecord) != nil || childByID(bar, nodeStop) != nil {
+					t.Fatalf("mode %s width %d shows actions beside the camera", state.Mode, width)
 				}
+			} else if childByID(bar, nodeRecord) == nil || childByID(bar, nodeStop) == nil {
+				t.Fatalf("mode %s width %d missing transport controls", state.Mode, width)
 			}
-			if state.Mode == ReplayActive {
-				save := childByID(bar, nodeSave)
-				if width < 64 {
-					if save != nil {
-						t.Fatalf("32px bar should keep the save action in the panel, got %+v", save)
-					}
-					if panelSave := childByID(PanelTree(state, Config{ReplayEnabled: true}, time.Time{}), nodeSave); panelSave == nil || panelSave.Name != "Save replay" {
-						t.Fatalf("32px bar lost panel save action: %+v", panelSave)
-					}
-				} else if save == nil || save.Name != "Save replay" || save.Role != "button" || len(save.Events) != 1 || save.Events[0] != v1.EventActivate {
-					t.Fatalf("width %d save interaction = %+v", width, save)
-				} else if width == 64 && (save.Text != "" || save.Icon != "download") {
-					t.Fatalf("64px save control = %+v", save)
-				}
+			if childByID(bar, nodeSave) != nil {
+				t.Fatalf("mode %s width %d exposes save on the bar", state.Mode, width)
 			}
 		}
+	}
+	panelSave := childByID(PanelTree(Snapshot{Mode: ReplayActive}, Config{ReplayEnabled: true}, time.Time{}), nodeSave)
+	if panelSave == nil || panelSave.Name != "Save replay" {
+		t.Fatalf("replay save missing from panel: %+v", panelSave)
 	}
 }
 
 func TestBarTreeCarriesElapsedWhileRecording(t *testing.T) {
 	t.Parallel()
 	root := BarTree(Snapshot{Mode: Recording, Elapsed: 72 * time.Second}, Config{})
-	toggle := childByID(root, nodeToggle)
-	if toggle.Text != "01:12" || !toggle.Tabular {
-		t.Fatalf("toggle = %+v", toggle)
+	if strings.Contains(flatten(root), "01:12") {
+		t.Fatalf("elapsed leaked onto the bar: %q", flatten(root))
+	}
+	if !strings.Contains(flatten(PanelTree(Snapshot{Mode: Recording, Elapsed: 72 * time.Second}, Config{}, time.Time{})), "01:12") {
+		t.Fatal("panel lost elapsed time")
 	}
 }
 
 func TestBarTreeHidesWhenIdleAndConfigured(t *testing.T) {
 	t.Parallel()
 	hidden := BarTree(Snapshot{Mode: Idle}, Config{HideInactive: true})
-	if len(hidden.Children) != 0 {
-		t.Fatalf("hide_inactive idle children = %d, want none", len(hidden.Children))
+	if childByID(hidden, "camera") == nil || childByID(hidden, nodeRecord) != nil || childByID(hidden, nodeStop) != nil {
+		t.Fatalf("hide_inactive idle tree = %q", flatten(hidden))
 	}
 	if err := v1.Validate(hidden, v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
 	shown := BarTree(Snapshot{Mode: Recording}, Config{HideInactive: true})
-	if childByID(shown, nodeToggle) == nil {
-		t.Fatalf("hide_inactive hid the control while recording: %q", flatten(shown))
+	if childByID(shown, "camera") == nil || childByID(shown, nodeRecord) == nil || childByID(shown, nodeStop) == nil {
+		t.Fatalf("hide_inactive hid live controls: %q", flatten(shown))
 	}
 }
 
@@ -213,73 +198,44 @@ func TestTooltipTreeIncludesFailureLog(t *testing.T) {
 
 func TestHandleInputButtons(t *testing.T) {
 	t.Parallel()
-	open, record, stop, replay, save := HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventActivate}, Idle)
-	if open || !record || stop || replay || save {
-		t.Fatalf("toggle idle = %v %v %v %v %v", open, record, stop, replay, save)
+	assert := func(node string, mode Mode, wantOpen, wantRecord, wantStop, wantReplay, wantSave bool) {
+		t.Helper()
+		open, record, stop, replay, save := HandleInput(&v1.InputEvent{Node: node, Event: v1.EventActivate}, mode)
+		if open != wantOpen || record != wantRecord || stop != wantStop || replay != wantReplay || save != wantSave {
+			t.Fatalf("%s in %s = %v %v %v %v %v", node, mode, open, record, stop, replay, save)
+		}
 	}
 
+	for _, mode := range []Mode{Idle, Recording, Adopted, Stopping, ReplayActive, Unavailable, Failed} {
+		assert("camera", mode, true, false, false, false, false)
+	}
+	assert(nodeRecord, Idle, false, true, false, false, false)
+	assert(nodeRecord, Recording, false, false, false, false, false)
+	assert(nodeRecord, Failed, false, true, false, false, false)
+	assert(nodeRecord, Unavailable, false, false, false, false, false)
 	for _, mode := range []Mode{Recording, Adopted, Stopping} {
-		open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventActivate}, mode)
-		if open || record || !stop || replay || save {
-			t.Fatalf("toggle live in %s = %v %v %v %v %v", mode, open, record, stop, replay, save)
-		}
+		assert(nodeStop, mode, false, false, true, false, false)
 	}
-	for _, mode := range []Mode{Unavailable, ReplayActive} {
-		_, record, _, _, _ = HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventActivate}, mode)
-		if record {
-			t.Fatalf("toggle recorded in %s", mode)
-		}
-	}
-	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventActivate}, Failed)
-	if open || !record || stop || replay || save {
-		t.Fatalf("toggle failed = %v %v %v %v %v", open, record, stop, replay, save)
-	}
+	assert(nodeStop, Idle, false, false, false, false, false)
+	assert(nodeStop, Unavailable, false, false, false, false, false)
+	assert(nodeStop, Failed, false, false, false, false, false)
+	assert(nodeStop, ReplayActive, false, false, false, true, false)
+	assert(nodeReplay, Failed, false, false, false, true, false)
+	assert(nodeSave, ReplayActive, false, false, false, false, true)
 
-	// The panel keeps explicit controls.
-	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeRecord, Event: v1.EventActivate}, Idle)
-	if open || !record || stop || replay || save {
-		t.Fatalf("record idle = %v %v %v %v %v", open, record, stop, replay, save)
-	}
-	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeRecord, Event: v1.EventActivate}, Recording)
-	if open || record || stop || replay || save {
-		t.Fatalf("record while recording = %v %v %v %v %v", open, record, stop, replay, save)
-	}
-	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeRecord, Event: v1.EventActivate}, Failed)
-	if open || !record || stop || replay || save {
-		t.Fatalf("record failed = %v %v %v %v %v", open, record, stop, replay, save)
-	}
-	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeReplay, Event: v1.EventActivate}, Failed)
-	if open || record || stop || !replay || save {
-		t.Fatalf("replay failed = %v %v %v %v %v", open, record, stop, replay, save)
-	}
-	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeStop, Event: v1.EventActivate}, Recording)
-	if open || record || !stop || replay || save {
-		t.Fatalf("stop recording = %v %v %v %v %v", open, record, stop, replay, save)
-	}
-	for _, mode := range []Mode{Idle, Unavailable, Failed, ReplayActive} {
-		_, _, stop, _, _ = HandleInput(&v1.InputEvent{Node: nodeStop, Event: v1.EventActivate}, mode)
-		if stop {
-			t.Fatalf("stop live in %s", mode)
+	for _, button := range []v1.PointerButton{v1.ButtonSecondary, v1.ButtonMiddle} {
+		open, record, stop, replay, save := HandleInput(&v1.InputEvent{Node: "camera", Event: v1.EventPointer, Button: button}, Idle)
+		if open || record || stop || replay || save {
+			t.Fatalf("pointer button %v = %v %v %v %v %v", button, open, record, stop, replay, save)
 		}
-	}
-
-	for _, mode := range []Mode{Idle, Unavailable, Failed, Recording} {
-		open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventPointer, Button: v1.ButtonSecondary}, mode)
-		if !open || record || stop || replay || save {
-			t.Fatalf("toggle secondary in %s = %v %v %v %v %v", mode, open, record, stop, replay, save)
-		}
-	}
-	open, record, stop, replay, save = HandleInput(&v1.InputEvent{Node: nodeToggle, Event: v1.EventPointer, Button: v1.ButtonMiddle}, Idle)
-	if open || record || stop || replay || save {
-		t.Fatalf("middle = %v %v %v %v %v", open, record, stop, replay, save)
 	}
 }
 
-// A replay that cannot be stopped keeps capturing the screen, so both the
-// bar toggle and the panel control have to reach ToggleReplay while one runs.
+// A replay that cannot be stopped keeps capturing the screen, so the bar
+// Stop control and panel controls have to reach ToggleReplay while one runs.
 func TestRunningReplayOffersAStopControl(t *testing.T) {
 	t.Parallel()
-	for _, node := range []string{nodeReplay, nodeToggle, nodeStop} {
+	for _, node := range []string{nodeReplay, nodeStop} {
 		open, record, stop, replay, save := HandleInput(&v1.InputEvent{Node: node, Event: v1.EventActivate}, ReplayActive)
 		if open || record || stop || !replay || save {
 			t.Fatalf("%s during replay = %v %v %v %v %v", node, open, record, stop, replay, save)
