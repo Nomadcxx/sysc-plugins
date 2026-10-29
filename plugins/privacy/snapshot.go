@@ -143,8 +143,10 @@ type App struct {
 }
 
 type AppOrigin struct {
-	Source   string `json:"source"`
-	Official bool   `json:"official"`
+	Source string `json:"source"`
+	// Official indicates that Source matches a recognized official label. It
+	// does not authenticate the configured source.
+	Official bool `json:"official"`
 }
 
 type Finding struct {

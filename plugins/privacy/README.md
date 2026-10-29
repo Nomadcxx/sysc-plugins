@@ -14,11 +14,12 @@ shield and grade label in the bar to open the panel. The Control Centre's
 The panel shows the overall grade, app categories, unmatched apps, origin
 context, a separate Flatpak sandbox grade with bounded per-installation
 evidence, VPN observations, findings, and coverage limits. Unmatched apps stay
-**Unrated**. Origin names include whether each source is marked official; they
-do not change grades. When a list is capped, the panel says how many entries it
-shows. Use **Scan now** to refresh the audit. The bar and Control Centre read
-the same published result. Older or unavailable results also appear as
-**Unrated**.
+**Unrated**. Origin names show whether a name matches a recognized official
+label. privacybit does not authenticate the configured repository or remote,
+and origin context does not change grades. When a list is capped, the panel says
+how many entries it shows. Use **Scan now** to refresh the audit. The bar and
+Control Centre read the same published result. Older or unavailable results
+also appear as **Unrated**.
 
 Install `privacybit` separately. The plugin checks `PATH`, then
 `~/.local/bin/privacybit`; if neither is executable, it shows an explicit
