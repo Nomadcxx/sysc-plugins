@@ -58,7 +58,7 @@ func runPlugin(ctx context.Context, in io.Reader, out io.Writer, runAudit auditR
 
 func runPluginWithInterval(ctx context.Context, in io.Reader, out io.Writer, runAudit auditRunner, interval time.Duration) error {
 	client := v1.NewClient(in, out)
-	if _, err := client.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.privacy", Name: "Privacy audit", Version: "0.1.2"})); err != nil {
+	if _, err := client.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.privacy", Name: "Privacy audit", Version: "0.1.3"})); err != nil {
 		return err
 	}
 	pluginCtx, cancel := context.WithCancel(ctx)
