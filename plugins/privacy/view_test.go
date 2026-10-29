@@ -218,7 +218,7 @@ func TestPrivacyPanelShowsOriginAsContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := PanelTree(snapshot, now, false, "")
-	for _, want := range []string{"Origin context", "flathub (official)", "aur (not marked official)"} {
+	for _, want := range []string{"Origin context", "flathub (recognized official label; configured source not verified)", "aur (not marked official)"} {
 		if !treeHasText(root, want) {
 			t.Errorf("panel omitted %q", want)
 		}
