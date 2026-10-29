@@ -166,6 +166,40 @@ func TestParseAuditOutputAcceptsLegacyAppWithoutOriginContext(t *testing.T) {
 	}
 }
 
+func TestParseAuditOutputPreservesBoundedUnmatchedOrigins(t *testing.T) {
+	var unmatched strings.Builder
+	for i := range 15 {
+		if i > 0 {
+			unmatched.WriteByte(',')
+		}
+		fmt.Fprintf(&unmatched, `{"name":"Unknown %02d","grade":"unknown","origins":[{"source":"repo-%02d","official":false}],"origins_shown":1,"origins_total":1}`, i, i)
+	}
+	input := fmt.Sprintf(`{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-23T10:00:00Z","overall":{"grade":"green"},"unmatched":[%s],"unmatched_total":15}}`, unmatched.String())
+	snapshot, err := ParseAuditOutput([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Unmatched          []App `json:"unmatched"`
+		UnmatchedShown     int   `json:"unmatched_shown"`
+		UnmatchedTotal     int   `json:"unmatched_total"`
+		UnmatchedTruncated bool  `json:"unmatched_truncated"`
+	}
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Unmatched) != 12 || got.UnmatchedShown != 12 || got.UnmatchedTotal != 15 || !got.UnmatchedTruncated {
+		t.Fatalf("unmatched projection = %d shown %d of %d truncated=%t, want 12 of 15", len(got.Unmatched), got.UnmatchedShown, got.UnmatchedTotal, got.UnmatchedTruncated)
+	}
+	if len(got.Unmatched[0].Origins) != 1 || got.Unmatched[0].Grade != "unknown" {
+		t.Fatalf("unmatched app projection = %+v, want origin context and unknown grade", got.Unmatched[0])
+	}
+}
+
 func TestParseAuditOutputBoundsFlatpakSandboxEvidence(t *testing.T) {
 	labels := make([]string, maxSandboxEvidence+2)
 	for i := range labels {

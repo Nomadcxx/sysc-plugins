@@ -27,6 +27,7 @@ const (
 	maxReduced           = 12
 	maxSandboxApps       = 4
 	maxSandboxEvidence   = 8
+	maxUnmatchedApps     = 12
 	maxOriginsPerApp     = 8
 	maxOriginSourceBytes = 80
 	maxLabelBytes        = 160
@@ -47,6 +48,10 @@ type Snapshot struct {
 	CategoriesShown     int        `json:"categories_shown"`
 	CategoriesTotal     int        `json:"categories_total"`
 	CategoriesTruncated bool       `json:"categories_truncated"`
+	Unmatched           []App      `json:"unmatched,omitempty"`
+	UnmatchedShown      int        `json:"unmatched_shown,omitempty"`
+	UnmatchedTotal      int        `json:"unmatched_total,omitempty"`
+	UnmatchedTruncated  bool       `json:"unmatched_truncated,omitempty"`
 	Findings            []Finding  `json:"findings"`
 	FindingsShown       int        `json:"findings_shown"`
 	FindingsTotal       int        `json:"findings_total"`
@@ -207,7 +212,10 @@ type auditSnapshot struct {
 		InstalledTruncated bool   `json:"installed_truncated"`
 		Worst              *App   `json:"worst"`
 	} `json:"categories"`
-	Findings []struct {
+	Unmatched          []App `json:"unmatched"`
+	UnmatchedTotal     int   `json:"unmatched_total"`
+	UnmatchedTruncated bool  `json:"unmatched_truncated"`
+	Findings           []struct {
 		ID       string   `json:"id"`
 		Severity string   `json:"severity"`
 		Grade    string   `json:"grade"`
@@ -378,6 +386,27 @@ func ParseAuditOutput(data []byte) (Snapshot, error) {
 	}
 	out.CategoriesShown = len(out.Categories)
 	out.CategoriesTruncated = out.CategoriesTruncated || out.CategoriesShown < out.CategoriesTotal
+	if input.UnmatchedTotal < 0 {
+		return Snapshot{}, errors.New("privacybit returned a negative unmatched app count")
+	}
+	out.UnmatchedTotal = max(input.UnmatchedTotal, len(input.Unmatched))
+	out.UnmatchedTruncated = input.UnmatchedTruncated
+	for _, app := range input.Unmatched {
+		if app.Grade != "unknown" {
+			return Snapshot{}, fmt.Errorf("privacybit returned non-unknown grade %q for unmatched app %q", app.Grade, app.Name)
+		}
+		projectedApp, err := projectApp(app)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("privacybit returned invalid origin context for unmatched app %q: %w", app.Name, err)
+		}
+		out.Unmatched = append(out.Unmatched, projectedApp)
+	}
+	if len(out.Unmatched) > maxUnmatchedApps {
+		out.Unmatched = out.Unmatched[:maxUnmatchedApps]
+		out.UnmatchedTruncated = true
+	}
+	out.UnmatchedShown = len(out.Unmatched)
+	out.UnmatchedTruncated = out.UnmatchedTruncated || out.UnmatchedShown < out.UnmatchedTotal
 
 	out.FindingsTotal = input.FindingsTotal
 	if out.FindingsTotal < len(input.Findings) {

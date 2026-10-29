@@ -17,6 +17,11 @@ func TestCapturePanel(t *testing.T) {
 	app := &snapshot.Categories[0].Installed[0]
 	app.Origins = []AppOrigin{{Source: "flathub", Official: true}, {Source: "community"}}
 	app.OriginsShown, app.OriginsTotal = len(app.Origins), len(app.Origins)
+	snapshot.Unmatched = []App{{
+		Name: "Unknown browser", Grade: "unknown", Origins: []AppOrigin{{Source: "community"}},
+		OriginsShown: 1, OriginsTotal: 1,
+	}}
+	snapshot.UnmatchedShown, snapshot.UnmatchedTotal = 1, 1
 	snapshot.Sandbox = &Sandbox{
 		Applicable: true, Grade: "unknown", AppsTotal: 1, AppsChecked: 1,
 		AppsIncomplete: 1, PartialCoverage: true,

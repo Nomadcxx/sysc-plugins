@@ -85,6 +85,9 @@ func PanelTree(snapshot Snapshot, now time.Time, scanning bool, scanMessage stri
 		return root
 	}
 	sections := []*v1.Node{categorySection(snapshot)}
+	if unmatched := unmatchedSection(snapshot); unmatched != nil {
+		sections = append(sections, unmatched)
+	}
 	if sandbox := sandboxSection(snapshot.Sandbox); sandbox != nil {
 		sections = append(sections, sandbox)
 	}
@@ -228,6 +231,28 @@ func appendOriginContext(rows []*v1.Node, app App) []*v1.Node {
 			Size: "caption", Tone: v1.ToneSubtle})
 	}
 	return rows
+}
+
+func unmatchedSection(snapshot Snapshot) *v1.Node {
+	if len(snapshot.Unmatched) == 0 && !snapshot.UnmatchedTruncated {
+		return nil
+	}
+	rows := []*v1.Node{sectionTitle("Unmatched apps")}
+	for index, app := range snapshot.Unmatched {
+		name := text(app.Name, maxLabelBytes)
+		if app.Scope != "" {
+			name += " · " + text(app.Scope, maxLabelBytes)
+		}
+		rows = append(rows, &v1.Node{Kind: v1.KindRow, Gap: 8, PinEnd: true, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: name, MaxWidth: 400},
+			gradeChip("unknown", fmt.Sprintf("grade-unmatched-%d", index)),
+		}})
+		rows = appendOriginContext(rows, app)
+	}
+	if snapshot.UnmatchedTruncated {
+		rows = append(rows, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d unmatched apps.", snapshot.UnmatchedShown, snapshot.UnmatchedTotal), Size: "caption", Tone: v1.ToneSubtle})
+	}
+	return card("privacy-unmatched", rows...)
 }
 
 func sandboxSection(sandbox *Sandbox) *v1.Node {

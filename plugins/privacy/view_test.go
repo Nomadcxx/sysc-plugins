@@ -245,6 +245,20 @@ func TestPrivacyPanelShowsOriginForWorstAppOutsideTheVisibleList(t *testing.T) {
 	}
 }
 
+func TestPrivacyPanelShowsUnmatchedOriginContext(t *testing.T) {
+	input := `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-23T10:00:00Z","overall":{"grade":"green"},"unmatched":[{"name":"Mystery browser","grade":"unknown","origins":[{"source":"community","official":false}],"origins_shown":1,"origins_total":1}],"unmatched_total":1}}`
+	snapshot, err := ParseAuditOutput([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := PanelTree(snapshot, time.Date(2026, 10, 23, 10, 0, 1, 0, time.UTC), false, "")
+	for _, want := range []string{"Unmatched apps", "Mystery browser", "Unrated", "Origin context: community (not marked official)"} {
+		if !treeHasText(root, want) {
+			t.Errorf("privacy panel omitted %q", want)
+		}
+	}
+}
+
 func TestPrivacyPanelExplainsWhenNoFlatpakAppsAreInstalled(t *testing.T) {
 	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
 	input := `{"t":"done","snapshot":{"schema":1,"available":true,"generated_at":"2026-10-23T10:00:00Z","overall":{"grade":"green"},"sandbox":{"applicable":false,"grade":"unknown","apps":[],"apps_shown":0,"apps_total":0,"reason":"No Flatpak applications are installed."}}}`
