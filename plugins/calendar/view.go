@@ -35,12 +35,10 @@ func BarTreeAtWidth(events []Event, now time.Time, width int) *v1.Node {
 	compact := barwidth.Compact(width)
 	event, active, ok := NextTimedEvent(events, now)
 	if !ok {
-		label := now.Format("Mon 2 Jan")
-		if compact {
-			label = ""
-		}
-		return &v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{{
-			Kind: v1.KindButton, ID: "calendar-open", Icon: "calendar_month", Text: label, Name: "Open calendar, " + now.Format("Monday, 2 January 2006"), Role: "button",
+		// With no event ahead the date is the only thing to say, and the
+		// bar's clock already says it; the glyph opens the calendar.
+		return &v1.Node{Kind: v1.KindRow, Gap: 6, Tooltip: now.Format("Monday, 2 January"), Children: []*v1.Node{{
+			Kind: v1.KindButton, ID: "calendar-open", Icon: "calendar_month", Name: "Open calendar, " + now.Format("Monday, 2 January 2006"), Role: "button",
 			Fill: "card", Events: []v1.EventKind{v1.EventActivate},
 		}}}
 	}

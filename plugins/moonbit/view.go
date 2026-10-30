@@ -55,6 +55,12 @@ func BarAtWidth(s *State, width int) *v1.Node {
 	if barwidth.Compact(width) {
 		label = ""
 	}
+	// Accent means on: the orb takes it only while Moonbit is working and the
+	// error tone on a failure, and rests in the surface foreground otherwise.
+	orb := v1.ToneNormal
+	if tone == v1.ToneAccent || tone == v1.ToneError {
+		orb = tone
+	}
 	btn := &v1.Node{
 		Kind:   v1.KindButton,
 		ID:     "bar",
@@ -62,7 +68,7 @@ func BarAtWidth(s *State, width int) *v1.Node {
 		Role:   "button",
 		Events: []v1.EventKind{v1.EventActivate, v1.EventPointer},
 		Children: []*v1.Node{
-			{Kind: v1.KindIcon, Icon: "moonbit", Tone: v1.ToneAccent},
+			{Kind: v1.KindIcon, Icon: "moonbit", Tone: orb},
 		},
 	}
 	if barwidth.Compact(width) {

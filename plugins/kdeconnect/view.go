@@ -163,19 +163,18 @@ func BarTree(snap Snapshot) *v1.Node {
 	return BarTreeAtWidth(snap, barwidth.StandardWidth)
 }
 
-func BarTreeAtWidth(snap Snapshot, width int) *v1.Node {
-	icon, label := "smartphone", "N/A"
+// BarTreeAtWidth is a bare glyph at every width: each state has its own
+// shape and tone, and the accessible name carries the state in words.
+func BarTreeAtWidth(snap Snapshot, _ int) *v1.Node {
+	icon, tone, name := "phonelink-off", v1.ToneSubtle, "Open phone connect, unavailable"
 	if snap.Available {
-		label = ""
+		icon, tone, name = "smartphone", v1.ToneNormal, "Open phone connect"
 		if dev := selectedDevice(snap); dev != nil && !dev.Reachable {
-			icon = "devices_other"
+			icon, tone, name = "devices_other", v1.ToneSubtle, "Open phone connect, device offline"
 		}
 	}
-	if barwidth.Compact(width) {
-		label = ""
-	}
 	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{Kind: v1.KindButton, ID: "open",
-		Icon: icon, Text: label, Name: "Open phone connect", Role: "button",
+		Icon: icon, Tone: tone, Name: name, Role: "button",
 		Events: []v1.EventKind{v1.EventActivate}}}}
 }
 
