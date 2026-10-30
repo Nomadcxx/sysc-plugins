@@ -12,31 +12,15 @@ import (
 	"github.com/Nomadcxx/sysc-shell/plugin/catalog"
 )
 
-// confinedManifest is a manifest that declares the boundary the host
-// enforces: the paths it may read, the paths it may write, the socket it may
-// connect to, and whether it may signal processes it did not start.
-const confinedManifest = `{
-	"schema": 1, "id": "org.sysc.timer", "name": "Pomodoro Timer",
-	"description": "A test plugin.", "version": "1.0.0",
-	"exec": "bin/sysc-plugin-timer", "protocol": {"major": 1, "minor": 20},
-	"capabilities": ["panels"], "requires": {"commands": []},
-	"filesystem": {
-		"read": ["/home/u/Documents"],
-		"read_write": ["/home/u/Notes"],
-		"sockets": ["org.sysc.notes"],
-		"signals": "any"
-	}
-}`
-
 // confinedArchiveManifest is the same declaration in the form the release
 // archive carries it.
 func confinedArchiveManifest() pluginManifest {
 	m := archiveManifest("org.sysc.timer", "1.0.0")
 	m.Protocol.Minor = 20
 	m.Filesystem = &catalog.Filesystem{
-		Read:      []string{"/home/u/Documents"},
-		ReadWrite: []string{"/home/u/Notes"},
-		Sockets:   []string{"org.sysc.notes"},
+		Read:      []string{"~/Documents"},
+		ReadWrite: []string{"~/Notes"},
+		Sockets:   []string{"session-bus", "/run/user/1000/notes.sock"},
 		Signals:   "any",
 	}
 	return m
@@ -48,8 +32,12 @@ func confinedArchiveManifest() pluginManifest {
 func confinedRepo(t *testing.T) (root, dist string) {
 	t.Helper()
 	root = newFixtureRepo(t, "timer", "org.sysc.timer", "Pomodoro Timer", "1.0.0")
-	writeFile(t, filepath.Join(root, "plugins", "timer", "manifest.json"), confinedManifest)
-	withTaggedContentServer(t, []byte(confinedManifest))
+	manifest, err := os.ReadFile(filepath.Join("..", "testdata", "confined-manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "plugins", "timer", "manifest.json"), string(manifest))
+	withTaggedContentServer(t, manifest)
 	dist = t.TempDir()
 	writeDistArchiveWithManifest(t, dist, "org.sysc.timer", "1.0.0", "amd64", confinedArchiveManifest(), "v1")
 	return root, dist
@@ -68,9 +56,9 @@ func TestUpdateCopiesTheManifestFilesystemIntoTheCatalog(t *testing.T) {
 		t.Fatal("the catalog row dropped the manifest's filesystem declaration")
 	}
 	want := &catalog.Filesystem{
-		Read:      []string{"/home/u/Documents"},
-		ReadWrite: []string{"/home/u/Notes"},
-		Sockets:   []string{"org.sysc.notes"},
+		Read:      []string{"~/Documents"},
+		ReadWrite: []string{"~/Notes"},
+		Sockets:   []string{"session-bus", "/run/user/1000/notes.sock"},
 		Signals:   "any",
 	}
 	if !catalog.SameSet(e.Filesystem.Read, want.Read) ||

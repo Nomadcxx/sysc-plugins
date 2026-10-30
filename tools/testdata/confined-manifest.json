@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "org.sysc.timer",
+  "name": "Pomodoro Timer",
+  "author": "Nomadcxx",
+  "description": "A test plugin.",
+  "version": "1.0.0",
+  "exec": "bin/sysc-plugin-timer",
+  "protocol": {"major": 1, "minor": 20},
+  "capabilities": ["panels"],
+  "requires": {"commands": []},
+  "filesystem": {
+    "read": ["~/Documents"],
+    "read_write": ["~/Notes"],
+    "sockets": ["session-bus", "/run/user/1000/notes.sock"],
+    "signals": "any"
+  }
+}

@@ -112,9 +112,37 @@ the union of their parts: `state` is `state-read` plus `state-write`,
 `screenshot-capture` plus `screenshot-read`, and `panels` and
 `floating_surfaces` both carry `outputs-read` with them.
 
-The narrowed classes need a shell that speaks plugin protocol minor 19. The
-tagged shell releases speak minor 16, so a plugin that uses them needs a shell
-from the main line.
+The current tagged shell release, `sysc-shell v0.2.1`, speaks plugin protocol
+minor 22. Older shell releases may reject capabilities or manifest fields
+introduced in later minors, so check the minimum minor for each feature you
+use.
+
+## Filesystem declarations
+
+The optional `filesystem` block describes a plugin's access beyond its own
+directory and state directory. It requires protocol minor 20:
+
+```json
+"filesystem": {
+  "read": ["~/Documents"],
+  "read_write": ["~/Notes"],
+  "sockets": ["session-bus"],
+  "signals": "own"
+}
+```
+
+`read` and `read_write` accept clean paths beginning with `~/` or absolute
+paths. A declaration can list at most 32 paths across those fields and
+`sockets`; it cannot grant the filesystem root. A socket is either one of
+`session-bus`, `system-bus`, `compositor`, or `wayland`, or an absolute Unix
+socket path. Omit `signals` or set it to `own` to limit signalling to processes
+the plugin started; `any` allows signals to other processes.
+
+The shell enforces these declarations with Landlock when the running kernel
+supports the required controls. Kernel support affects which file, socket, and
+signal restrictions can be enforced; on a kernel without Landlock, the
+declaration does not confine filesystem access. Check the target system when
+claiming a plugin is confined.
 
 ## Validating before you tag
 

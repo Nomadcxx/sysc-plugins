@@ -19,6 +19,7 @@ type manifest struct {
 	Schema      int    `json:"schema"`
 	ID          string `json:"id"`
 	Name        string `json:"name"`
+	Author      string `json:"author,omitempty"`
 	Description string `json:"description"`
 	Version     string `json:"version"`
 	Exec        string `json:"exec"`
@@ -26,7 +27,8 @@ type manifest struct {
 		Major int `json:"major"`
 		Minor int `json:"minor"`
 	} `json:"protocol"`
-	Capabilities []string `json:"capabilities"`
+	Capabilities []string        `json:"capabilities"`
+	Filesystem   *filesystemDecl `json:"filesystem,omitempty"`
 	Requires     struct {
 		Commands []string `json:"commands"`
 	} `json:"requires"`
@@ -54,6 +56,20 @@ type manifest struct {
 	Settings []setting `json:"settings"`
 }
 
+type filesystemDecl struct {
+	Read      []string `json:"read,omitempty"`
+	ReadWrite []string `json:"read_write,omitempty"`
+	Sockets   []string `json:"sockets,omitempty"`
+	Signals   string   `json:"signals,omitempty"`
+}
+
+const (
+	narrowCapabilityMinor = 19
+	filesystemMinor       = 20
+	maxFilesystemPaths    = 32
+	maxLabelBytes         = 256
+)
+
 // setting is one manifest settings row, at plugin scope or inside a widget.
 // It mirrors the host's wireSetting field for field: the decode is strict, so
 // a field the host accepts and this omits fails a manifest the shell loads.
@@ -70,17 +86,30 @@ type setting struct {
 }
 
 var allowedCapabilities = map[string]bool{
-	"notifications":     true,
-	"panels":            true,
-	"settings":          true,
-	"state":             true,
-	"wallpaper":         true,
-	"floating_surfaces": true,
-	"clipboard-read":    true,
-	"clipboard-write":   true,
-	"open-url":          true,
-	"screenshot":        true,
-	"files":             true,
+	"notifications":      true,
+	"panels":             true,
+	"settings":           true,
+	"state":              true,
+	"wallpaper":          true,
+	"floating_surfaces":  true,
+	"clipboard-read":     true,
+	"clipboard-write":    true,
+	"open-url":           true,
+	"screenshot":         true,
+	"files":              true,
+	"state-read":         true,
+	"state-write":        true,
+	"wallpaper-read":     true,
+	"wallpaper-write":    true,
+	"screenshot-capture": true,
+	"screenshot-read":    true,
+	"outputs-read":       true,
+	"files:browser":      true,
+}
+
+var narrowCapabilities = map[string]bool{
+	"state-read": true, "state-write": true, "wallpaper-read": true, "wallpaper-write": true,
+	"screenshot-capture": true, "screenshot-read": true, "outputs-read": true, "files:browser": true,
 }
 
 var allowedSettingTypes = map[string]bool{
@@ -156,8 +185,13 @@ func validate(path string, seenIDs map[string]string) error {
 		return fmt.Errorf("id %q is not a valid reverse-domain plugin id", m.ID)
 	case m.Protocol.Major != 1:
 		return fmt.Errorf("protocol.major must be 1, got %d", m.Protocol.Major)
+	case m.Protocol.Minor < 0:
+		return fmt.Errorf("protocol minor %d is negative", m.Protocol.Minor)
 	case m.Exec == "":
 		return fmt.Errorf("exec is required")
+	}
+	if len(m.Author) > maxLabelBytes {
+		return fmt.Errorf("author is %d bytes, more than the %d allowed", len(m.Author), maxLabelBytes)
 	}
 
 	if prev, dup := seenIDs[m.ID]; dup {
@@ -172,6 +206,13 @@ func validate(path string, seenIDs map[string]string) error {
 	for _, c := range m.Capabilities {
 		if !allowedCapabilities[c] {
 			return fmt.Errorf("unknown capability %q", c)
+		}
+	}
+	if m.Protocol.Minor < narrowCapabilityMinor {
+		for i, c := range m.Capabilities {
+			if narrowCapabilities[c] {
+				return fmt.Errorf("capabilities[%d]: %q requires protocol minor %d", i, c, narrowCapabilityMinor)
+			}
 		}
 	}
 	if _, err := validateSettings(m.Settings); err != nil {
@@ -210,10 +251,72 @@ func validate(path string, seenIDs map[string]string) error {
 			return fmt.Errorf("panels[%d]: placement %q is not one the shell supports", i, p.Placement)
 		}
 	}
+	if m.Filesystem != nil {
+		if err := validateFilesystem(*m.Filesystem, m.Protocol.Minor); err != nil {
+			return err
+		}
+	}
 	// The host rejects each capability-gated hostcall at dispatch time
 	// (sysc-shell internal/plugin/hostcall.go); catch it here instead.
-	if err := validateHostcallCaps(path, m.Capabilities); err != nil {
+	if err := validateHostcallCaps(path, m.Capabilities, m.Protocol.Minor); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateFilesystem(fs filesystemDecl, minor int) error {
+	if minor < filesystemMinor {
+		return fmt.Errorf("filesystem requires protocol minor %d", filesystemMinor)
+	}
+	if n := len(fs.Read) + len(fs.ReadWrite) + len(fs.Sockets); n > maxFilesystemPaths {
+		return fmt.Errorf("filesystem declares %d paths, more than the %d allowed", n, maxFilesystemPaths)
+	}
+	for _, list := range []struct {
+		field string
+		paths []string
+	}{{"read", fs.Read}, {"read_write", fs.ReadWrite}} {
+		for i, path := range list.paths {
+			if err := validateDeclaredPath(path); err != nil {
+				return fmt.Errorf("filesystem.%s[%d]: %w", list.field, i, err)
+			}
+		}
+	}
+	for i, socket := range fs.Sockets {
+		switch socket {
+		case "session-bus", "system-bus", "compositor", "wayland":
+			continue
+		}
+		if !filepath.IsAbs(socket) {
+			return fmt.Errorf("filesystem.sockets[%d]: %q is neither an endpoint (session-bus, system-bus, compositor, wayland) nor an absolute path", i, socket)
+		}
+		if err := validateDeclaredPath(socket); err != nil {
+			return fmt.Errorf("filesystem.sockets[%d]: %w", i, err)
+		}
+	}
+	switch fs.Signals {
+	case "", "own", "any":
+	default:
+		return fmt.Errorf(`filesystem.signals: %q is not "own" or "any"`, fs.Signals)
+	}
+	return nil
+}
+
+func validateDeclaredPath(path string) error {
+	if len(path) > maxLabelBytes {
+		return fmt.Errorf("%q is longer than %d bytes", path, maxLabelBytes)
+	}
+	rest, home := strings.CutPrefix(path, "~/")
+	if !home && !filepath.IsAbs(path) {
+		return fmt.Errorf("%q must begin with ~/ or /", path)
+	}
+	if !home {
+		rest = path
+	}
+	if rest == "/" || rest == "" {
+		return fmt.Errorf("%q grants everything", path)
+	}
+	if filepath.Clean(rest) != rest || rest == ".." || strings.HasPrefix(rest, "../") || strings.Contains(rest, "/../") {
+		return fmt.Errorf("%q is not a clean path inside its root", path)
 	}
 	return nil
 }
@@ -221,9 +324,9 @@ func validate(path string, seenIDs map[string]string) error {
 // requiredCap maps a hostcall constant to the capability the host demands
 // for it. Add one row per new gated call, mirroring the host's switch.
 var requiredCap = map[string]string{
-	"CallStateGet":            "state",
-	"CallStateSet":            "state",
-	"CallStateList":           "state",
+	"CallStateGet":            "state-read",
+	"CallStateSet":            "state-write",
+	"CallStateList":           "state-read",
 	"CallPanelOpen":           "panels",
 	"CallPanelClose":          "panels",
 	"CallPanelResize":         "panels",
@@ -232,14 +335,15 @@ var requiredCap = map[string]string{
 	"CallSurfaceClose":        "floating_surfaces",
 	"CallSurfacePin":          "floating_surfaces",
 	"CallNotify":              "notifications",
-	"CallWallpaperSnapshot":   "wallpaper",
-	"CallWallpaperMaskSet":    "wallpaper",
+	"CallWallpaperSnapshot":   "wallpaper-read",
+	"CallWallpaperMaskSet":    "wallpaper-write",
 	"CallClipboardRead":       "clipboard-read",
 	"CallClipboardWrite":      "clipboard-write",
 	"CallOpenURL":             "open-url",
-	"CallScreenshotStart":     "screenshot",
-	"CallScreenshotDirectory": "screenshot",
+	"CallScreenshotStart":     "screenshot-capture",
+	"CallScreenshotDirectory": "screenshot-read",
 	"CallFilesBrowse":         "files",
+	"CallOutputContext":       "outputs-read",
 }
 
 // validateHostcallCaps scans the plugin's Go sources under
@@ -247,7 +351,7 @@ var requiredCap = map[string]string{
 // capability the manifest does not grant. The import alias varies, so the
 // bare constant name is matched; plugin dirs that do not exist (some plugins
 // are non-Go) pass.
-func validateHostcallCaps(manifestPath string, caps []string) error {
+func validateHostcallCaps(manifestPath string, caps []string, minor int) error {
 	pluginDir := filepath.Dir(manifestPath)
 	repoRoot := filepath.Dir(filepath.Dir(pluginDir))
 	cmdDir := filepath.Join(repoRoot, "cmd", "sysc-plugin-"+filepath.Base(pluginDir))
@@ -274,13 +378,21 @@ func validateHostcallCaps(manifestPath string, caps []string) error {
 	}
 	granted := map[string]bool{}
 	for _, c := range caps {
-		granted[c] = true
+		for _, grant := range grantsOf(c) {
+			granted[grant] = true
+		}
 	}
 	// Deterministic output: one error per missing capability.
 	missing := map[string][]string{}
 	for call, want := range requiredCap {
+		// output.context had no gate before minor 19. Keep accepting legacy
+		// manifests while enforcing the narrowed capability once available.
+		if call == "CallOutputContext" && minor < narrowCapabilityMinor {
+			continue
+		}
 		if used[call] && !granted[want] {
-			missing[want] = append(missing[want], call)
+			name := capabilityNameForMinor(want, minor)
+			missing[name] = append(missing[name], call)
 		}
 	}
 	capsMissing := make([]string, 0, len(missing))
@@ -294,6 +406,39 @@ func validateHostcallCaps(manifestPath string, caps []string) error {
 		return fmt.Errorf("uses %s but capability %q is not granted", strings.Join(calls, ", "), want)
 	}
 	return nil
+}
+
+func capabilityNameForMinor(name string, minor int) string {
+	if minor >= narrowCapabilityMinor {
+		return name
+	}
+	switch name {
+	case "state-read", "state-write":
+		return "state"
+	case "wallpaper-read", "wallpaper-write":
+		return "wallpaper"
+	case "screenshot-capture", "screenshot-read":
+		return "screenshot"
+	default:
+		return name
+	}
+}
+
+func grantsOf(name string) []string {
+	switch name {
+	case "state":
+		return []string{"state-read", "state-write"}
+	case "wallpaper":
+		return []string{"wallpaper-read", "wallpaper-write"}
+	case "screenshot":
+		return []string{"screenshot-capture", "screenshot-read"}
+	case "panels", "floating_surfaces":
+		return []string{name, "outputs-read"}
+	case "files:browser":
+		return []string{"files"}
+	default:
+		return []string{name}
+	}
 }
 
 func isBareToken(src []byte, token string) bool {
