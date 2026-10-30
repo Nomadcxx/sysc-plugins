@@ -10,7 +10,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -23,24 +22,21 @@ const (
 type gradeStyle struct {
 	word       string
 	icon       string
+	tone       v1.Tone
 	fill       string
 	stroke     int
 	strokeFill string
 }
 
-func BarTree(snapshot Snapshot, now time.Time, width int) *v1.Node {
-	grade := currentGrade(snapshot, now)
-	style := styleForGrade(grade)
-	label := style.word
-	if barwidth.Compact(width) {
-		label = ""
-	}
-	return &v1.Node{Kind: v1.KindRow, Gap: 6,
+// BarTree is a bare shield in the bar pill. The glyph's mark and the tone
+// carry the grade; the word stays in the tooltip and the accessible name.
+func BarTree(snapshot Snapshot, now time.Time) *v1.Node {
+	style := styleForGrade(currentGrade(snapshot, now))
+	return &v1.Node{Kind: v1.KindRow,
 		Tooltip: "privacybit · Overall: " + style.word + " · " + scanAge(snapshot.GeneratedAt, now),
 		Children: []*v1.Node{{
-			Kind: v1.KindButton, ID: "privacy-open", Icon: "shield", Text: label,
-			Name: "Open privacybit audit, " + style.word, Role: "button", Fill: style.fill,
-			Stroke: style.stroke, StrokeFill: style.strokeFill,
+			Kind: v1.KindButton, ID: "privacy-open", Icon: style.icon, Tone: style.tone,
+			Name: "Open privacybit audit, " + style.word, Role: "button",
 			Events: []v1.EventKind{v1.EventActivate},
 		}}}
 }
@@ -458,16 +454,19 @@ func valueRow(label, value string) *v1.Node {
 	}}
 }
 
+// styleForGrade is the one grade vocabulary for the bar and the panel chips.
+// Each grade has its own shield shape, so it survives without colour; gpp_bad
+// is left to the shell's monitoring warning.
 func styleForGrade(grade string) gradeStyle {
 	switch grade {
 	case "green":
-		return gradeStyle{word: "Good", icon: "verified_user", fill: "accent"}
+		return gradeStyle{word: "Good", icon: "verified_user", tone: v1.ToneAccent, fill: "accent"}
 	case "amber":
-		return gradeStyle{word: "Review", icon: "flag", fill: "surface", stroke: 1, strokeFill: "outline"}
+		return gradeStyle{word: "Review", icon: "gpp_maybe", tone: v1.ToneWarning, fill: "surface", stroke: 1, strokeFill: "outline"}
 	case "red":
-		return gradeStyle{word: "Risky", icon: "gpp_bad", fill: "error-container"}
+		return gradeStyle{word: "Risky", icon: "remove_moderator", tone: v1.ToneError, fill: "error-container"}
 	default:
-		return gradeStyle{word: "Unrated", icon: "disabled_by_default", fill: "soft"}
+		return gradeStyle{word: "Unrated", icon: "shield", tone: v1.ToneSubtle, fill: "soft"}
 	}
 }
 

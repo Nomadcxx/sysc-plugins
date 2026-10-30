@@ -14,12 +14,12 @@ import (
 
 func TestPrivacyBarOpensPanelAndShowsCurrentGrade(t *testing.T) {
 	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
-	root := BarTree(testSnapshot("amber", now), now, lint.BarWidth)
+	root := BarTree(testSnapshot("amber", now), now)
 	if err := v1.Validate(root, v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
 	button := findNode(root, "privacy-open")
-	if button == nil || button.Icon != "shield" || button.Text != "Review" || button.Name == "" {
+	if button == nil || button.Icon != "gpp_maybe" || button.Tone != v1.ToneWarning || !strings.HasSuffix(button.Name, "Review") {
 		t.Fatalf("bar button = %+v", button)
 	}
 	if len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
@@ -49,9 +49,9 @@ func TestPrivacyPanelUsesDistinctGradeFillsAndExplainsCoverage(t *testing.T) {
 		icon   string
 	}{
 		{"green", "Good", "accent", 0, "verified_user"},
-		{"amber", "Review", "surface", 1, "flag"},
-		{"red", "Risky", "error-container", 0, "gpp_bad"},
-		{"unknown", "Unrated", "soft", 0, "disabled_by_default"},
+		{"amber", "Review", "surface", 1, "gpp_maybe"},
+		{"red", "Risky", "error-container", 0, "remove_moderator"},
+		{"unknown", "Unrated", "soft", 0, "shield"},
 	} {
 		t.Run(tc.grade, func(t *testing.T) {
 			root := PanelTree(testSnapshot(tc.grade, now), now, false, "")
@@ -411,4 +411,49 @@ func treeHasText(root *v1.Node, want string) bool {
 		}
 	}
 	return false
+}
+
+// The bar pill is the widget's chrome. The shield carries the grade by shape
+// and tone alone, and the word survives in the accessible name and tooltip.
+func TestPrivacyBarIsABareShieldPerGrade(t *testing.T) {
+	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	icons := map[string]bool{}
+	for _, tc := range []struct {
+		grade string
+		word  string
+		icon  string
+		tone  v1.Tone
+	}{
+		{"green", "Good", "verified_user", v1.ToneAccent},
+		{"amber", "Review", "gpp_maybe", v1.ToneWarning},
+		{"red", "Risky", "remove_moderator", v1.ToneError},
+		{"unknown", "Unrated", "shield", v1.ToneSubtle},
+	} {
+		t.Run(tc.grade, func(t *testing.T) {
+			root := BarTree(testSnapshot(tc.grade, now), now)
+			if err := v1.Validate(root, v1.ViewBar); err != nil {
+				t.Fatal(err)
+			}
+			button := findNode(root, "privacy-open")
+			if button == nil || button.Icon != tc.icon || button.Tone != tc.tone {
+				t.Fatalf("bar button = %+v, want %q in tone %q", button, tc.icon, tc.tone)
+			}
+			if button.Text != "" || button.Fill != "" || button.Stroke != 0 || button.StrokeFill != "" {
+				t.Errorf("bar button carries chrome or a label: text %q fill %q stroke %d/%q", button.Text, button.Fill, button.Stroke, button.StrokeFill)
+			}
+			if !strings.HasSuffix(button.Name, tc.word) || !strings.Contains(root.Tooltip, "Overall: "+tc.word) {
+				t.Errorf("grade word missing: name %q tooltip %q", button.Name, root.Tooltip)
+			}
+			if findings := lint.Tree(root, v1.ViewBar, lint.BarWidth, lint.BarHeight); len(findings) != 0 {
+				t.Fatalf("bar does not fit: %+v", findings)
+			}
+		})
+		icons[tc.icon] = true
+	}
+	if len(icons) != 4 {
+		t.Fatalf("grades share a bar glyph: %v", icons)
+	}
+	if icons["gpp_bad"] {
+		t.Fatal("the bar borrows gpp_bad, the shell's monitoring warning")
+	}
 }
