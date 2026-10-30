@@ -45,7 +45,6 @@ type auditRunner func(context.Context) ([]byte, error)
 
 type openedView struct {
 	kind       v1.ViewKind
-	width      int
 	instance   string
 	output     string
 	generation uint32
@@ -158,7 +157,7 @@ func runPluginWithInterval(ctx context.Context, in io.Reader, out io.Writer, run
 		case message := <-incoming:
 			switch message := message.(type) {
 			case *v1.ViewOpen:
-				view := openedView{kind: message.View, width: message.Width, instance: message.Instance,
+				view := openedView{kind: message.View, instance: message.Instance,
 					output: message.Output, generation: message.Generation}
 				views[message.ViewID] = view
 				if err := publishView(pluginCtx, client, views, message.ViewID, snapshot, scanning, scanMessage); err != nil {
@@ -271,7 +270,7 @@ func publishView(ctx context.Context, client *v1.Client, views map[string]opened
 	var root *v1.Node
 	switch view.kind {
 	case v1.ViewBar:
-		root = privacy.BarTree(snapshot, now, view.width)
+		root = privacy.BarTree(snapshot, now)
 	case v1.ViewTooltip:
 		root = privacy.TooltipTree(snapshot, now)
 	case v1.ViewPanel:
