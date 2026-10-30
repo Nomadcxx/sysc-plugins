@@ -246,6 +246,7 @@ func TestRunPluginExitsCleanlyWhenTheHostClosesThePipe(t *testing.T) {
 	hostOutput, pluginOutput := io.Pipe()
 	defer hostInput.Close()
 	defer hostOutput.Close()
+	defer pluginOutput.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -276,6 +277,9 @@ func TestRunPluginExitsCleanlyWhenTheHostClosesThePipe(t *testing.T) {
 	if _, err := hostInput.Write(append(reply, '\n')); err != nil {
 		t.Fatal(err)
 	}
+	// The shell keeps decoding plugin output while a session runs. io.Pipe has
+	// no buffer, so leave a host reader active while the plugin shuts down.
+	go io.Copy(io.Discard, hostOutput)
 
 	// The host closes the pipe under the plugin. The plugin reads the
 	// closed pipe as io.ErrClosedPipe rather than io.EOF.
@@ -291,7 +295,6 @@ func TestRunPluginExitsCleanlyWhenTheHostClosesThePipe(t *testing.T) {
 		t.Fatal("the plugin did not stop after the host closed the pipe")
 	}
 	_ = hostInput.Close()
-	_ = pluginOutput.Close()
 }
 
 func TestLimitedBufferCapsMemory(t *testing.T) {
@@ -660,6 +663,7 @@ func TestPrivacyExitsCleanlyWhenTheHostClosesThePipe(t *testing.T) {
 	hostOutput, pluginOutput := io.Pipe()
 	t.Cleanup(func() {
 		_ = hostInput.Close()
+		_ = hostOutput.Close()
 		_ = pluginOutput.Close()
 	})
 	finished := make(chan error, 1)
@@ -681,6 +685,9 @@ func TestPrivacyExitsCleanlyWhenTheHostClosesThePipe(t *testing.T) {
 	// The startup snapshot is published with a state.set call, and the
 	// plugin waits for the answer before it serves anything.
 	ackStateCall(t, hostInput, reader)
+	// The shell keeps decoding plugin output while a session runs. io.Pipe has
+	// no buffer, so leave a host reader active while the plugin shuts down.
+	go io.Copy(io.Discard, hostOutput)
 	// The host stops the plugin by closing the pipe the plugin reads from.
 	_ = pluginInput.Close()
 	select {
