@@ -116,6 +116,10 @@ func runPluginWithInterval(ctx context.Context, in io.Reader, out io.Writer, run
 		return true
 	}
 	startAudit()
+	if err := publishSnapshot(pluginCtx, client,
+		privacy.UnavailableSnapshot("First audit in progress", time.Now().UTC())); err != nil && pluginCtx.Err() == nil {
+		log.Printf("privacybit initial state publish failed: %s", cleanError(err.Error()))
+	}
 
 	for {
 		select {
