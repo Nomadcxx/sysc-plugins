@@ -197,6 +197,7 @@ func TestRunPluginPublishesBoundedStateSnapshot(t *testing.T) {
 	if pluginHello["type"] != "plugin.hello" {
 		t.Fatalf("first plugin message = %s", hello)
 	}
+	ackStateCall(t, hostInput, reader)
 	line, err := reader.ReadBytes('\n')
 	if err != nil {
 		t.Fatal(err)
@@ -451,12 +452,13 @@ func TestRunPluginPanelRefreshPublishesOneFreshScanAndDropsStaleClicks(t *testin
 	}
 }
 
-func TestRunPluginShowsFirstAuditProgressUntilItCompletes(t *testing.T) {
+func TestRunPluginPublishesFirstScanStatusAndShowsProgressUntilCompletion(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		runAudit      auditRunner
-		wantAvailable bool
-		wantText      string
+		name               string
+		runAudit           auditRunner
+		wantAvailable      bool
+		wantText           string
+		rejectPendingState bool
 	}{
 		{
 			name: "success",
@@ -471,13 +473,14 @@ func TestRunPluginShowsFirstAuditProgressUntilItCompletes(t *testing.T) {
 			runAudit: func(context.Context) ([]byte, error) {
 				return nil, errors.New("privacybit permission scan failed")
 			},
-			wantText: "privacybit permission scan failed",
+			wantText:           "privacybit permission scan failed",
+			rejectPendingState: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			started := make(chan struct{})
 			release := make(chan struct{})
-			hostInput, reader, stop := startPrivacyPlugin(t, func(ctx context.Context) ([]byte, error) {
+			hostInput, reader, stop := startPrivacyPluginWithPendingState(t, func(ctx context.Context) ([]byte, error) {
 				close(started)
 				select {
 				case <-release:
@@ -492,6 +495,38 @@ func TestRunPluginShowsFirstAuditProgressUntilItCompletes(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("the initial audit did not start")
 			}
+			var pendingCall v1.HostCall
+			readPrivacyMessage(t, reader, &pendingCall)
+			if pendingCall.Call != v1.CallStateSet {
+				t.Fatalf("initial audit call = %q, want state.set before the audit completes", pendingCall.Call)
+			}
+			var pendingParams v1.StateSetParams
+			if err := json.Unmarshal(pendingCall.Params, &pendingParams); err != nil {
+				t.Fatal(err)
+			}
+			if pendingParams.Key != "control_center" {
+				t.Fatalf("pending state key = %q, want control_center", pendingParams.Key)
+			}
+			var pendingSnapshot privacy.Snapshot
+			if err := json.Unmarshal(pendingParams.Value, &pendingSnapshot); err != nil {
+				t.Fatal(err)
+			}
+			if pendingSnapshot.Schema != privacy.Schema || pendingSnapshot.Available || pendingSnapshot.Hint != "" ||
+				pendingSnapshot.Overall.Grade != "unknown" || pendingSnapshot.Reason != "First audit in progress" ||
+				pendingSnapshot.GeneratedAt.IsZero() || len(pendingSnapshot.Categories) != 0 ||
+				pendingSnapshot.CategoriesShown != 0 || pendingSnapshot.CategoriesTotal != 0 ||
+				len(pendingSnapshot.Findings) != 0 || pendingSnapshot.FindingsShown != 0 || pendingSnapshot.FindingsTotal != 0 ||
+				len(pendingSnapshot.Reduced) != 0 || pendingSnapshot.ReducedShown != 0 || pendingSnapshot.ReducedTotal != 0 ||
+				pendingSnapshot.Network.VPN.State != "unknown" || len(pendingSnapshot.Network.VPN.Defects) != 0 ||
+				pendingSnapshot.Network.VPN.DefectsShown != 0 || pendingSnapshot.Network.VPN.DefectsTotal != 0 ||
+				!pendingSnapshot.Network.TelemetryConnectionsUnknown {
+				t.Fatalf("pending snapshot is not schema-valid and explicitly unknown: %+v", pendingSnapshot)
+			}
+			pendingReply := v1.HostReply{Type: v1.TypeHostReply, ID: pendingCall.ID, OK: !tc.rejectPendingState}
+			if tc.rejectPendingState {
+				pendingReply.Error = "state write rejected"
+			}
+			sendPrivacyMessage(t, hostInput, pendingReply)
 
 			sendPrivacyMessage(t, hostInput, map[string]any{
 				"type": v1.TypeViewOpen, "view_id": "panel-1", "view": v1.ViewPanel,
@@ -698,6 +733,7 @@ func TestALongAuditDoesNotHoldTheEventLoop(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the audit never started")
 	}
+	ackStateCall(t, hostInput, reader)
 
 	// The host opens a view while the audit runs: the view must come back.
 	sendPrivacyMessage(t, hostInput, map[string]any{
@@ -741,6 +777,16 @@ func startPrivacyPlugin(t *testing.T, runAudit auditRunner) (*io.PipeWriter, *bu
 }
 
 func startPrivacyPluginWithInterval(t *testing.T, runAudit auditRunner, interval time.Duration) (*io.PipeWriter, *bufio.Reader, func()) {
+	// Acknowledge startup state so ordinary tests can focus on later plugin messages.
+	return startPrivacyPluginWithIntervalAndPendingAck(t, runAudit, interval, true)
+}
+
+// startPrivacyPluginWithPendingState leaves the initial state.set for tests of first-scan publication.
+func startPrivacyPluginWithPendingState(t *testing.T, runAudit auditRunner) (*io.PipeWriter, *bufio.Reader, func()) {
+	return startPrivacyPluginWithIntervalAndPendingAck(t, runAudit, refreshInterval, false)
+}
+
+func startPrivacyPluginWithIntervalAndPendingAck(t *testing.T, runAudit auditRunner, interval time.Duration, acknowledgePending bool) (*io.PipeWriter, *bufio.Reader, func()) {
 	t.Helper()
 	pluginInput, hostInput := io.Pipe()
 	hostOutput, pluginOutput := io.Pipe()
@@ -756,6 +802,9 @@ func startPrivacyPluginWithInterval(t *testing.T, runAudit auditRunner, interval
 	readPrivacyMessage(t, reader, &hello)
 	if hello["type"] != "plugin.hello" {
 		t.Fatalf("first plugin message = %#v", hello)
+	}
+	if acknowledgePending {
+		ackStateCall(t, hostInput, reader)
 	}
 	return hostInput, reader, func() {
 		cancel()
