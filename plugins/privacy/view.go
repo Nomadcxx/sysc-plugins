@@ -507,13 +507,14 @@ func scanAge(at, now time.Time) string {
 }
 
 func findingCount(snapshot Snapshot) string {
-	if snapshot.Overall.High > 0 {
-		return fmt.Sprintf("%d findings · %d high priority", snapshot.Overall.Findings, snapshot.Overall.High)
-	}
+	count := fmt.Sprintf("%d findings", snapshot.Overall.Findings)
 	if snapshot.Overall.Findings == 1 {
-		return "1 finding"
+		count = "1 finding"
 	}
-	return fmt.Sprintf("%d findings", snapshot.Overall.Findings)
+	if snapshot.Overall.High > 0 {
+		return fmt.Sprintf("%s · %d high priority", count, snapshot.Overall.High)
+	}
+	return count
 }
 
 func shownCount(shown, total int, singular string) string {

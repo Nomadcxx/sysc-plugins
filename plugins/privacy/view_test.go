@@ -30,6 +30,15 @@ func TestPrivacyBarOpensPanelAndShowsCurrentGrade(t *testing.T) {
 	}
 }
 
+func TestPrivacyPanelUsesSingularForOneHighPriorityFinding(t *testing.T) {
+	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	root := PanelTree(testSnapshot("red", now), now, false, "")
+
+	if !treeHasText(findNodeByKey(root, "privacy-summary"), "1 finding · 1 high priority") {
+		t.Fatal("summary did not use the singular label for one high-priority finding")
+	}
+}
+
 func TestPrivacyPanelUsesDistinctGradeFillsAndExplainsCoverage(t *testing.T) {
 	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
