@@ -290,25 +290,23 @@ func TooltipFor(report Report, width int) *v1.Node {
 		credits = wrapText(attribution, lineBytes)
 	}
 	remaining := tooltipReadingBudget(len(credits))
-	appendSummary := func(text string, tone v1.Tone) {
+	appendSummary := func(text string) {
 		parts := wrapText(text, lineBytes)
 		if len(parts) > remaining {
 			return
 		}
 		for _, part := range parts {
-			children = append(children, &v1.Node{Kind: v1.KindText, Text: part, Tone: tone})
+			children = append(children, &v1.Node{Kind: v1.KindText, Text: part})
 		}
 		remaining -= len(parts)
 	}
 	if report.Snapshot.Alert != nil {
 		alert := report.Snapshot.Alert
-		label, tone := "Storm: "+alert.Level.Name, v1.ToneWarning
+		label := "Storm: " + alert.Level.Name
 		if report.Stale {
-			label, tone = "Last storm: "+alert.Level.Name, v1.ToneSubtle
-		} else if alert.Level.Severity >= SeverityHigh {
-			tone = v1.ToneError
+			label = "Last storm: " + alert.Level.Name
 		}
-		appendSummary(label, tone)
+		appendSummary(label)
 	}
 	pollen := MeasureGrass
 	if _, ok := report.Snapshot.Measure(pollen); !ok {
@@ -330,7 +328,7 @@ func TooltipFor(report Report, width int) *v1.Node {
 			lines = []string{strings.Join(lines, " · ")}
 		}
 		for _, line := range lines {
-			appendSummary(line, toneFor(m.Level.Severity))
+			appendSummary(line)
 		}
 	}
 	for _, line := range credits {
@@ -477,14 +475,7 @@ func PanelFor(report Report, protocolMinor int) *v1.Node {
 		children = append(children, section)
 	}
 	if report.Snapshot.Attribution != "" {
-		// Attribution is a licence condition, so it must be readable in full.
-		// A text node has one line and is ellipsised past the row width, so the
-		// string is wrapped here rather than handed over whole.
-		for _, line := range wrapText(report.Snapshot.Attribution, attributionBytes) {
-			children = append(children, &v1.Node{
-				Kind: v1.KindText, Text: line, Tone: v1.ToneSubtle, Size: "caption",
-			})
-		}
+		children = append(children, attributionNode(report.Snapshot.Attribution))
 	}
 	return panelRoot(children)
 }
@@ -493,6 +484,26 @@ func PanelFor(report Report, protocolMinor int) *v1.Node {
 // eight bytes wide per byte of content regardless of size token, so the budget
 // is the panel's content width in bytes, not in pixels.
 const attributionBytes = (PanelWidth - 2*panelPad) / 8
+
+// attributionNode wraps each provider credit independently, so a source's
+// label stays with its name. The full text remains visible, with compact line
+// spacing because legal credits belong below the forecast rather than beside
+// the current readings.
+func attributionNode(attribution string) *v1.Node {
+	var sources []*v1.Node
+	for _, source := range strings.Split(attribution, " · ") {
+		var lines []*v1.Node
+		for _, line := range wrapText(source, attributionBytes) {
+			lines = append(lines, &v1.Node{
+				Kind: v1.KindText, Text: line, Tone: v1.ToneSubtle, Size: "caption",
+			})
+		}
+		if len(lines) > 0 {
+			sources = append(sources, &v1.Node{Kind: v1.KindColumn, Children: lines})
+		}
+	}
+	return &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: sources}
+}
 
 // wrapText breaks s on spaces into lines of at most budget bytes. A word longer
 // than the budget is emitted on its own line rather than split, because a URL or
@@ -568,10 +579,10 @@ func measureRow(m Measure) *v1.Node {
 		Gap: measureRowGap,
 		Children: []*v1.Node{
 			{Kind: v1.KindRow, Gap: measureRowGap, Children: []*v1.Node{
-				{Kind: v1.KindIcon, Icon: MeasureIcon(m.Name), Tone: toneFor(m.Level.Severity)},
+				{Kind: v1.KindIcon, Icon: MeasureIcon(m.Name), Tone: iconToneFor(m.Level.Severity)},
 				{Kind: v1.KindText, Text: Title(m.Name)},
 			}},
-			{Kind: v1.KindText, Text: value, Tone: toneFor(m.Level.Severity)},
+			{Kind: v1.KindText, Text: value},
 		},
 	}
 }
@@ -771,7 +782,7 @@ func unitsLabel(units string) string {
 	}
 }
 
-func toneFor(s Severity) v1.Tone {
+func iconToneFor(s Severity) v1.Tone {
 	switch s {
 	case SeverityHigh:
 		return v1.ToneError
@@ -849,9 +860,7 @@ func breakdownRow(m Measure) *v1.Node {
 		} else if part.Level.Known() {
 			label += " " + part.Level.Name
 		}
-		children = append(children, &v1.Node{
-			Kind: v1.KindText, Text: label, Tone: toneFor(part.Level.Severity), Size: "caption",
-		})
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: label, Size: "caption"})
 	}
 	if len(children) == 0 {
 		return nil

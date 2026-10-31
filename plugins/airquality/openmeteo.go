@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -352,17 +351,6 @@ func formatUV(uv float64) string {
 		return strconv.FormatFloat(rounded, 'f', 0, 64)
 	}
 	return strconv.FormatFloat(rounded, 'f', 1, 64)
-}
-
-// uvPeakText is the panel label for a UV measure.
-func uvPeakText(m Measure) string {
-	if m.Metric == nil {
-		return m.Level.Name
-	}
-	if strings.EqualFold(m.Metric.Subcat, "now") {
-		return formatUV(m.Metric.Value) + " now"
-	}
-	return "peak " + formatUV(m.Metric.Value)
 }
 
 // uvDialMax is the top of the UV dial's scale. The published bands run to 11

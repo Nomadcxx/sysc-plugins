@@ -699,6 +699,32 @@ func TestMeasureRowPinsTheReadingToTheRowEnd(t *testing.T) {
 	if got := row.Children[1].Text; got != "Fair · 19.9 µg/m³" {
 		t.Errorf("trailing text = %q", got)
 	}
+	if got := row.Children[1].Tone; got != v1.ToneNormal {
+		t.Errorf("reading tone = %q, want normal foreground for contrast", got)
+	}
+	if got := row.Children[0].Children[0].Tone; got != v1.ToneAccent {
+		t.Errorf("severity icon tone = %q, want accent", got)
+	}
+}
+
+func TestTooltipReadingsUseNormalForeground(t *testing.T) {
+	root := Tooltip(sampleReport())
+	text := nodeText(root)
+	for _, want := range []string{"Storm: Moderate", "Grass: High", "Air: Fair 19.9 µg/m³"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("tooltip text %q does not include %q", text, want)
+		}
+	}
+	var visit func(*v1.Node)
+	visit = func(n *v1.Node) {
+		if n.Kind == v1.KindText && n.Tone != v1.ToneNormal && n.Tone != v1.ToneSubtle {
+			t.Errorf("tooltip text %q tone = %q, want normal foreground", n.Text, n.Tone)
+		}
+		for _, child := range n.Children {
+			visit(child)
+		}
+	}
+	visit(root)
 }
 
 func TestForecastRowUsesTheDayItNames(t *testing.T) {
@@ -764,6 +790,9 @@ func TestBreakdownKeepsRealConstituents(t *testing.T) {
 	want := "PM2.5 19.9 · PM10 7.6"
 	if got := strings.Join(texts, " "); got != want {
 		t.Errorf("strip = %q, want %q", got, want)
+	}
+	if row.Children[0].Tone != v1.ToneNormal || row.Children[2].Tone != v1.ToneNormal {
+		t.Errorf("breakdown tones = %q and %q, want normal foreground", row.Children[0].Tone, row.Children[2].Tone)
 	}
 }
 
@@ -920,19 +949,24 @@ func TestWrapTextKeepsAShortAttributionOnOneLine(t *testing.T) {
 	}
 }
 
-func TestPanelShowsEveryAttributionLine(t *testing.T) {
+func TestPanelGroupsAndShowsEveryAttributionSource(t *testing.T) {
 	report := sampleReport()
 	report.Snapshot.Attribution = "Air quality data: EPA Victoria (CC BY 4.0) · Air quality and UV: CAMS ENSEMBLE via Open-Meteo"
-	var shown []string
-	for _, child := range PanelFor(report, 24).Children {
-		if child.Kind == v1.KindText {
-			shown = append(shown, child.Text)
-		}
+	root := PanelFor(report, 24)
+	credits := root.Children[len(root.Children)-1]
+	if credits.Kind != v1.KindColumn || len(credits.Children) != 2 {
+		t.Fatalf("source credits = %+v, want two grouped sources", credits)
 	}
-	joined := strings.Join(shown, " ")
+	if got := credits.Children[0].Children[0].Text; got != "Air quality data: EPA Victoria (CC BY 4.0)" {
+		t.Errorf("first source = %q", got)
+	}
+	if got := credits.Children[1].Children[0].Text; got != "Air quality and UV: CAMS ENSEMBLE via Open-Meteo" {
+		t.Errorf("second source = %q", got)
+	}
+	joined := nodeText(credits)
 	for _, want := range []string{"EPA Victoria", "CAMS ENSEMBLE", "Open-Meteo"} {
 		if !strings.Contains(joined, want) {
-			t.Errorf("panel attribution is missing %q: %v", want, shown)
+			t.Errorf("panel attribution is missing %q: %q", want, joined)
 		}
 	}
 }

@@ -67,10 +67,7 @@ func ParseTree(raw []byte) (*Tree, error) {
 			for metric, scale := range metrics {
 				classes := make([]Class, 0, len(scale.Classes))
 				for _, c := range scale.Classes {
-					classes = append(classes, Class{
-						Name: c.Name, LowerBound: c.LowerBound,
-						UpperBound: c.UpperBound, WarnLevel: c.WarnLevel,
-					})
+					classes = append(classes, Class(c))
 				}
 				// Sort rather than trust wire order: the Air Quality branch
 				// publishes NO2 with a zero-width "Very Good" band first, and
