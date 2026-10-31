@@ -93,20 +93,48 @@ func TestPrivacyPanelUsesDistinctGradeFillsAndExplainsCoverage(t *testing.T) {
 }
 
 func TestPrivacyPanelShowsSourcesBehindReducedCoverage(t *testing.T) {
-	input := auditOutputWithReduced(t, []any{map[string]any{
-		"fact": "licence", "effect": "not supported by the listed sources",
-		"sources": []string{"desktop", "dpkg"},
-	}})
+	input := auditOutputWithReduced(t, []any{
+		map[string]any{
+			"fact": "licence", "effect": "not supported by the listed sources",
+			"sources": []string{"desktop", "dpkg"},
+		},
+		map[string]any{"fact": "reverse_deps", "effect": "not supported by the listed sources"},
+		map[string]any{"fact": "future.fact", "effect": "not checked"},
+	})
 	snapshot, err := ParseAuditOutput(input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	root := PanelTree(snapshot, time.Date(2026, 10, 30, 0, 1, 0, 0, time.UTC), false, "")
-	if !treeHasText(root, "licence (desktop, dpkg) · not supported by the listed sources") {
-		t.Fatal("coverage card did not identify sources missing the licence fact")
+	for _, want := range []string{
+		"Licence (desktop, dpkg) · not supported by the listed sources",
+		"Reverse dependencies · not supported by the listed sources",
+		"future.fact · not checked",
+	} {
+		if !treeHasText(root, want) {
+			t.Errorf("coverage card omitted %q", want)
+		}
 	}
 	if findings := lint.Tree(root, v1.ViewPanel, panelWidth, panelHeight); len(findings) != 0 {
 		t.Fatalf("coverage panel does not fit: %+v", findings)
+	}
+}
+
+func TestPrivacyPanelLeadsWithFindingsAndKeepsUnmatchedLate(t *testing.T) {
+	now := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	snapshot := testSnapshot("red", now)
+	snapshot.Unmatched = []App{{Name: "mystery-tool", Grade: "unknown"}}
+	snapshot.UnmatchedShown, snapshot.UnmatchedTotal = 1, 1
+	root := PanelTree(snapshot, now, false, "")
+	var keys []string
+	for _, child := range root.Children {
+		if child.Key != "" {
+			keys = append(keys, child.Key)
+		}
+	}
+	want := []string{"privacy-summary", "privacy-findings", "privacy-categories", "privacy-network", "privacy-unmatched", "privacy-coverage"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Fatalf("panel sections = %v, want %v", keys, want)
 	}
 }
 
