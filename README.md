@@ -7,7 +7,7 @@ program the shell starts and talks to over a pipe, so a plugin that crashes take
 it.
 
 <p align="center">
-  <img src="assets/gallery.webp" alt="All sixteen official sysc-shell plugin panels" width="920" loading="lazy"><br>
+  <img src="assets/gallery.webp" alt="Examples of official sysc-shell plugin panels" width="920" loading="lazy"><br>
   <sub>AI Usage, Calendar, Cat, Faith, Games, GitHub Notifications, Phone Connect, Mini Docker, Moonbit, Notes, ProtonVPN, Screen Recorder, Screenshot, Pomodoro Timer, Wallpaper Depth and World Clock, captured from fixture data.</sub>
 </p>
 
@@ -18,6 +18,7 @@ it.
 | Plugin | What it does | Needs |
 |---|---|---|
 | **AI Usage** | AI coding-assistant quotas in the bar, with a detail panel and threshold alerts | |
+| **Air Quality & Pollen** | Global air quality and UV, with Australian pollen and thunderstorm asthma alerts for supported locations | |
 | **Calendar** | Read-only calendar with event views and details | evolution-data-server |
 | **Cat** | A bar cat that walks and gallops with CPU load, and grooms, stretches and naps when the machine is idle | |
 | **Faith** | A cross in the bar that offers a prayer, and a Scripture panel with cross-references and commentary | |
