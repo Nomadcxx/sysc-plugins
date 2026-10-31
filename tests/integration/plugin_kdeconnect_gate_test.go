@@ -25,11 +25,11 @@ func TestPluginKDEConnectGateServesViewsAndSurvivesInput(t *testing.T) {
 	h := startKDEConnect(t)
 	h.waitProtocol(v1.Version{Major: 1, Minor: 18})
 
-	// The bar opens with the offline or the connected pill.
+	// The bar opens with the unavailable, offline or connected pill.
 	h.openBar()
 	h.waitView("bar-1", func(n *v1.Node) bool {
 		open := findID(n, "open")
-		return open != nil && (open.Icon == "smartphone" || open.Icon == "devices_other")
+		return open != nil && (open.Icon == "phonelink-off" || open.Icon == "smartphone" || open.Icon == "devices_other")
 	})
 
 	// The panel opens with the refresh control and a legal top state.
@@ -61,7 +61,7 @@ func TestPluginKDEConnectGateServesViewsAndSurvivesInput(t *testing.T) {
 	// Both views keep being served by the one process.
 	h.waitView("bar-1", func(n *v1.Node) bool {
 		open := findID(n, "open")
-		return open != nil && (open.Icon == "smartphone" || open.Icon == "devices_other")
+		return open != nil && (open.Icon == "phonelink-off" || open.Icon == "smartphone" || open.Icon == "devices_other")
 	})
 
 	// The state store round-trips through the host replies.

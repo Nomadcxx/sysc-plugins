@@ -1,6 +1,7 @@
 package calendar
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -118,5 +119,19 @@ func TestTreesValidate(t *testing.T) {
 	}
 	if err := v1.Validate(PanelTree(m.Panel("test"), nil, m.WeekStart(), LoadStatus{Available: true, CalendarCount: 1}, now, nil, nil, false), v1.ViewPanel); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// With no event ahead the bar's clock already shows the date, so the pill is
+// the glyph alone and the date moves to the tooltip and accessible name.
+func TestBarWithoutAnEventCarriesNoDateLabel(t *testing.T) {
+	now := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	bar := BarTree(nil, now)
+	button := bar.Children[0]
+	if button.Text != "" {
+		t.Fatalf("idle label = %q, want the glyph alone", button.Text)
+	}
+	if bar.Tooltip != "Saturday, 31 October" || !strings.Contains(button.Name, "Saturday, 31 October 2026") {
+		t.Fatalf("idle tooltip %q name %q, want the date", bar.Tooltip, button.Name)
 	}
 }

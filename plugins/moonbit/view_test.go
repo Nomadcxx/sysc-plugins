@@ -246,10 +246,23 @@ func TestDoneRecordsTheScanStampForTheClean(t *testing.T) {
 	}
 }
 
-func TestBarUsesThemeTintedMoonbitMark(t *testing.T) {
-	icon := Bar(&State{}).Children[0].Children[0]
-	if icon.Kind != v1.KindIcon || icon.Icon != "moonbit" || icon.Tone != v1.ToneAccent {
-		t.Fatalf("bar icon = %+v, want the theme-accent Moonbit mark", icon)
+// Accent means on: the orb rests in the surface foreground and takes the
+// accent only while Moonbit works, and the error tone on a failure.
+func TestBarTintsTheMoonbitMarkOnlyWhileWorking(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		phase Phase
+		want  v1.Tone
+	}{
+		{"idle", PhaseIdle, v1.ToneNormal},
+		{"scanning", PhaseScanning, v1.ToneAccent},
+		{"cleaning", PhaseCleaning, v1.ToneAccent},
+		{"error", PhaseError, v1.ToneError},
+	} {
+		icon := Bar(&State{Phase: tc.phase}).Children[0].Children[0]
+		if icon.Kind != v1.KindIcon || icon.Icon != "moonbit" || icon.Tone != tc.want {
+			t.Errorf("%s: bar icon tone %q, want %q", tc.name, icon.Tone, tc.want)
+		}
 	}
 }
 
