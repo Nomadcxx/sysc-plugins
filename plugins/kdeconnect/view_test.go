@@ -169,8 +169,11 @@ func TestBarTreeShowsOfflineState(t *testing.T) {
 	if open.ID != "open" || open.Name == "" || open.Role == "" {
 		t.Fatalf("open control = %+v", open)
 	}
-	if open.Icon != "smartphone" || open.Text != "N/A" {
-		t.Fatalf("offline pill = %q %q", open.Icon, open.Text)
+	if open.Icon != "phonelink-off" || open.Tone != v1.ToneSubtle || open.Text != "" {
+		t.Fatalf("unavailable pill = %q tone %q text %q, want a muted phonelink-off glyph", open.Icon, open.Tone, open.Text)
+	}
+	if !strings.HasSuffix(open.Name, "unavailable") {
+		t.Fatalf("unavailable name = %q, want the state in words", open.Name)
 	}
 }
 
@@ -188,7 +191,7 @@ func TestBarFitsSideWidths(t *testing.T) {
 				t.Errorf("%s width %d label %q should move to the tooltip", name, width, bar.Children[0].Text)
 			}
 			button := bar.Children[0]
-			if button.ID != "open" || button.Name != "Open phone connect" || button.Role != "button" || len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
+			if button.ID != "open" || !strings.HasPrefix(button.Name, "Open phone connect") || button.Role != "button" || len(button.Events) != 1 || button.Events[0] != v1.EventActivate {
 				t.Fatalf("%s width %d interaction = %+v", name, width, button)
 			}
 		}
@@ -214,8 +217,11 @@ func TestBarTreeOmitsBatteryForSelectedDevice(t *testing.T) {
 	offline := pairedSnap()
 	offline.Devices[0].Reachable = false
 	offlinePill := BarTree(offline).Children[0]
-	if offlinePill.Icon != "devices_other" || offlinePill.Text != "" {
-		t.Fatalf("offline pill = %q %q", offlinePill.Icon, offlinePill.Text)
+	if offlinePill.Icon != "devices_other" || offlinePill.Tone != v1.ToneSubtle || offlinePill.Text != "" {
+		t.Fatalf("offline pill = %q tone %q text %q", offlinePill.Icon, offlinePill.Tone, offlinePill.Text)
+	}
+	if !strings.HasSuffix(offlinePill.Name, "device offline") {
+		t.Fatalf("offline name = %q, want the state in words", offlinePill.Name)
 	}
 }
 
