@@ -10,7 +10,7 @@ go 1.26.10
 
 require (
 	github.com/HugoSmits86/nativewebp v1.3.0
-	github.com/Nomadcxx/sysc-shell v0.2.1
+	github.com/Nomadcxx/sysc-shell v0.2.2-0.20261031130411-4914480184c4
 	github.com/godbus/dbus/v5 v5.2.4
 	golang.org/x/image v0.47.0
 	golang.org/x/sys v0.49.0
@@ -18,7 +18,7 @@ require (
 )
 
 require (
-	github.com/Nomadcxx/sysc-metrics v0.7.4
+	github.com/Nomadcxx/sysc-metrics v0.8.0
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
 	github.com/google/uuid v1.6.0 // indirect

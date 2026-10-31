@@ -4,6 +4,7 @@ PLUGINS := \
 	sysc-plugin-notes:notes \
 	sysc-plugin-timer:timer \
 	sysc-plugin-world-clock:world-clock \
+	sysc-plugin-airquality:airquality \
 	sysc-plugin-calendar:calendar \
 	sysc-plugin-github-notifications:github-notifications \
 	sysc-plugin-mini-docker:mini-docker \
