@@ -88,18 +88,16 @@ func PanelTree(snapshot Snapshot, now time.Time, scanning bool, scanMessage stri
 		root.Children = append(root.Children, staleCard(snapshot, now, scanning))
 		return root
 	}
-	sections := []*v1.Node{categorySection(snapshot)}
-	if unmatched := unmatchedSection(snapshot); unmatched != nil {
-		sections = append(sections, unmatched)
-	}
+	// Lead with what can be fixed; unmatched apps are unrated context.
+	sections := []*v1.Node{findingSection(snapshot), categorySection(snapshot)}
 	if sandbox := sandboxSection(snapshot.Sandbox); sandbox != nil {
 		sections = append(sections, sandbox)
 	}
-	sections = append(sections,
-		networkSection(snapshot.Network),
-		findingSection(snapshot),
-		coverageSection(snapshot),
-	)
+	sections = append(sections, networkSection(snapshot.Network))
+	if unmatched := unmatchedSection(snapshot); unmatched != nil {
+		sections = append(sections, unmatched)
+	}
+	sections = append(sections, coverageSection(snapshot))
 	root.Children = append(root.Children, sections...)
 	return root
 }
@@ -395,7 +393,7 @@ func coverageSection(snapshot Snapshot) *v1.Node {
 		if item.Fact == "network.telemetry" {
 			continue
 		}
-		label := text(item.Fact, maxLabelBytes)
+		label := factLabel(item.Fact)
 		if len(item.Sources) > 0 {
 			label += " (" + text(strings.Join(item.Sources, ", "), maxSummaryBytes) + ")"
 		}
@@ -404,7 +402,7 @@ func coverageSection(snapshot Snapshot) *v1.Node {
 		}
 		children = append(children, &v1.Node{Kind: v1.KindText, Text: label, Size: "caption", Tone: v1.ToneSubtle})
 		if item.SourcesTruncated {
-			children = append(children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d sources for %s.", item.SourcesShown, item.SourcesTotal, text(item.Fact, maxLabelBytes)), Size: "caption", Tone: v1.ToneSubtle})
+			children = append(children, &v1.Node{Kind: v1.KindText, Text: fmt.Sprintf("Showing %d of %d sources for %s.", item.SourcesShown, item.SourcesTotal, factLabel(item.Fact)), Size: "caption", Tone: v1.ToneSubtle})
 		}
 	}
 	if snapshot.ReducedTruncated {
@@ -414,6 +412,32 @@ func coverageSection(snapshot Snapshot) *v1.Node {
 		children = append(children, &v1.Node{Kind: v1.KindText, Text: "Catalogue " + text(snapshot.CatalogRev, maxLabelBytes), Size: "caption", Tone: v1.ToneSubtle})
 	}
 	return card("privacy-coverage", children...)
+}
+
+// factLabel names the facts privacybit reports as reduced; an unknown fact
+// keeps its ID so a newer audit still says what it could not check.
+func factLabel(fact string) string {
+	switch fact {
+	case "explicit":
+		return "Install reason"
+	case "licence":
+		return "Licence"
+	case "origin":
+		return "Package origin"
+	case "reverse_deps":
+		return "Reverse dependencies"
+	case "signed":
+		return "Signature"
+	case "vendor":
+		return "Vendor"
+	case "version":
+		return "Version"
+	case "network.vpn":
+		return "VPN checks"
+	case "flatpak.sandbox":
+		return "Flatpak sandbox"
+	}
+	return text(fact, maxLabelBytes)
 }
 
 func gradeChip(grade, key string) *v1.Node {
