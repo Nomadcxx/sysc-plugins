@@ -100,6 +100,12 @@ Work status lives in Beads. Continue from these open tasks:
 The full scopes and acceptance criteria are in `bd show sysc-plugins-38` and
 `bd show sysc-plugins-39`.
 
+Both audits ran on 2026-11-01; see
+[`airquality-audit-2026-11-01/README.md`](airquality-audit-2026-11-01/README.md).
+They found that the keyless EPA mirror has been frozen since 2025-12-05, and
+fixed that along with the refresh, cache and location bugs and the UI findings
+in plugin 0.1.1.
+
 ## Product limits to carry forward
 
 - The plugin uses configured coordinates and defaults to Melbourne. It does

@@ -22,7 +22,7 @@ const epaBody = `{
   "features": [
     {"attributes": {"siteID":"1001","siteName":"Melbourne CBD","siteType":"Standard",
       "healthParameter":"PM2.5","healthAdvice":"Fair","averageValue":19.9,
-      "since":1764907200000,"until":1764914400000},
+      "since":1793430000000,"until":1793433600000},
      "geometry": {"x":144.9671,"y":-37.8141}}
   ]
 }`
@@ -182,10 +182,12 @@ func start(t *testing.T, rec *recorder, stored *v1.StateGetResult, tweak func(*s
 				}
 				continue
 			}
+			// After stop, keep reading and drop the line: a snapshot written
+			// while the plugin handles its last refresh would otherwise block
+			// the plugin before it reads host.shutdown.
 			select {
 			case h.lines <- line:
 			case <-h.closed:
-				return
 			}
 		}
 		close(h.lines)
@@ -387,8 +389,10 @@ func TestAirHealthReadingsWhenEnabled(t *testing.T) {
 }
 
 func TestPartialSourceFailureKeepsPreviousReport(t *testing.T) {
+	// Six hours old and for the configured place, so it is still carried.
 	previous := airquality.Report{
-		UpdatedAt: time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 10, 31, 3, 0, 0, 0, time.UTC),
+		Origin:    &airquality.Coordinates{Latitude: airquality.DefaultLatitude, Longitude: airquality.DefaultLongitude},
 		Snapshot: airquality.Snapshot{
 			Location: airquality.Location{Suburb: "Melbourne", State: "VIC", SAL: "21640"},
 			Measures: []airquality.Measure{{
@@ -792,4 +796,93 @@ func (h *harness) storedState() *v1.StateGetResult {
 		h.t.Fatal("plugin saved no state")
 	}
 	return &v1.StateGetResult{Found: true, Value: append([]byte(nil), h.saved...)}
+}
+
+// setRoutes swaps the recorder's answers between refreshes.
+func (r *recorder) setRoutes(routes []route) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.routes = routes
+}
+
+// openPanelID opens a panel without waiting for a reading.
+func (h *harness) openPanelID() string {
+	id := fmt.Sprintf("p%d", h.nextView())
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: id, View: v1.ViewPanel, Entry: "panel",
+		Width: airquality.PanelWidth, Height: airquality.PanelHeight})
+	return id
+}
+
+// The host pushes the plugin's settings as soon as it starts. An unchanged
+// configuration must not push the first reading back by a refresh interval.
+func TestStartupSettingsKeepImmediateRefresh(t *testing.T) {
+	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
+	h := start(t, rec, nil, func(s *settings) { s.epa = false; s.airHealth = false })
+	h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopePlugin, Values: map[string]any{
+		"source_epa": false, "source_airhealth": false,
+	}})
+	h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopeInstance, Instance: "bar-1", Values: map[string]any{"show": "air"}})
+	id := h.openPanelID()
+	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "UV index") })
+}
+
+// Each bar widget keeps its own measure choice.
+func TestBarShowIsPerInstance(t *testing.T) {
+	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
+	h := start(t, rec, nil, func(s *settings) { s.epa = false; s.airHealth = false })
+	h.openPanel()
+	for _, bar := range []struct{ view, instance, show string }{{"bar-a", "inst-a", "air"}, {"bar-b", "inst-b", "icon"}} {
+		h.send(v1.ViewOpen{Type: "view.open", ViewID: bar.view, View: v1.ViewBar, Entry: "bar", Instance: bar.instance,
+			Width: shelllint.BarWidth, Height: shelllint.BarHeight})
+		h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopeInstance, Instance: bar.instance, Values: map[string]any{"show": bar.show}})
+	}
+	hasLabel := func(root *v1.Node) bool {
+		open := find(root, "open")
+		return open != nil && len(open.Children) == 2
+	}
+	h.snapshotFor("bar-b", func(root *v1.Node) bool { return !hasLabel(root) })
+	// Another refresh redraws both bars; the first must still show its label.
+	h.send(v1.InputEvent{Type: "input.event", ViewID: "bar-a", Node: "refresh", Event: v1.EventActivate})
+	h.snapshotFor("bar-a", func(root *v1.Node) bool { return hasLabel(root) && strings.Contains(allText(root), "Air") })
+}
+
+// While one provider is down, the providers that answered must keep updating
+// the panel rather than freezing it on the first partial report.
+func TestPartialFailureStillUpdatesWorkingSources(t *testing.T) {
+	down := route{suffix: "/locations/", status: http.StatusServiceUnavailable, body: "down"}
+	rec := &recorder{routes: []route{down, {suffix: "FeatureServer/0/query", body: epaBody}}}
+	h := start(t, rec, nil, func(s *settings) { s.openMeteo = false })
+	id := h.openPanelID()
+	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "19.9") })
+
+	rec.setRoutes([]route{down, {suffix: "FeatureServer/0/query", body: strings.Replace(epaBody, "19.9", "31.4", 1)}})
+	h.send(v1.InputEvent{Type: "input.event", ViewID: id, Node: "refresh", Event: v1.EventActivate})
+	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "31.4") })
+}
+
+// Moving the location must drop the old place's reading, never show it as the
+// new place's stale data, and must not present the move as a source failure.
+func TestLocationChangeDropsOldPlace(t *testing.T) {
+	rec := &recorder{routes: []route{{suffix: "FeatureServer/0/query", body: epaBody}}}
+	h := start(t, rec, nil, func(s *settings) { s.openMeteo = false; s.airHealth = false })
+	id := h.openPanelID()
+	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "Melbourne CBD") })
+
+	rec.setRoutes([]route{{suffix: "/v1/air-quality", status: http.StatusServiceUnavailable, body: "down"}})
+	h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopePlugin, Values: map[string]any{
+		"latitude": 51.5072, "longitude": -0.1276, "source_openmeteo": true,
+	}})
+	for {
+		snap := h.snapshotFor(id, func(*v1.Node) bool { return true })
+		text := allText(snap.Root)
+		if strings.Contains(text, "Melbourne CBD") {
+			t.Fatalf("panel still shows the previous location: %s", text)
+		}
+		if strings.Contains(text, "refreshing with updated settings") {
+			t.Fatalf("a settings change was reported as a source failure: %s", text)
+		}
+		if strings.Contains(text, "Open-Meteo") {
+			return
+		}
+	}
 }

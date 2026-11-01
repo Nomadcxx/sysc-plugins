@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +50,24 @@ type Report struct {
 	// Errors names the sources that failed, so the panel can say which part
 	// of the reading is old rather than implying the whole thing is.
 	Errors []string
+	// Origin is the coordinate pair the report was requested for, or nil for a
+	// report persisted before origins were recorded. It keeps one place's
+	// reading from being shown, or carried forward, as another's.
+	Origin *Coordinates
+}
+
+// Coordinates is a requested location in decimal degrees.
+type Coordinates struct {
+	Latitude  float64
+	Longitude float64
+}
+
+// Same reports whether two pairs name the same configured place. Settings
+// arrive as JSON numbers, so equal settings decode to equal floats; the
+// tolerance only absorbs a persisted round trip.
+func (c Coordinates) Same(other Coordinates) bool {
+	const epsilon = 1e-6
+	return math.Abs(c.Latitude-other.Latitude) < epsilon && math.Abs(c.Longitude-other.Longitude) < epsilon
 }
 
 // Fetcher runs one refresh against the configured sources.
@@ -109,7 +130,7 @@ func (f Fetcher) Fetch(ctx context.Context, src Sources) (Report, error) {
 			snap.Attribution = joinAttribution(snap.Attribution, OpenMeteoAttribution)
 			snap.Measures = mergeMeasures(snap.Measures, model, haveAir, haveUV)
 			if snap.Location.Suburb == "" {
-				snap.Location.Suburb = fmt.Sprintf("%.2f, %.2f", src.Latitude, src.Longitude)
+				snap.Location.Suburb = FormatCoordinates(src.Latitude, src.Longitude)
 			}
 		}
 	}
@@ -121,7 +142,11 @@ func (f Fetcher) Fetch(ctx context.Context, src Sources) (Report, error) {
 		return Report{Stale: true, Errors: problems}, fmt.Errorf("air quality: %s", strings.Join(problems, "; "))
 	}
 	snap.Measures = sortMeasures(snap.Measures)
-	return Report{Snapshot: snap, UpdatedAt: now, Errors: problems}, nil
+	for i := range snap.Measures {
+		snap.Measures[i].Updated = now
+	}
+	origin := Coordinates{Latitude: src.Latitude, Longitude: src.Longitude}
+	return Report{Snapshot: snap, UpdatedAt: now, Errors: problems, Origin: &origin}, nil
 }
 
 // AirHealthSupportsCoordinates filters out locations outside Australia before
@@ -231,6 +256,10 @@ func (f Fetcher) fetchAirHealth(ctx context.Context, src Sources) (Snapshot, err
 	return snap, nil
 }
 
+// EPAMaxAge is how old a station's averaging window may be and still count as
+// the current reading.
+const EPAMaxAge = 3 * time.Hour
+
 // fetchEPA returns the air quality measure and the station name it came from.
 func (f Fetcher) fetchEPA(ctx context.Context, src Sources) (Measure, string, error) {
 	radius := src.RadiusKM
@@ -241,6 +270,27 @@ func (f Fetcher) fetchEPA(ctx context.Context, src Sources) (Measure, string, er
 	if err != nil {
 		return Measure{}, "", err
 	}
+	// EPA publishes hourly averages, and the keyless mirror stopped updating
+	// on 2025-12-05. A station is current only if its averaging window ended
+	// recently; anything older would pass for today's air.
+	now := f.now()
+	current := sites[:0]
+	var newest time.Time
+	for _, site := range sites {
+		if site.Until.After(newest) {
+			newest = site.Until
+		}
+		if !site.Until.IsZero() && now.Sub(site.Until) <= EPAMaxAge {
+			current = append(current, site)
+		}
+	}
+	if len(current) == 0 {
+		if newest.IsZero() {
+			return Measure{}, "", fmt.Errorf("%w: no current station reading", ErrUnavailable)
+		}
+		return Measure{}, "", fmt.Errorf("%w: no current station reading (latest %s)", ErrUnavailable, newest.Format("2 Jan 2006"))
+	}
+	sites = current
 	// A configured station wins over proximity, so a user who knows their
 	// local station is the representative one keeps it even when a closer
 	// sensor appears.
@@ -268,15 +318,47 @@ func (f Fetcher) now() time.Time {
 	return time.Now()
 }
 
+// FormatCoordinates names a place with no suburb, such as a location outside
+// the regional services, with hemispheres rather than bare signed numbers.
+func FormatCoordinates(lat, lon float64) string {
+	ns, ew := "N", "E"
+	if lat < 0 {
+		ns = "S"
+	}
+	if lon < 0 {
+		ew = "W"
+	}
+	return fmt.Sprintf("%.2f°%s, %.2f°%s", math.Abs(lat), ns, math.Abs(lon), ew)
+}
+
 // describe turns a source error into panel text. It keeps the cause short:
 // the panel has one line for it, and the full error goes to the log.
 func describe(source string, err error) string {
 	return source + ": " + shortError(err)
 }
 
+// shortError says what went wrong in a reader's words. Transport failures and
+// HTTP statuses are named by what they mean; anything else is the error's
+// last clause, bounded to one line.
 func shortError(err error) string {
 	if err == nil {
 		return ""
+	}
+	var status *httpStatusError
+	var network net.Error
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timed out"
+	case errors.As(err, &status):
+		if status.code >= 500 || status.code == http.StatusTooManyRequests {
+			return fmt.Sprintf("service unavailable (HTTP %d)", status.code)
+		}
+		return fmt.Sprintf("request refused (HTTP %d)", status.code)
+	case errors.As(err, &network):
+		if network.Timeout() {
+			return "timed out"
+		}
+		return "can't connect; check the network"
 	}
 	msg := err.Error()
 	if i := strings.LastIndex(msg, ": "); i >= 0 && len(msg)-i < 60 {
@@ -312,6 +394,12 @@ func sortMeasures(measures []Measure) []Measure {
 	return measures
 }
 
+// CarryLimit is how long a measure from a failing source stays on the panel
+// beside fresh readings from the sources that answered. AirHealth publishes its
+// pollen forecast once a day, so half a day keeps a morning reading through an
+// afternoon outage without presenting yesterday's forecast as today's.
+const CarryLimit = 12 * time.Hour
+
 // Cache keeps the last good report so a refresh failure shows stale data
 // rather than an empty panel, and so a restart does not begin blank.
 type Cache struct {
@@ -326,6 +414,23 @@ func (c *Cache) Put(report Report) {
 	defer c.mu.Unlock()
 	report.Stale = false
 	c.report, c.seen = report, true
+}
+
+// Merge stores a partial report: the sources that answered replace their own
+// rows, and rows from the sources that failed are carried over from the stored
+// report for the same place while they are younger than CarryLimit. The merged
+// report is stale when it carries anything, and its UpdatedAt is the oldest
+// carried row's, so the panel's age never understates what it shows.
+func (c *Cache) Merge(fresh Report) Report {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	merged := fresh
+	merged.Stale = false
+	if c.seen && sameOrigin(c.report, fresh) {
+		merged = carryOver(fresh, c.report)
+	}
+	c.report, c.seen = merged, true
+	return merged
 }
 
 // Keep marks the stored report stale and records why, returning it. It is
@@ -356,4 +461,87 @@ func (c *Cache) Restore(report Report) {
 	defer c.mu.Unlock()
 	report.Stale = true
 	c.report, c.seen = report, true
+}
+
+// Relocate drops the stored report unless it was fetched for at. A report
+// from before origins were recorded cannot prove its place, so it is dropped
+// too: one refresh is cheaper than another city's pollen count.
+func (c *Cache) Relocate(at Coordinates) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.seen && (c.report.Origin == nil || !c.report.Origin.Same(at)) {
+		c.report, c.seen = Report{}, false
+	}
+}
+
+func sameOrigin(a, b Report) bool {
+	return a.Origin != nil && b.Origin != nil && a.Origin.Same(*b.Origin)
+}
+
+// carryOver adds previous's still-current rows that fresh lacks. AirHealth is
+// the only source of the forecast, the advisory and the suburb, so those come
+// along with its rows.
+func carryOver(fresh, previous Report) Report {
+	merged := fresh
+	merged.Snapshot.Measures = append([]Measure(nil), fresh.Snapshot.Measures...)
+	oldest := fresh.UpdatedAt
+	carried := map[string]bool{}
+	for _, m := range previous.Snapshot.Measures {
+		if _, ok := fresh.Snapshot.Measure(m.Name); ok {
+			continue
+		}
+		if m.Updated.IsZero() || fresh.UpdatedAt.Sub(m.Updated) > CarryLimit {
+			continue
+		}
+		merged.Snapshot.Measures = append(merged.Snapshot.Measures, m)
+		carried[m.Source] = true
+		if m.Updated.Before(oldest) {
+			oldest = m.Updated
+		}
+	}
+	if len(carried) == 0 {
+		return merged
+	}
+	merged.Stale = true
+	merged.UpdatedAt = oldest
+	merged.Snapshot.Measures = sortMeasures(merged.Snapshot.Measures)
+	if carried["airhealth"] {
+		snap, prev := &merged.Snapshot, previous.Snapshot
+		if snap.Location.SAL == "" {
+			snap.Location = prev.Location
+		}
+		if snap.Alert == nil {
+			snap.Alert = prev.Alert
+		}
+		if len(snap.Forecast) == 0 {
+			snap.Forecast = prev.Forecast
+		}
+		if snap.Weather == nil {
+			snap.Weather = prev.Weather
+		}
+		if snap.Date == "" {
+			snap.Date, snap.Title, snap.Advice = prev.Date, prev.Title, prev.Advice
+		}
+	}
+	for source := range carried {
+		merged.Snapshot.Attribution = joinAttribution(merged.Snapshot.Attribution, sourceCredit(previous.Snapshot.Attribution, source))
+	}
+	return merged
+}
+
+// sourceCredit finds one source's credit in a joined attribution. AirHealth
+// sends its own wording, so it is whichever credit is not one of the others.
+func sourceCredit(attribution, source string) string {
+	switch source {
+	case "epa":
+		return EPAAttribution
+	case "open-meteo":
+		return OpenMeteoAttribution
+	}
+	for _, credit := range strings.Split(attribution, " · ") {
+		if credit != EPAAttribution && credit != OpenMeteoAttribution {
+			return credit
+		}
+	}
+	return ""
 }

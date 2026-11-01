@@ -7,7 +7,10 @@
 // categories; EPA is the authority on Victorian particulate readings.
 package airquality
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // Severity is the normalised warning axis shared by every measure. It is the
 // only axis that is comparable across measures: the Air Quality scale runs
@@ -183,6 +186,9 @@ type Measure struct {
 	// Max is the top of the scale the bands divide. Zero means the measure has
 	// no numeric axis and must not be shown on a dial.
 	Max float64
+	// Updated is when the source supplied this row. A row carried over from an
+	// earlier refresh keeps its original time, which is what bounds its age.
+	Updated time.Time
 }
 
 // Band is one severity zone of a measure's published scale.

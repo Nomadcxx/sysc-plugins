@@ -322,11 +322,13 @@ func sortBreakdowns(parts []Breakdown) {
 	}
 }
 
-// selectSAL re-decodes the SA3 body and returns the snapshot for one suburb.
-func selectSAL(_ Snapshot, body []byte, sal string) Snapshot {
+// selectSAL re-decodes the SA3 body and returns the snapshot for one suburb,
+// or fallback (the area's first suburb) when the suburb is not listed. An
+// empty snapshot here would drop every pollen reading without an error.
+func selectSAL(fallback Snapshot, body []byte, sal string) Snapshot {
 	var wire wireDashboard
 	if err := json.Unmarshal(body, &wire); err != nil || len(wire.Locations) == 0 {
-		return Snapshot{}
+		return fallback
 	}
 	for _, raw := range wire.Locations {
 		if raw.Location.SAL != sal {
@@ -345,7 +347,7 @@ func selectSAL(_ Snapshot, body []byte, sal string) Snapshot {
 			}
 		}
 	}
-	return Snapshot{}
+	return fallback
 }
 
 // The dashboard wire shapes. Only the fields the plugin reads are declared;

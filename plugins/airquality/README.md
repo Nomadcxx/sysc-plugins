@@ -17,6 +17,12 @@ no key or registration. The plugin picks the nearest station with a reading and
 prefers a Standard monitoring station over an indicative sensor within one
 kilometre. EPA publishes this data under CC BY 4.0; the panel credits EPA.
 
+A station counts only if its averaging window ended within the last three
+hours. On 2026-11-01 every station in the mirror still carried its
+2025-12-05 reading; the layer's `dataLastEditDate` is 2025-12-05. Until the
+mirror updates, Open-Meteo supplies the air quality reading wherever AirHealth
+has none, and the panel reports "EPA Victoria: no current station reading".
+
 The backend research documents EPA's official Environment Monitoring API. It
 needs a free key. The shell has no protected plugin setting for credentials, so
 the plugin uses the keyless mirror.
@@ -69,14 +75,19 @@ Thunderstorm asthma is seasonal. Out of season the measure is absent rather
 than "Low", and the panel hides it instead of implying monitoring is running.
 
 Melbourne is the default location. Set latitude and longitude in settings to
-select the AirHealth location and the global model grid. The `Station` setting
-only overrides the nearest EPA Victoria site.
+select the AirHealth location and the global model grid. The plugin cannot read
+the shell's weather location: the plugin protocol has no host call for it. The
+`Station` setting only overrides the nearest EPA Victoria site. Changing the
+location discards the previous place's reading rather than showing it as stale
+data for the new one. Outside Australia the panel says that pollen and
+thunderstorm asthma forecasts cover Australian locations only.
 
 ## Breakdowns
 
 The headline row for a measure is a summary; the useful detail is underneath it.
 Where a source publishes constituent readings, the panel shows them as a strip
-under the worst measure only:
+under the worst measure only, which is under the dial when the dial shows that
+measure:
 
 ```
 Air quality
@@ -123,14 +134,20 @@ one source can still notify when another source fails during the same refresh.
 ## Panel and bar
 
 The bar shows the worst current measure by default. The `Bar shows` setting can
-pin it to grass, air quality or thunderstorm asthma, or show the icon only. The
-widget drops its text on a narrow bar.
+pin it to grass, air quality or thunderstorm asthma, or show the icon only; each
+bar widget keeps its own choice. The label puts the figure before the category
+and shortens at a word boundary, so a narrow bar loses words rather than the
+number. The widget drops its text on a narrow bar.
 
 The panel leads with a half radial dial for the worst measure that has a numeric
 scale, then lists each measure with its level and any numeric reading, then up
-to three forecast days. UV readings are identified as today's peak. While a
-fetch is failing the last known reading is kept and marked stale, the error
-names which source failed, and a Retry button runs the existing refresh action.
+to three forecast days. UV readings are identified as today's peak. When every
+source fails, the last known reading is kept and marked stale, and an error card
+names the failures in plain words. When only some sources fail, the sources that
+answered update their rows, and a failed source's rows from the same place stay
+for up to 12 hours. The header's age then reports the oldest row shown, and a
+warning card names the failed sources. Both cards have a Retry button that runs
+the refresh action.
 The thunderstorm asthma alert card includes the source's explanatory text.
 
 The dial paints four to six severity zones in green, amber and red, with a
