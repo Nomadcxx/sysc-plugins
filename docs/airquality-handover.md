@@ -9,27 +9,21 @@ history. The audit it commissioned is in
 | Item | Where | State |
 | --- | --- | --- |
 | Audit fixes, plugin 0.1.1 | sysc-plugins #307 | Merged (`d02fc57`). Beads `sysc-plugins-38` and `-39` closed. |
-| Shell location protocol, minor 26 | sysc-shell [#595](https://github.com/Nomadcxx/sysc-shell/pull/595), branch `feat/plugin-location`, commit `9a9bcb37` | Open. All five checks pass. **Merge first.** |
-| Shell location, European and Google pollen, plugin 0.2.0 | sysc-plugins [#309](https://github.com/Nomadcxx/sysc-plugins/pull/309), branch `feat/airquality-location-pollen` | Open. **Merge after #595.** The owner added two review fixes (`fdd2ee0` off-loop location poll and transient Google rows; `bd1f626` pollen source coverage), so wait for CI on the head commit. |
+| Shell location protocol, minor 26 | sysc-shell [#595](https://github.com/Nomadcxx/sysc-shell/pull/595) | Merged (`28f2b13a`). The owner rebased it and added `994e4318` "order location updates" before merging. |
+| Shell location, European and Google pollen, plugin 0.2.0 | sysc-plugins [#309](https://github.com/Nomadcxx/sysc-plugins/pull/309) | Merged (`11ba6e3`), with the owner's review fixes `fdd2ee0` (off-loop location poll, transient Google rows) and `bd1f626` (pollen source coverage). |
+| Repin and this handover | branch `fix/airquality-repin-handover` | #309 merged with `go.mod` pinning the pre-rebase #595 commit `9a9bcb37`, which is no longer on any sysc-shell branch. The follow-up repins to the #595 merge commit, `v0.2.4-0.20261101121114-28f2b13a7997`, and lands this file. Between the two commits `plugin/v1` differs only in a doc comment. |
 
-`go.mod` in #309 pins `github.com/Nomadcxx/sysc-shell
-v0.2.4-0.20261101102346-9a9bcb370588`, the #595 branch commit. A merge
-commit keeps that commit reachable from `main`, so the pin stays valid; do
-not squash-merge #595. If it is squashed anyway, repin: edit the `require`
-line to the squash commit's pseudo-version (resolve it with
-`GOFLAGS=-mod=mod GOPROXY=direct go list -m -json github.com/Nomadcxx/sysc-shell@<sha>`).
-Then build with `GOFLAGS=-mod=mod` to refresh `go.sum`. Do not run `go get` or
-`go mod tidy` in this repository.
+To repin again, resolve a commit's pseudo-version with
+`GOFLAGS=-mod=mod GOPROXY=direct go list -m -json github.com/Nomadcxx/sysc-shell@<sha>`,
+edit the `require` line, delete the old `go.sum` lines, and build with
+`GOFLAGS=-mod=mod` to refresh `go.sum`. Do not run `go get` or `go mod tidy`
+in this repository. Pin only commits reachable from sysc-shell `main` or a tag,
+because branch commits disappear when a branch is rebased.
 
 Merges were blocked for the session's agent by the auto-mode permission check
-("merge without review"). The owner merges:
+("merge without review"); the owner merges.
 
-```
-gh pr merge 595 --repo Nomadcxx/sysc-shell --merge
-gh pr merge 309 --repo Nomadcxx/sysc-plugins --merge
-```
-
-## What the open PRs do
+## What the merged PRs do
 
 ### sysc-shell #595: protocol minor 26
 
@@ -49,7 +43,9 @@ gh pr merge 309 --repo Nomadcxx/sysc-plugins --merge
   plugin was last told. `locationMaybeChanged` runs off-lock after every
   config reload (`registry.go`, after `SetCity`). It pushes `location.changed`
   only to running plugins that are granted the capability, negotiated minor 26
-  or later, and were last told a different place.
+  or later, and were last told a different place. The owner's `994e4318`
+  numbers each reload (`nextRevision`) and sends through `sendIfCurrent`, so
+  a slow lookup from an older reload can no longer overwrite a newer place.
 
 ### sysc-plugins #309: plugin 0.2.0
 
@@ -114,16 +110,18 @@ gh pr merge 309 --repo Nomadcxx/sysc-plugins --merge
 
 ## Outstanding work, in order
 
-1. **Merge** #595, then #309 (commands above).
+1. **Merge the repin follow-up** (`fix/airquality-repin-handover`). Until it
+   lands, `main` builds only while the Go module proxy still serves the
+   orphaned `9a9bcb37`, and `GOPROXY=direct` builds fail.
 2. **Deploy and test in a live shell.** Follow the deploy rule: build the
    shell only from an `origin/main` worktree with `scripts/deploy --host
    desktop|laptop`. Install the plugin binary as in the plugin deploy notes.
    Then check:
    - The plugin's declared capabilities changed (`location` added). Expect
      the shell to withhold the grants as "changed" until the user approves
-     the plugin again in Settings > Plugins. Approve it, and confirm the
-     consent text for `location` makes sense to a user; nothing in #595 adds
-     consent copy for it.
+     the plugin again in Settings > Plugins. Approve it, and check that the
+     approval screen lists `location`. No capability has its own consent
+     wording in the shell, so the screen shows the capability name.
    - With Settings > Weather set to a city, the panel names that city and
      reads there. Change the city: the panel should move within seconds,
      driven by `location.changed`, without a restart.
@@ -137,9 +135,9 @@ gh pr merge 309 --repo Nomadcxx/sysc-plugins --merge
    refused (HTTP 403)"). Check the US (e.g. 40.71, −74.01), a covered
    non-US country, an uncovered region, and a bad key. The key must never
    appear in the panel or logs.
-4. **Optional: tag the shell** (v0.2.4) after #595, and repin
+4. **Optional: tag the shell** (v0.2.4) and repin
    `github.com/Nomadcxx/sysc-shell` to the tag in a small follow-up. The
-   current pseudo-version pin is valid without it.
+   pseudo-version pin of the #595 merge commit is valid without it.
 5. **Optional: switch EPA to its official API.** The keyless ArcGIS mirror
    has been frozen since 2025-12-05. Its readings are rejected after three
    hours, so Open-Meteo supplies Victorian air quality whenever AirHealth has
@@ -163,11 +161,13 @@ gh pr merge 309 --repo Nomadcxx/sysc-plugins --merge
 
 ## Workspace notes
 
-- **Worktrees from this work** (remove after merge):
-  - sysc-plugins `.worktrees/airquality-audit-20261101` (merged)
-  - `.worktrees/airquality-location-pollen` (#309)
+- **Worktrees from this work** (remove once the repin follow-up merges):
+  - sysc-plugins `.worktrees/airquality-audit-20261101` (#307, merged)
+  - `.worktrees/airquality-location-pollen` (#309, merged)
   - `.worktrees/airquality-handover-20261101` (old handover)
-  - sysc-shell `~/worktrees/sysc-shell-aq-audit` (branch `feat/plugin-location`, #595)
+  - `.worktrees/airquality-repin` (the repin follow-up)
+  - sysc-shell `~/worktrees/sysc-shell-aq-audit` (#595, merged; it still
+    has the pre-rebase `9a9bcb37` checked out)
 - **Commit messages:** the commit-msg hooks in both repositories reject `bot`,
   `agent`, `llm` and `claude` as substrings (watch "both"). They also reject
   Co-Authored-By trailers.
@@ -184,5 +184,6 @@ gh pr merge 309 --repo Nomadcxx/sysc-plugins --merge
 - **Renders:** build `sysc-panel-preview` from a current shell worktree with
   `GOWORK=off go build ./cmd/sysc-panel-preview`. It accepts only column roots,
   so wrap bar rows in a column to preview them.
-- **Temp space:** the session temp volume ran out once; keep large binaries
-  and renders out of `/tmp`, or clean them up afterwards.
+- **Temp space:** `/tmp` has a per-user quota, and other sessions' files
+  fill it. When a build fails with "disk quota exceeded", set
+  `GOTMPDIR=~/.cache/go-tmp`. Keep large binaries and renders out of `/tmp`.
