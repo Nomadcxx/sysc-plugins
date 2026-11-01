@@ -61,9 +61,9 @@ state, never carried across a failed refresh, and disappear when a refresh
 fails. The panel shows Google's required credit: "Source: Includes pollen data
 from Google."
 
-Pollen precedence is AirHealth in Australia, then Google where a key is set,
-then Open-Meteo's European model. Elsewhere without a key, the panel says that
-pollen needs a Google Pollen API key.
+Pollen precedence is AirHealth in Australia, Open-Meteo's European model, then
+Google when earlier sources have no pollen and a key is set. Elsewhere without
+a key, the panel says that pollen needs a Google Pollen API key.
 
 **AirHealth pollen apps (on by default).** Grass pollen and allergen readings
 come from the free app service behind the regional pollen sites. The plugin uses
@@ -89,7 +89,7 @@ University of Tasmania and University of Melbourne".
 | Air quality category | AirHealth, EPA Victoria, Open-Meteo | AirHealth returned Australian locations; EPA near Victorian stations; Open-Meteo global model fallback |
 | Pollutant readings | Open-Meteo | Global model coverage |
 | UV index | Open-Meteo | Global model coverage |
-| Grass pollen | AirHealth, Open-Meteo, Google | Australia (AirHealth); Europe (Open-Meteo, keyless); elsewhere Google covers, with a key |
+| Grass pollen | AirHealth, Open-Meteo, Google | Australia (AirHealth); Europe (Open-Meteo); elsewhere Google when it covers, with a key |
 | Other allergens | AirHealth, Open-Meteo, Google | As grass pollen |
 | Thunderstorm asthma | AirHealth | Seasonal Australian forecast, when published for the location |
 

@@ -138,8 +138,8 @@ func pollenServer(t *testing.T, body, google string, googleHits *int) *httptest.
 	return srv
 }
 
-// Pollen comes from Google where the user has a key, else Open-Meteo's
-// European model; without either the report says how to get it.
+// Pollen prefers AirHealth and Open-Meteo; Google fills coverage gaps when
+// the user has a key.
 func TestFetchPollenPrecedence(t *testing.T) {
 	london := Sources{OpenMeteo: true, Latitude: 51.51, Longitude: -0.13, Label: "London"}
 	hits := 0
@@ -164,18 +164,33 @@ func TestFetchPollenPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	grass, _ = report.Snapshot.Measure(MeasureGrass)
-	if grass.Source != "google" || !strings.Contains(report.Snapshot.Attribution, GoogleAttribution) {
-		t.Fatalf("with a key: grass %+v, attribution %q", grass, report.Snapshot.Attribution)
+	if grass.Source != "open-meteo" || hits != 0 || strings.Contains(report.Snapshot.Attribution, GoogleAttribution) {
+		t.Fatalf("Europe with a key: grass %+v, google hits %d, attribution %q", grass, hits, report.Snapshot.Attribution)
 	}
 
 	usSrv := pollenServer(t, usPollenBody, googlePollenBody, &hits)
 	us := Sources{OpenMeteo: true, Latitude: 40.71, Longitude: -74.01}
-	report, err = Fetcher{OpenMeteo: OpenMeteo{Base: usSrv.URL + "/air"}, Now: fixtureNow}.Fetch(context.Background(), us)
+	usFetcher := Fetcher{
+		OpenMeteo: OpenMeteo{Base: usSrv.URL + "/air"},
+		Google:    GooglePollen{Base: usSrv.URL + "/pollen"},
+		Now:       fixtureNow,
+	}
+	report, err = usFetcher.Fetch(context.Background(), us)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := report.Snapshot.Measure(MeasureGrass); ok || !strings.Contains(report.PollenNote, "Google Pollen API key") {
+	if _, ok := report.Snapshot.Measure(MeasureGrass); ok || !strings.Contains(report.PollenNote, "Google Pollen API key") || hits != 0 {
 		t.Fatalf("US without a key: measures %+v, note %q", report.Snapshot.Measures, report.PollenNote)
+	}
+
+	us.GoogleKey = "k"
+	report, err = usFetcher.Fetch(context.Background(), us)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grass, _ = report.Snapshot.Measure(MeasureGrass)
+	if grass.Source != "google" || hits != 1 || !strings.Contains(report.Snapshot.Attribution, GoogleAttribution) {
+		t.Fatalf("US with a key: grass %+v, google hits %d, attribution %q", grass, hits, report.Snapshot.Attribution)
 	}
 }
 

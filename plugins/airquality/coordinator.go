@@ -28,8 +28,8 @@ type Sources struct {
 	Site string
 	// RadiusKM bounds the EPA station search.
 	RadiusKM float64
-	// GoogleKey enables the Google Pollen API where AirHealth has no pollen;
-	// empty leaves it off.
+	// GoogleKey enables Google pollen when AirHealth and Open-Meteo have no
+	// pollen; empty leaves it off.
 	GoogleKey string
 	// Label names the location when no regional source does, such as the
 	// shell's weather location "London".
@@ -60,8 +60,8 @@ type Report struct {
 	// report persisted before origins were recorded. It keeps one place's
 	// reading from being shown, or carried forward, as another's.
 	Origin *Coordinates
-	// PollenNote explains a report with no pollen rows outside AirHealth's
-	// coverage, such as a location that needs a Google Pollen API key.
+	// PollenNote explains a report with no pollen rows, such as a location
+	// that needs a Google Pollen API key.
 	PollenNote string
 }
 
@@ -95,9 +95,8 @@ type Fetcher struct {
 // those regional sources cover the configured coordinates. Open-Meteo remains
 // the global fallback and is consulted for UV and gaseous pollutants too.
 //
-// Pollen precedence is AirHealth in Australia, then Google wherever the user
-// has a key, then Open-Meteo's European model. The first that answers
-// supplies both the pollen rows and, when nothing earlier did, the forecast.
+// Pollen precedence is AirHealth, Open-Meteo, then Google when earlier sources
+// have no pollen. The first that answers supplies the rows and forecast.
 func (f Fetcher) Fetch(ctx context.Context, src Sources) (Report, error) {
 	now := f.now()
 	var (
@@ -125,23 +124,6 @@ func (f Fetcher) Fetch(ctx context.Context, src Sources) (Report, error) {
 	if _, ok := snap.Measure(MeasureAllergens); ok {
 		havePollen = true
 	}
-	if !havePollen && src.GoogleKey != "" {
-		google := f.Google
-		google.Key = src.GoogleKey
-		measures, forecast, err := google.Fetch(ctx, src.Latitude, src.Longitude)
-		switch {
-		case err == nil && len(measures) > 0:
-			snap.Measures = append(snap.Measures, measures...)
-			snap.Attribution = joinAttribution(snap.Attribution, GoogleAttribution)
-			if len(snap.Forecast) == 0 {
-				snap.Forecast = forecast
-			}
-			havePollen = true
-		case err != nil && !errors.Is(err, ErrNoCoverage):
-			problems = append(problems, describe("Google Pollen", err))
-		}
-	}
-
 	if src.EPA && !haveAir {
 		measure, site, err := f.fetchEPA(ctx, src)
 		if err != nil {
@@ -172,6 +154,22 @@ func (f Fetcher) Fetch(ctx context.Context, src Sources) (Report, error) {
 				}
 				havePollen = true
 			}
+		}
+	}
+	if !havePollen && src.GoogleKey != "" {
+		google := f.Google
+		google.Key = src.GoogleKey
+		measures, forecast, err := google.Fetch(ctx, src.Latitude, src.Longitude)
+		switch {
+		case err == nil && len(measures) > 0:
+			snap.Measures = append(snap.Measures, measures...)
+			snap.Attribution = joinAttribution(snap.Attribution, GoogleAttribution)
+			if len(snap.Forecast) == 0 {
+				snap.Forecast = forecast
+			}
+			havePollen = true
+		case err != nil && !errors.Is(err, ErrNoCoverage):
+			problems = append(problems, describe("Google Pollen", err))
 		}
 	}
 
