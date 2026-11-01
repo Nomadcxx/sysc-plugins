@@ -80,6 +80,17 @@ protocol minor 10 row fallback and the offline state.
 
 ## Deferred decisions
 
+Update, 2026-11-01: all three were resolved in plugin 0.2.0.
+- **Shared location:** sysc-shell protocol minor 26 adds `location.get` and
+  `location.changed`, and the plugin follows the shell's weather location by
+  default.
+- **EPA:** stays on by default, but only for Victorian coordinates.
+- **Pollen:** Europe comes from Open-Meteo; the United States and other
+  covered countries come from Google Pollen with an optional masked key.
+
+The original notes follow.
+
+
 1. **Shared location (requirement gap).** The shell keeps a weather location
    (`config.Weather` latitude/longitude/city), but the plugin protocol has no
    host call or setting type that exposes it, so the plugin cannot inherit it.

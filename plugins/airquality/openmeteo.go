@@ -18,7 +18,7 @@ const OpenMeteoBase = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
 // OpenMeteoAttribution is what the model data requires on screen. CAMS is the
 // Copernicus Atmosphere Monitoring Service that supplies the forecast.
-const OpenMeteoAttribution = "Air quality and UV: CAMS ENSEMBLE via Open-Meteo"
+const OpenMeteoAttribution = "Air quality, UV and pollen: CAMS ENSEMBLE via Open-Meteo"
 
 // UV categories. Open-Meteo publishes the number; the bands are the WHO /
 // Bureau of Meteorology exposure scale, which is what an Australian reader
@@ -53,17 +53,24 @@ const (
 	openMeteoDaily   = "uv_index_max"
 )
 
-// Fetch returns the model measures for a location.
-//
-// The result is deliberately partial: it carries air quality and UV, and
-// nothing about pollen, because Open-Meteo's pollen layers are Europe-only.
-// Merging is the coordinator's job.
-func (o OpenMeteo) Fetch(ctx context.Context, lat, lon float64) ([]Measure, error) {
+// Model is one Open-Meteo answer: air quality and UV everywhere, and the
+// European pollen rows and forecast where the CAMS pollen domain covers the
+// location.
+type Model struct {
+	Measures []Measure
+	Pollen   []Measure
+	Forecast []Day
+}
+
+// Fetch returns the model readings for a location. Merging them with the
+// regional sources is the coordinator's job.
+func (o OpenMeteo) Fetch(ctx context.Context, lat, lon float64) (Model, error) {
 	q := url.Values{}
 	q.Set("latitude", trimFloat(lat))
 	q.Set("longitude", trimFloat(lon))
 	q.Set("current", openMeteoCurrent)
 	q.Set("daily", openMeteoDaily)
+	q.Set("hourly", openMeteoPollenHourly)
 	q.Set("timezone", "auto")
 	q.Set("forecast_days", "4")
 
@@ -74,7 +81,7 @@ func (o OpenMeteo) Fetch(ctx context.Context, lat, lon float64) ([]Measure, erro
 	endpoint := base + "?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, err
+		return Model{}, err
 	}
 	req.Header.Set("Accept", "application/json")
 
@@ -84,17 +91,24 @@ func (o OpenMeteo) Fetch(ctx context.Context, lat, lon float64) ([]Measure, erro
 	}
 	resp, err := do.Do(req)
 	if err != nil {
-		return nil, err
+		return Model{}, err
 	}
 	defer resp.Body.Close()
 	if err := statusError("open-meteo", resp); err != nil {
-		return nil, err
+		return Model{}, err
 	}
 	body, err := readLimited(resp.Body)
 	if err != nil {
-		return nil, err
+		return Model{}, err
 	}
-	return ParseOpenMeteo(body)
+	measures, err := ParseOpenMeteo(body)
+	if err != nil {
+		return Model{}, err
+	}
+	// Pollen is optional: a malformed pollen series must not cost the air
+	// quality reading that came with it.
+	pollen, forecast, _ := ParseOpenMeteoPollen(body)
+	return Model{Measures: measures, Pollen: pollen, Forecast: forecast}, nil
 }
 
 // wireOpenMeteo is the response shape. Every number is a pointer because the

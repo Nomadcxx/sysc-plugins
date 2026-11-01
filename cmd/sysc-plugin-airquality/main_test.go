@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -123,6 +125,20 @@ type harness struct {
 // everything else succeeds, so a test only has to watch the view traffic.
 func start(t *testing.T, rec *recorder, stored *v1.StateGetResult, tweak func(*settings)) *harness {
 	t.Helper()
+	return startWith(t, rec, stored, tweak, hostOptions{minor: 10})
+}
+
+// hostOptions shapes the fake host: the protocol minor it offers and the
+// weather location it answers location.get with (nil answers "{}").
+type hostOptions struct {
+	minor           int
+	location        *v1.Location
+	locationGate    <-chan struct{}
+	locationStarted chan<- struct{}
+}
+
+func startWith(t *testing.T, rec *recorder, stored *v1.StateGetResult, tweak func(*settings), opts hostOptions) *harness {
+	t.Helper()
 	input, host := io.Pipe()
 	plugin, output := io.Pipe()
 	h := &harness{
@@ -161,6 +177,11 @@ func start(t *testing.T, rec *recorder, stored *v1.StateGetResult, tweak func(*s
 				case v1.CallStateGet:
 					raw, _ := json.Marshal(stateResult)
 					reply.Result = raw
+				case v1.CallLocationGet:
+					if opts.location != nil {
+						raw, _ := json.Marshal(opts.location)
+						reply.Result = raw
+					}
 				case v1.CallStateSet:
 					// Capture the last write so a restart test can restore
 					// exactly what the plugin saved.
@@ -175,6 +196,24 @@ func start(t *testing.T, rec *recorder, stored *v1.StateGetResult, tweak func(*s
 					if json.Unmarshal(call.Params, &params) == nil {
 						h.notifications <- params
 					}
+				}
+				if call.Call == v1.CallLocationGet && opts.locationGate != nil {
+					if opts.locationStarted != nil {
+						select {
+						case opts.locationStarted <- struct{}{}:
+						default:
+						}
+					}
+					data, _ := json.Marshal(reply)
+					go func(line []byte) {
+						select {
+						case <-opts.locationGate:
+						case <-h.closed:
+							return
+						}
+						_, _ = h.host.Write(append(line, '\n'))
+					}(data)
+					continue
 				}
 				data, _ := json.Marshal(reply)
 				if _, err := h.host.Write(append(data, '\n')); err != nil {
@@ -193,7 +232,7 @@ func start(t *testing.T, rec *recorder, stored *v1.StateGetResult, tweak func(*s
 		close(h.lines)
 	}()
 
-	h.send(map[string]any{"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: 10}}, "capabilities": []string{"notifications", "panels", "settings", "state"}})
+	h.send(map[string]any{"type": "host.hello", "supported": []v1.Version{{Major: 1, Minor: opts.minor}}, "capabilities": []string{"location", "notifications", "panels", "settings", "state"}})
 	if got := h.next(); messageType(got) != "plugin.hello" {
 		t.Fatalf("first message = %s", got)
 	}
@@ -553,9 +592,9 @@ func TestSourcesRouteByProviderCoverage(t *testing.T) {
 		airHealth, epa bool
 	}{
 		{"Melbourne", -37.8136, 144.9631, true, true},
-		{"Canberra", -35.2809, 149.1300, true, true},
-		{"Sydney", -33.8688, 151.2093, true, true},
-		{"Perth", -31.9505, 115.8605, true, true},
+		{"Canberra", -35.2809, 149.1300, true, false},
+		{"Sydney", -33.8688, 151.2093, true, false},
+		{"Perth", -31.9505, 115.8605, true, false},
 		{"London", 51.5072, -0.1276, false, false},
 	}
 	for _, tc := range cases {
@@ -753,6 +792,42 @@ func TestHandleRefreshIgnoresSupersededGeneration(t *testing.T) {
 	}
 }
 
+func TestLiveGooglePollenRendersWithoutEnteringCache(t *testing.T) {
+	fresh := airquality.Report{
+		Snapshot: airquality.Snapshot{
+			Attribution: airquality.OpenMeteoAttribution + " · " + airquality.GoogleAttribution,
+			Measures: []airquality.Measure{
+				{Name: airquality.MeasureGrass, Source: "google", Level: airquality.Level{Name: "Moderate", Severity: airquality.SeverityModerate}},
+				{Name: airquality.MeasureUV, Source: "open-meteo", Level: airquality.Level{Name: "Low", Severity: airquality.SeverityGood}},
+			},
+		},
+	}
+	s := &session{settings: defaultSettings()}
+	s.handleRefresh(context.Background(), refreshResult{report: fresh})
+
+	current := s.current()
+	if _, ok := current.Snapshot.Measure(airquality.MeasureGrass); !ok || !strings.Contains(current.Snapshot.Attribution, airquality.GoogleAttribution) {
+		t.Fatalf("current report lost the live Google response: %+v", current.Snapshot)
+	}
+	text := allText(s.tree(view{kind: v1.ViewPanel, width: airquality.PanelWidth}))
+	if !strings.Contains(text, "Grass pollen") || !strings.Contains(text, airquality.GoogleAttribution) {
+		t.Fatalf("panel did not render the live Google response: %s", text)
+	}
+	stored, ok := s.cache.Get()
+	if !ok {
+		t.Fatal("successful refresh was not retained")
+	}
+	if _, ok := stored.Snapshot.Measure(airquality.MeasureGrass); ok || strings.Contains(stored.Snapshot.Attribution, airquality.GoogleAttribution) {
+		t.Fatalf("cache retained the Google response: %+v", stored.Snapshot)
+	}
+
+	s.handleRefresh(context.Background(), refreshResult{err: fmt.Errorf("Open-Meteo timed out")})
+	current = s.current()
+	if _, ok := current.Snapshot.Measure(airquality.MeasureGrass); ok || strings.Contains(current.Snapshot.Attribution, airquality.GoogleAttribution) {
+		t.Fatalf("a failed refresh served Google data stale: %+v", current.Snapshot)
+	}
+}
+
 // The UV row must survive the state round-trip, or a restart loses it.
 func TestOpenMeteoReadingPersistsAcrossRestart(t *testing.T) {
 	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
@@ -884,5 +959,128 @@ func TestLocationChangeDropsOldPlace(t *testing.T) {
 		if strings.Contains(text, "Open-Meteo") {
 			return
 		}
+	}
+}
+
+// openMeteoLatitude is the latitude of the last Open-Meteo request.
+func (r *recorder) openMeteoLatitude() string {
+	for _, p := range slices.Backward(r.requested()) {
+		if strings.Contains(p, "/v1/air-quality") {
+			u, _ := url.Parse(p)
+			return u.Query().Get("latitude")
+		}
+	}
+	return ""
+}
+
+// By default the plugin reads at the shell's weather location and names it
+// with the shell's label.
+func TestFollowsShellWeatherLocation(t *testing.T) {
+	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
+	london := &v1.Location{Configured: true, Latitude: 51.5072, Longitude: -0.1276, Label: "London"}
+	h := startWith(t, rec, nil, nil, hostOptions{minor: v1.LocationMinor, location: london})
+	panel := h.openPanel()
+	if text := allText(panel.Root); !strings.Contains(text, "London") {
+		t.Fatalf("panel does not name the shell's location: %s", text)
+	}
+	if got := rec.openMeteoLatitude(); got != "51.5072" {
+		t.Fatalf("requested latitude %q, want the shell's", got)
+	}
+	if rec.hits("airhealthservices") != 0 || rec.hits("FeatureServer") != 0 {
+		t.Fatal("Australian sources were queried for London")
+	}
+}
+
+// location.changed moves the reading without a settings change.
+func TestLocationChangedMovesTheReading(t *testing.T) {
+	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
+	london := &v1.Location{Configured: true, Latitude: 51.5072, Longitude: -0.1276, Label: "London"}
+	h := startWith(t, rec, nil, func(s *settings) { s.airHealth = false; s.epa = false }, hostOptions{minor: v1.LocationMinor, location: london})
+	id := h.openPanelID()
+	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "London") })
+
+	h.send(v1.LocationChanged{Type: v1.TypeLocationChanged, Location: v1.Location{Configured: true, Latitude: 48.8566, Longitude: 2.3522, Label: "Paris"}})
+	h.snapshotFor(id, func(root *v1.Node) bool {
+		text := allText(root)
+		if strings.Contains(text, "London") && strings.Contains(text, "UV index") {
+			return false
+		}
+		return strings.Contains(text, "Paris") && strings.Contains(text, "UV index")
+	})
+	if got := rec.openMeteoLatitude(); got != "48.8566" {
+		t.Fatalf("requested latitude %q after the move, want Paris", got)
+	}
+}
+
+// A slow host location lookup must not stop the event loop from handling views.
+func TestLocationPollDoesNotBlockViews(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	started := make(chan struct{}, 1)
+	london := &v1.Location{Configured: true, Latitude: 51.5072, Longitude: -0.1276, Label: "London"}
+	h := startWith(t, &recorder{}, nil, nil, hostOptions{
+		minor: v1.LocationMinor, location: london, locationGate: gate, locationStarted: started,
+	})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("host did not receive location.get")
+	}
+
+	const id = "slow-location"
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: id, View: v1.ViewPanel, Entry: "panel",
+		Width: airquality.PanelWidth, Height: airquality.PanelHeight})
+	select {
+	case line := <-h.lines:
+		var snapshot v1.ViewSnapshot
+		if messageType(line) != v1.TypeViewSnapshot || json.Unmarshal(line, &snapshot) != nil || snapshot.ViewID != id {
+			t.Fatalf("view response while location was pending = %s", line)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("view handling waited for the host location reply")
+	}
+}
+
+func TestLocationPollDropsAResultOlderThanLocationChanged(t *testing.T) {
+	paris := &v1.Location{Configured: true, Latitude: 48.8566, Longitude: 2.3522, Label: "Paris"}
+	london := &v1.Location{Configured: true, Latitude: 51.5072, Longitude: -0.1276, Label: "London"}
+	s := &session{settings: defaultSettings(), shell: paris, locationRevision: 2}
+	want := s.sources()
+	if s.applyLocationResult(locationResult{revision: 1, location: london}) {
+		t.Fatal("a stale location poll replaced a newer pushed location")
+	}
+	if got := s.sources(); got != want {
+		t.Fatalf("effective location = %+v, want pushed location %+v", got, want)
+	}
+}
+
+// Turning the option off, or a shell with no location, uses the plugin's own
+// coordinates.
+func TestOwnCoordinatesWhenNotFollowingTheShell(t *testing.T) {
+	for name, tc := range map[string]struct {
+		useShell bool
+		location *v1.Location
+	}{
+		"opted out":      {false, &v1.Location{Configured: true, Latitude: 51.5072, Longitude: -0.1276, Label: "London"}},
+		"no shell place": {true, &v1.Location{}},
+		"city resolving": {true, &v1.Location{Configured: true, Pending: true, Label: "Paris"}},
+		"older host":     {true, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
+			opts := hostOptions{minor: v1.LocationMinor, location: tc.location}
+			if tc.location == nil {
+				opts.minor = 25
+			}
+			h := startWith(t, rec, nil, func(s *settings) {
+				s.useShell = tc.useShell
+				s.airHealth, s.epa = false, false
+				s.latitude, s.longitude = 35.6762, 139.6503
+			}, opts)
+			h.openPanel()
+			if got := rec.openMeteoLatitude(); got != "35.6762" {
+				t.Fatalf("requested latitude %q, want the plugin's own", got)
+			}
+		})
 	}
 }

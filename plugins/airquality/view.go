@@ -234,8 +234,11 @@ func measureText(m Measure, report Report) string {
 		if uvIsCurrent(m) {
 			text += " now"
 		}
-		if metricScaleLabel(m) != "" {
+		switch metricScaleLabel(m) {
+		case "US AQI":
 			text += " AQI"
+		case "UPI":
+			text += " UPI"
 		}
 		text += " " + formatValue(m.Metric.Value)
 	}
@@ -511,17 +514,13 @@ func PanelFor(report Report, protocolMinor int) *v1.Node {
 	return panelRoot(children)
 }
 
-// coverageNote explains an empty pollen section: outside Australia the panel
-// has air quality and UV only, and without this it reads as a fault.
+// coverageNote explains an empty pollen section, such as a location that
+// needs a Google Pollen API key; without it the gap reads as a fault.
 func coverageNote(report Report) *v1.Node {
-	origin := report.Origin
-	if origin == nil || AirHealthSupportsCoordinates(origin.Latitude, origin.Longitude) {
+	if report.PollenNote == "" {
 		return nil
 	}
-	if _, ok := report.Snapshot.Measure(MeasureGrass); ok {
-		return nil
-	}
-	lines := wrapText("Pollen and thunderstorm asthma forecasts cover Australian locations only.", attributionBytes)
+	lines := wrapText(report.PollenNote, attributionBytes)
 	column := &v1.Node{Kind: v1.KindColumn, Children: make([]*v1.Node, 0, len(lines))}
 	for _, line := range lines {
 		column.Children = append(column.Children, &v1.Node{Kind: v1.KindText, Text: line, Tone: v1.ToneSubtle})
@@ -647,6 +646,9 @@ func measureValueText(m Measure) string {
 	num := formatValue(m.Metric.Value)
 	if scale := metricScaleLabel(m); scale != "" {
 		num = scale + " " + num
+	} else if m.Name == MeasureAllergens && m.Metric.Subcat != "" {
+		// The allergen row reports its worst species; say which.
+		num = m.Metric.Subcat + " " + num
 	}
 	if m.Metric.Units != "" {
 		num += " " + unitsLabel(m.Metric.Units)
@@ -667,9 +669,17 @@ func measureValueText(m Measure) string {
 	return m.Level.Name + " · " + num
 }
 
+// metricScaleLabel names an index the reading is quoted on: the US AQI for
+// model air quality, the Universal Pollen Index for Google pollen.
 func metricScaleLabel(m Measure) string {
-	if m.Name == MeasureAirQuality && m.Metric != nil && strings.EqualFold(strings.TrimSpace(m.Metric.Subcat), "US AQI") {
+	if m.Metric == nil {
+		return ""
+	}
+	switch subcat := strings.TrimSpace(m.Metric.Subcat); {
+	case m.Name == MeasureAirQuality && strings.EqualFold(subcat, "US AQI"):
 		return "US AQI"
+	case strings.EqualFold(subcat, "UPI"):
+		return "UPI"
 	}
 	return ""
 }
@@ -1071,6 +1081,9 @@ func DialLabel(report Report, protocolMinor int) string {
 	}
 	if m.Metric == nil {
 		return Title(m.Name) + " · category position"
+	}
+	if metricScaleLabel(m) == "UPI" {
+		return Title(m.Name) + " · Universal Pollen Index, 0–5"
 	}
 	if m.Name == MeasureUV {
 		if uvIsCurrent(m) {
