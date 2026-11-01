@@ -90,3 +90,27 @@ The protocol grew for this work: plugin/v1 minor 1 adds `subtle` and
 `accent` text tones (muted foreground and theme accent) and the host now
 honours node Height, so views can carry text hierarchy and fixed-height
 rows. The timer is the first rebuild; the rest follow its patterns.
+
+## The shell's location
+
+From protocol minor 26 a plugin can read the place named in Settings >
+Weather instead of asking for its own coordinates. Declare the `location`
+capability, which needs `"protocol": {"major": 1, "minor": 26}`, then call
+`location.get` (`v1.CallLocationGet` with `v1.LocationGetParams{}`). The reply
+is a `v1.Location`:
+
+- `configured` is false when the user has set no location. Use your own
+  setting then; never read it as 0,0.
+- `pending` is true while a configured city is still being geocoded. Use your
+  own setting until a later answer resolves it.
+- `latitude`, `longitude` and `label` name the place, for example "London".
+
+The host pushes `location.changed` (`*v1.LocationChanged`) to granted plugins
+on minor 26 or later when the place changes. Ask again on your own refresh
+too: a city that finishes geocoding later causes no config reload, so nothing
+pushes it. Air Quality & Pollen (`cmd/sysc-plugin-airquality`) follows this
+pattern, with a setting to opt out.
+
+A credential, such as an API key, belongs in a string setting with
+`"secret": true`. The shell draws it masked and keeps it out of screenshots
+and screen shares.

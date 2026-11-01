@@ -1049,19 +1049,19 @@ func TestDialledWorstMeasureKeepsItsBreakdown(t *testing.T) {
 	}
 }
 
-// Outside Australia the panel says why there is no pollen, and names the place
-// with hemispheres; inside it says nothing.
-func TestCoverageNoteOutsideAustralia(t *testing.T) {
+// A report with no pollen says why, and names a place with no suburb by
+// hemispheres; a report with pollen says nothing.
+func TestCoverageNoteExplainsMissingPollen(t *testing.T) {
 	tokyo := Report{Origin: &Coordinates{Latitude: 35.6762, Longitude: 139.6503},
-		Snapshot: Snapshot{Location: Location{Suburb: FormatCoordinates(35.6762, 139.6503)}, Measures: []Measure{usAQIMeasure(40)}}}
+		PollenNote: "Pollen here needs a Google Pollen API key; add one in this plugin's settings.",
+		Snapshot:   Snapshot{Location: Location{Suburb: FormatCoordinates(35.6762, 139.6503)}, Measures: []Measure{usAQIMeasure(40)}}}
 	text := nodeText(PanelFor(tokyo, dialBandLabelsProtocolMinor))
-	if !strings.Contains(text, "Australian locations only") || !strings.Contains(text, "35.68°N, 139.65°E") {
+	if !strings.Contains(text, "Google Pollen API key") || !strings.Contains(text, "35.68°N, 139.65°E") {
 		t.Fatalf("global panel = %s", text)
 	}
 	melbourne := sampleReport()
-	melbourne.Origin = &Coordinates{Latitude: DefaultLatitude, Longitude: DefaultLongitude}
-	if text := nodeText(PanelFor(melbourne, dialBandLabelsProtocolMinor)); strings.Contains(text, "Australian locations only") {
-		t.Fatalf("Australian panel carries the coverage note: %s", text)
+	if text := nodeText(PanelFor(melbourne, dialBandLabelsProtocolMinor)); strings.Contains(text, "Google Pollen API key") {
+		t.Fatalf("a panel with pollen carries the note: %s", text)
 	}
 }
 

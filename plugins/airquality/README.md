@@ -1,15 +1,19 @@
 # Air Quality & Pollen
 
-Air Quality & Pollen shows air quality and UV data for configured coordinates
-worldwide, plus Australian pollen and thunderstorm asthma where the regional
-AirHealth service returns a location. The default coordinates are in
-Melbourne; set decimal latitude and longitude in settings for another location.
+Air Quality & Pollen shows air quality and UV worldwide, pollen for Australia
+and Europe, pollen anywhere else Google covers when you add a Google Pollen API
+key, and Australian thunderstorm asthma. It reads at the shell's weather
+location (Settings > Weather). With no shell location, or with "Use the
+shell's weather location" off, it uses its own latitude and longitude, which
+default to Melbourne.
 
 ## Sources
 
 Open-Meteo is the global model source. AirHealth and EPA Victoria are regional
-sources and are used only where their coordinates are covered. All three
-settings default to on; turn off a source in settings to exclude its readings.
+sources and are used only where they have coverage: AirHealth for Australian
+coordinates, EPA only for Victorian ones. The three keyless sources default to
+on; turn one off in settings to exclude its readings. Google Pollen is off
+until you enter a key.
 
 **EPA Victoria (default, on).** The plugin reads air quality from a public
 ArcGIS feature service that mirrors EPA Victoria's monitoring network. It needs
@@ -23,9 +27,9 @@ hours. On 2026-11-01 every station in the mirror still carried its
 mirror updates, Open-Meteo supplies the air quality reading wherever AirHealth
 has none, and the panel reports "EPA Victoria: no current station reading".
 
-The backend research documents EPA's official Environment Monitoring API. It
-needs a free key. The shell has no protected plugin setting for credentials, so
-the plugin uses the keyless mirror.
+The backend research documents EPA's official Environment Monitoring API,
+which needs a free key. The shell now offers masked secret settings, so the
+official API could replace the frozen mirror in a later change.
 
 **Open-Meteo (default, on).** Supplies the global fallback air-quality index,
 particulate and gaseous pollutant readings, and UV. Its CAMS ENSEMBLE model
@@ -38,10 +42,28 @@ scale label.
 The displayed UV value is today's forecast peak, and the panel and tooltip label
 it as today's peak so it is not mistaken for the current UV level.
 
-Open-Meteo exposes pollen variables only for Europe, and this plugin
-does not currently request them. Outside locations returned by AirHealth,
-pollen and thunderstorm-asthma data are unavailable; global air quality and UV
-remain available through Open-Meteo.
+Open-Meteo also serves the CAMS European pollen forecast: grass, birch, alder,
+olive, mugwort and ragweed in grains/m³. Outside Europe these values are null,
+and the plugin shows no Open-Meteo pollen. Each day's reading is the mean of its
+local hours, placed on MeteoSwiss's per-species load classes (None, Low,
+Moderate, High, Very High). MeteoSwiss publishes no olive classes, so olive
+uses birch's. Grass is its own row; the allergen row reports the worst other
+species and names it, with every species in its breakdown.
+
+**Google Pollen (optional).** Covers the United States and other countries
+that AirHealth and Open-Meteo do not, using the Universal Pollen Index (0–5)
+for grass, tree and weed plus in-season plants. Enter a Google Cloud API key
+with the Pollen API enabled in the masked "Google Pollen API key" setting.
+Billing must be on; the monthly free quota covers this plugin's requests. The
+key is sent in a request header, never in a URL. Google's terms prohibit
+caching or storing its data, so Google rows are never written to plugin
+state, never carried across a failed refresh, and disappear when a refresh
+fails. The panel shows Google's required credit: "Source: Includes pollen data
+from Google."
+
+Pollen precedence is AirHealth in Australia, then Google where a key is set,
+then Open-Meteo's European model. Elsewhere without a key, the panel says that
+pollen needs a Google Pollen API key.
 
 **AirHealth pollen apps (on by default).** Grass pollen and allergen readings
 come from the free app service behind the regional pollen sites. The plugin uses
@@ -67,20 +89,22 @@ University of Tasmania and University of Melbourne".
 | Air quality category | AirHealth, EPA Victoria, Open-Meteo | AirHealth returned Australian locations; EPA near Victorian stations; Open-Meteo global model fallback |
 | Pollutant readings | Open-Meteo | Global model coverage |
 | UV index | Open-Meteo | Global model coverage |
-| Grass pollen | AirHealth regional pollen apps | Melbourne, Canberra, Sydney, Perth and other returned Australian locations |
-| Other allergens | AirHealth regional pollen apps | Returned Australian locations |
+| Grass pollen | AirHealth, Open-Meteo, Google | Australia (AirHealth); Europe (Open-Meteo, keyless); elsewhere Google covers, with a key |
+| Other allergens | AirHealth, Open-Meteo, Google | As grass pollen |
 | Thunderstorm asthma | AirHealth | Seasonal Australian forecast, when published for the location |
 
 Thunderstorm asthma is seasonal. Out of season the measure is absent rather
 than "Low", and the panel hides it instead of implying monitoring is running.
 
-Melbourne is the default location. Set latitude and longitude in settings to
-select the AirHealth location and the global model grid. The plugin cannot read
-the shell's weather location: the plugin protocol has no host call for it. The
-`Station` setting only overrides the nearest EPA Victoria site. Changing the
+The plugin reads the shell's weather location through the `location`
+capability (sysc-shell protocol minor 26). It asks at start and on each
+refresh, and the shell pushes `location.changed` when Settings > Weather
+moves, so the reading follows without a restart. A city the shell is still
+geocoding counts as no location until it resolves. The panel names the place
+with AirHealth's suburb, else the shell's label, else hemisphere coordinates.
+The `Station` setting only overrides the nearest EPA Victoria site. Changing
 location discards the previous place's reading rather than showing it as stale
-data for the new one. Outside Australia the panel says that pollen and
-thunderstorm asthma forecasts cover Australian locations only.
+data for the new one.
 
 ## Breakdowns
 
@@ -175,30 +199,21 @@ category band and says "category position" under the dial. This represents the
 reported category, not an invented pollen count. A minor 24 host keeps the
 numeric-measure dial and shows grass in the rows.
 
-Half dials and severity bands need sysc-shell protocol minor 24; band labels
-and category-only grass positioning need minor 25. Against an older shell the
-panel falls back to the row list, and a narrow bar drops to its icon.
-
-Until a shell release carries minor 25, this plugin needs a `replace` in the
-repository `go.mod` pointing at a shell checkout that includes it:
-
-```
-replace github.com/Nomadcxx/sysc-shell => /path/to/sysc-shell
-```
-
-The half gauge is on branch `feat/gauge-half-severity-bands`; its band labels
-extend that work at protocol minor 25. Drop the replace once that is released
-and the dependency pin is bumped.
+The manifest declares protocol minor 26 for the `location` capability, so the
+plugin needs a shell that speaks it. Half dials and severity bands date from
+minor 24 and band labels from minor 25.
 
 ## Settings
 
 | Setting | Default | Notes |
 | --- | --- | --- |
 | AirHealth pollen apps | on | Australian coverage; skipped elsewhere; opt-out in settings |
-| EPA Victoria | on | Near Victorian stations; skipped elsewhere |
-| Open-Meteo | on | Global model AQI, UV and pollutants |
-| Latitude | -37.8136 | Melbourne; accepts -90 to 90 |
-| Longitude | 144.9631 | Melbourne; accepts -180 to 180 |
+| EPA Victoria | on | Victorian coordinates only; skipped elsewhere |
+| Open-Meteo | on | Global AQI, UV and pollutants; European pollen |
+| Google Pollen API key | empty | Optional, masked; enables Google pollen where AirHealth has none |
+| Use the shell's weather location | on | Follows Settings > Weather when it names a place |
+| Latitude | -37.8136 | Fallback; Melbourne; accepts -90 to 90 |
+| Longitude | 144.9631 | Fallback; Melbourne; accepts -180 to 180 |
 | Station | empty | Site name override; empty means nearest |
 | Refresh | 15 min | 5–180 |
 | Search radius | 15 km | 1–100 |

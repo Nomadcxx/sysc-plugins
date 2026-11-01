@@ -83,6 +83,8 @@ type setting struct {
 	Max         any            `json:"max"`
 	Options     []any          `json:"options"`
 	VisibleWhen map[string]any `json:"visible_when"`
+	// Secret marks a credential the shell draws masked; only a string can be.
+	Secret bool `json:"secret"`
 }
 
 var allowedCapabilities = map[string]bool{
@@ -105,7 +107,12 @@ var allowedCapabilities = map[string]bool{
 	"screenshot-read":    true,
 	"outputs-read":       true,
 	"files:browser":      true,
+	"location":           true,
 }
+
+// locationMinor is the protocol minor that introduced the location
+// capability; the host refuses it on an older manifest.
+const locationMinor = 26
 
 var narrowCapabilities = map[string]bool{
 	"state-read": true, "state-write": true, "wallpaper-read": true, "wallpaper-write": true,
@@ -213,6 +220,11 @@ func validate(path string, seenIDs map[string]string) error {
 			if narrowCapabilities[c] {
 				return fmt.Errorf("capabilities[%d]: %q requires protocol minor %d", i, c, narrowCapabilityMinor)
 			}
+		}
+	}
+	for i, c := range m.Capabilities {
+		if c == "location" && m.Protocol.Minor < locationMinor {
+			return fmt.Errorf("capabilities[%d]: %q requires protocol minor %d", i, c, locationMinor)
 		}
 	}
 	if _, err := validateSettings(m.Settings); err != nil {
@@ -344,6 +356,7 @@ var requiredCap = map[string]string{
 	"CallScreenshotDirectory": "screenshot-read",
 	"CallFilesBrowse":         "files",
 	"CallOutputContext":       "outputs-read",
+	"CallLocationGet":         "location",
 }
 
 // validateHostcallCaps scans the plugin's Go sources under
@@ -532,6 +545,9 @@ func validateSettings(settings []setting) (map[string]bool, error) {
 		keys[s.Key] = true
 	}
 	for _, s := range settings {
+		if s.Secret && s.Type != "string" {
+			return nil, fmt.Errorf("setting %q: only a string setting can be secret", s.Key)
+		}
 		if s.VisibleWhen == nil {
 			continue
 		}

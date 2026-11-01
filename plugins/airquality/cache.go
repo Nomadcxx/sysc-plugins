@@ -2,6 +2,7 @@ package airquality
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -90,8 +91,45 @@ type diskDay struct {
 	Measures []diskMeasure `json:"measures,omitempty"`
 }
 
+// WithoutGoogle drops every Google Pollen row, today's and the forecast's.
+// Google's Pollen API terms prohibit caching or storing its data, so those
+// rows live only in the refresh that fetched them: they are never persisted
+// and never shown again as stale data.
+func WithoutGoogle(report Report) Report {
+	measures := make([]Measure, 0, len(report.Snapshot.Measures))
+	for _, m := range report.Snapshot.Measures {
+		if m.Source != "google" {
+			measures = append(measures, m)
+		}
+	}
+	report.Snapshot.Measures = measures
+	var forecast []Day
+	for _, d := range report.Snapshot.Forecast {
+		day := d
+		day.Measures = map[string]Measure{}
+		for name, m := range d.Measures {
+			if m.Source != "google" {
+				day.Measures[name] = m
+			}
+		}
+		if len(day.Measures) > 0 {
+			forecast = append(forecast, day)
+		}
+	}
+	report.Snapshot.Forecast = forecast
+	var credits []string
+	for _, credit := range strings.Split(report.Snapshot.Attribution, " · ") {
+		if credit != GoogleAttribution {
+			credits = append(credits, credit)
+		}
+	}
+	report.Snapshot.Attribution = strings.Join(credits, " · ")
+	return report
+}
+
 // EncodeReport serialises a report for plugin state.
 func EncodeReport(report Report) ([]byte, error) {
+	report = WithoutGoogle(report)
 	if report.UpdatedAt.IsZero() {
 		report.UpdatedAt = time.Now()
 	}

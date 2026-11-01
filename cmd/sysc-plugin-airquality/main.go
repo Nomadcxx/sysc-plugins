@@ -21,7 +21,7 @@ import (
 const (
 	pluginID      = "org.sysc.airquality"
 	pluginName    = "Air Quality & Pollen"
-	pluginVersion = "0.1.1"
+	pluginVersion = "0.2.0"
 )
 
 const (
@@ -64,6 +64,12 @@ type settings struct {
 	radiusKM    float64
 	notifyHigh  bool
 	notifyStorm bool
+	// useShell follows the shell's weather location when it has one; the
+	// coordinates above are the fallback.
+	useShell bool
+	// googleKey enables Google pollen where AirHealth has none. It is a
+	// secret setting, so the shell draws it masked.
+	googleKey string
 }
 
 func defaultSettings() settings {
@@ -77,6 +83,7 @@ func defaultSettings() settings {
 		radiusKM:    airquality.DefaultRadiusKM,
 		notifyHigh:  true,
 		notifyStorm: true,
+		useShell:    true,
 	}
 }
 
@@ -118,25 +125,36 @@ func (s *settings) apply(values map[string]any) {
 	if v, ok := values["notify_storm"].(bool); ok {
 		s.notifyStorm = v
 	}
+	if v, ok := values["use_shell_location"].(bool); ok {
+		s.useShell = v
+	}
+	if v, ok := values["google_pollen_key"].(string); ok {
+		s.googleKey = strings.TrimSpace(v)
+	}
 }
 
 func clamp(v, lo, hi float64) float64 {
 	return min(max(v, lo), hi)
 }
 
-func (s settings) origin() airquality.Coordinates {
-	return airquality.Coordinates{Latitude: s.latitude, Longitude: s.longitude}
+// sources is the request for the configured coordinates.
+func (s settings) sources() airquality.Sources {
+	return s.sourcesAt(s.latitude, s.longitude, "")
 }
 
-func (s settings) sources() airquality.Sources {
+// sourcesAt is the request for a location, routing each regional provider
+// only where it has coverage.
+func (s settings) sourcesAt(lat, lon float64, label string) airquality.Sources {
 	return airquality.Sources{
-		AirHealth: s.airHealth && airquality.AirHealthSupportsCoordinates(s.latitude, s.longitude),
-		EPA:       s.epa && airquality.EPAVictoriaMayCoverCoordinates(s.latitude, s.longitude),
+		AirHealth: s.airHealth && airquality.AirHealthSupportsCoordinates(lat, lon),
+		EPA:       s.epa && airquality.EPAVictoriaMayCoverCoordinates(lat, lon),
 		OpenMeteo: s.openMeteo,
-		Latitude:  s.latitude,
-		Longitude: s.longitude,
+		Latitude:  lat,
+		Longitude: lon,
 		Site:      s.site,
 		RadiusKM:  s.radiusKM,
+		GoogleKey: s.googleKey,
+		Label:     label,
 	}
 }
 
@@ -172,6 +190,56 @@ type session struct {
 	// lastErr is the most recent refresh error, shown in the panel and
 	// cleared by a success.
 	lastErr string
+	// shell is the shell's weather location, or nil before the host answered
+	// or on a host that cannot share it.
+	shell *v1.Location
+}
+
+// sources is the effective request: the shell's weather location when the
+// user follows it and the shell has resolved one, else the plugin's own
+// coordinates.
+func (s *session) sources() airquality.Sources {
+	if loc := s.shell; s.settings.useShell && loc != nil && loc.Configured && !loc.Pending {
+		return s.settings.sourcesAt(loc.Latitude, loc.Longitude, loc.Label)
+	}
+	return s.settings.sources()
+}
+
+// sourcesChanged reacts to a possibly new request. Another place's reading is
+// never this place's stale data, alerts re-arm for a new place, and a changed
+// request starts a refresh. It reports whether a refresh was started.
+func (s *session) sourcesChanged(before airquality.Sources) bool {
+	after := s.sources()
+	origin := airquality.Coordinates{Latitude: after.Latitude, Longitude: after.Longitude}
+	s.cache.Relocate(origin)
+	if !origin.Same(airquality.Coordinates{Latitude: before.Latitude, Longitude: before.Longitude}) {
+		s.notified = map[string]airquality.Severity{}
+	}
+	if before == after {
+		return false
+	}
+	s.generation++
+	// The old request's failures say nothing about the new one.
+	s.lastErr = ""
+	s.requestRefresh()
+	return true
+}
+
+// queryLocation asks the host for its weather location. A host before minor
+// 26, or one that withholds the capability, leaves the plugin on its own
+// coordinates.
+func (s *session) queryLocation(ctx context.Context) {
+	if s.minor < v1.LocationMinor {
+		return
+	}
+	reply, err := s.call(ctx, v1.CallLocationGet, v1.LocationGetParams{})
+	if err != nil || !reply.OK {
+		return
+	}
+	var loc v1.Location
+	if json.Unmarshal(reply.Result, &loc) == nil {
+		s.shell = &loc
+	}
 }
 
 func runPlugin(in io.Reader, out io.Writer, env environment) error {
@@ -212,6 +280,7 @@ func runPluginWith(in io.Reader, out io.Writer, env environment, initial setting
 	}()
 
 	s.restore(ctx)
+	s.queryLocation(ctx)
 
 	// The refresher owns the network. Keeping it off the loop means a slow
 	// source delays a reading, never the handshake or a keypress.
@@ -242,7 +311,13 @@ func runPluginWith(in io.Reader, out io.Writer, env environment, initial setting
 		case <-ctx.Done():
 			return nil
 		case <-timerC:
-			s.requestRefresh()
+			// Ask again each tick: a city the shell was still geocoding
+			// resolves without a config reload, so no push announces it.
+			before := s.sources()
+			s.queryLocation(ctx)
+			if !s.sourcesChanged(before) {
+				s.requestRefresh()
+			}
 			armTimer(s.settings.refresh)
 		case result := <-results:
 			s.handleRefresh(ctx, result)
@@ -275,20 +350,17 @@ func runPluginWith(in io.Reader, out io.Writer, env environment, initial setting
 				// The host sends the plugin's settings on every start, so an
 				// unchanged message must leave the pending refresh alone; re-arming
 				// unconditionally pushed the first reading out by a whole interval.
-				before := s.settings
+				before, interval := s.sources(), s.settings.refresh
 				s.settings.apply(m.Values)
-				// Another place's reading is never this place's stale data.
-				s.cache.Relocate(s.settings.origin())
-				if !before.origin().Same(s.settings.origin()) {
-					s.notified = map[string]airquality.Severity{}
-				}
-				if before.sources() != s.settings.sources() {
-					s.generation++
-					// The old request's failures say nothing about the new one.
-					s.lastErr = ""
-					s.requestRefresh()
+				if s.sourcesChanged(before) || interval != s.settings.refresh {
 					armTimer(s.settings.refresh)
-				} else if before.refresh != s.settings.refresh {
+				}
+				s.snapshotAll()
+			case *v1.LocationChanged:
+				before := s.sources()
+				loc := m.Location
+				s.shell = &loc
+				if s.sourcesChanged(before) {
 					armTimer(s.settings.refresh)
 				}
 				s.snapshotAll()
@@ -327,6 +399,7 @@ func (s *session) refreshLoop(ctx context.Context, results chan<- refreshResult)
 			AirHealth: airquality.AirHealth{Do: s.env.do},
 			EPA:       airquality.EPAArcGIS{Do: s.env.do},
 			OpenMeteo: airquality.OpenMeteo{Do: s.env.do},
+			Google:    airquality.GooglePollen{Do: s.env.do},
 			Now:       s.env.now,
 		}
 		report, err := fetcher.Fetch(fetchCtx, request.sources)
@@ -342,7 +415,7 @@ func (s *session) refreshLoop(ctx context.Context, results chan<- refreshResult)
 // requestRefresh asks the refresher for a reading without blocking. A trigger
 // already pending is the same request, so a full slot is success.
 func (s *session) requestRefresh() {
-	request := refreshRequest{sources: s.settings.sources(), generation: s.generation}
+	request := refreshRequest{sources: s.sources(), generation: s.generation}
 	select {
 	case s.wake <- request:
 	default:

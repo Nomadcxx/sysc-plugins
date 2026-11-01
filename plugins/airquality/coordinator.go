@@ -28,6 +28,12 @@ type Sources struct {
 	Site string
 	// RadiusKM bounds the EPA station search.
 	RadiusKM float64
+	// GoogleKey enables the Google Pollen API where AirHealth has no pollen;
+	// empty leaves it off.
+	GoogleKey string
+	// Label names the location when no regional source does, such as the
+	// shell's weather location "London".
+	Label string
 }
 
 // Defaults for the Melbourne CBD, used when a setting is absent.
@@ -54,6 +60,9 @@ type Report struct {
 	// report persisted before origins were recorded. It keeps one place's
 	// reading from being shown, or carried forward, as another's.
 	Origin *Coordinates
+	// PollenNote explains a report with no pollen rows outside AirHealth's
+	// coverage, such as a location that needs a Google Pollen API key.
+	PollenNote string
 }
 
 // Coordinates is a requested location in decimal degrees.
@@ -75,7 +84,9 @@ type Fetcher struct {
 	AirHealth AirHealth
 	EPA       EPAArcGIS
 	OpenMeteo OpenMeteo
-	Now       func() time.Time
+	// Google carries the transport; the key comes from Sources.
+	Google GooglePollen
+	Now    func() time.Time
 }
 
 // Fetch builds a report from the enabled sources.
@@ -83,6 +94,10 @@ type Fetcher struct {
 // Air quality precedence is AirHealth, then EPA, then Open-Meteo wherever
 // those regional sources cover the configured coordinates. Open-Meteo remains
 // the global fallback and is consulted for UV and gaseous pollutants too.
+//
+// Pollen precedence is AirHealth in Australia, then Google wherever the user
+// has a key, then Open-Meteo's European model. The first that answers
+// supplies both the pollen rows and, when nothing earlier did, the forecast.
 func (f Fetcher) Fetch(ctx context.Context, src Sources) (Report, error) {
 	now := f.now()
 	var (
@@ -103,6 +118,27 @@ func (f Fetcher) Fetch(ctx context.Context, src Sources) (Report, error) {
 			if !errors.Is(err, ErrNoCoverage) {
 				problems = append(problems, describe("AirHealth pollen", err))
 			}
+		}
+	}
+
+	_, havePollen := snap.Measure(MeasureGrass)
+	if _, ok := snap.Measure(MeasureAllergens); ok {
+		havePollen = true
+	}
+	if !havePollen && src.GoogleKey != "" {
+		google := f.Google
+		google.Key = src.GoogleKey
+		measures, forecast, err := google.Fetch(ctx, src.Latitude, src.Longitude)
+		switch {
+		case err == nil && len(measures) > 0:
+			snap.Measures = append(snap.Measures, measures...)
+			snap.Attribution = joinAttribution(snap.Attribution, GoogleAttribution)
+			if len(snap.Forecast) == 0 {
+				snap.Forecast = forecast
+			}
+			havePollen = true
+		case err != nil && !errors.Is(err, ErrNoCoverage):
+			problems = append(problems, describe("Google Pollen", err))
 		}
 	}
 
@@ -128,10 +164,30 @@ func (f Fetcher) Fetch(ctx context.Context, src Sources) (Report, error) {
 			problems = append(problems, describe("Open-Meteo", err))
 		} else {
 			snap.Attribution = joinAttribution(snap.Attribution, OpenMeteoAttribution)
-			snap.Measures = mergeMeasures(snap.Measures, model, haveAir, haveUV)
-			if snap.Location.Suburb == "" {
-				snap.Location.Suburb = FormatCoordinates(src.Latitude, src.Longitude)
+			snap.Measures = mergeMeasures(snap.Measures, model.Measures, haveAir, haveUV)
+			if !havePollen && len(model.Pollen) > 0 {
+				snap.Measures = append(snap.Measures, model.Pollen...)
+				if len(snap.Forecast) == 0 {
+					snap.Forecast = model.Forecast
+				}
+				havePollen = true
 			}
+		}
+	}
+
+	// AirHealth names its suburb; otherwise the shell's weather label beats an
+	// EPA station name or bare coordinates.
+	if snap.Location.SAL == "" && src.Label != "" {
+		snap.Location.Suburb = src.Label
+	}
+	if snap.Location.Suburb == "" && len(snap.Measures) > 0 {
+		snap.Location.Suburb = FormatCoordinates(src.Latitude, src.Longitude)
+	}
+	note := ""
+	if !havePollen && !AirHealthSupportsCoordinates(src.Latitude, src.Longitude) {
+		note = "No pollen forecast is published for this location."
+		if src.GoogleKey == "" {
+			note = "Pollen here needs a Google Pollen API key; add one in this plugin's settings."
 		}
 	}
 
@@ -146,7 +202,7 @@ func (f Fetcher) Fetch(ctx context.Context, src Sources) (Report, error) {
 		snap.Measures[i].Updated = now
 	}
 	origin := Coordinates{Latitude: src.Latitude, Longitude: src.Longitude}
-	return Report{Snapshot: snap, UpdatedAt: now, Errors: problems, Origin: &origin}, nil
+	return Report{Snapshot: snap, UpdatedAt: now, Errors: problems, Origin: &origin, PollenNote: note}, nil
 }
 
 // AirHealthSupportsCoordinates filters out locations outside Australia before
@@ -157,11 +213,28 @@ func AirHealthSupportsCoordinates(lat, lon float64) bool {
 	return lat >= -44 && lat <= -10 && lon >= 112 && lon <= 154
 }
 
-// EPAVictoriaMayCoverCoordinates filters out global coordinates before
-// querying the Victorian station mirror. Its configured radius determines
-// whether a station actually covers the requested Australian location.
+// victoria outlines the state as (longitude, latitude) pairs, following the
+// Murray to its source, the straight line to Cape Howe, the coast and the
+// South Australian border. It is coarse, a little outside the border, which
+// is all a station search needs: the radius decides the rest.
+var victoria = [][2]float64{
+	{140.95, -33.95}, {142.16, -34.05}, {143.55, -35.25}, {144.75, -36.05},
+	{146.92, -35.98}, {147.9, -35.95}, {148.25, -36.75}, {150.05, -37.5},
+	{146.4, -39.25}, {141.6, -38.5}, {140.95, -38.1},
+}
+
+// EPAVictoriaMayCoverCoordinates reports whether coordinates fall in
+// Victoria, the only place the EPA Victoria network has stations. Its
+// configured radius then decides whether one is in range.
 func EPAVictoriaMayCoverCoordinates(lat, lon float64) bool {
-	return AirHealthSupportsCoordinates(lat, lon)
+	inside := false
+	for i, j := 0, len(victoria)-1; i < len(victoria); j, i = i, i+1 {
+		a, b := victoria[i], victoria[j]
+		if (a[1] > lat) != (b[1] > lat) && lon < (b[0]-a[0])*(lat-a[1])/(b[1]-a[1])+a[0] {
+			inside = !inside
+		}
+	}
+	return inside
 }
 
 // mergeMeasures adds the model's measures alongside what the other sources
@@ -442,6 +515,7 @@ func (c *Cache) Keep(errors []string) (Report, bool) {
 	if !c.seen {
 		return Report{}, false
 	}
+	c.report = WithoutGoogle(c.report)
 	c.report.Stale = true
 	c.report.Errors = errors
 	return c.report, true
@@ -490,7 +564,9 @@ func carryOver(fresh, previous Report) Report {
 		if _, ok := fresh.Snapshot.Measure(m.Name); ok {
 			continue
 		}
-		if m.Updated.IsZero() || fresh.UpdatedAt.Sub(m.Updated) > CarryLimit {
+		// Google's terms prohibit caching its data, so a Google row is never
+		// shown past the refresh that fetched it.
+		if m.Source == "google" || m.Updated.IsZero() || fresh.UpdatedAt.Sub(m.Updated) > CarryLimit {
 			continue
 		}
 		merged.Snapshot.Measures = append(merged.Snapshot.Measures, m)
