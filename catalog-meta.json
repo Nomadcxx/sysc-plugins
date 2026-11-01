@@ -5,6 +5,11 @@
     "license": "MIT",
     "homepage": "https://github.com/Nomadcxx/sysc-plugins"
   },
+  "org.sysc.airquality": {
+    "category": "weather",
+    "author": "Nomadcxx",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
   "org.sysc.calendar": {
     "category": "productivity",
     "author": "Nomadcxx",

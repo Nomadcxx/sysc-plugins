@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "id": "org.sysc.airquality",
+  "name": "Air Quality & Pollen",
+  "description": "Global air quality and UV, with Australian pollen and thunderstorm asthma for supported locations.",
+  "version": "0.1.0",
+  "protocol": {
+    "major": 1,
+    "minor": 7
+  },
+  "exec": "bin/sysc-plugin-airquality",
+  "capabilities": [
+    "notifications",
+    "panels",
+    "settings",
+    "state"
+  ],
+  "requires": {
+    "commands": []
+  },
+  "services": [
+    {
+      "id": "airquality"
+    }
+  ],
+  "widgets": [
+    {
+      "id": "bar",
+      "settings": [
+        {"key": "show", "type": "select", "label": "Bar shows", "default": "worst",
+          "options": [
+            {"value": "worst", "label": "Worst measure"},
+            {"value": "grass", "label": "Grass pollen"},
+            {"value": "air", "label": "Air quality"},
+            {"value": "storm", "label": "Thunderstorm asthma"},
+            {"value": "icon", "label": "Icon only"}
+          ]}
+      ]
+    }
+  ],
+  "panels": [
+    {
+      "id": "panel",
+      "width": 460,
+      "height": 600,
+      "placement": "attached"
+    }
+  ],
+  "settings": [
+    {"key": "source_airhealth", "type": "bool",
+     "label": "AirHealth pollen apps (grass pollen and allergens)",
+     "description": "Enabled by default for Australian coordinates. Uses the free app service behind Melbourne, Canberra, Sydney and Perth pollen sites; coordinates select your service location. No premium route, API key or cookies are used. You can turn this source off in settings.",
+     "default": true},
+    {"key": "source_epa", "type": "bool",
+     "label": "EPA Victoria air quality",
+     "description": "Keyless ArcGIS mirror of EPA Victoria monitoring stations. Used near Victoria when AirHealth has no air-quality reading or is off.",
+     "default": true},
+    {"key": "source_openmeteo", "type": "bool",
+     "label": "Global air quality, UV and pollutants (Open-Meteo)",
+     "description": "Global CAMS model data for AQI, particulates, UV and gaseous pollutants. No key required.",
+     "default": true},
+    {"key": "latitude", "type": "float", "label": "Latitude", "description": "Decimal degrees for your location; global model data is available worldwide.", "default": -37.8136, "min": -90, "max": 90},
+    {"key": "longitude", "type": "float", "label": "Longitude", "description": "Decimal degrees for your location; global model data is available worldwide.", "default": 144.9631, "min": -180, "max": 180},
+    {"key": "site", "type": "string", "label": "Preferred EPA station",
+     "description": "Leave empty to use the closest station. A name such as \"Melbourne CBD\" pins the reading.",
+     "default": ""},
+    {"key": "refresh_minutes", "type": "int", "label": "Refresh interval (minutes)", "default": 15, "min": 5, "max": 180},
+    {"key": "radius_km", "type": "float", "label": "Station search radius (km)", "default": 15, "min": 1, "max": 100},
+    {"key": "notify_high", "type": "bool",
+     "label": "Notify when air quality, pollen or UV is high", "default": true},
+    {"key": "notify_storm", "type": "bool",
+     "label": "Notify on thunderstorm asthma risk", "default": true}
+  ]
+}
