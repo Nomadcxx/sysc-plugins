@@ -70,7 +70,7 @@ func TestOpenMeteoAQIUsesItsOwnHalfGaugeScale(t *testing.T) {
 	}
 	report := Report{Snapshot: Snapshot{Measures: measures}}
 	gauge := Dial(report, 25)
-	if gauge == nil || gauge.Name != Title(MeasureAirQuality) || gauge.ValueText != "64 US AQI Moderate" {
+	if gauge == nil || gauge.Name != "Air quality: 64 US AQI Moderate" || gauge.ValueText != "64 US AQI Moderate" {
 		t.Fatalf("global gauge = %+v, want labelled AQI 64 Moderate", gauge)
 	}
 	if got, want := measureValueText(air), "Moderate · US AQI 64"; got != want {

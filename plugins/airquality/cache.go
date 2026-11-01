@@ -24,6 +24,13 @@ type diskReport struct {
 	Measures    []diskMeasure `json:"measures"`
 	Alert       *diskAlert    `json:"alert,omitempty"`
 	Forecast    []diskDay     `json:"forecast,omitempty"`
+	// Origin is absent from reports saved before it was recorded.
+	Origin *diskOrigin `json:"origin,omitempty"`
+}
+
+type diskOrigin struct {
+	Latitude  float64 `json:"lat"`
+	Longitude float64 `json:"lon"`
 }
 
 type diskLocation struct {
@@ -46,6 +53,9 @@ type diskMeasure struct {
 	Max       float64         `json:"max,omitempty"`
 	Bands     []diskBand      `json:"bands,omitempty"`
 	Breakdown []diskBreakdown `json:"breakdown,omitempty"`
+	// UpdatedUnix is when the row's source supplied it; absent rows date from
+	// the report.
+	UpdatedUnix int64 `json:"updated_unix,omitempty"`
 }
 
 type diskBand struct {
@@ -98,6 +108,9 @@ func EncodeReport(report Report) ([]byte, error) {
 		Advice:      report.Snapshot.Advice,
 		Attribution: report.Snapshot.Attribution,
 	}
+	if report.Origin != nil {
+		disk.Origin = &diskOrigin{Latitude: report.Origin.Latitude, Longitude: report.Origin.Longitude}
+	}
 	for _, m := range report.Snapshot.Measures {
 		disk.Measures = append(disk.Measures, toDiskMeasure(m))
 	}
@@ -123,6 +136,9 @@ func toDiskMeasure(m Measure) diskMeasure {
 	out := diskMeasure{
 		Name: m.Name, Level: m.Level.Name, Index: m.Level.Index,
 		Severity: int(m.Level.Severity), Source: m.Source, Max: m.Max,
+	}
+	if !m.Updated.IsZero() {
+		out.UpdatedUnix = m.Updated.Unix()
 	}
 	if m.Metric != nil {
 		out.Subcat, out.Value, out.Units = m.Metric.Subcat, m.Metric.Value, m.Metric.Units
@@ -170,8 +186,15 @@ func DecodeReport(raw []byte) (Report, bool) {
 			Attribution: disk.Attribution,
 		},
 	}
+	if disk.Origin != nil {
+		report.Origin = &Coordinates{Latitude: disk.Origin.Latitude, Longitude: disk.Origin.Longitude}
+	}
 	for _, m := range disk.Measures {
-		report.Snapshot.Measures = append(report.Snapshot.Measures, fromDiskMeasure(m))
+		measure := fromDiskMeasure(m)
+		if measure.Updated.IsZero() {
+			measure.Updated = report.UpdatedAt
+		}
+		report.Snapshot.Measures = append(report.Snapshot.Measures, measure)
 	}
 	if disk.Alert != nil {
 		report.Snapshot.Alert = &Alert{
@@ -194,6 +217,9 @@ func fromDiskMeasure(m diskMeasure) Measure {
 	out := Measure{
 		Name: m.Name, Title: Title(m.Name), Source: m.Source, Max: m.Max,
 		Level: fromDiskLevel(m.Level, m.Index, m.Severity),
+	}
+	if m.UpdatedUnix != 0 {
+		out.Updated = time.Unix(m.UpdatedUnix, 0)
 	}
 	if m.Subcat != "" || m.Units != "" {
 		out.Metric = &Metric{Subcat: m.Subcat, Value: m.Value, Units: m.Units}

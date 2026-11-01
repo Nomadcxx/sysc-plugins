@@ -38,9 +38,9 @@ func TestEPANearestSortsByDistance(t *testing.T) {
 // the standard station is the honest number for the same air.
 func TestEPANearestPrefersStandardStation(t *testing.T) {
 	body := `{"features":[
-	 {"attributes":{"siteName":"Sensor","siteType":"Sensor","healthParameter":"Particles","healthAdvice":"Good","averageValue":6.58,"since":1764910800000,"until":1764914400000},
+	 {"attributes":{"siteName":"Sensor","siteType":"Sensor","healthParameter":"Particles","healthAdvice":"Good","averageValue":6.58,"since":1793430000000,"until":1793433600000},
 	  "geometry":{"x":144.9640,"y":-37.8136}},
-	 {"attributes":{"siteName":"Standard","siteType":"Standard","healthParameter":"PM2.5","healthAdvice":"Fair","averageValue":19.9,"since":1764910800000,"until":1764914400000},
+	 {"attributes":{"siteName":"Standard","siteType":"Standard","healthParameter":"PM2.5","healthAdvice":"Fair","averageValue":19.9,"since":1793430000000,"until":1793433600000},
 	  "geometry":{"x":144.9660,"y":-37.8140}}
 	]}`
 	srv := epaServer(t, body)
@@ -217,8 +217,8 @@ func epaServer(t *testing.T, body string) *httptest.Server {
 // Trimmed from the live layer captured on 2026-10-31, keeping the fields and
 // coordinates the sorting rules depend on.
 const epaFixture = `{"features":[
- {"attributes":{"siteID":"1023","siteName":"Melbourne CBD","siteType":"Standard","healthParameter":"PM2.5","healthAdvice":"Fair","averageValue":19.9,"since":1764910800000,"until":1764914400000},"geometry":{"x":144.97158,"y":-37.825023}},
- {"attributes":{"siteID":"1011","siteName":"Alphington","siteType":"Standard","healthParameter":"PM2.5","healthAdvice":"Fair","averageValue":20.75,"since":1764910800000,"until":1764914400000},"geometry":{"x":145.031,"y":-37.787}},
- {"attributes":{"siteID":"1055","siteName":"Spotswood","siteType":"Standard","healthParameter":"PM2.5","healthAdvice":"Good","averageValue":4.08,"since":1764910800000,"until":1764914400000},"geometry":{"x":144.887,"y":-37.829}},
- {"attributes":{"siteID":"1077","siteName":"Footscray","siteType":"Standard","healthParameter":"PM10","healthAdvice":"Good","averageValue":12.64,"since":1764910800000,"until":1764914400000},"geometry":{"x":144.9,"y":-37.8}}
+ {"attributes":{"siteID":"1023","siteName":"Melbourne CBD","siteType":"Standard","healthParameter":"PM2.5","healthAdvice":"Fair","averageValue":19.9,"since":1793430000000,"until":1793433600000},"geometry":{"x":144.97158,"y":-37.825023}},
+ {"attributes":{"siteID":"1011","siteName":"Alphington","siteType":"Standard","healthParameter":"PM2.5","healthAdvice":"Fair","averageValue":20.75,"since":1793430000000,"until":1793433600000},"geometry":{"x":145.031,"y":-37.787}},
+ {"attributes":{"siteID":"1055","siteName":"Spotswood","siteType":"Standard","healthParameter":"PM2.5","healthAdvice":"Good","averageValue":4.08,"since":1793430000000,"until":1793433600000},"geometry":{"x":144.887,"y":-37.829}},
+ {"attributes":{"siteID":"1077","siteName":"Footscray","siteType":"Standard","healthParameter":"PM10","healthAdvice":"Good","averageValue":12.64,"since":1793430000000,"until":1793433600000},"geometry":{"x":144.9,"y":-37.8}}
 ]}`

@@ -556,7 +556,7 @@ func TestDialCarriesTextAsWellAsColour(t *testing.T) {
 	if gauge.Form != v1.GaugeHalf {
 		t.Fatalf("dial form = %q, want half", gauge.Form)
 	}
-	if gauge.Name != "Grass pollen" || gauge.Role != "img" {
+	if gauge.Name != "Grass pollen: 86 grains/m³ High" || gauge.Role != "img" {
 		t.Fatalf("dial accessible identity = %q/%q", gauge.Name, gauge.Role)
 	}
 	if !strings.Contains(gauge.Tooltip, "Grass pollen") || !strings.Contains(gauge.Tooltip, "High") {
@@ -702,8 +702,8 @@ func TestMeasureRowPinsTheReadingToTheRowEnd(t *testing.T) {
 	if got := row.Children[1].Tone; got != v1.ToneNormal {
 		t.Errorf("reading tone = %q, want normal foreground for contrast", got)
 	}
-	if got := row.Children[0].Children[0].Tone; got != v1.ToneAccent {
-		t.Errorf("severity icon tone = %q, want accent", got)
+	if got := row.Children[0].Children[0].Tone; got != v1.ToneWarning {
+		t.Errorf("severity icon tone = %q, want warning", got)
 	}
 }
 
@@ -1017,4 +1017,65 @@ func nodeWithFill(root *v1.Node, fill string) *v1.Node {
 		}
 	}
 	return nil
+}
+
+func usAQIMeasure(aqi float64) Measure {
+	return Measure{Name: MeasureAirQuality, Level: Level{Name: USAQICategory(aqi), Severity: USAQISeverity(aqi)},
+		Metric: &Metric{Subcat: "US AQI", Value: aqi}, Max: 500, Bands: usaqiBands(), Source: "open-meteo",
+		Breakdown: []Breakdown{{Name: "PM2.5", Metric: &Metric{Subcat: "PM2.5", Value: 38.2}}}}
+}
+
+// A long category must lose its words, never the figure, and never mid-word.
+func TestBarLabelKeepsTheFigure(t *testing.T) {
+	report := Report{Snapshot: Snapshot{Measures: []Measure{usAQIMeasure(101)}}}
+	if got := measureText(usAQIMeasure(101), report); got != "Air AQI 101 unhealthy (sensitive)" {
+		t.Errorf("240px label = %q", got)
+	}
+	bar := BarFor(report, "air", 120)
+	open := bar.Children[0]
+	if got := open.Children[1].Text; got != "Air AQI 101" {
+		t.Errorf("120px label = %q, want the figure kept at a word boundary", got)
+	}
+	if open.Name != "Air AQI 101 unhealthy (sensitive)" {
+		t.Errorf("accessible name = %q, want the longer label", open.Name)
+	}
+}
+
+// The dialled measure has no row, so its constituents must appear under the dial.
+func TestDialledWorstMeasureKeepsItsBreakdown(t *testing.T) {
+	report := Report{Snapshot: Snapshot{Measures: []Measure{usAQIMeasure(160)}}}
+	if text := nodeText(PanelFor(report, dialBandLabelsProtocolMinor)); !strings.Contains(text, "PM2.5 38.2") {
+		t.Fatalf("panel hides the pollutant behind the dialled reading: %s", text)
+	}
+}
+
+// Outside Australia the panel says why there is no pollen, and names the place
+// with hemispheres; inside it says nothing.
+func TestCoverageNoteOutsideAustralia(t *testing.T) {
+	tokyo := Report{Origin: &Coordinates{Latitude: 35.6762, Longitude: 139.6503},
+		Snapshot: Snapshot{Location: Location{Suburb: FormatCoordinates(35.6762, 139.6503)}, Measures: []Measure{usAQIMeasure(40)}}}
+	text := nodeText(PanelFor(tokyo, dialBandLabelsProtocolMinor))
+	if !strings.Contains(text, "Australian locations only") || !strings.Contains(text, "35.68°N, 139.65°E") {
+		t.Fatalf("global panel = %s", text)
+	}
+	melbourne := sampleReport()
+	melbourne.Origin = &Coordinates{Latitude: DefaultLatitude, Longitude: DefaultLongitude}
+	if text := nodeText(PanelFor(melbourne, dialBandLabelsProtocolMinor)); strings.Contains(text, "Australian locations only") {
+		t.Fatalf("Australian panel carries the coverage note: %s", text)
+	}
+}
+
+// A failure beside readings is a warning card; with nothing to show it is an error.
+func TestSourceErrorCardWeight(t *testing.T) {
+	partial := sampleReport()
+	partial.Errors = []string{"AirHealth pollen: timed out"}
+	card := PanelFor(partial, dialBandLabelsProtocolMinor).Children[2]
+	if card.Fill != "card" || !strings.Contains(nodeText(card), "Some sources didn't update") || nodeWithID(card, "refresh") == nil {
+		t.Fatalf("partial failure card = fill %q %s", card.Fill, nodeText(card))
+	}
+	offline := offlineReport()
+	card = PanelFor(offline, dialBandLabelsProtocolMinor).Children[1]
+	if card.Fill != "error-container" || !strings.Contains(nodeText(card), "Sources unavailable") {
+		t.Fatalf("total failure card = fill %q %s", card.Fill, nodeText(card))
+	}
 }

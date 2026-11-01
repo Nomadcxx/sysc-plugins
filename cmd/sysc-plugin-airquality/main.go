@@ -21,7 +21,7 @@ import (
 const (
 	pluginID      = "org.sysc.airquality"
 	pluginName    = "Air Quality & Pollen"
-	pluginVersion = "0.1.0"
+	pluginVersion = "0.1.1"
 )
 
 const (
@@ -64,9 +64,6 @@ type settings struct {
 	radiusKM    float64
 	notifyHigh  bool
 	notifyStorm bool
-	// barShow picks which measure the bar widget displays. It is a widget
-	// setting, so it arrives in an instance-scoped message.
-	barShow string
 }
 
 func defaultSettings() settings {
@@ -80,7 +77,6 @@ func defaultSettings() settings {
 		radiusKM:    airquality.DefaultRadiusKM,
 		notifyHigh:  true,
 		notifyStorm: true,
-		barShow:     "worst",
 	}
 }
 
@@ -122,13 +118,14 @@ func (s *settings) apply(values map[string]any) {
 	if v, ok := values["notify_storm"].(bool); ok {
 		s.notifyStorm = v
 	}
-	if v, ok := values["show"].(string); ok {
-		s.barShow = v
-	}
 }
 
 func clamp(v, lo, hi float64) float64 {
 	return min(max(v, lo), hi)
+}
+
+func (s settings) origin() airquality.Coordinates {
+	return airquality.Coordinates{Latitude: s.latitude, Longitude: s.longitude}
 }
 
 func (s settings) sources() airquality.Sources {
@@ -144,9 +141,10 @@ func (s settings) sources() airquality.Sources {
 }
 
 type view struct {
-	kind  v1.ViewKind
-	rev   uint64
-	width int
+	kind     v1.ViewKind
+	rev      uint64
+	width    int
+	instance string
 }
 
 type session struct {
@@ -154,7 +152,10 @@ type session struct {
 	client   *v1.Client
 	settings settings
 	views    map[string]view
-	cache    airquality.Cache
+	// barShow is each bar widget instance's measure choice. It is a widget
+	// setting, so it arrives in an instance-scoped message.
+	barShow map[string]string
+	cache   airquality.Cache
 	// minor is the host's protocol minor from the handshake. The half gauge
 	// arrived in minor twenty-four; labels and category-only grass require 25.
 	minor int
@@ -192,7 +193,7 @@ func runPluginWith(in io.Reader, out io.Writer, env environment, initial setting
 	protocol, _ := v1.NegotiateProtocol(hello.Supported)
 	s := &session{
 		env: env, client: c, settings: initial, minor: protocol.Minor,
-		views: map[string]view{}, wake: make(chan refreshRequest, 1),
+		views: map[string]view{}, barShow: map[string]string{}, wake: make(chan refreshRequest, 1),
 		notified: map[string]airquality.Severity{},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -250,7 +251,7 @@ func runPluginWith(in io.Reader, out io.Writer, env environment, initial setting
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
-				s.views[m.ViewID] = view{kind: m.View, width: m.Width}
+				s.views[m.ViewID] = view{kind: m.View, width: m.Width, instance: m.Instance}
 				s.snapshot(m.ViewID)
 			case *v1.ViewClose:
 				delete(s.views, m.ViewID)
@@ -263,19 +264,32 @@ func runPluginWith(in io.Reader, out io.Writer, env environment, initial setting
 			case *v1.InputEvent:
 				s.handle(ctx, m)
 			case *v1.SettingsChanged:
-				before := s.settings.sources()
+				if m.Scope == v1.ScopeInstance {
+					// A bar label change only needs a redraw.
+					if show, ok := m.Values["show"].(string); ok {
+						s.barShow[m.Instance] = barChoice(show)
+					}
+					s.snapshotAll()
+					continue
+				}
+				// The host sends the plugin's settings on every start, so an
+				// unchanged message must leave the pending refresh alone; re-arming
+				// unconditionally pushed the first reading out by a whole interval.
+				before := s.settings
 				s.settings.apply(m.Values)
-				armTimer(s.settings.refresh)
-				// A location or source change invalidates the reading; a bar
-				// label change only needs a redraw.
-				after := s.settings.sources()
-				if before != after {
+				// Another place's reading is never this place's stale data.
+				s.cache.Relocate(s.settings.origin())
+				if !before.origin().Same(s.settings.origin()) {
+					s.notified = map[string]airquality.Severity{}
+				}
+				if before.sources() != s.settings.sources() {
 					s.generation++
-					s.lastErr = "refreshing with updated settings"
-					// Do not leave the old-location result looking current while
-					// the new request is in flight.
-					s.cache.Keep([]string{s.lastErr})
+					// The old request's failures say nothing about the new one.
+					s.lastErr = ""
 					s.requestRefresh()
+					armTimer(s.settings.refresh)
+				} else if before.refresh != s.settings.refresh {
+					armTimer(s.settings.refresh)
 				}
 				s.snapshotAll()
 			}
@@ -362,23 +376,13 @@ func (s *session) handleRefresh(ctx context.Context, result refreshResult) {
 		s.snapshotAll()
 		return
 	}
-	if len(result.report.Errors) > 0 {
-		// Keep the last complete report so a partial refresh cannot replace and
-		// permanently discard a provider's last reading.
-		if kept, ok := s.cache.Keep(result.report.Errors); ok {
-			// ponytail: alert from measures this refresh actually returned while
-			// retaining the last complete panel snapshot; unavailable sources do
-			// not suppress a fresh warning from another provider.
-			s.announce(ctx, result.report)
-			s.lastErr = strings.Join(result.report.Errors, "; ")
-			s.save(ctx, kept)
-			s.snapshotAll()
-			return
-		}
-	}
-	s.lastErr = ""
-	s.cache.Put(result.report)
-	s.save(ctx, result.report)
+	// The sources that answered replace their rows; a failed source's recent
+	// rows are carried over, so a partial refresh neither discards its last
+	// reading nor freezes the others. Alerts come only from what this refresh
+	// returned, so a carried row cannot raise a warning twice.
+	merged := s.cache.Merge(result.report)
+	s.lastErr = strings.Join(result.report.Errors, "; ")
+	s.save(ctx, merged)
 	s.announce(ctx, result.report)
 	s.snapshotAll()
 }
@@ -525,7 +529,7 @@ func (s *session) tree(v view) *v1.Node {
 	report := s.current()
 	switch v.kind {
 	case v1.ViewBar:
-		return airquality.BarFor(report, barChoice(s.settings.barShow), v.width)
+		return airquality.BarFor(report, barChoice(s.barShow[v.instance]), v.width)
 	case v1.ViewTooltip:
 		return airquality.TooltipFor(report, v.width)
 	default:

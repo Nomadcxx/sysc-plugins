@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -167,7 +170,7 @@ func TestFetchSkipsEPAWhenAirHealthHasAirQuality(t *testing.T) {
 	})
 	defer epa.Close()
 
-	f := Fetcher{AirHealth: AirHealth{Base: ah.URL}, EPA: EPAArcGIS{Base: epa.URL}}
+	f := Fetcher{AirHealth: AirHealth{Base: ah.URL}, EPA: EPAArcGIS{Base: epa.URL}, Now: fixtureNow}
 	if _, err := f.Fetch(context.Background(), Sources{AirHealth: true, EPA: true}); err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -180,7 +183,7 @@ func TestFetchUsesEPAWhenAirHealthDisabled(t *testing.T) {
 	})
 	defer epa.Close()
 
-	f := Fetcher{EPA: EPAArcGIS{Base: epa.URL}}
+	f := Fetcher{EPA: EPAArcGIS{Base: epa.URL}, Now: fixtureNow}
 	report, err := f.Fetch(context.Background(), Sources{EPA: true, Latitude: -37.8136, Longitude: 144.9631})
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
@@ -219,7 +222,7 @@ func TestFetchFallsBackToEPAForSparseAirHealth(t *testing.T) {
 	})
 	defer epa.Close()
 
-	f := Fetcher{AirHealth: AirHealth{Base: ah.URL}, EPA: EPAArcGIS{Base: epa.URL}}
+	f := Fetcher{AirHealth: AirHealth{Base: ah.URL}, EPA: EPAArcGIS{Base: epa.URL}, Now: fixtureNow}
 	report, err := f.Fetch(context.Background(), Sources{AirHealth: true, EPA: true})
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
@@ -252,7 +255,7 @@ func TestFetchReportsPartialFailure(t *testing.T) {
 	})
 	defer epa.Close()
 
-	f := Fetcher{AirHealth: AirHealth{Base: ah.URL}, EPA: EPAArcGIS{Base: epa.URL}}
+	f := Fetcher{AirHealth: AirHealth{Base: ah.URL}, EPA: EPAArcGIS{Base: epa.URL}, Now: fixtureNow}
 	report, err := f.Fetch(context.Background(), Sources{AirHealth: true, EPA: true})
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
@@ -360,7 +363,7 @@ func TestFetchPrefersConfiguredSite(t *testing.T) {
 	})
 	defer epa.Close()
 
-	f := Fetcher{EPA: EPAArcGIS{Base: epa.URL}}
+	f := Fetcher{EPA: EPAArcGIS{Base: epa.URL}, Now: fixtureNow}
 	report, err := f.Fetch(context.Background(), Sources{
 		EPA: true, Latitude: -37.8136, Longitude: 144.9631, Site: "Spotswood",
 	})
@@ -506,6 +509,7 @@ func TestOpenMeteoSuppliesUVWhenOthersCannot(t *testing.T) {
 	f := Fetcher{
 		EPA:       EPAArcGIS{Base: epa.URL},
 		OpenMeteo: OpenMeteo{Base: bodyServer(t, openMeteoFixture).URL},
+		Now:       fixtureNow,
 	}
 	report, err := f.Fetch(context.Background(), Sources{
 		EPA: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631,
@@ -552,6 +556,7 @@ func TestOpenMeteoFillsAirQualityWhenEPAFails(t *testing.T) {
 	f := Fetcher{
 		EPA:       EPAArcGIS{Base: down.URL},
 		OpenMeteo: OpenMeteo{Base: bodyServer(t, openMeteoFixture).URL},
+		Now:       fixtureNow,
 	}
 	report, err := f.Fetch(context.Background(), Sources{
 		EPA: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631,
@@ -577,6 +582,7 @@ func TestAirHealthAirQualityWinsOverModel(t *testing.T) {
 	f := Fetcher{
 		AirHealth: AirHealth{Base: air.URL},
 		OpenMeteo: OpenMeteo{Base: bodyServer(t, openMeteoFixture).URL},
+		Now:       fixtureNow,
 	}
 	report, err := f.Fetch(context.Background(), Sources{
 		AirHealth: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631,
@@ -634,6 +640,7 @@ func TestAirQualityBreakdownAgreesWithHeadline(t *testing.T) {
 	f := Fetcher{
 		EPA:       EPAArcGIS{Base: epaServer(t, epaFixture).URL},
 		OpenMeteo: OpenMeteo{Base: bodyServer(t, openMeteoFixture).URL},
+		Now:       fixtureNow,
 	}
 	report, err := f.Fetch(context.Background(), Sources{
 		EPA: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631,
@@ -671,3 +678,163 @@ func TestAirQualityBreakdownAgreesWithHeadline(t *testing.T) {
 			air.Breakdown[0].Name, air.Metric.Subcat)
 	}
 }
+
+func row(name, source string, updated time.Time) Measure {
+	return Measure{Name: name, Source: source, Updated: updated, Level: Level{Name: "High", Severity: SeverityHigh}}
+}
+
+// A partial refresh replaces the rows its sources returned and carries the
+// failed source's recent rows, with the report dated by the oldest of them.
+func TestCacheMergeCarriesRecentRowsFromFailedSource(t *testing.T) {
+	melbourne := &Coordinates{Latitude: DefaultLatitude, Longitude: DefaultLongitude}
+	earlier := time.Date(2026, 10, 31, 6, 0, 0, 0, time.UTC)
+	now := earlier.Add(3 * time.Hour)
+	forecast := []Day{{Date: "2026-11-01", Measures: map[string]Measure{}}}
+	cache := &Cache{}
+	cache.Put(Report{Origin: melbourne, UpdatedAt: earlier, Snapshot: Snapshot{
+		Location:    Location{Suburb: "Melbourne", State: "VIC", SAL: "21640"},
+		Forecast:    forecast,
+		Attribution: AirHealthAttribution + " · " + OpenMeteoAttribution,
+		Measures:    []Measure{row(MeasureGrass, "airhealth", earlier), row(MeasureUV, "open-meteo", earlier)},
+	}})
+
+	fresh := Report{Origin: melbourne, UpdatedAt: now, Errors: []string{"AirHealth pollen: down"}, Snapshot: Snapshot{
+		Location:    Location{Suburb: "-37.81, 144.96"},
+		Attribution: OpenMeteoAttribution,
+		Measures:    []Measure{row(MeasureUV, "open-meteo", now)},
+	}}
+	merged := cache.Merge(fresh)
+	if uv, _ := merged.Snapshot.Measure(MeasureUV); !uv.Updated.Equal(now) {
+		t.Errorf("UV row was not replaced by the fresh reading: %v", uv.Updated)
+	}
+	if _, ok := merged.Snapshot.Measure(MeasureGrass); !ok {
+		t.Fatal("failed source's recent grass row was dropped")
+	}
+	if !merged.Stale || !merged.UpdatedAt.Equal(earlier) {
+		t.Errorf("merged stale=%v updated=%v, want stale and dated by the carried row", merged.Stale, merged.UpdatedAt)
+	}
+	if merged.Snapshot.Location.Suburb != "Melbourne" || len(merged.Snapshot.Forecast) != 1 {
+		t.Errorf("AirHealth context not carried: %+v", merged.Snapshot)
+	}
+	if !strings.Contains(merged.Snapshot.Attribution, AirHealthAttribution) {
+		t.Errorf("carried rows lost their credit: %q", merged.Snapshot.Attribution)
+	}
+
+	// Past the carry limit the old row goes, and the report is current again.
+	later := fresh
+	later.UpdatedAt = earlier.Add(CarryLimit + time.Minute)
+	later.Snapshot.Measures = []Measure{row(MeasureUV, "open-meteo", later.UpdatedAt)}
+	merged = cache.Merge(later)
+	if _, ok := merged.Snapshot.Measure(MeasureGrass); ok {
+		t.Fatal("a row older than the carry limit was still shown")
+	}
+	if merged.Stale {
+		t.Error("a report carrying nothing was marked stale")
+	}
+}
+
+// Rows from another place are never carried, and relocating clears them.
+func TestCacheNeverMixesPlaces(t *testing.T) {
+	now := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	melbourne := &Coordinates{Latitude: DefaultLatitude, Longitude: DefaultLongitude}
+	london := &Coordinates{Latitude: 51.5072, Longitude: -0.1276}
+	cache := &Cache{}
+	cache.Put(Report{Origin: melbourne, UpdatedAt: now, Snapshot: Snapshot{Measures: []Measure{row(MeasureGrass, "airhealth", now)}}})
+	merged := cache.Merge(Report{Origin: london, UpdatedAt: now, Errors: []string{"x"}, Snapshot: Snapshot{
+		Measures: []Measure{row(MeasureUV, "open-meteo", now)},
+	}})
+	if _, ok := merged.Snapshot.Measure(MeasureGrass); ok {
+		t.Fatal("Melbourne grass was carried into a London report")
+	}
+
+	cache.Relocate(*london)
+	if _, ok := cache.Get(); !ok {
+		t.Fatal("relocating to the cached place dropped its report")
+	}
+	cache.Relocate(*melbourne)
+	if _, ok := cache.Get(); ok {
+		t.Fatal("relocating kept another place's report")
+	}
+	cache.Restore(Report{Snapshot: Snapshot{Measures: []Measure{row(MeasureGrass, "airhealth", now)}}})
+	cache.Relocate(*melbourne)
+	if _, ok := cache.Get(); ok {
+		t.Fatal("a report with no recorded origin survived relocation")
+	}
+}
+
+// The origin and per-row times survive a restart; an older save without them
+// still decodes, dating its rows from the report.
+func TestEncodeDecodeKeepsOriginAndRowTimes(t *testing.T) {
+	updated := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	rowTime := updated.Add(-2 * time.Hour)
+	raw, err := EncodeReport(Report{UpdatedAt: updated, Origin: &Coordinates{Latitude: -33.8688, Longitude: 151.2093},
+		Snapshot: Snapshot{Measures: []Measure{row(MeasureGrass, "airhealth", rowTime)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := DecodeReport(raw)
+	if !ok || got.Origin == nil || !got.Origin.Same(Coordinates{Latitude: -33.8688, Longitude: 151.2093}) {
+		t.Fatalf("origin lost: %+v ok=%v", got.Origin, ok)
+	}
+	if !got.Snapshot.Measures[0].Updated.Equal(rowTime) {
+		t.Errorf("row time = %v, want %v", got.Snapshot.Measures[0].Updated, rowTime)
+	}
+
+	legacy := `{"version":1,"updated_unix":` + strconv.FormatInt(updated.Unix(), 10) + `,"measures":[{"name":"Grass","level":"High","severity":2}]}`
+	got, ok = DecodeReport([]byte(legacy))
+	if !ok || got.Origin != nil || !got.Snapshot.Measures[0].Updated.Equal(updated) {
+		t.Fatalf("legacy report = %+v ok=%v", got, ok)
+	}
+}
+
+// Transport and status failures read as what they mean, not as Go errors.
+func TestShortErrorUsesPlainWords(t *testing.T) {
+	resp := &http.Response{StatusCode: 503, Status: "503 Service Unavailable"}
+	if got := shortError(statusError("airhealth", resp)); got != "service unavailable (HTTP 503)" {
+		t.Errorf("503 = %q", got)
+	}
+	if got := shortError(statusError("airhealth", &http.Response{StatusCode: 404, Status: "404 Not Found"})); got != "request refused (HTTP 404)" {
+		t.Errorf("404 = %q", got)
+	}
+	dns := &url.Error{Op: "Get", URL: "https://x", Err: &net.DNSError{Err: "no such host", Name: "x"}}
+	if got := shortError(dns); got != "can't connect; check the network" {
+		t.Errorf("dns = %q", got)
+	}
+	if got := shortError(fmt.Errorf("fetch: %w", context.DeadlineExceeded)); got != "timed out" {
+		t.Errorf("deadline = %q", got)
+	}
+}
+
+// The keyless EPA mirror stopped updating on 2025-12-05. A station reading that
+// old must not be shown as current air quality; the model fills the row and
+// the panel says why EPA was not used.
+func TestFetchRejectsStaleEPAReadings(t *testing.T) {
+	frozen := strings.ReplaceAll(strings.ReplaceAll(epaFixture, "1793430000000", "1764910800000"), "1793433600000", "1764914400000")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "air-quality") {
+			_, _ = w.Write([]byte(`{"current":{"pm2_5":4.3,"us_aqi":28},"daily":{"time":["2026-10-31"],"uv_index_max":[4.9]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(frozen))
+	}))
+	defer srv.Close()
+	f := Fetcher{
+		EPA:       EPAArcGIS{Base: srv.URL + "/epa"},
+		OpenMeteo: OpenMeteo{Base: srv.URL + "/air-quality"},
+		Now:       func() time.Time { return time.Date(2026, 10, 31, 10, 0, 0, 0, time.UTC) },
+	}
+	report, err := f.Fetch(context.Background(), Sources{EPA: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631, RadiusKM: 15})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	air, ok := report.Snapshot.Measure(MeasureAirQuality)
+	if !ok || air.Source != "open-meteo" {
+		t.Fatalf("air quality = %+v, want the model's current reading instead of an 11-month-old station", air)
+	}
+	if len(report.Errors) != 1 || !strings.Contains(report.Errors[0], "EPA Victoria: no current station reading") {
+		t.Fatalf("errors = %q, want EPA named as out of date", report.Errors)
+	}
+}
+
+// fixtureNow is an hour or two after the EPA fixtures' averaging window.
+func fixtureNow() time.Time { return time.Date(2026, 10, 31, 10, 0, 0, 0, time.UTC) }

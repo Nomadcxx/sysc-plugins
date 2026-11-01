@@ -508,7 +508,7 @@ func TestEpochMillisZeroStaysZero(t *testing.T) {
 	if got := epochMillis(0); !got.IsZero() {
 		t.Errorf("epochMillis(0) = %v, want zero", got)
 	}
-	if got := epochMillis(1764914400000); !got.Equal(time.Date(2025, 12, 5, 6, 0, 0, 0, time.UTC)) {
+	if got := epochMillis(1793433600000); !got.Equal(time.Date(2026, 10, 31, 8, 0, 0, 0, time.UTC)) {
 		t.Errorf("epochMillis = %v", got)
 	}
 }
@@ -636,3 +636,18 @@ const openMeteoFixture = `{
  "daily_units":{"time":"iso8601","uv_index_max":""},
  "daily":{"time":["2026-10-31","2026-11-01","2026-11-02"],"uv_index_max":[4.9,4.55,3.2]}
 }`
+
+// An SA3 body that does not list the requested suburb falls back to the area's
+// first suburb rather than an empty snapshot that silently drops the pollen.
+func TestSelectSALFallsBackToArea(t *testing.T) {
+	body := []byte(`{"sals":["1"],"locations":[{"location":{"sal":"1","suburb":"First"},
+		"measures":[{"name":"Grass","text":"High","value":2}]}]}`)
+	fallback, err := ParseDashboard(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := selectSAL(fallback, body, "999")
+	if _, ok := got.Measure(MeasureGrass); !ok || got.Location.Suburb != "First" {
+		t.Fatalf("selectSAL dropped the area reading: %+v", got)
+	}
+}

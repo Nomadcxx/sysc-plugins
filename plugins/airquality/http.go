@@ -33,6 +33,16 @@ var ErrUnavailable = errors.New("source unavailable")
 // ErrNoCoverage marks a valid location for which a regional source has no data.
 var ErrNoCoverage = errors.New("source has no coverage at location")
 
+// httpStatusError is a non-200 answer, kept typed so the panel can describe
+// it in words rather than quoting the status line.
+type httpStatusError struct {
+	source string
+	code   int
+	status string
+}
+
+func (e *httpStatusError) Error() string { return e.source + ": " + e.status }
+
 // statusError turns a non-200 response into ErrUnavailable when the status
 // suggests a transient or access problem, so callers can distinguish "try
 // again later" from "the payload was malformed".
@@ -40,9 +50,9 @@ func statusError(source string, resp *http.Response) error {
 	if resp.StatusCode == http.StatusOK {
 		return nil
 	}
-	err := fmt.Errorf("%s: %s", source, resp.Status)
+	err := &httpStatusError{source: source, code: resp.StatusCode, status: resp.Status}
 	if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return err
 }

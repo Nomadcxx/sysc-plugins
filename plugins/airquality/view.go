@@ -93,6 +93,7 @@ const (
 	iconPollen   = "wind"
 	iconAir      = "fog"
 	iconStorm    = "thunderstorm"
+	iconSun      = "clear-day"
 	iconSmoke    = "cloud"
 	iconGood     = "clear-day"
 	iconModerate = "partly-cloudy"
@@ -126,6 +127,8 @@ func MeasureIcon(measure string) string {
 		return iconStorm
 	case MeasureWoodsmoke:
 		return iconSmoke
+	case MeasureUV:
+		return iconSun
 	default:
 		return iconAir
 	}
@@ -183,7 +186,7 @@ func BarFor(report Report, show string, width int) *v1.Node {
 	if show != "icon" {
 		if budget := barLabelBytes(width); budget > 0 {
 			children = append(children, &v1.Node{
-				Kind: v1.KindText, Text: truncateBytes(label, budget), Tabular: true,
+				Kind: v1.KindText, Text: cutWords(label, budget), Tabular: true,
 			})
 		}
 	}
@@ -221,31 +224,45 @@ func chooseMeasure(report Report, show string) (Measure, bool) {
 
 // measureText is one measure as a bar label: its short name, its category and
 // the numeric reading when the source supplies one.
+//
+// The figure comes before the category, so a narrow slot or a long category
+// such as "Unhealthy for Sensitive Groups" loses words of the category rather
+// than the number. The cut falls on a word boundary.
 func measureText(m Measure, report Report) string {
-	text := measureShort(m.Name) + " " + strings.ToLower(m.Level.Name)
-	if scale := metricScaleLabel(m); scale != "" {
-		text = measureShort(m.Name) + " " + scale + " " + strings.ToLower(m.Level.Name)
-	}
+	text := measureShort(m.Name)
 	if m.Metric != nil && m.Metric.Value > 0 {
-		if m.Name == MeasureUV {
-			// UV is quoted as a bare number nationally, so the figure leads and
-			// the band follows rather than the other way round.
-			text = measureShort(m.Name) + " "
-			if uvIsCurrent(m) {
-				text += "now "
-			}
-			text += formatValue(m.Metric.Value) + " " + strings.ToLower(m.Level.Name)
-		} else {
-			text += " " + formatValue(m.Metric.Value)
+		if uvIsCurrent(m) {
+			text += " now"
 		}
+		if metricScaleLabel(m) != "" {
+			text += " AQI"
+		}
+		text += " " + formatValue(m.Metric.Value)
 	}
+	category := strings.ToLower(m.Level.Name)
+	if category == "unhealthy for sensitive groups" {
+		// The one category too long for a bar slot; cut at a word boundary
+		// it would end on "for".
+		category = "unhealthy (sensitive)"
+	}
+	text += " " + category
 	if report.Stale {
 		text += " ·"
 	}
-	if len(text) > barTextBytes {
-		text = truncateBytes(text, barTextBytes)
+	return cutWords(text, barTextBytes)
+}
+
+// cutWords shortens text to budget bytes at a word boundary, falling back to
+// a rune boundary for a single word longer than the budget.
+func cutWords(text string, budget int) string {
+	if len(text) <= budget {
+		return text
 	}
-	return text
+	cut := truncateBytes(text, budget)
+	if i := strings.LastIndexByte(cut, ' '); i > 0 && text[len(cut)] != ' ' {
+		cut = cut[:i]
+	}
+	return strings.TrimRight(cut, " ·")
 }
 
 // pick prefers the severity glyph, but keeps the measure's own icon when the
@@ -281,7 +298,11 @@ func TooltipFor(report Report, width int) *v1.Node {
 		}},
 	}
 	if !reportHasData(report) {
-		children = append(children, &v1.Node{Kind: v1.KindText, Text: "No reading", Tone: v1.ToneSubtle})
+		status := "No reading yet"
+		if len(report.Errors) > 0 {
+			status = "Sources unavailable"
+		}
+		children = append(children, &v1.Node{Kind: v1.KindText, Text: status, Tone: v1.ToneSubtle})
 		return &v1.Node{Kind: v1.KindColumn, Padding: tooltipPadding, Gap: tooltipGap, Children: children}
 	}
 	var credits []string
@@ -422,7 +443,7 @@ func PanelFor(report Report, protocolMinor int) *v1.Node {
 		children = append(children, alertCard(*report.Snapshot.Alert, report.Stale))
 	}
 	if len(report.Errors) > 0 {
-		children = append(children, sourceErrorCard(report.Errors))
+		children = append(children, sourceErrorCard(report.Errors, reportHasData(report)))
 	}
 	if !reportHasData(report) {
 		children = append(children, &v1.Node{
@@ -450,6 +471,13 @@ func PanelFor(report Report, protocolMinor int) *v1.Node {
 			{Kind: v1.KindText, Text: DialLabel(report, protocolMinor), Tone: v1.ToneSubtle, Size: "label"},
 			dial,
 		}})
+		// The dialled measure has no row, so its constituents go under the
+		// dial; otherwise a Very Poor reading never says which pollutant.
+		if hasWorst && worst.Name == dialled {
+			if strip := breakdownRow(worst); strip != nil {
+				children = append(children, strip)
+			}
+		}
 	}
 	// The alert card restates one measure in full. Drawing both made the panel
 	// carry "Thunderstorm Asthma: Moderate" twice, four pixels apart, and the
@@ -471,6 +499,9 @@ func PanelFor(report Report, protocolMinor int) *v1.Node {
 			}
 		}
 	}
+	if note := coverageNote(report); note != nil {
+		children = append(children, note)
+	}
 	if section := forecastSection(report.Snapshot.Forecast); section != nil {
 		children = append(children, section)
 	}
@@ -478,6 +509,24 @@ func PanelFor(report Report, protocolMinor int) *v1.Node {
 		children = append(children, attributionNode(report.Snapshot.Attribution))
 	}
 	return panelRoot(children)
+}
+
+// coverageNote explains an empty pollen section: outside Australia the panel
+// has air quality and UV only, and without this it reads as a fault.
+func coverageNote(report Report) *v1.Node {
+	origin := report.Origin
+	if origin == nil || AirHealthSupportsCoordinates(origin.Latitude, origin.Longitude) {
+		return nil
+	}
+	if _, ok := report.Snapshot.Measure(MeasureGrass); ok {
+		return nil
+	}
+	lines := wrapText("Pollen and thunderstorm asthma forecasts cover Australian locations only.", attributionBytes)
+	column := &v1.Node{Kind: v1.KindColumn, Children: make([]*v1.Node, 0, len(lines))}
+	for _, line := range lines {
+		column.Children = append(column.Children, &v1.Node{Kind: v1.KindText, Text: line, Tone: v1.ToneSubtle})
+	}
+	return column
 }
 
 // attributionBytes is the byte budget for one attribution line. Text measures
@@ -630,20 +679,23 @@ func uvIsCurrent(m Measure) bool {
 }
 
 func alertCard(a Alert, stale bool) *v1.Node {
+	// Subtle text on a card is not a pair the theme validates, so a stale
+	// alert says it is stale in its title and keeps its detail at full contrast.
 	fill, tone, detailTone := "card", v1.ToneWarning, v1.ToneNormal
 	title := a.Title + ": " + a.Level.Name
 	if stale {
 		title = "Last alert · " + a.Title + " · " + a.Level.Name
-		detailTone = v1.ToneSubtle
 	} else if a.Level.Severity >= SeverityHigh {
 		// The error container already carries the warning colour. Normal
 		// foreground text keeps the copy legible against that surface.
 		fill, tone, detailTone = "error-container", v1.ToneNormal, v1.ToneNormal
 	}
+	// The title sits in a column so the row does not pin it to the far edge,
+	// away from its icon.
 	children := []*v1.Node{{
 		Kind: v1.KindRow, Gap: 8, Height: 24, Children: []*v1.Node{
 			{Kind: v1.KindIcon, Icon: iconAlert, Tone: tone},
-			{Kind: v1.KindText, Text: title, Tone: tone, Bold: true},
+			{Kind: v1.KindColumn, Children: []*v1.Node{{Kind: v1.KindText, Text: title, Tone: tone, Bold: true}}},
 		},
 	}}
 	if explanation := strings.TrimSpace(a.Text); explanation != "" {
@@ -654,26 +706,29 @@ func alertCard(a Alert, stale bool) *v1.Node {
 	return &v1.Node{Kind: v1.KindColumn, Fill: fill, Radius: 12, Padding: panelCardPadding, Gap: 4, Children: children}
 }
 
-func sourceErrorCard(problems []string) *v1.Node {
-	details := []*v1.Node{{Kind: v1.KindText, Text: "Source update failed", Bold: true}}
+// sourceErrorCard names the sources that failed. With no reading at all it is
+// an error; when readings are still shown it is a warning on a plain card, so
+// a routine outage of one source does not outrank the readings themselves.
+func sourceErrorCard(problems []string, haveData bool) *v1.Node {
+	heading, fill, tone := "Sources unavailable", "error-container", v1.ToneNormal
+	if haveData {
+		heading, fill, tone = "Some sources didn't update", "card", v1.ToneWarning
+	}
+	details := []*v1.Node{{Kind: v1.KindText, Text: heading, Bold: true}}
 	for _, problem := range problems {
 		for _, line := range wrapText(problem, errorDetailBytes) {
 			details = append(details, &v1.Node{Kind: v1.KindText, Text: line})
 		}
 	}
-	return errorCard(
-		&v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
-			{Kind: v1.KindIcon, Icon: iconAlert},
-			{Kind: v1.KindColumn, Gap: 3, Children: details},
-		}},
-		refreshButton(),
-	)
-}
-
-func errorCard(children ...*v1.Node) *v1.Node {
 	return &v1.Node{
-		Kind: v1.KindColumn, Fill: "error-container", Radius: 12,
-		Padding: panelCardPadding, Gap: 4, Children: children,
+		Kind: v1.KindColumn, Fill: fill, Radius: 12, Padding: panelCardPadding, Gap: 4,
+		Children: []*v1.Node{
+			{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
+				{Kind: v1.KindIcon, Icon: iconAlert, Tone: tone},
+				{Kind: v1.KindColumn, Gap: 3, Children: details},
+			}},
+			refreshButton(),
+		},
 	}
 }
 
@@ -787,7 +842,9 @@ func iconToneFor(s Severity) v1.Tone {
 	case SeverityHigh:
 		return v1.ToneError
 	case SeverityModerate:
-		return v1.ToneAccent
+		// Warning, not accent: the dial paints Moderate amber, and the brand
+		// accent says nothing about severity.
+		return v1.ToneWarning
 	default:
 		return v1.ToneNormal
 	}
@@ -809,8 +866,10 @@ func ageText(report Report) string {
 		text = "just now"
 	case age < time.Hour:
 		text = fmt.Sprintf("%dm ago", int(age.Minutes()))
-	default:
+	case age < 48*time.Hour:
 		text = fmt.Sprintf("%dh ago", int(age.Hours()))
+	default:
+		text = fmt.Sprintf("%dd ago", int(age.Hours()/24))
 	}
 	if report.Stale {
 		return "stale · " + text
@@ -974,7 +1033,9 @@ func dialNode(m Measure, protocolMinor int) *v1.Node {
 		Height:  dialHeight,
 		Key:     "worst",
 		Animate: true,
-		Name:    Title(m.Name),
+		// The name carries the reading: a screen reader announcing only
+		// "Grass pollen" for a picture of a gauge says nothing.
+		Name:    dialTooltip(m),
 		Role:    "img",
 		Tooltip: dialTooltip(m),
 		// The centre label carries the number and the category, because a
