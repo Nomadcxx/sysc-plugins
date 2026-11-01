@@ -115,13 +115,17 @@ jobs:
         arch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v7
+      # The arm64 build stays on the Ubuntu runner: there is no official
+      # Arch Linux arm64 image. amd64 builds in the Arch container below.
       - uses: actions/setup-go@v7
+        if: matrix.arch == 'arm64'
         with:
           go-version-file: go.mod
       # Same package the CI job installs; only calendar's cgo build uses it,
       # and installing it for every plugin keeps the plugin list in one place
       # (tools/catalog's cgoPlugins map) instead of duplicated here.
       - name: install libecal
+        if: matrix.arch == 'arm64'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libecal2.0-dev libjson-glib-dev
       - name: Verify manifest version
         run: |
@@ -133,7 +137,28 @@ jobs:
             echo "tag $dir-v$version does not match manifest version $manifest" >&2
             exit 1
           fi
-      - name: Package
+      # The suite installs on Arch, and calendar's cgo build links the
+      # sonames of the system it was built on: built on Ubuntu 24.04 it needs
+      # libical-glib.so.3, which Arch (libical 4) does not ship, and the
+      # plugin dies in the loader before plugin.hello. Building inside Arch
+      # links the libraries the suite's users have. The image is pinned by
+      # digest so a release rebuilds from the same system.
+      - name: Package (amd64, Arch)
+        if: matrix.arch == 'amd64'
+        env:
+          ARCH_IMAGE: archlinux:base-devel@sha256:624bdc7fc6615155d67bc34cf7146c0c9fd0e3c92943977da63a630e4ca49c30
+          PLUGIN_DIR: ${{ needs.gate.outputs.dir }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          docker run --rm -v "$PWD":/src -w /src -e PLUGIN_DIR "$ARCH_IMAGE" bash -c '
+            set -euo pipefail
+            pacman -Syu --noconfirm --needed go git evolution-data-server json-glib >/dev/null
+            git config --global --add safe.directory /src
+            go run ./tools/catalog package -plugin "$PLUGIN_DIR" -arch amd64 -out dist
+            chown -R '"$(id -u):$(id -g)"' dist'
+      - name: Package (arm64)
+        if: matrix.arch == 'arm64'
         run: |
           set -euo pipefail
           mkdir -p dist
