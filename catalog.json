@@ -111,12 +111,12 @@
       "license": "MIT",
       "homepage": "https://github.com/Nomadcxx/sysc-plugins",
       "screenshot": {
-        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/calendar-v0.4.0/plugins/calendar/thumbnail.webp",
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/calendar-v0.4.1/plugins/calendar/thumbnail.webp",
         "sha256": "55ca96069e4878434be58069689d99bdaa3bad9a56ce272ab02039209af3b25b"
       },
       "added_at": "2026-09-29T04:04:20.323735366Z",
-      "updated_at": "2026-10-14T14:38:06.316723517Z",
-      "version": "0.4.0",
+      "updated_at": "2026-11-01T10:48:18.581903351Z",
+      "version": "0.4.1",
       "protocol": {
         "major": 1,
         "minor": 8
@@ -133,18 +133,48 @@
       },
       "assets": {
         "linux-amd64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.4.0/org.sysc.calendar-0.4.0-linux-amd64.tar.gz",
-          "sha256": "24e59e13f7c8de39330d4a2354d0b35b74b3ee0b90febf4483987651923e15b4",
-          "size": 2425579
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.4.1/org.sysc.calendar-0.4.1-linux-amd64.tar.gz",
+          "sha256": "6239b49933f93698e8d6b06ab14965055c33b9ebee9dd95d042722f72ad576b2",
+          "size": 2973597
         },
         "linux-arm64": {
-          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.4.0/org.sysc.calendar-0.4.0-linux-arm64.tar.gz",
-          "sha256": "5362e302b539f95bb45a7634a1232836b799e5c732fe12013e77310840865646",
-          "size": 2229269
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.4.1/org.sysc.calendar-0.4.1-linux-arm64.tar.gz",
+          "sha256": "9be879cda748d3228df8a6eae229ec61928156d410c42ec3dc34b39b081977d7",
+          "size": 2232821
         }
       },
-      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/calendar-v0.4.0",
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/calendar-v0.4.1",
       "releases": [
+        {
+          "version": "0.4.0",
+          "protocol": {
+            "major": 1,
+            "minor": 8
+          },
+          "capabilities": [
+            "panels",
+            "settings",
+            "state",
+            "clipboard-write",
+            "open-url"
+          ],
+          "requires": {
+            "commands": []
+          },
+          "assets": {
+            "linux-amd64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.4.0/org.sysc.calendar-0.4.0-linux-amd64.tar.gz",
+              "sha256": "24e59e13f7c8de39330d4a2354d0b35b74b3ee0b90febf4483987651923e15b4",
+              "size": 2425579
+            },
+            "linux-arm64": {
+              "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/calendar-v0.4.0/org.sysc.calendar-0.4.0-linux-arm64.tar.gz",
+              "sha256": "5362e302b539f95bb45a7634a1232836b799e5c732fe12013e77310840865646",
+              "size": 2229269
+            }
+          },
+          "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/calendar-v0.4.0"
+        },
         {
           "version": "0.3.0",
           "protocol": {
