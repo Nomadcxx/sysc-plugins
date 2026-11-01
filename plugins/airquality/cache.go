@@ -107,12 +107,17 @@ func WithoutGoogle(report Report) Report {
 	for _, d := range report.Snapshot.Forecast {
 		day := d
 		day.Measures = map[string]Measure{}
+		removedGoogle := false
 		for name, m := range d.Measures {
-			if m.Source != "google" {
-				day.Measures[name] = m
+			if m.Source == "google" {
+				removedGoogle = true
+				continue
 			}
+			day.Measures[name] = m
 		}
-		if len(day.Measures) > 0 {
+		// Preserve source-neutral forecast context; drop a day emptied by
+		// removing Google's rows.
+		if len(day.Measures) > 0 || !removedGoogle {
 			forecast = append(forecast, day)
 		}
 	}

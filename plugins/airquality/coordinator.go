@@ -481,10 +481,11 @@ type Cache struct {
 	seen   bool
 }
 
-// Put stores a successful report.
+// Put stores a successful report without Google's non-cacheable rows.
 func (c *Cache) Put(report Report) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	report = WithoutGoogle(report)
 	report.Stale = false
 	c.report, c.seen = report, true
 }
@@ -493,7 +494,9 @@ func (c *Cache) Put(report Report) {
 // rows, and rows from the sources that failed are carried over from the stored
 // report for the same place while they are younger than CarryLimit. The merged
 // report is stale when it carries anything, and its UpdatedAt is the oldest
-// carried row's, so the panel's age never understates what it shows.
+// carried row's, so the panel's age never understates what it shows. The return
+// value includes this refresh's Google rows for live display; retained state
+// does not.
 func (c *Cache) Merge(fresh Report) Report {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -502,7 +505,7 @@ func (c *Cache) Merge(fresh Report) Report {
 	if c.seen && sameOrigin(c.report, fresh) {
 		merged = carryOver(fresh, c.report)
 	}
-	c.report, c.seen = merged, true
+	c.report, c.seen = WithoutGoogle(merged), true
 	return merged
 }
 
@@ -521,7 +524,7 @@ func (c *Cache) Keep(errors []string) (Report, bool) {
 	return c.report, true
 }
 
-// Get returns the stored report.
+// Get returns the retained report, without Google's non-cacheable rows.
 func (c *Cache) Get() (Report, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -533,6 +536,7 @@ func (c *Cache) Get() (Report, bool) {
 func (c *Cache) Restore(report Report) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	report = WithoutGoogle(report)
 	report.Stale = true
 	c.report, c.seen = report, true
 }

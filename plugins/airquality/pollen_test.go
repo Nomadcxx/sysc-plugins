@@ -196,16 +196,53 @@ func TestGoogleRowsAreNeverStored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "High") || strings.Contains(string(raw), "Google") {
+	if strings.Contains(string(raw), `"google"`) || strings.Contains(string(raw), GoogleAttribution) {
 		t.Fatalf("persisted Google data: %s", raw)
+	}
+
+	hasGoogle := func(report Report) bool {
+		if strings.Contains(report.Snapshot.Attribution, GoogleAttribution) {
+			return true
+		}
+		for _, measure := range report.Snapshot.Measures {
+			if measure.Source == "google" {
+				return true
+			}
+		}
+		for _, day := range report.Snapshot.Forecast {
+			for _, measure := range day.Measures {
+				if measure.Source == "google" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	assertNoGoogle := func(name string, report Report) {
+		t.Helper()
+		if hasGoogle(report) {
+			t.Fatalf("%s retained Google data: %+v", name, report.Snapshot)
+		}
 	}
 
 	var cache Cache
 	cache.Put(report)
-	kept, _ := cache.Keep([]string{"Open-Meteo: timed out"})
-	if _, ok := kept.Snapshot.Measure(MeasureGrass); ok || len(kept.Snapshot.Forecast) != 0 || strings.Contains(kept.Snapshot.Attribution, "Google") {
-		t.Fatalf("a failed refresh served Google data stale: %+v", kept.Snapshot)
+	stored, _ := cache.Get()
+	assertNoGoogle("Put/Get", stored)
+
+	live := cache.Merge(report)
+	if _, ok := live.Snapshot.Measure(MeasureGrass); !ok || !strings.Contains(live.Snapshot.Attribution, GoogleAttribution) {
+		t.Fatalf("the current live response lost Google pollen: %+v", live.Snapshot)
 	}
+	stored, _ = cache.Get()
+	assertNoGoogle("Merge/Get", stored)
+
+	kept, _ := cache.Keep([]string{"Open-Meteo: timed out"})
+	assertNoGoogle("Keep", kept)
+
+	cache.Restore(report)
+	stored, _ = cache.Get()
+	assertNoGoogle("Restore/Get", stored)
 }
 
 func TestEPAOnlyForVictorianCoordinates(t *testing.T) {

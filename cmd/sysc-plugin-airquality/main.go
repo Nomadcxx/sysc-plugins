@@ -193,6 +193,11 @@ type session struct {
 	// shell is the shell's weather location, or nil before the host answered
 	// or on a host that cannot share it.
 	shell *v1.Location
+	// locationRevision invalidates a host poll when a newer push arrives.
+	locationRevision uint64
+	// live is the current report for this run. It may contain Google's one-
+	// refresh data; Cache and persisted state never do.
+	live *airquality.Report
 }
 
 // sources is the effective request: the shell's weather location when the
@@ -218,6 +223,7 @@ func (s *session) sourcesChanged(before airquality.Sources) bool {
 	if before == after {
 		return false
 	}
+	s.live = nil
 	s.generation++
 	// The old request's failures say nothing about the new one.
 	s.lastErr = ""
@@ -227,19 +233,30 @@ func (s *session) sourcesChanged(before airquality.Sources) bool {
 
 // queryLocation asks the host for its weather location. A host before minor
 // 26, or one that withholds the capability, leaves the plugin on its own
-// coordinates.
-func (s *session) queryLocation(ctx context.Context) {
+// coordinates. The caller keeps it off the event loop because the host may
+// geocode a configured city before replying.
+func (s *session) queryLocation(ctx context.Context) *v1.Location {
 	if s.minor < v1.LocationMinor {
-		return
+		return nil
 	}
 	reply, err := s.call(ctx, v1.CallLocationGet, v1.LocationGetParams{})
 	if err != nil || !reply.OK {
-		return
+		return nil
 	}
 	var loc v1.Location
-	if json.Unmarshal(reply.Result, &loc) == nil {
-		s.shell = &loc
+	if json.Unmarshal(reply.Result, &loc) != nil {
+		return nil
 	}
+	return &loc
+}
+
+func (s *session) applyLocationResult(result locationResult) bool {
+	if result.location == nil || result.revision != s.locationRevision {
+		return false
+	}
+	before := s.sources()
+	s.shell = result.location
+	return s.sourcesChanged(before)
 }
 
 func runPlugin(in io.Reader, out io.Writer, env environment) error {
@@ -280,12 +297,28 @@ func runPluginWith(in io.Reader, out io.Writer, env environment, initial setting
 	}()
 
 	s.restore(ctx)
-	s.queryLocation(ctx)
 
 	// The refresher owns the network. Keeping it off the loop means a slow
 	// source delays a reading, never the handshake or a keypress.
 	results := make(chan refreshResult, 1)
 	go s.refreshLoop(ctx, results)
+	locationResults := make(chan locationResult, 1)
+	locationPending := false
+	startLocationQuery := func() {
+		if locationPending || s.minor < v1.LocationMinor {
+			return
+		}
+		locationPending = true
+		revision := s.locationRevision
+		go func() {
+			location := s.queryLocation(ctx)
+			select {
+			case locationResults <- locationResult{revision: revision, location: location}:
+			case <-ctx.Done():
+			}
+		}()
+	}
+	startLocationQuery()
 
 	var timer *time.Timer
 	var timerC <-chan time.Time
@@ -305,18 +338,35 @@ func runPluginWith(in io.Reader, out io.Writer, env environment, initial setting
 	// The first reading should not wait a whole refresh interval. The timer is
 	// the trigger; asking the refresher directly as well would fire twice.
 	armTimer(immediateDelay)
+	initialRefreshStarted := false
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case result := <-locationResults:
+			locationPending = false
+			changed := s.applyLocationResult(result)
+			if changed {
+				s.snapshotAll()
+			}
+			if !initialRefreshStarted {
+				if !changed {
+					s.requestRefresh()
+				}
+				initialRefreshStarted = true
+				armTimer(s.settings.refresh)
+			} else if changed {
+				armTimer(s.settings.refresh)
+			}
 		case <-timerC:
-			// Ask again each tick: a city the shell was still geocoding
-			// resolves without a config reload, so no push announces it.
-			before := s.sources()
-			s.queryLocation(ctx)
-			if !s.sourcesChanged(before) {
+			// Poll off-loop: resolving a city may take longer than a frame or
+			// an input event. Skip only the initial refresh until that answer
+			// arrives; later refreshes can use the last known location.
+			startLocationQuery()
+			if initialRefreshStarted || !locationPending {
 				s.requestRefresh()
+				initialRefreshStarted = true
 			}
 			armTimer(s.settings.refresh)
 		case result := <-results:
@@ -352,15 +402,20 @@ func runPluginWith(in io.Reader, out io.Writer, env environment, initial setting
 				// unconditionally pushed the first reading out by a whole interval.
 				before, interval := s.sources(), s.settings.refresh
 				s.settings.apply(m.Values)
-				if s.sourcesChanged(before) || interval != s.settings.refresh {
+				if s.sourcesChanged(before) {
+					initialRefreshStarted = true
+					armTimer(s.settings.refresh)
+				} else if interval != s.settings.refresh {
 					armTimer(s.settings.refresh)
 				}
 				s.snapshotAll()
 			case *v1.LocationChanged:
+				s.locationRevision++
 				before := s.sources()
 				loc := m.Location
 				s.shell = &loc
 				if s.sourcesChanged(before) {
+					initialRefreshStarted = true
 					armTimer(s.settings.refresh)
 				}
 				s.snapshotAll()
@@ -374,6 +429,11 @@ type refreshResult struct {
 	report     airquality.Report
 	err        error
 	generation uint64
+}
+
+type locationResult struct {
+	revision uint64
+	location *v1.Location
 }
 
 type refreshRequest struct {
@@ -440,11 +500,13 @@ func (s *session) handleRefresh(ctx context.Context, result refreshResult) {
 		// Keep the last good reading rather than replacing it with nothing;
 		// the panel marks it stale and names what failed.
 		if kept, ok := s.cache.Keep([]string{problem}); ok {
+			s.live = &kept
 			s.lastErr = problem
 			s.save(ctx, kept)
 			s.snapshotAll()
 			return
 		}
+		s.live = nil
 		s.lastErr = problem
 		s.snapshotAll()
 		return
@@ -454,6 +516,7 @@ func (s *session) handleRefresh(ctx context.Context, result refreshResult) {
 	// reading nor freezes the others. Alerts come only from what this refresh
 	// returned, so a carried row cannot raise a warning twice.
 	merged := s.cache.Merge(result.report)
+	s.live = &merged
 	s.lastErr = strings.Join(result.report.Errors, "; ")
 	s.save(ctx, merged)
 	s.announce(ctx, result.report)
@@ -588,9 +651,15 @@ func (s *session) save(ctx context.Context, report airquality.Report) {
 
 // current returns the report to draw, with the panel's error line folded in.
 func (s *session) current() airquality.Report {
-	report, ok := s.cache.Get()
-	if !ok {
-		report = airquality.Report{Stale: true}
+	var report airquality.Report
+	if s.live != nil {
+		report = *s.live
+	} else {
+		var ok bool
+		report, ok = s.cache.Get()
+		if !ok {
+			report = airquality.Report{Stale: true}
+		}
 	}
 	if s.lastErr != "" && len(report.Errors) == 0 {
 		report.Errors = []string{s.lastErr}

@@ -131,8 +131,10 @@ func start(t *testing.T, rec *recorder, stored *v1.StateGetResult, tweak func(*s
 // hostOptions shapes the fake host: the protocol minor it offers and the
 // weather location it answers location.get with (nil answers "{}").
 type hostOptions struct {
-	minor    int
-	location *v1.Location
+	minor           int
+	location        *v1.Location
+	locationGate    <-chan struct{}
+	locationStarted chan<- struct{}
 }
 
 func startWith(t *testing.T, rec *recorder, stored *v1.StateGetResult, tweak func(*settings), opts hostOptions) *harness {
@@ -194,6 +196,24 @@ func startWith(t *testing.T, rec *recorder, stored *v1.StateGetResult, tweak fun
 					if json.Unmarshal(call.Params, &params) == nil {
 						h.notifications <- params
 					}
+				}
+				if call.Call == v1.CallLocationGet && opts.locationGate != nil {
+					if opts.locationStarted != nil {
+						select {
+						case opts.locationStarted <- struct{}{}:
+						default:
+						}
+					}
+					data, _ := json.Marshal(reply)
+					go func(line []byte) {
+						select {
+						case <-opts.locationGate:
+						case <-h.closed:
+							return
+						}
+						_, _ = h.host.Write(append(line, '\n'))
+					}(data)
+					continue
 				}
 				data, _ := json.Marshal(reply)
 				if _, err := h.host.Write(append(data, '\n')); err != nil {
@@ -772,6 +792,42 @@ func TestHandleRefreshIgnoresSupersededGeneration(t *testing.T) {
 	}
 }
 
+func TestLiveGooglePollenRendersWithoutEnteringCache(t *testing.T) {
+	fresh := airquality.Report{
+		Snapshot: airquality.Snapshot{
+			Attribution: airquality.OpenMeteoAttribution + " · " + airquality.GoogleAttribution,
+			Measures: []airquality.Measure{
+				{Name: airquality.MeasureGrass, Source: "google", Level: airquality.Level{Name: "Moderate", Severity: airquality.SeverityModerate}},
+				{Name: airquality.MeasureUV, Source: "open-meteo", Level: airquality.Level{Name: "Low", Severity: airquality.SeverityGood}},
+			},
+		},
+	}
+	s := &session{settings: defaultSettings()}
+	s.handleRefresh(context.Background(), refreshResult{report: fresh})
+
+	current := s.current()
+	if _, ok := current.Snapshot.Measure(airquality.MeasureGrass); !ok || !strings.Contains(current.Snapshot.Attribution, airquality.GoogleAttribution) {
+		t.Fatalf("current report lost the live Google response: %+v", current.Snapshot)
+	}
+	text := allText(s.tree(view{kind: v1.ViewPanel, width: airquality.PanelWidth}))
+	if !strings.Contains(text, "Grass pollen") || !strings.Contains(text, airquality.GoogleAttribution) {
+		t.Fatalf("panel did not render the live Google response: %s", text)
+	}
+	stored, ok := s.cache.Get()
+	if !ok {
+		t.Fatal("successful refresh was not retained")
+	}
+	if _, ok := stored.Snapshot.Measure(airquality.MeasureGrass); ok || strings.Contains(stored.Snapshot.Attribution, airquality.GoogleAttribution) {
+		t.Fatalf("cache retained the Google response: %+v", stored.Snapshot)
+	}
+
+	s.handleRefresh(context.Background(), refreshResult{err: fmt.Errorf("Open-Meteo timed out")})
+	current = s.current()
+	if _, ok := current.Snapshot.Measure(airquality.MeasureGrass); ok || strings.Contains(current.Snapshot.Attribution, airquality.GoogleAttribution) {
+		t.Fatalf("a failed refresh served Google data stale: %+v", current.Snapshot)
+	}
+}
+
 // The UV row must survive the state round-trip, or a restart loses it.
 func TestOpenMeteoReadingPersistsAcrossRestart(t *testing.T) {
 	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
@@ -953,6 +1009,48 @@ func TestLocationChangedMovesTheReading(t *testing.T) {
 	})
 	if got := rec.openMeteoLatitude(); got != "48.8566" {
 		t.Fatalf("requested latitude %q after the move, want Paris", got)
+	}
+}
+
+// A slow host location lookup must not stop the event loop from handling views.
+func TestLocationPollDoesNotBlockViews(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	started := make(chan struct{}, 1)
+	london := &v1.Location{Configured: true, Latitude: 51.5072, Longitude: -0.1276, Label: "London"}
+	h := startWith(t, &recorder{}, nil, nil, hostOptions{
+		minor: v1.LocationMinor, location: london, locationGate: gate, locationStarted: started,
+	})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("host did not receive location.get")
+	}
+
+	const id = "slow-location"
+	h.send(v1.ViewOpen{Type: "view.open", ViewID: id, View: v1.ViewPanel, Entry: "panel",
+		Width: airquality.PanelWidth, Height: airquality.PanelHeight})
+	select {
+	case line := <-h.lines:
+		var snapshot v1.ViewSnapshot
+		if messageType(line) != v1.TypeViewSnapshot || json.Unmarshal(line, &snapshot) != nil || snapshot.ViewID != id {
+			t.Fatalf("view response while location was pending = %s", line)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("view handling waited for the host location reply")
+	}
+}
+
+func TestLocationPollDropsAResultOlderThanLocationChanged(t *testing.T) {
+	paris := &v1.Location{Configured: true, Latitude: 48.8566, Longitude: 2.3522, Label: "Paris"}
+	london := &v1.Location{Configured: true, Latitude: 51.5072, Longitude: -0.1276, Label: "London"}
+	s := &session{settings: defaultSettings(), shell: paris, locationRevision: 2}
+	want := s.sources()
+	if s.applyLocationResult(locationResult{revision: 1, location: london}) {
+		t.Fatal("a stale location poll replaced a newer pushed location")
+	}
+	if got := s.sources(); got != want {
+		t.Fatalf("effective location = %+v, want pushed location %+v", got, want)
 	}
 }
 
