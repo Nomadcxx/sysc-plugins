@@ -256,13 +256,11 @@ func TestReadOnlyRefreshDoesNotPublishTransientBusyOrRedrawViews(t *testing.T) {
 		s, ok := m.(*v1.ServiceStatus)
 		return ok && s.State == v1.ServiceStateInactive && !s.Busy && s.Revision > initial.Revision
 	}).(*v1.ServiceStatus)
-	if updated.Revision <= initial.Revision {
-		t.Fatalf("refresh did not publish the observed service revision: initial=%d updated=%d", initial.Revision, updated.Revision)
+	select {
+	case msg := <-h.msgs:
+		t.Fatalf("unchanged manual refresh emitted another message: %#v", msg)
+	case <-time.After(100 * time.Millisecond):
 	}
-	h.wait(func(m v1.Message) bool {
-		s, ok := m.(*v1.ViewSnapshot)
-		return ok && s.ViewID == "bar-1"
-	})
 
 	waitForRefresh(3)
 	select {
@@ -271,12 +269,14 @@ func TestReadOnlyRefreshDoesNotPublishTransientBusyOrRedrawViews(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 	release <- struct{}{}
-	final := h.wait(func(m v1.Message) bool {
+	h.wait(func(m v1.Message) bool {
 		s, ok := m.(*v1.ServiceStatus)
 		return ok && s.State == v1.ServiceStateInactive && !s.Busy && s.Revision > updated.Revision
-	}).(*v1.ServiceStatus)
-	if final.Revision <= updated.Revision {
-		t.Fatalf("periodic refresh did not publish its observed revision: previous=%d final=%d", updated.Revision, final.Revision)
+	})
+	select {
+	case msg := <-h.msgs:
+		t.Fatalf("unchanged periodic refresh emitted another message: %#v", msg)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

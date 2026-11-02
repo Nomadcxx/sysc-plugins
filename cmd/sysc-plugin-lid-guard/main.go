@@ -48,7 +48,9 @@ func run(in io.Reader, out io.Writer, options lidguard.Options) error {
 	views := make(map[string]openView)
 	var pendingAction string
 	var statusRevision uint64
-	publish := func() error {
+	var lastViewSnapshot lidguard.Snapshot
+	hasViewSnapshot := false
+	publish := func(forceViews bool) error {
 		snapshot := service.Snapshot()
 		if snapshot.Revision > statusRevision {
 			if err := client.Send(&v1.ServiceStatus{
@@ -65,25 +67,30 @@ func run(in io.Reader, out io.Writer, options lidguard.Options) error {
 			}
 			pendingAction = ""
 		}
-		for id, view := range views {
-			view.revision++
-			views[id] = view
-			var root *v1.Node
-			switch view.kind {
-			case v1.ViewTooltip:
-				root = lidguard.TooltipTree(snapshot)
-			case v1.ViewPanel:
-				root = lidguard.PanelTree(snapshot)
-			default:
-				root = lidguard.BarTreeAtWidth(snapshot, view.width)
+		// Suppress redundant redraws from same-state status polls.
+		if forceViews || !hasViewSnapshot || !sameViewState(snapshot, lastViewSnapshot) {
+			for id, view := range views {
+				view.revision++
+				views[id] = view
+				var root *v1.Node
+				switch view.kind {
+				case v1.ViewTooltip:
+					root = lidguard.TooltipTree(snapshot)
+				case v1.ViewPanel:
+					root = lidguard.PanelTree(snapshot)
+				default:
+					root = lidguard.BarTreeAtWidth(snapshot, view.width)
+				}
+				if err := client.Snapshot(id, view.revision, root); err != nil {
+					return err
+				}
 			}
-			if err := client.Snapshot(id, view.revision, root); err != nil {
-				return err
-			}
+			lastViewSnapshot = snapshot
+			hasViewSnapshot = true
 		}
 		return nil
 	}
-	if err := publish(); err != nil {
+	if err := publish(true); err != nil {
 		return err
 	}
 
@@ -110,7 +117,7 @@ func run(in io.Reader, out io.Writer, options lidguard.Options) error {
 		case <-ctx.Done():
 			return nil
 		case <-service.Updates():
-			if err := publish(); err != nil {
+			if err := publish(false); err != nil {
 				return err
 			}
 		case <-ticker.C:
@@ -130,14 +137,14 @@ func run(in io.Reader, out io.Writer, options lidguard.Options) error {
 					width = 240
 				}
 				views[m.ViewID] = openView{kind: m.View, width: width, output: m.Output}
-				if err := publish(); err != nil {
+				if err := publish(true); err != nil {
 					return err
 				}
 			case *v1.ViewResize:
 				if view, ok := views[m.ViewID]; ok {
 					view.width = m.Width
 					views[m.ViewID] = view
-					if err := publish(); err != nil {
+					if err := publish(true); err != nil {
 						return err
 					}
 				}
@@ -147,7 +154,7 @@ func run(in io.Reader, out io.Writer, options lidguard.Options) error {
 				if view, ok := views[m.ViewID]; ok {
 					view.revision = 0
 					views[m.ViewID] = view
-					if err := publish(); err != nil {
+					if err := publish(true); err != nil {
 						return err
 					}
 				}
@@ -161,7 +168,7 @@ func run(in io.Reader, out io.Writer, options lidguard.Options) error {
 				}
 				pendingAction = m.ActionID
 				if m.ActionID != "refresh" && m.ActionID != "status" {
-					if err := publish(); err != nil {
+					if err := publish(false); err != nil {
 						return err
 					}
 				}
@@ -185,13 +192,18 @@ func run(in io.Reader, out io.Writer, options lidguard.Options) error {
 					}
 				}
 				if action != "" && action != "refresh" && action != "status" {
-					if err := publish(); err != nil {
+					if err := publish(false); err != nil {
 						return err
 					}
 				}
 			}
 		}
 	}
+}
+
+func sameViewState(a, b lidguard.Snapshot) bool {
+	return a.State == b.State && a.Available == b.Available && a.Busy == b.Busy &&
+		a.Refreshing == b.Refreshing && a.Message == b.Message
 }
 
 func inputOutput(ctx context.Context, client *v1.Client, input *v1.InputEvent, view openView) string {
