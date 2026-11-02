@@ -25,6 +25,7 @@ it.
 | **Games** | Multi-launcher game deck: Steam, Lutris, Heroic and Faugus — launch games, see what's running, session history, cover art | Steam / Lutris / Heroic / Faugus (any subset) |
 | **GitHub Notifications** | Triage unread GitHub notifications and contribution activity from the panel | `gh` |
 | **Herdr** | Monitor herdr terminal sessions and coding agents from the bar, with a session panel | `herdr` |
+| **Lid Guard** | Toggle lid-close inhibition from the bar, Control Center, or detail panel | systemd user manager, `systemctl`, `systemd-run`, `systemd-inhibit`, `sleep` |
 | **Mini Docker** | The Docker whale in the bar, with a panel to manage containers | `docker` |
 | **Moonbit** | System cleaner: scan and clean progress from the bar, with a category review panel | `moonbit` |
 | **Notes** | Markdown notes and pastel sticky notes for an Obsidian folder, with one box to search or start a note | |
@@ -39,7 +40,7 @@ it.
 | **Wallpaper Depth** | Depth masks for image wallpapers, so scenery can sit in front of the shell's centred clock | `python3` |
 | **World Clock** | Labelled clocks for other cities in the bar and panel | |
 
-The manager lists tagged releases. Plugins without a catalog release can still be installed from a local source checkout.
+The manager lists tagged releases. Moonbit and Lid Guard can still be installed from local source checkouts.
 
 ## Installation
 

@@ -6,6 +6,8 @@ github.com/Nomadcxx/sysc-shell v0.2.2 h1:F3wPA1daZNX/W5SX8C3tsC8b4CTp6/FYKn1mXo0
 github.com/Nomadcxx/sysc-shell v0.2.2/go.mod h1:S/lHQmB4kZpFSJ7yCF1mdbPFj0IzpjXss4ncGtIep/8=
 github.com/Nomadcxx/sysc-shell v0.2.4-0.20261101121114-28f2b13a7997 h1:G4v2sPYsm7TddKwrlCYcWYw+tLR+GoqVpAXtBVasrF0=
 github.com/Nomadcxx/sysc-shell v0.2.4-0.20261101121114-28f2b13a7997/go.mod h1:S/lHQmB4kZpFSJ7yCF1mdbPFj0IzpjXss4ncGtIep/8=
+github.com/Nomadcxx/sysc-shell v0.2.4-0.20261102010227-db337610964a h1:SS/enCqkjJFRFFE3jMEvJ5mooF50i+5ljo7oWSlrGbA=
+github.com/Nomadcxx/sysc-shell v0.2.4-0.20261102010227-db337610964a/go.mod h1:MwxO0mlTqYuDegeBZAzm+LyIrVYacFQ1uJpk3RLpHWM=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=
 github.com/dustin/go-humanize v1.1.0/go.mod h1:hc1CvRkJMsgxqjmjMQF3QNRAZBwY8AXBAzKYoSX9sFI=
 github.com/go-text/typesetting v0.3.5 h1:XZPUooClHY0Vf/rFyUyuPRNEkawARaFzLMQcXLSEyPk=

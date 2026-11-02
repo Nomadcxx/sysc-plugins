@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "id": "org.sysc.lid-guard",
+  "name": "Lid Guard",
+  "description": "Control lid-close inhibition from the bar, Control Center, or a detail panel.",
+  "version": "1.0.0",
+  "protocol": {"major": 1, "minor": 27},
+  "exec": "bin/sysc-plugin-lid-guard",
+  "capabilities": ["notifications", "panels"],
+  "requires": {"commands": []},
+  "services": [{
+    "id": "lid-guard",
+    "actions": ["enable", "disable", "toggle", "refresh", "status"],
+    "quick_action": {"label": "Lid Guard", "icon": "laptop", "action": "toggle"}
+  }],
+  "widgets": [{"id": "bar", "settings": []}],
+  "panels": [{"id": "panel", "width": 560, "height": 340, "placement": "attached"}]
+}

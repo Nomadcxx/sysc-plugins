@@ -114,3 +114,29 @@ pattern, with a setting to opt out.
 A credential, such as an API key, belongs in a string setting with
 `"secret": true`. The shell draws it masked and keeps it out of screenshots
 and screen shares.
+
+Protocol minor 27 adds manifest-declared service actions and typed service
+status. A service entry can list allowed action IDs and one `quick_action`:
+
+```json
+"services": [{
+  "id": "lid-guard",
+  "actions": ["enable", "disable", "toggle", "refresh", "status"],
+  "quick_action": {"label": "Lid Guard", "icon": "laptop", "action": "toggle"}
+}]
+```
+
+The host checks every action against this allowlist. It shows `quick_action`
+on the Control Center Home page while the plugin is enabled. Its icon must
+exist in the shell icon catalogue, and its action must appear in `actions`.
+Plugins receive `service.action` and report observed state through
+`service.status`, including `state`, `busy`, `message`, and `revision`.
+
+The same-user CLI can request an action:
+
+```sh
+sysc-shell ipc plugin.action '{"plugin_id":"org.sysc.lid-guard","service_id":"lid-guard","action_id":"toggle"}'
+```
+
+The IPC method returns after the host queues the request. The plugin sends
+`service.status` after it observes the result.

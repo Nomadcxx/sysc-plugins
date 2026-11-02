@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Nomadcxx/sysc-plugins/internal/thumbnail"
+	"github.com/Nomadcxx/sysc-shell/plugin/icons"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
@@ -33,7 +35,14 @@ type manifest struct {
 		Commands []string `json:"commands"`
 	} `json:"requires"`
 	Services []struct {
-		ID string `json:"id"`
+		Label       string   `json:"label"`
+		ID          string   `json:"id"`
+		Actions     []string `json:"actions,omitempty"`
+		QuickAction *struct {
+			Label  string `json:"label"`
+			Icon   string `json:"icon"`
+			Action string `json:"action"`
+		} `json:"quick_action,omitempty"`
 	} `json:"services"`
 	Widgets []struct {
 		ID       string    `json:"id"`
@@ -123,6 +132,11 @@ var allowedSettingTypes = map[string]bool{
 	"bool": true, "int": true, "float": true, "string": true,
 	"select": true, "color": true, "file": true, "folder": true,
 }
+
+const (
+	maxServiceEntries = 32
+	maxServiceActions = 16
+)
 
 func main() {
 	roots, err := filepath.Glob("plugins/*")
@@ -229,6 +243,53 @@ func validate(path string, seenIDs map[string]string) error {
 	}
 	if _, err := validateSettings(m.Settings); err != nil {
 		return err
+	}
+	if len(m.Services) > maxServiceEntries {
+		return fmt.Errorf("services lists %d entries, more than the %d allowed", len(m.Services), maxServiceEntries)
+	}
+	seenServiceIDs := make(map[string]bool, len(m.Services))
+	for i, service := range m.Services {
+		if !v1.ValidEntryID(service.ID) {
+			return fmt.Errorf("services[%d]: id %q is not a valid identifier", i, service.ID)
+		}
+		if seenServiceIDs[service.ID] {
+			return fmt.Errorf("services: id %q is declared twice", service.ID)
+		}
+		seenServiceIDs[service.ID] = true
+		if len(service.Label) > maxLabelBytes {
+			return fmt.Errorf("services[%d].label is %d bytes, more than the %d allowed", i, len(service.Label), maxLabelBytes)
+		}
+		if (service.Actions != nil || service.QuickAction != nil) && m.Protocol.Minor < v1.ServiceActionMinor {
+			return fmt.Errorf("services[%d]: service actions and quick_action require protocol minor %d", i, v1.ServiceActionMinor)
+		}
+		if service.Actions != nil && len(service.Actions) == 0 {
+			return fmt.Errorf("services[%d].actions must declare at least one action", i)
+		}
+		if len(service.Actions) > maxServiceActions {
+			return fmt.Errorf("services[%d].actions lists %d entries, more than the %d allowed", i, len(service.Actions), maxServiceActions)
+		}
+		seenActions := make(map[string]bool, len(service.Actions))
+		for _, action := range service.Actions {
+			if !v1.ValidEntryID(action) {
+				return fmt.Errorf("services[%d].actions: action %q is not an identifier", i, action)
+			}
+			if seenActions[action] {
+				return fmt.Errorf("services[%d].actions lists action %q more than once", i, action)
+			}
+			seenActions[action] = true
+		}
+		if quick := service.QuickAction; quick != nil {
+			switch {
+			case strings.TrimSpace(quick.Label) == "" || !utf8.ValidString(quick.Label) || len(quick.Label) > 256:
+				return fmt.Errorf("services[%d].quick_action.label must be non-empty and at most 256 bytes", i)
+			case !v1.ValidEntryID(quick.Icon) || !icons.ValidName(quick.Icon):
+				return fmt.Errorf("services[%d].quick_action.icon %q is not in the shell catalogue", i, quick.Icon)
+			case !v1.ValidEntryID(quick.Action):
+				return fmt.Errorf("services[%d].quick_action.action %q is not an identifier", i, quick.Action)
+			case !seenActions[quick.Action]:
+				return fmt.Errorf("services[%d].quick_action.action %q is not declared in actions", i, quick.Action)
+			}
+		}
 	}
 	for i, w := range m.Widgets {
 		if w.ID == "" {

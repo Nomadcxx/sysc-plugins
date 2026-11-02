@@ -7,6 +7,7 @@ Where each plugin's behavior comes from:
 | Screen Recorder | extracted from sysc-shell |
 | Notes | extracted from sysc-shell |
 | Timer | extracted from sysc-shell, with deltas from the noctalia timer |
+| Lid Guard | port of [Noctalia Community Lid Guard](https://github.com/noctalia-dev/community-plugins/tree/main/lid-guard), under the MIT license |
 | World Clock | extracted from sysc-shell, redesigned in 2.0.0 |
 | Calendar | port of the built-in sysc-shell clock-panel calendar |
 | GitHub Notifications | port of noctalia community plugin |
