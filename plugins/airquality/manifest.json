@@ -3,7 +3,7 @@
   "id": "org.sysc.airquality",
   "name": "Air Quality & Pollen",
   "description": "Air quality and UV worldwide, with pollen for Australia, Europe and beyond, and thunderstorm asthma.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "protocol": {
     "major": 1,
     "minor": 26
@@ -28,13 +28,12 @@
     {
       "id": "bar",
       "settings": [
-        {"key": "show", "type": "select", "label": "Bar shows", "default": "worst",
+        {"key": "show", "type": "select", "label": "Bar shows", "default": "both",
+          "description": "Dials for how much the air and pollen need attention today. Where there is no pollen data, the air dial shows alone.",
           "options": [
-            {"value": "worst", "label": "Worst measure"},
-            {"value": "grass", "label": "Grass pollen"},
-            {"value": "air", "label": "Air quality"},
-            {"value": "storm", "label": "Thunderstorm asthma"},
-            {"value": "icon", "label": "Icon only"}
+            {"value": "both", "label": "Air and pollen"},
+            {"value": "air", "label": "Air quality only"},
+            {"value": "pollen", "label": "Pollen only"}
           ]}
       ]
     }
