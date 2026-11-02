@@ -216,3 +216,59 @@ func validateManifestFixture(t *testing.T, minor int, caps, fields, calls string
 	}
 	return validate(path, map[string]string{})
 }
+
+func TestServiceActionsAndQuickActionValidation(t *testing.T) {
+	base := `{"schema":1,"id":"org.sysc.x","name":"X","description":"d","version":"1.0.0",` +
+		`"protocol":{"major":1,"minor":27},"exec":"bin/sysc-plugin-x","capabilities":[],` +
+		`"services":[{"id":"x","label":"Lid Guard","actions":["toggle"],"quick_action":{"label":"X","icon":"laptop","action":"toggle"}}]}`
+	cases := []struct {
+		name, manifest, wantErr string
+	}{
+		{"valid_action", base, ""},
+		{"legacy_service", strings.Replace(base, `"minor":27`, `"minor":26`, 1), "service actions and quick_action require protocol minor 27"},
+		{"invalid_service_id", strings.Replace(base, `"id":"x"`, `"id":"bad id"`, 1), "services[0]"},
+		{"duplicate_service_id", strings.Replace(base, `"services":[{"id":"x","label":"Lid Guard"`, `"services":[{"id":"x"},{"id":"x","label":"Lid Guard"`, 1), `services: id "x" is declared twice`},
+		{"service_label_over_limit", strings.Replace(base, `"label":"Lid Guard"`, `"label":"`+strings.Repeat("a", 257)+`"`, 1), "services[0].label is 257 bytes"},
+		{"duplicate_action", strings.Replace(base, `"toggle"]`, `"toggle","toggle"]`, 1), "lists action \"toggle\" more than once"},
+		{"invalid_action", strings.Replace(base, `"toggle"]`, `"bad action"]`, 1), "action \"bad action\" is not an identifier"},
+		{"empty_actions", strings.Replace(base, `"actions":["toggle"],"quick_action"`, `"actions":[],"quick_action"`, 1), "actions must declare at least one action"},
+		{"undeclared_quick_action", strings.Replace(base, `"action":"toggle"`, `"action":"enable"`, 1), "is not declared in actions"},
+		{"invalid_icon", strings.Replace(base, `"laptop"`, `"not an icon"`, 1), "icon \"not an icon\" is not in the shell catalogue"},
+		{"non_catalogue_icon", strings.Replace(base, `"laptop"`, `"not_a_shell_icon"`, 1), "icon \"not_a_shell_icon\" is not in the shell catalogue"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateServiceManifest(t, tc.manifest)
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("got %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestServiceEntryLimitMatchesHost(t *testing.T) {
+	services := strings.TrimSuffix(strings.Repeat(`{"id":"x"},`, 33), ",")
+	manifest := `{"schema":1,"id":"org.sysc.x","name":"X","description":"d","version":"1.0.0",` +
+		`"protocol":{"major":1,"minor":27},"exec":"bin/sysc-plugin-x","capabilities":[],"services":[` + services + `]}`
+	err := validateServiceManifest(t, manifest)
+	if err == nil || !strings.Contains(err.Error(), "services lists 33 entries, more than the 32 allowed") {
+		t.Fatalf("got %v, want service entry limit error", err)
+	}
+}
+
+func validateServiceManifest(t *testing.T, body string) error {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "plugins", "x")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "manifest.json")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return validate(path, map[string]string{})
+}

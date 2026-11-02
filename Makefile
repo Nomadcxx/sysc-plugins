@@ -3,6 +3,7 @@ PLUGINS := \
 	sysc-plugin-screenshot:screenshot \
 	sysc-plugin-notes:notes \
 	sysc-plugin-timer:timer \
+	sysc-plugin-lid-guard:lid-guard \
 	sysc-plugin-world-clock:world-clock \
 	sysc-plugin-airquality:airquality \
 	sysc-plugin-calendar:calendar \
