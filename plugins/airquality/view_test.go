@@ -88,20 +88,94 @@ func TestBarControlIsInteractiveAndNamed(t *testing.T) {
 	}
 }
 
-// A narrow side-bar slot cannot fit the label, so the bar drops to the icon
-// and its accessible name, never truncating mid-word at the host's edge.
-func TestBarDropsLabelWhenNarrow(t *testing.T) {
+// barDials lists the dials a bar control holds, by key.
+func barDials(bar *v1.Node) []*v1.Node {
+	var out []*v1.Node
+	for _, c := range bar.Children[0].Children {
+		if c.Kind == v1.KindGauge {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func dialKeys(bar *v1.Node) string {
+	var keys []string
+	for _, d := range barDials(bar) {
+		keys = append(keys, d.Key)
+	}
+	return strings.Join(keys, ",")
+}
+
+// A standard bar with air and pollen readings shows both dials, air first,
+// each a banded half gauge with no centre text so the shell paints a dial.
+func TestBarShowsAirAndPollenDials(t *testing.T) {
 	t.Parallel()
-	narrow := Bar(sampleReport(), 40).Children[0]
-	if len(narrow.Children) != 1 || narrow.Children[0].Kind != v1.KindIcon {
-		t.Fatalf("narrow bar children = %+v", narrow.Children)
+	bar := Bar(sampleReport(), shelllint.BarWidth)
+	if got := dialKeys(bar); got != "dial-air,dial-pollen" {
+		t.Fatalf("dials = %q, want air then pollen", got)
 	}
-	if narrow.Name == "" {
+	for _, d := range barDials(bar) {
+		if d.Form != v1.GaugeHalf || len(d.Bands) != 3 || d.ValueText != "" || d.Icon != "" {
+			t.Fatalf("dial %s = %+v, want a banded half gauge with an empty centre", d.Key, d)
+		}
+		if d.Name == "" {
+			t.Fatalf("dial %s has no accessible name", d.Key)
+		}
+	}
+	var captions []string
+	for _, c := range bar.Children[0].Children {
+		if c.Kind == v1.KindText {
+			captions = append(captions, c.Text)
+		}
+	}
+	if strings.Join(captions, ",") != "AIR,POL" {
+		t.Fatalf("captions = %v", captions)
+	}
+}
+
+// Where no source has pollen, the air dial shows alone, a size up.
+func TestBarFallsBackToTheAirDialWithoutPollen(t *testing.T) {
+	t.Parallel()
+	report := Report{Snapshot: Snapshot{Measures: []Measure{usAQIMeasure(53)}}}
+	for _, show := range []string{BarBoth, BarPollen, BarAir} {
+		bar := BarFor(report, show, shelllint.BarWidth)
+		if got := dialKeys(bar); got != "dial-air" {
+			t.Fatalf("show %s: dials = %q, want the air dial alone", show, got)
+		}
+		if d := barDials(bar)[0]; d.Width != barSoloDialWidth || d.Absent {
+			t.Fatalf("show %s: lone dial = %+v", show, d)
+		}
+		if len(bar.Children[0].Children) != 1 {
+			t.Fatalf("show %s: lone dial carries a caption", show)
+		}
+		lintView(t, bar, v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight)
+	}
+}
+
+func TestBarChoicesPickTheirDial(t *testing.T) {
+	t.Parallel()
+	for show, want := range map[string]string{BarAir: "dial-air", BarPollen: "dial-pollen"} {
+		if got := dialKeys(BarFor(sampleReport(), show, shelllint.BarWidth)); got != want {
+			t.Errorf("show %s: dials = %q, want %q", show, got, want)
+		}
+	}
+}
+
+// A slot too narrow for two dials keeps the one that matters more.
+func TestBarNarrowSlotKeepsTheWorseDial(t *testing.T) {
+	t.Parallel()
+	bar := Bar(sampleReport(), 96)
+	dials := barDials(bar)
+	if len(dials) != 1 || dials[0].Width != barSoloDialWidth {
+		t.Fatalf("narrow bar dials = %+v", dials)
+	}
+	// Grass is High and air Fair, so the pollen reading is the worse.
+	if want := concern(sampleReport().Snapshot.Measures[0]); dials[0].Value != want {
+		t.Fatalf("narrow dial value = %v, want the grass reading %v", dials[0].Value, want)
+	}
+	if bar.Children[0].Name == "" {
 		t.Fatal("narrow bar control lost its accessible name")
-	}
-	wide := Bar(sampleReport(), shelllint.BarWidth).Children[0]
-	if len(wide.Children) != 2 || wide.Children[1].Kind != v1.KindText {
-		t.Fatalf("wide bar children = %+v", wide.Children)
 	}
 }
 
@@ -111,44 +185,57 @@ func TestBarWithNoReadingStillRenders(t *testing.T) {
 		bar := Bar(offlineReport(), width)
 		lintView(t, bar, v1.ViewBar, width, shelllint.BarHeight)
 		control := bar.Children[0]
-		if control.Name == "" {
-			t.Fatalf("width %d: offline control has no name", width)
+		if control.Name != "Air quality: offline" {
+			t.Fatalf("width %d: offline control name = %q", width, control.Name)
 		}
-		if len(control.Children) == 0 || control.Children[0].Icon == "" {
-			t.Fatalf("width %d: offline control has no glyph", width)
+		dials := barDials(bar)
+		if len(dials) != 1 || !dials[0].Absent {
+			t.Fatalf("width %d: offline dials = %+v, want one empty dial", width, dials)
 		}
 	}
 }
 
-func TestBarTextNamesWorstMeasure(t *testing.T) {
+// The dials share one scale: each severity owns a third, and a reading sits
+// inside its third by where it falls on its own scale.
+func TestConcernPlacesReadingsInTheirThird(t *testing.T) {
 	t.Parallel()
-	text := BarText(sampleReport())
-	if !strings.Contains(text, "Grass") {
-		t.Fatalf("bar text = %q, want the worst measure", text)
+	for _, tc := range []struct {
+		m      Measure
+		lo, hi float64
+	}{
+		{usAQIMeasure(10), 0, 1.0 / 3},
+		{usAQIMeasure(53), 1.0 / 3, 0.4},
+		{usAQIMeasure(95), 0.6, 2.0 / 3},
+		{usAQIMeasure(300), 2.0 / 3, 1},
+		{Measure{Name: MeasureThunderstorm, Level: Level{Name: "High", Index: 2, Severity: SeverityHigh}}, 2.0 / 3, 1},
+	} {
+		if got := concern(tc.m); got < tc.lo || got > tc.hi {
+			t.Errorf("%s %s: concern %.3f, want %.3f..%.3f", tc.m.Name, tc.m.Level.Name, got, tc.lo, tc.hi)
+		}
 	}
-	if !strings.Contains(text, "high") {
-		t.Fatalf("bar text = %q, want the category", text)
-	}
-	if len(text) > barTextBytes {
-		t.Fatalf("bar text = %q is %d bytes, over the %d budget", text, len(text), barTextBytes)
+	if a, b := concern(usAQIMeasure(55)), concern(usAQIMeasure(90)); a >= b {
+		t.Errorf("AQI 55 at %.3f is not below AQI 90 at %.3f", a, b)
 	}
 }
 
-// A UV reading is quoted as a bare number nationally, so the bar leads with the
-// figure and follows with the band. It must also use the short measure name:
-// the full "UV Index" pushed the label past the narrow bar's budget.
-func TestBarTextLeadsWithTheUVFigure(t *testing.T) {
+// A thunderstorm asthma warning tints the whole control; a high grass count
+// alone does not, because it is not an act-now warning.
+func TestBarTintsForAThunderstormWarning(t *testing.T) {
 	t.Parallel()
-	report := Report{Snapshot: Snapshot{Measures: []Measure{{
-		Name:   MeasureUV,
-		Title:  Title(MeasureUV),
-		Level:  Level{Name: uvHigh, Index: 2, Severity: SeverityHigh},
-		Metric: &Metric{Subcat: "today's peak", Value: 6.4, Units: ""},
-	}}}}
-	text := BarText(report)
-	if want := "UV 6.4 high"; text != want {
-		t.Fatalf("bar text = %q, want %q", text, want)
+	report := sampleReport()
+	if fill := Bar(report, shelllint.BarWidth).Children[0].Fill; fill != "" {
+		t.Fatalf("moderate storm risk tinted the bar %q", fill)
 	}
+	for i := range report.Snapshot.Measures {
+		if report.Snapshot.Measures[i].Name == MeasureThunderstorm {
+			report.Snapshot.Measures[i].Level = Level{Name: "High", Index: 2, Severity: SeverityHigh}
+		}
+	}
+	bar := Bar(report, shelllint.BarWidth)
+	if fill := bar.Children[0].Fill; fill != "error-container" {
+		t.Fatalf("storm warning fill = %q, want error-container", fill)
+	}
+	lintView(t, bar, v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight)
 }
 
 func TestTooltipFitsEveryGeometry(t *testing.T) {
@@ -283,11 +370,7 @@ func TestPanelRootKindIsAllowed(t *testing.T) {
 func TestAllIconsExist(t *testing.T) {
 	t.Parallel()
 	used := []string{
-		iconPollen, iconAir, iconStorm, iconSmoke,
-		iconGood, iconModerate, iconHigh, iconAlert, iconRefresh,
-	}
-	for _, s := range []Severity{SeverityGood, SeverityModerate, SeverityHigh} {
-		used = append(used, SeverityIcon(s))
+		iconPollen, iconAir, iconStorm, iconSun, iconSmoke, iconAlert, iconRefresh,
 	}
 	for _, m := range []string{MeasureGrass, MeasureAllergens, MeasureAirQuality, MeasureThunderstorm, MeasureWoodsmoke} {
 		used = append(used, MeasureIcon(m))
@@ -864,31 +947,6 @@ func panelMeasureRows(root *v1.Node) []string {
 	return out
 }
 
-func TestBarLabelFitsItsWidth(t *testing.T) {
-	t.Parallel()
-
-	// A long reading, so the budget is what limits it rather than the data.
-	report := sampleReport()
-	report.Snapshot.Measures[0].Metric = &Metric{Subcat: "Grass", Value: 1234.5, Units: "grains/m³"}
-	for _, width := range []int{240, 200, 160, 120, 119, 96, 64, 40, 32} {
-		bar := Bar(report, width)
-		lintView(t, bar, v1.ViewBar, width, shelllint.BarHeight)
-		control := bar.Children[0]
-		var label string
-		for _, child := range control.Children {
-			if child.Kind == v1.KindText {
-				label = child.Text
-			}
-		}
-		if label == "" {
-			continue
-		}
-		if budget := barLabelBytes(width); len(label) > budget {
-			t.Fatalf("width %d: label %q is %d bytes, budget %d", width, label, len(label), budget)
-		}
-	}
-}
-
 func TestTruncateBytesNeverSplitsARune(t *testing.T) {
 	t.Parallel()
 
@@ -1025,19 +1083,14 @@ func usAQIMeasure(aqi float64) Measure {
 		Breakdown: []Breakdown{{Name: "PM2.5", Metric: &Metric{Subcat: "PM2.5", Value: 38.2}}}}
 }
 
-// A long category must lose its words, never the figure, and never mid-word.
-func TestBarLabelKeepsTheFigure(t *testing.T) {
+// The bar control names every reading in full, figure first, for a screen reader.
+func TestBarNameKeepsTheFigure(t *testing.T) {
 	report := Report{Snapshot: Snapshot{Measures: []Measure{usAQIMeasure(101)}}}
 	if got := measureText(usAQIMeasure(101), report); got != "Air AQI 101 unhealthy (sensitive)" {
 		t.Errorf("240px label = %q", got)
 	}
-	bar := BarFor(report, "air", 120)
-	open := bar.Children[0]
-	if got := open.Children[1].Text; got != "Air AQI 101" {
-		t.Errorf("120px label = %q, want the figure kept at a word boundary", got)
-	}
-	if open.Name != "Air AQI 101 unhealthy (sensitive)" {
-		t.Errorf("accessible name = %q, want the longer label", open.Name)
+	if name := BarFor(report, BarAir, 120).Children[0].Name; name != "Air AQI 101 unhealthy (sensitive)" {
+		t.Errorf("accessible name = %q, want the full reading", name)
 	}
 }
 

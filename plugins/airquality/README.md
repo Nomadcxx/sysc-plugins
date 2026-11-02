@@ -157,11 +157,24 @@ one source can still notify when another source fails during the same refresh.
 
 ## Panel and bar
 
-The bar shows the worst current measure by default. The `Bar shows` setting can
-pin it to grass, air quality or thunderstorm asthma, or show the icon only; each
-bar widget keeps its own choice. The label puts the figure before the category
-and shortens at a word boundary, so a narrow bar loses words rather than the
-number. The widget drops its text on a narrow bar.
+The bar answers one question from across a room: does the air need attention
+today. It shows two small dials, air on the left and pollen on the right, each
+with green, amber and red zones and a needle. Air takes the worse of air
+quality and woodsmoke; pollen takes the worst of grass, other allergens and
+thunderstorm asthma. Each needle sits in its severity's third of the dial, placed
+within it by where the reading falls on its own scale, so the two dials read
+alike although their sources use different units. Where the location has no
+pollen data, or the slot is too narrow for two, one larger dial shows alone. A
+thunderstorm asthma warning tints the whole widget red. Readings and their names
+are in the tooltip, the accessible name and the panel, not on the bar.
+
+The `Bar shows` setting picks air and pollen (the default), air only, or pollen
+only, which falls back to air where there is no pollen. Each bar widget keeps
+its own choice. Earlier choices map across: worst measure and icon only become
+air and pollen; grass and thunderstorm asthma become pollen only.
+
+The dials need a shell that paints an unlabelled banded half gauge as a dial.
+An older shell draws the same gauge with a percentage under it.
 
 The panel leads with a half radial dial for the worst measure that has a numeric
 scale, then lists each measure with its level and any numeric reading, then up

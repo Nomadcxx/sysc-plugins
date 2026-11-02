@@ -525,21 +525,13 @@ func TestBarShowSettingChangesLabel(t *testing.T) {
 	h := start(t, rec, nil, nil)
 	h.openBar(shelllint.BarWidth)
 
-	h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopeInstance, Values: map[string]any{"show": "icon"}})
+	h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopeInstance, Values: map[string]any{"show": "air"}})
 	snap := h.snapshotWhere(func(root *v1.Node) bool {
 		open := find(root, "open")
-		if open == nil {
-			return false
-		}
-		for _, c := range open.Children {
-			if c.Kind == v1.KindText {
-				return false
-			}
-		}
-		return len(open.Children) == 1
+		return open != nil && len(open.Children) == 1 && open.Children[0].Kind == v1.KindGauge
 	})
 	for _, finding := range shelllint.Tree(snap.Root, v1.ViewBar, shelllint.BarWidth, shelllint.BarHeight) {
-		t.Errorf("icon-only bar: %s", finding)
+		t.Errorf("air-only bar: %s", finding)
 	}
 }
 
@@ -634,12 +626,14 @@ func TestSettingsApplyKeepsAbsentKeys(t *testing.T) {
 	}
 }
 
-func TestBarChoiceRejectsUnknown(t *testing.T) {
-	if got := barChoice("nonsense"); got != "worst" {
-		t.Errorf("barChoice(nonsense) = %q", got)
-	}
-	if got := barChoice("storm"); got != "storm" {
-		t.Errorf("barChoice(storm) = %q", got)
+func TestBarChoiceMapsEarlierValues(t *testing.T) {
+	for in, want := range map[string]string{
+		"nonsense": airquality.BarBoth, "": airquality.BarBoth, "worst": airquality.BarBoth, "icon": airquality.BarBoth,
+		"air": airquality.BarAir, "grass": airquality.BarPollen, "storm": airquality.BarPollen, "pollen": airquality.BarPollen,
+	} {
+		if got := airquality.BarChoice(in); got != want {
+			t.Errorf("BarChoice(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -901,24 +895,35 @@ func TestStartupSettingsKeepImmediateRefresh(t *testing.T) {
 	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "UV index") })
 }
 
-// Each bar widget keeps its own measure choice.
+// Each bar widget keeps its own choice: one shows the air dial alone while
+// another shows both dials.
 func TestBarShowIsPerInstance(t *testing.T) {
-	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
-	h := start(t, rec, nil, func(s *settings) { s.epa = false; s.airHealth = false })
+	rec := &recorder{routes: []route{
+		{suffix: "/locations/", body: `{"locations":[{"id":863,"suburb":"Melbourne","state":"VIC","SAL":"21640","SA3":"20604","use_sal":false}]}`},
+		{suffix: "/dashboard/metricdash/SAL/21640/", body: dashboardBody},
+	}}
+	h := start(t, rec, nil, func(s *settings) { s.airHealth = true; s.epa = false; s.openMeteo = false })
 	h.openPanel()
-	for _, bar := range []struct{ view, instance, show string }{{"bar-a", "inst-a", "air"}, {"bar-b", "inst-b", "icon"}} {
+	for _, bar := range []struct{ view, instance, show string }{{"bar-a", "inst-a", "air"}, {"bar-b", "inst-b", "both"}} {
 		h.send(v1.ViewOpen{Type: "view.open", ViewID: bar.view, View: v1.ViewBar, Entry: "bar", Instance: bar.instance,
 			Width: shelllint.BarWidth, Height: shelllint.BarHeight})
 		h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopeInstance, Instance: bar.instance, Values: map[string]any{"show": bar.show}})
 	}
-	hasLabel := func(root *v1.Node) bool {
-		open := find(root, "open")
-		return open != nil && len(open.Children) == 2
+	dials := func(root *v1.Node) []string {
+		var keys []string
+		if open := find(root, "open"); open != nil {
+			for _, c := range open.Children {
+				if c.Kind == v1.KindGauge {
+					keys = append(keys, c.Key)
+				}
+			}
+		}
+		return keys
 	}
-	h.snapshotFor("bar-b", func(root *v1.Node) bool { return !hasLabel(root) })
-	// Another refresh redraws both bars; the first must still show its label.
+	h.snapshotFor("bar-b", func(root *v1.Node) bool { return strings.Join(dials(root), ",") == "dial-air,dial-pollen" })
+	// Another refresh redraws both bars; the first must still show air alone.
 	h.send(v1.InputEvent{Type: "input.event", ViewID: "bar-a", Node: "refresh", Event: v1.EventActivate})
-	h.snapshotFor("bar-a", func(root *v1.Node) bool { return hasLabel(root) && strings.Contains(allText(root), "Air") })
+	h.snapshotFor("bar-a", func(root *v1.Node) bool { return strings.Join(dials(root), ",") == "dial-air" })
 }
 
 // While one provider is down, the providers that answered must keep updating
