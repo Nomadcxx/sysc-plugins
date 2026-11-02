@@ -19,16 +19,6 @@ import (
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
-// epaBody is a trimmed ArcGIS response with one Standard station near the CBD.
-const epaBody = `{
-  "features": [
-    {"attributes": {"siteID":"1001","siteName":"Melbourne CBD","siteType":"Standard",
-      "healthParameter":"PM2.5","healthAdvice":"Fair","averageValue":19.9,
-      "since":1793430000000,"until":1793433600000},
-     "geometry": {"x":144.9671,"y":-37.8141}}
-  ]
-}`
-
 const dashboardBody = `{
   "sals": ["21640"],
   "locations": [{
@@ -387,33 +377,13 @@ func allText(root *v1.Node) string {
 	return out
 }
 
-// EPA still works alone when the user turns off AirHealth and Open-Meteo.
-func TestEPAOnlyRendersReading(t *testing.T) {
-	rec := &recorder{routes: []route{{suffix: "FeatureServer/0/query", body: epaBody}}}
-	h := start(t, rec, nil, func(s *settings) {
-		s.airHealth = false
-		s.openMeteo = false
-	})
-
-	panel := h.openPanel()
-	if text := allText(panel.Root); !strings.Contains(text, "Melbourne CBD") {
-		t.Fatalf("panel does not name the station: %s", text)
-	}
-	if got := rec.hits("airhealthservices"); got != 0 {
-		t.Fatalf("opted-out source was called %d times", got)
-	}
-	if rec.hits("FeatureServer") == 0 {
-		t.Fatal("EPA was never queried")
-	}
-}
-
 // Turning AirHealth on must reach it and display its readings and attribution.
 func TestAirHealthReadingsWhenEnabled(t *testing.T) {
 	rec := &recorder{routes: []route{
 		{suffix: "/locations/", body: `{"locations":[{"id":863,"suburb":"Melbourne","state":"VIC","SAL":"21640","SA3":"20604","use_sal":false}]}`},
 		{suffix: "/dashboard/metricdash/SAL/21640/", body: dashboardBody},
 	}}
-	h := start(t, rec, nil, func(s *settings) { s.airHealth = true; s.epa = false; s.openMeteo = false })
+	h := start(t, rec, nil, func(s *settings) { s.airHealth = true; s.openMeteo = false })
 
 	panel := h.openPanel()
 	text := allText(panel.Root)
@@ -447,12 +417,11 @@ func TestPartialSourceFailureKeepsPreviousReport(t *testing.T) {
 	}
 	rec := &recorder{routes: []route{
 		{suffix: "/locations/", status: http.StatusServiceUnavailable, body: "down"},
-		{suffix: "FeatureServer/0/query", body: strings.Replace(epaBody, `"healthAdvice":"Fair"`, `"healthAdvice":"Very Poor"`, 1)},
+		{suffix: "/v1/air-quality", body: strings.Replace(openMeteoBody, `"us_aqi":28`, `"us_aqi":220`, 1)},
 	}}
 	h := start(t, rec, &v1.StateGetResult{Found: true, Value: raw}, func(s *settings) {
 		s.airHealth = true
-		s.epa = true
-		s.openMeteo = false
+		s.openMeteo = true
 	})
 	id := fmt.Sprintf("partial%d", h.nextView())
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: id, View: v1.ViewPanel, Entry: "panel",
@@ -466,8 +435,8 @@ func TestPartialSourceFailureKeepsPreviousReport(t *testing.T) {
 	}
 	select {
 	case notification := <-h.notifications:
-		if notification.Summary != "Air quality very poor" {
-			t.Fatalf("partial refresh notification = %q, want the fresh EPA warning", notification.Summary)
+		if notification.Summary != "Air quality very unhealthy" {
+			t.Fatalf("partial refresh notification = %q, want the fresh Open-Meteo warning", notification.Summary)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("fresh high reading did not notify during a partial source failure")
@@ -491,7 +460,7 @@ func TestRestoredReportIsStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Fail every refresh so the restored copy is what the panel shows.
-	rec := &recorder{routes: []route{{suffix: "FeatureServer/0/query", status: 503, body: "down"}}}
+	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", status: 503, body: "down"}}}
 	h := start(t, rec, &v1.StateGetResult{Found: true, Value: raw}, nil)
 
 	id := fmt.Sprintf("r%d", h.nextView())
@@ -508,7 +477,7 @@ func TestRestoredReportIsStale(t *testing.T) {
 // The bar must lint at every width the host can open it, including the side
 // bar widths a vertical panel uses.
 func TestBarFitsHostWidths(t *testing.T) {
-	rec := &recorder{routes: []route{{suffix: "FeatureServer/0/query", body: epaBody}}}
+	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
 	h := start(t, rec, nil, nil)
 	for _, width := range []int{shelllint.BarWidth, 96, 64, 40, 32} {
 		snap := h.openBar(width)
@@ -521,7 +490,7 @@ func TestBarFitsHostWidths(t *testing.T) {
 // The settings message must rebuild the views rather than wait for a refresh,
 // and an instance-scoped bar setting must change the label.
 func TestBarShowSettingChangesLabel(t *testing.T) {
-	rec := &recorder{routes: []route{{suffix: "FeatureServer/0/query", body: epaBody}}}
+	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
 	h := start(t, rec, nil, nil)
 	h.openBar(shelllint.BarWidth)
 
@@ -537,13 +506,13 @@ func TestBarShowSettingChangesLabel(t *testing.T) {
 
 // A failed refresh with no prior reading must not crash or draw a fake zero.
 func TestTotalFailureStillAnswers(t *testing.T) {
-	rec := &recorder{routes: []route{{suffix: "FeatureServer/0/query", status: 500, body: "boom"}}}
+	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", status: 500, body: "boom"}}}
 	h := start(t, rec, nil, nil)
 	id := fmt.Sprintf("f%d", h.nextView())
 	h.send(v1.ViewOpen{Type: "view.open", ViewID: id, View: v1.ViewPanel, Entry: "panel",
 		Width: airquality.PanelWidth, Height: airquality.PanelHeight})
 	panel := h.snapshotFor(id, func(root *v1.Node) bool {
-		return strings.Contains(allText(root), "EPA Victoria")
+		return strings.Contains(allText(root), "Open-Meteo")
 	})
 	for _, finding := range shelllint.Tree(panel.Root, v1.ViewPanel, airquality.PanelWidth, airquality.PanelHeight) {
 		t.Errorf("failure panel: %s", finding)
@@ -557,7 +526,6 @@ func TestSettingsApplyAllowsWorldwideCoordinates(t *testing.T) {
 	s := defaultSettings()
 	s.apply(map[string]any{
 		"refresh_minutes": float64(1), "latitude": float64(51.5072), "longitude": float64(-0.1276),
-		"radius_km": float64(500), "site": "  Melbourne CBD  ",
 	})
 	if s.refresh != 5*time.Minute {
 		t.Errorf("refresh = %v, want the 5m floor", s.refresh)
@@ -569,33 +537,27 @@ func TestSettingsApplyAllowsWorldwideCoordinates(t *testing.T) {
 	if s.latitude != 51.5072 || s.longitude != -0.1276 {
 		t.Errorf("invalid coordinates changed location to %v,%v", s.latitude, s.longitude)
 	}
-	if s.radiusKM != 100 {
-		t.Errorf("radius = %v, want the 100km ceiling", s.radiusKM)
-	}
-	if s.site != "Melbourne CBD" {
-		t.Errorf("site = %q, want it trimmed", s.site)
-	}
 }
 
 func TestSourcesRouteByProviderCoverage(t *testing.T) {
 	cases := []struct {
-		name           string
-		lat, lon       float64
-		airHealth, epa bool
+		name      string
+		lat, lon  float64
+		airHealth bool
 	}{
-		{"Melbourne", -37.8136, 144.9631, true, true},
-		{"Canberra", -35.2809, 149.1300, true, false},
-		{"Sydney", -33.8688, 151.2093, true, false},
-		{"Perth", -31.9505, 115.8605, true, false},
-		{"London", 51.5072, -0.1276, false, false},
+		{"Melbourne", -37.8136, 144.9631, true},
+		{"Canberra", -35.2809, 149.1300, true},
+		{"Sydney", -33.8688, 151.2093, true},
+		{"Perth", -31.9505, 115.8605, true},
+		{"London", 51.5072, -0.1276, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := defaultSettings()
 			s.latitude, s.longitude = tc.lat, tc.lon
 			sources := s.sources()
-			if sources.AirHealth != tc.airHealth || sources.EPA != tc.epa || !sources.OpenMeteo {
-				t.Fatalf("sources = %+v, want AirHealth=%v EPA=%v OpenMeteo=true", sources, tc.airHealth, tc.epa)
+			if sources.AirHealth != tc.airHealth || !sources.OpenMeteo {
+				t.Fatalf("sources = %+v, want AirHealth=%v OpenMeteo=true", sources, tc.airHealth)
 			}
 		})
 	}
@@ -616,10 +578,10 @@ func TestAirHealthIsEnabledByDefaultAndCanBeTurnedOff(t *testing.T) {
 // scope's whole map, and a widget setting legitimately absent from it.
 func TestSettingsApplyKeepsAbsentKeys(t *testing.T) {
 	s := defaultSettings()
-	s.epa = false
+	s.airHealth = false
 	s.apply(map[string]any{"refresh_minutes": float64(30)})
-	if s.epa {
-		t.Error("absent source_epa reset the value")
+	if s.airHealth {
+		t.Error("absent source_airhealth reset the value")
 	}
 	if s.refresh != 30*time.Minute {
 		t.Errorf("refresh = %v", s.refresh)
@@ -716,7 +678,6 @@ func TestPlanAlertsIgnoresUnknownLevels(t *testing.T) {
 func TestOpenMeteoSuppliesTooltipAndPanel(t *testing.T) {
 	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
 	h := start(t, rec, nil, func(s *settings) {
-		s.epa = false
 		s.airHealth = false
 		s.openMeteo = true
 	})
@@ -826,7 +787,6 @@ func TestLiveGooglePollenRendersWithoutEnteringCache(t *testing.T) {
 func TestOpenMeteoReadingPersistsAcrossRestart(t *testing.T) {
 	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
 	h := start(t, rec, nil, func(s *settings) {
-		s.epa = false
 		s.airHealth = false
 		s.openMeteo = true
 	})
@@ -839,7 +799,6 @@ func TestOpenMeteoReadingPersistsAcrossRestart(t *testing.T) {
 	// A second run with no network at all, restoring the saved state.
 	offline := &recorder{routes: []route{{suffix: "/v1/air-quality", status: 503, body: "down"}}}
 	h2 := start(t, offline, h.storedState(), func(s *settings) {
-		s.epa = false
 		s.airHealth = false
 		s.openMeteo = true
 	})
@@ -886,9 +845,9 @@ func (h *harness) openPanelID() string {
 // configuration must not push the first reading back by a refresh interval.
 func TestStartupSettingsKeepImmediateRefresh(t *testing.T) {
 	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
-	h := start(t, rec, nil, func(s *settings) { s.epa = false; s.airHealth = false })
+	h := start(t, rec, nil, func(s *settings) { s.airHealth = false })
 	h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopePlugin, Values: map[string]any{
-		"source_epa": false, "source_airhealth": false,
+		"source_airhealth": false,
 	}})
 	h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopeInstance, Instance: "bar-1", Values: map[string]any{"show": "air"}})
 	id := h.openPanelID()
@@ -902,7 +861,7 @@ func TestBarShowIsPerInstance(t *testing.T) {
 		{suffix: "/locations/", body: `{"locations":[{"id":863,"suburb":"Melbourne","state":"VIC","SAL":"21640","SA3":"20604","use_sal":false}]}`},
 		{suffix: "/dashboard/metricdash/SAL/21640/", body: dashboardBody},
 	}}
-	h := start(t, rec, nil, func(s *settings) { s.airHealth = true; s.epa = false; s.openMeteo = false })
+	h := start(t, rec, nil, func(s *settings) { s.airHealth = true; s.openMeteo = false })
 	h.openPanel()
 	for _, bar := range []struct{ view, instance, show string }{{"bar-a", "inst-a", "air"}, {"bar-b", "inst-b", "both"}} {
 		h.send(v1.ViewOpen{Type: "view.open", ViewID: bar.view, View: v1.ViewBar, Entry: "bar", Instance: bar.instance,
@@ -930,32 +889,32 @@ func TestBarShowIsPerInstance(t *testing.T) {
 // the panel rather than freezing it on the first partial report.
 func TestPartialFailureStillUpdatesWorkingSources(t *testing.T) {
 	down := route{suffix: "/locations/", status: http.StatusServiceUnavailable, body: "down"}
-	rec := &recorder{routes: []route{down, {suffix: "FeatureServer/0/query", body: epaBody}}}
-	h := start(t, rec, nil, func(s *settings) { s.openMeteo = false })
+	rec := &recorder{routes: []route{down, {suffix: "/v1/air-quality", body: openMeteoBody}}}
+	h := start(t, rec, nil, nil)
 	id := h.openPanelID()
-	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "19.9") })
+	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "US AQI 28") })
 
-	rec.setRoutes([]route{down, {suffix: "FeatureServer/0/query", body: strings.Replace(epaBody, "19.9", "31.4", 1)}})
+	rec.setRoutes([]route{down, {suffix: "/v1/air-quality", body: strings.Replace(openMeteoBody, `"us_aqi":28`, `"us_aqi":61`, 1)}})
 	h.send(v1.InputEvent{Type: "input.event", ViewID: id, Node: "refresh", Event: v1.EventActivate})
-	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "31.4") })
+	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "US AQI 61") })
 }
 
 // Moving the location must drop the old place's reading, never show it as the
 // new place's stale data, and must not present the move as a source failure.
 func TestLocationChangeDropsOldPlace(t *testing.T) {
-	rec := &recorder{routes: []route{{suffix: "FeatureServer/0/query", body: epaBody}}}
-	h := start(t, rec, nil, func(s *settings) { s.openMeteo = false; s.airHealth = false })
+	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
+	h := start(t, rec, nil, func(s *settings) { s.airHealth = false })
 	id := h.openPanelID()
-	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "Melbourne CBD") })
+	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "US AQI 28") })
 
 	rec.setRoutes([]route{{suffix: "/v1/air-quality", status: http.StatusServiceUnavailable, body: "down"}})
 	h.send(v1.SettingsChanged{Type: "settings.changed", Scope: v1.ScopePlugin, Values: map[string]any{
-		"latitude": 51.5072, "longitude": -0.1276, "source_openmeteo": true,
+		"latitude": 51.5072, "longitude": -0.1276,
 	}})
 	for {
 		snap := h.snapshotFor(id, func(*v1.Node) bool { return true })
 		text := allText(snap.Root)
-		if strings.Contains(text, "Melbourne CBD") {
+		if strings.Contains(text, "US AQI 28") {
 			t.Fatalf("panel still shows the previous location: %s", text)
 		}
 		if strings.Contains(text, "refreshing with updated settings") {
@@ -991,7 +950,7 @@ func TestFollowsShellWeatherLocation(t *testing.T) {
 	if got := rec.openMeteoLatitude(); got != "51.5072" {
 		t.Fatalf("requested latitude %q, want the shell's", got)
 	}
-	if rec.hits("airhealthservices") != 0 || rec.hits("FeatureServer") != 0 {
+	if rec.hits("airhealthservices") != 0 {
 		t.Fatal("Australian sources were queried for London")
 	}
 }
@@ -1000,7 +959,7 @@ func TestFollowsShellWeatherLocation(t *testing.T) {
 func TestLocationChangedMovesTheReading(t *testing.T) {
 	rec := &recorder{routes: []route{{suffix: "/v1/air-quality", body: openMeteoBody}}}
 	london := &v1.Location{Configured: true, Latitude: 51.5072, Longitude: -0.1276, Label: "London"}
-	h := startWith(t, rec, nil, func(s *settings) { s.airHealth = false; s.epa = false }, hostOptions{minor: v1.LocationMinor, location: london})
+	h := startWith(t, rec, nil, func(s *settings) { s.airHealth = false }, hostOptions{minor: v1.LocationMinor, location: london})
 	id := h.openPanelID()
 	h.snapshotFor(id, func(root *v1.Node) bool { return strings.Contains(allText(root), "London") })
 
@@ -1079,7 +1038,7 @@ func TestOwnCoordinatesWhenNotFollowingTheShell(t *testing.T) {
 			}
 			h := startWith(t, rec, nil, func(s *settings) {
 				s.useShell = tc.useShell
-				s.airHealth, s.epa = false, false
+				s.airHealth = false
 				s.latitude, s.longitude = 35.6762, 139.6503
 			}, opts)
 			h.openPanel()

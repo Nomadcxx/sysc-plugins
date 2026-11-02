@@ -16,18 +16,12 @@ import (
 type Sources struct {
 	// AirHealth enables the Australian regional pollen app service.
 	AirHealth bool
-	// EPA enables the keyless EPA Victoria mirror for particulate readings.
-	EPA bool
 	// OpenMeteo enables the global CAMS model, which supplies the fallback AQI,
 	// UV index and gaseous pollutants. It needs no key.
 	OpenMeteo bool
 	// Latitude and Longitude are the location the report covers.
 	Latitude  float64
 	Longitude float64
-	// Site is an optional EPA station name to prefer over the nearest one.
-	Site string
-	// RadiusKM bounds the EPA station search.
-	RadiusKM float64
 	// GoogleKey enables Google pollen when AirHealth and Open-Meteo have no
 	// pollen; empty leaves it off.
 	GoogleKey string
@@ -40,7 +34,6 @@ type Sources struct {
 const (
 	DefaultLatitude  = -37.8136
 	DefaultLongitude = 144.9631
-	DefaultRadiusKM  = 15.0
 )
 
 // Report is the merged result of one refresh.
@@ -82,7 +75,6 @@ func (c Coordinates) Same(other Coordinates) bool {
 // Fetcher runs one refresh against the configured sources.
 type Fetcher struct {
 	AirHealth AirHealth
-	EPA       EPAArcGIS
 	OpenMeteo OpenMeteo
 	// Google carries the transport; the key comes from Sources.
 	Google GooglePollen
@@ -91,9 +83,9 @@ type Fetcher struct {
 
 // Fetch builds a report from the enabled sources.
 //
-// Air quality precedence is AirHealth, then EPA, then Open-Meteo wherever
-// those regional sources cover the configured coordinates. Open-Meteo remains
-// the global fallback and is consulted for UV and gaseous pollutants too.
+// Air quality precedence is AirHealth where it covers the configured
+// coordinates, then Open-Meteo, the global fallback, which is consulted for UV
+// and gaseous pollutants too.
 //
 // Pollen precedence is AirHealth, Open-Meteo, then Google when earlier sources
 // have no pollen. The first that answers supplies the rows and forecast.
@@ -124,22 +116,6 @@ func (f Fetcher) Fetch(ctx context.Context, src Sources) (Report, error) {
 	if _, ok := snap.Measure(MeasureAllergens); ok {
 		havePollen = true
 	}
-	if src.EPA && !haveAir {
-		measure, site, err := f.fetchEPA(ctx, src)
-		if err != nil {
-			if !errors.Is(err, ErrNoCoverage) {
-				problems = append(problems, describe("EPA Victoria", err))
-			}
-		} else {
-			snap.Attribution = joinAttribution(snap.Attribution, EPAAttribution)
-			snap.Measures = append(snap.Measures, measure)
-			haveAir = true
-			if snap.Location.Suburb == "" {
-				snap.Location.Suburb = site
-			}
-		}
-	}
-
 	if src.OpenMeteo {
 		model, err := f.OpenMeteo.Fetch(ctx, src.Latitude, src.Longitude)
 		if err != nil {
@@ -173,8 +149,8 @@ func (f Fetcher) Fetch(ctx context.Context, src Sources) (Report, error) {
 		}
 	}
 
-	// AirHealth names its suburb; otherwise the shell's weather label beats an
-	// EPA station name or bare coordinates.
+	// AirHealth names its suburb; otherwise the shell's weather label beats
+	// bare coordinates.
 	if snap.Location.SAL == "" && src.Label != "" {
 		snap.Location.Suburb = src.Label
 	}
@@ -211,30 +187,6 @@ func AirHealthSupportsCoordinates(lat, lon float64) bool {
 	return lat >= -44 && lat <= -10 && lon >= 112 && lon <= 154
 }
 
-// victoria outlines the state as (longitude, latitude) pairs, following the
-// Murray to its source, the straight line to Cape Howe, the coast and the
-// South Australian border. It is coarse, a little outside the border, which
-// is all a station search needs: the radius decides the rest.
-var victoria = [][2]float64{
-	{140.95, -33.95}, {142.16, -34.05}, {143.55, -35.25}, {144.75, -36.05},
-	{146.92, -35.98}, {147.9, -35.95}, {148.25, -36.75}, {150.05, -37.5},
-	{146.4, -39.25}, {141.6, -38.5}, {140.95, -38.1},
-}
-
-// EPAVictoriaMayCoverCoordinates reports whether coordinates fall in
-// Victoria, the only place the EPA Victoria network has stations. Its
-// configured radius then decides whether one is in range.
-func EPAVictoriaMayCoverCoordinates(lat, lon float64) bool {
-	inside := false
-	for i, j := 0, len(victoria)-1; i < len(victoria); j, i = i, i+1 {
-		a, b := victoria[i], victoria[j]
-		if (a[1] > lat) != (b[1] > lat) && lon < (b[0]-a[0])*(lat-a[1])/(b[1]-a[1])+a[0] {
-			inside = !inside
-		}
-	}
-	return inside
-}
-
 // mergeMeasures adds the model's measures alongside what the other sources
 // already produced.
 //
@@ -266,8 +218,9 @@ func mergeMeasures(have []Measure, model []Measure, haveAir, haveUV bool) []Meas
 // air quality row, keeping the authoritative category and its numeric value
 // and appending only the constituents the row does not already have.
 //
-// The row's own metric is seeded first. EPA reports PM2.5 as the headline
-// value, and the model reports its own PM2.5 separately; without seeding, the
+// The row's own metric is seeded first. AirHealth reports PM2.5 as the
+// headline value, and the model reports its own PM2.5 separately; without
+// seeding, the
 // panel would show "Fair · 19.9 µg/m³" above "PM2.5 4.8", which reads as a
 // contradiction even though both numbers are correct for their own source.
 func attachModelBreakdown(measures []Measure, model Measure) {
@@ -325,61 +278,6 @@ func (f Fetcher) fetchAirHealth(ctx context.Context, src Sources) (Snapshot, err
 		snap.Location.State = loc.State
 	}
 	return snap, nil
-}
-
-// EPAMaxAge is how old a station's averaging window may be and still count as
-// the current reading.
-const EPAMaxAge = 3 * time.Hour
-
-// fetchEPA returns the air quality measure and the station name it came from.
-func (f Fetcher) fetchEPA(ctx context.Context, src Sources) (Measure, string, error) {
-	radius := src.RadiusKM
-	if radius <= 0 {
-		radius = DefaultRadiusKM
-	}
-	sites, err := f.EPA.Nearest(ctx, src.Latitude, src.Longitude, radius)
-	if err != nil {
-		return Measure{}, "", err
-	}
-	// EPA publishes hourly averages, and the keyless mirror stopped updating
-	// on 2025-12-05. A station is current only if its averaging window ended
-	// recently; anything older would pass for today's air.
-	now := f.now()
-	current := sites[:0]
-	var newest time.Time
-	for _, site := range sites {
-		if site.Until.After(newest) {
-			newest = site.Until
-		}
-		if !site.Until.IsZero() && now.Sub(site.Until) <= EPAMaxAge {
-			current = append(current, site)
-		}
-	}
-	if len(current) == 0 {
-		if newest.IsZero() {
-			return Measure{}, "", fmt.Errorf("%w: no current station reading", ErrUnavailable)
-		}
-		return Measure{}, "", fmt.Errorf("%w: no current station reading (latest %s)", ErrUnavailable, newest.Format("2 Jan 2006"))
-	}
-	sites = current
-	// A configured station wins over proximity, so a user who knows their
-	// local station is the representative one keeps it even when a closer
-	// sensor appears.
-	if want := strings.TrimSpace(src.Site); want != "" {
-		for _, site := range sites {
-			if strings.EqualFold(site.Name, want) {
-				if m, ok := site.AirQualityMeasure(); ok {
-					return m, site.Name, nil
-				}
-			}
-		}
-	}
-	for _, site := range sites {
-		if m, ok := site.AirQualityMeasure(); ok {
-			return m, site.Name, nil
-		}
-	}
-	return Measure{}, "", fmt.Errorf("%w: no EPA station reported a category", ErrUnavailable)
 }
 
 func (f Fetcher) now() time.Time {
@@ -610,14 +508,11 @@ func carryOver(fresh, previous Report) Report {
 // sourceCredit finds one source's credit in a joined attribution. AirHealth
 // sends its own wording, so it is whichever credit is not one of the others.
 func sourceCredit(attribution, source string) string {
-	switch source {
-	case "epa":
-		return EPAAttribution
-	case "open-meteo":
+	if source == "open-meteo" {
 		return OpenMeteoAttribution
 	}
 	for _, credit := range strings.Split(attribution, " · ") {
-		if credit != EPAAttribution && credit != OpenMeteoAttribution {
+		if credit != OpenMeteoAttribution {
 			return credit
 		}
 	}

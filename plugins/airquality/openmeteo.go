@@ -13,7 +13,7 @@ import (
 
 // OpenMeteoBase is the keyless global air-quality endpoint. It needs no
 // registration or key and supplies the model fallback, UV index and gaseous
-// pollutants that EPA Victoria's mirror omits.
+// pollutants.
 const OpenMeteoBase = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
 // OpenMeteoAttribution is what the model data requires on screen. CAMS is the
