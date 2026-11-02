@@ -392,7 +392,7 @@ func runPluginWith(in io.Reader, out io.Writer, env environment, initial setting
 				if m.Scope == v1.ScopeInstance {
 					// A bar label change only needs a redraw.
 					if show, ok := m.Values["show"].(string); ok {
-						s.barShow[m.Instance] = barChoice(show)
+						s.barShow[m.Instance] = airquality.BarChoice(show)
 					}
 					s.snapshotAll()
 					continue
@@ -671,7 +671,7 @@ func (s *session) tree(v view) *v1.Node {
 	report := s.current()
 	switch v.kind {
 	case v1.ViewBar:
-		return airquality.BarFor(report, barChoice(s.barShow[v.instance]), v.width)
+		return airquality.BarFor(report, airquality.BarChoice(s.barShow[v.instance]), v.width)
 	case v1.ViewTooltip:
 		return airquality.TooltipFor(report, v.width)
 	default:
@@ -705,10 +705,3 @@ func (s *session) handle(ctx context.Context, m *v1.InputEvent) {
 
 // barChoice validates a widget setting. An unknown value falls back to the
 // worst measure rather than drawing nothing.
-func barChoice(v string) string {
-	switch v {
-	case "worst", "grass", "air", "storm", "icon":
-		return v
-	}
-	return "worst"
-}

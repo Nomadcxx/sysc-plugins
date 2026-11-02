@@ -34,34 +34,6 @@ const (
 	errorDetailBytes     = (PanelWidth - 2*panelPad - 2*panelCardPadding - 24 - 8) / 8
 )
 
-// Bar geometry. A bar view is one row and gets BarHeight; text measures 16
-// tall, which leaves room for the row's padding.
-// barIconBytes is the horizontal space the leading glyph takes, in text
-// advances. The host's bar row must fit its content box, and the glyph plus
-// its gap is not free.
-const barIconBytes = 3
-
-// barMinLabelBytes is the shortest label worth showing. Anything under it is
-// a fragment of a word.
-const barMinLabelBytes = 8
-
-// barLabelBytes is how many bytes of label fit beside the icon at a given bar
-// width. Zero means no label: at that size the glyph is the whole widget. A
-// width of zero means unconstrained, which only happens in tests and in the
-// tooltip, where the full label is wanted.
-func barLabelBytes(width int) int {
-	if width <= 0 {
-		return barTextBytes
-	}
-	budget := width/8 - barIconBytes
-	// A couple of bytes is not a label, it is a fragment: below a useful
-	// minimum the glyph alone reads better than "Gr".
-	if budget < barMinLabelBytes {
-		return 0
-	}
-	return min(budget, barTextBytes)
-}
-
 // truncateBytes cuts a label to a byte budget without splitting a rune, since
 // a half UTF-8 sequence would refuse the text node outright.
 func truncateBytes(text string, budget int) string {
@@ -90,32 +62,16 @@ const measureRowHeight = 38
 // pollen or leaf symbol, so grass pollen borrows the clearest available
 // weather metaphor rather than showing nothing.
 const (
-	iconPollen   = "wind"
-	iconAir      = "fog"
-	iconStorm    = "thunderstorm"
-	iconSun      = "clear-day"
-	iconSmoke    = "cloud"
-	iconGood     = "clear-day"
-	iconModerate = "partly-cloudy"
-	iconHigh     = "thunderstorm"
-	iconAlert    = "notifications-active"
-	iconRefresh  = "refresh"
+	iconPollen  = "wind"
+	iconAir     = "fog"
+	iconStorm   = "thunderstorm"
+	iconSun     = "clear-day"
+	iconSmoke   = "cloud"
+	iconAlert   = "notifications-active"
+	iconRefresh = "refresh"
 )
 
 var activate = []v1.EventKind{v1.EventActivate}
-
-// SeverityIcon picks a glyph for a severity. It is the only place severity
-// becomes a picture, so the mapping stays consistent across bar and panel.
-func SeverityIcon(s Severity) string {
-	switch s {
-	case SeverityHigh:
-		return iconHigh
-	case SeverityModerate:
-		return iconModerate
-	default:
-		return iconGood
-	}
-}
 
 // MeasureIcon picks a glyph for a measure, used where the measure's identity
 // matters more than its severity.
@@ -134,92 +90,212 @@ func MeasureIcon(measure string) string {
 	}
 }
 
-// BarText is the bar widget's single line: the worst current measure, its
-// category, and the numeric reading when one exists.
-func BarText(report Report) string {
-	if !reportHasData(report) {
-		return "No reading"
+// The bar answers one question from across a room: does the air need
+// thinking about today. It shows dials, not words: a dial for the air and,
+// where the location has pollen data, one for pollen. Each needle sits on a
+// shared good, moderate and high scale, so the two read alike although their
+// sources measure in different units. Readings and names live in the tooltip
+// and the panel.
+
+// Bar choices, the values of the bar widget's "show" setting.
+const (
+	BarBoth   = "both"
+	BarAir    = "air"
+	BarPollen = "pollen"
+)
+
+// BarChoice resolves a stored "show" value. Earlier releases offered single
+// measures; each maps to the dial that now carries it.
+func BarChoice(v string) string {
+	switch v {
+	case BarAir:
+		return BarAir
+	case BarPollen, "grass", "storm":
+		return BarPollen
 	}
-	m, ok := report.Snapshot.Worst()
-	if !ok {
-		return "No reading"
-	}
-	return measureText(m, report)
+	return BarBoth
 }
 
-// Bar renders the horizontal bar: an icon for the worst measure and its
-// category, or the icon alone when the slot is narrow.
+var (
+	airDialMeasures    = []string{MeasureAirQuality, MeasureWoodsmoke}
+	pollenDialMeasures = []string{MeasureGrass, MeasureAllergens, MeasureThunderstorm}
+)
+
+const (
+	// barPairDialWidth fits two dials and their captions in a standard bar.
+	barPairDialWidth = 30
+	// barSoloDialWidth is the lone dial, a size up because it has the pill to
+	// itself.
+	barSoloDialWidth = 40
+	// barDialHeight is the dial's box. The shell centres the arc and hub in
+	// it, so it sits on the bar's text line.
+	barDialHeight = 24
+	// barPairMinWidth is the narrowest slot that fits both dials and their
+	// captions; a side bar below it gets the one dial that matters most.
+	barPairMinWidth = 120
+	// barControlInset is the button's own padding, which a lone dial in a
+	// narrow side bar has to leave room for.
+	barControlInset = 16
+)
+
+// soloDialWidth is the lone dial's width: its full size unless the slot is
+// narrower than that plus the button around it.
+func soloDialWidth(width int) int {
+	if width <= 0 {
+		return barSoloDialWidth
+	}
+	return max(min(barSoloDialWidth, width-barControlInset), 1)
+}
+
+// Bar renders the bar widget with both dials.
+func Bar(report Report, width int) *v1.Node {
+	return BarFor(report, BarBoth, width)
+}
+
+// BarFor renders the bar widget for a "show" choice.
 //
 // The root is a row because the host refuses any other kind of bar root, and
 // the row holds exactly one control so the whole slot is one click target.
-//
-// width is the viewport the host opened, which is 240 for a horizontal bar and
-// can be smaller in a side bar. A zero width is the protocol's legacy
-// unspecified size and keeps the labelled form.
-func Bar(report Report, width int) *v1.Node {
-	return BarFor(report, "worst", width)
-}
-
-// BarFor is Bar with the measure the widget was configured to show. An
-// unknown or unavailable choice falls back to the worst measure, because a bar
-// that shows nothing is worse than one showing the thing that matters.
+// A width of zero is the protocol's legacy unspecified size, treated as wide.
 func BarFor(report Report, show string, width int) *v1.Node {
-	measureIcon := iconAir
-	severity := SeverityGood
-	label := "No reading"
-	chosen, has := chooseMeasure(report, show)
-	if reportHasData(report) && has {
-		measureIcon = MeasureIcon(chosen.Name)
-		severity = chosen.Level.Severity
-		label = measureText(chosen, report)
-	} else if report.Stale && len(report.Errors) > 0 {
-		label = "Offline"
+	air, haveAir := worstOf(report, airDialMeasures)
+	pollen, havePollen := worstOf(report, pollenDialMeasures)
+
+	var dials []*v1.Node
+	switch {
+	case show == BarBoth && haveAir && havePollen && (width == 0 || width >= barPairMinWidth):
+		dials = []*v1.Node{
+			barCaption("AIR"), barDial("air", air, true, barPairDialWidth),
+			barCaption("POL"), barDial("pollen", pollen, true, barPairDialWidth),
+		}
+	case show == BarBoth && haveAir && havePollen:
+		// Too narrow for two: the worse of the two keeps the slot.
+		m := air
+		if concern(pollen) > concern(air) {
+			m = pollen
+		}
+		dials = []*v1.Node{barDial("worst", m, true, soloDialWidth(width))}
+	case show == BarAir:
+		dials = []*v1.Node{barDial("air", air, haveAir, soloDialWidth(width))}
+	case havePollen && show != BarAir && (show == BarPollen || !haveAir):
+		dials = []*v1.Node{barDial("pollen", pollen, true, soloDialWidth(width))}
+	default:
+		// No pollen here, or air only: the air dial alone. With no reading
+		// at all it is an empty dial rather than a vanished widget.
+		dials = []*v1.Node{barDial("air", air, haveAir, soloDialWidth(width))}
 	}
 
-	// The icon carries the state; the label is the detail. The host measures
-	// text at a fixed advance per byte, so the label has to be cut to the
-	// space the icon leaves rather than to a fixed length: a 240px bar fits
-	// more than a 120px one, and a label that overruns refuses the whole row.
-	children := []*v1.Node{{
-		Kind: v1.KindIcon, Icon: pick(severity, measureIcon), Name: label,
-	}}
-	if show != "icon" {
-		if budget := barLabelBytes(width); budget > 0 {
-			children = append(children, &v1.Node{
-				Kind: v1.KindText, Text: cutWords(label, budget), Tabular: true,
-			})
-		}
+	control := &v1.Node{
+		Kind: v1.KindButton, ID: "open", Key: "bar", Name: barName(report, air, haveAir, pollen, havePollen),
+		Role: "button", Events: activate, Children: dials,
 	}
-	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{{
-		Kind: v1.KindButton, ID: "open", Key: "bar", Name: label, Role: "button",
-		Tabular: true, Events: activate, Children: children,
-	}}}
+	// A thunderstorm asthma warning is the one reading that means act now,
+	// so it tints the whole pill, not just a needle.
+	if storm, ok := report.Snapshot.Measure(MeasureThunderstorm); ok && reportHasData(report) &&
+		storm.Level.Known() && storm.Level.Severity >= SeverityHigh {
+		control.Fill = "error-container"
+	}
+	return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{control}}
 }
 
-// chooseMeasure resolves a widget's measure choice against a report. "worst"
-// is the report's own ranking; a named measure is used only when it is known,
-// so an out-of-season thunderstorm reading never renders as a fake Low.
-func chooseMeasure(report Report, show string) (Measure, bool) {
+// worstOf is the worst known reading among the named measures. A tie goes to
+// the reading further along its scale.
+func worstOf(report Report, names []string) (Measure, bool) {
 	if !reportHasData(report) {
 		return Measure{}, false
 	}
-	var name string
-	switch show {
-	case "grass":
-		name = MeasureGrass
-	case "air":
-		name = MeasureAirQuality
-	case "storm":
-		name = MeasureThunderstorm
-	case "icon", "worst":
-		return report.Snapshot.Worst()
-	default:
-		return report.Snapshot.Worst()
+	best, found := Measure{}, false
+	for _, name := range names {
+		m, ok := report.Snapshot.Measure(name)
+		if !ok || !m.Level.Known() {
+			continue
+		}
+		if !found || m.Level.Severity > best.Level.Severity ||
+			(m.Level.Severity == best.Level.Severity && concern(m) > concern(best)) {
+			best, found = m, true
+		}
 	}
-	if m, ok := report.Snapshot.Measure(name); ok && m.Level.Known() {
-		return m, true
+	return best, found
+}
+
+// concernBands are the dial's zones: good, moderate and high, a third each,
+// unlabelled because the dial is read by colour and angle.
+func concernBands() []v1.GaugeBand {
+	return []v1.GaugeBand{
+		{Until: 1.0 / 3, Severity: v1.SeverityGood},
+		{Until: 2.0 / 3, Severity: v1.SeverityModerate},
+		{Until: 1, Severity: v1.SeverityHigh},
 	}
-	return report.Snapshot.Worst()
+}
+
+// concern places a reading on the dial's shared scale. Its severity picks the
+// third, and its position among its own scale's bands of that severity places
+// it inside the third. A reading with no position sits mid-third.
+func concern(m Measure) float64 {
+	third := float64(min(max(m.Level.Severity, SeverityGood), SeverityHigh))
+	within := 0.5
+	if len(m.Bands) > 0 {
+		at := dialFraction(m)
+		lo, hi, found := 0.0, 0.0, false
+		previous := 0.0
+		for _, band := range m.Bands {
+			if band.Severity == m.Level.Severity {
+				if !found {
+					lo, found = previous, true
+				}
+				hi = band.Until
+			} else if found {
+				break
+			}
+			previous = band.Until
+		}
+		if found && hi > lo && at >= lo && at <= hi {
+			within = (at - lo) / (hi - lo)
+		}
+	}
+	return min(max((third+within)/3, 0), 1)
+}
+
+// barDial is one dial. Without a reading it is drawn absent: the empty arc
+// says "nothing yet" where a needle at zero would say "all clear".
+func barDial(key string, m Measure, has bool, width int) *v1.Node {
+	n := &v1.Node{
+		Kind: v1.KindGauge, Form: v1.GaugeHalf, Bands: concernBands(),
+		Width: width, Height: barDialHeight, Key: "dial-" + key, Role: "img",
+	}
+	if !has {
+		n.Absent = true
+		n.Name = "No reading"
+		return n
+	}
+	n.Value = concern(m)
+	n.Animate = true
+	n.Name = measureText(m, Report{})
+	return n
+}
+
+// barCaption names the dial that follows it. It is small: position does the
+// work from a distance, and the caption is for the first look.
+func barCaption(text string) *v1.Node {
+	return &v1.Node{Kind: v1.KindText, Text: text, Size: "caption", Tone: v1.ToneSubtle}
+}
+
+// barName is the control's accessible name: what each dial shows, in words.
+func barName(report Report, air Measure, haveAir bool, pollen Measure, havePollen bool) string {
+	switch {
+	case !reportHasData(report) && report.Stale && len(report.Errors) > 0:
+		return "Air quality: offline"
+	case !haveAir && !havePollen:
+		return "Air quality: no reading"
+	}
+	var parts []string
+	if haveAir {
+		parts = append(parts, measureText(air, report))
+	}
+	if havePollen {
+		parts = append(parts, measureText(pollen, report))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // measureText is one measure as a bar label: its short name, its category and
@@ -266,16 +342,6 @@ func cutWords(text string, budget int) string {
 		cut = cut[:i]
 	}
 	return strings.TrimRight(cut, " ·")
-}
-
-// pick prefers the severity glyph, but keeps the measure's own icon when the
-// reading is calm: a clear-day symbol says more than "wind" when the grass
-// count is low.
-func pick(severity Severity, measureIcon string) string {
-	if severity >= SeverityModerate {
-		return SeverityIcon(severity)
-	}
-	return measureIcon
 }
 
 // Tooltip renders a short reading summary, freshness and the full source
