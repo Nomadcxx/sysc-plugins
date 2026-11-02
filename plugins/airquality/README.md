@@ -9,33 +9,21 @@ default to Melbourne.
 
 ## Sources
 
-Open-Meteo is the global model source. AirHealth and EPA Victoria are regional
-sources and are used only where they have coverage: AirHealth for Australian
-coordinates, EPA only for Victorian ones. The three keyless sources default to
-on; turn one off in settings to exclude its readings. Google Pollen is off
-until you enter a key.
+Open-Meteo is the global model source. AirHealth is a regional source, used
+only for Australian coordinates. Both are keyless and default to on; turn one
+off in settings to exclude its readings. Google Pollen is off until you enter a
+key.
 
-**EPA Victoria (default, on).** The plugin reads air quality from a public
-ArcGIS feature service that mirrors EPA Victoria's monitoring network. It needs
-no key or registration. The plugin picks the nearest station with a reading and
-prefers a Standard monitoring station over an indicative sensor within one
-kilometre. EPA publishes this data under CC BY 4.0; the panel credits EPA.
-
-A station counts only if its averaging window ended within the last three
-hours. On 2026-11-01 every station in the mirror still carried its
-2025-12-05 reading; the layer's `dataLastEditDate` is 2025-12-05. Until the
-mirror updates, Open-Meteo supplies the air quality reading wherever AirHealth
-has none, and the panel reports "EPA Victoria: no current station reading".
-
-The backend research documents EPA's official Environment Monitoring API,
-which needs a free key. The shell now offers masked secret settings, so the
-official API could replace the frozen mirror in a later change.
+Releases before 0.4.0 also read EPA Victoria through a keyless ArcGIS mirror of
+its monitoring stations. The mirror stopped updating on 2025-12-05, so 0.4.0
+removed it. AirHealth supplies Victorian air quality, and a reading saved by an
+earlier release from EPA is dropped when the plugin starts.
 
 **Open-Meteo (default, on).** Supplies the global fallback air-quality index,
 particulate and gaseous pollutant readings, and UV. Its CAMS ENSEMBLE model
-needs no key for non-commercial use. Where AirHealth or a nearby EPA Victoria
-station supplies a local air-quality category, that category takes precedence;
-Open-Meteo still supplies UV and pollutant detail. Its particulate fields are
+needs no key for non-commercial use. Where AirHealth supplies a local
+air-quality category, that category takes precedence; Open-Meteo still
+supplies UV and pollutant detail. Its particulate fields are
 a 45 km model grid. Its fallback category uses the US AQI scale, shown with its
 scale label.
 
@@ -86,7 +74,7 @@ University of Tasmania and University of Melbourne".
 
 | Measure | Source | Where |
 | --- | --- | --- |
-| Air quality category | AirHealth, EPA Victoria, Open-Meteo | AirHealth returned Australian locations; EPA near Victorian stations; Open-Meteo global model fallback |
+| Air quality category | AirHealth, Open-Meteo | AirHealth returned Australian locations; Open-Meteo global model fallback |
 | Pollutant readings | Open-Meteo | Global model coverage |
 | UV index | Open-Meteo | Global model coverage |
 | Grass pollen | AirHealth, Open-Meteo, Google | Australia (AirHealth); Europe (Open-Meteo); elsewhere Google when it covers, with a key |
@@ -102,8 +90,7 @@ refresh, and the shell pushes `location.changed` when Settings > Weather
 moves, so the reading follows without a restart. A city the shell is still
 geocoding counts as no location until it resolves. The panel names the place
 with AirHealth's suburb, else the shell's label, else hemisphere coordinates.
-The `Station` setting only overrides the nearest EPA Victoria site. Changing
-location discards the previous place's reading rather than showing it as stale
+Changing location discards the previous place's reading rather than showing it as stale
 data for the new one.
 
 ## Breakdowns
@@ -123,10 +110,10 @@ The panel expands the worst measure. Showing every breakdown would push the
 forecast and attribution below the 600px panel. The expanded detail belongs to
 the reading most likely to need attention.
 
-The headline figure leads the strip. When EPA supplies the headline and
-Open-Meteo supplies neighbouring pollutants, the row puts EPA's value first.
-A live test caught a case where the panel showed 19.9 µg/m³ above a PM2.5
-reading of 4.8.
+The headline figure leads the strip. When a regional station supplies the
+headline and Open-Meteo supplies neighbouring pollutants, the row puts the
+station's value first. A live test caught a case where the panel showed
+19.9 µg/m³ above a PM2.5 reading of 4.8.
 
 For allergens the same mechanism lists the species: grass, birch, cypress,
 eucalypts, olive, plane and plantain, plus Alternaria spores.
@@ -221,15 +208,12 @@ minor 24 and band labels from minor 25.
 | Setting | Default | Notes |
 | --- | --- | --- |
 | AirHealth pollen apps | on | Australian coverage; skipped elsewhere; opt-out in settings |
-| EPA Victoria | on | Victorian coordinates only; skipped elsewhere |
 | Open-Meteo | on | Global AQI, UV and pollutants; European pollen |
 | Google Pollen API key | empty | Optional, masked; enables Google pollen where AirHealth has none |
 | Use the shell's weather location | on | Follows Settings > Weather when it names a place |
 | Latitude | -37.8136 | Fallback; Melbourne; accepts -90 to 90 |
 | Longitude | 144.9631 | Fallback; Melbourne; accepts -180 to 180 |
-| Station | empty | Site name override; empty means nearest |
 | Refresh | 15 min | 5–180 |
-| Search radius | 15 km | 1–100 |
 | Notify on high | on | Air quality, pollen and UV |
 | Notify thunderstorm asthma | on | |
 

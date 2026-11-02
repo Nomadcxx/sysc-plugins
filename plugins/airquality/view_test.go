@@ -285,13 +285,13 @@ func TestTooltipShowsUVPeakAndDominantAllergen(t *testing.T) {
 
 func TestNarrowTooltipFitsStormSummaryAndAllSourceCredits(t *testing.T) {
 	report := sampleReport()
-	report.Snapshot.Attribution = AirHealthAttribution + " · " + EPAAttribution + " · " + OpenMeteoAttribution
+	report.Snapshot.Attribution = AirHealthAttribution + " · " + OpenMeteoAttribution
 	root := TooltipFor(report, 200)
 	lintView(t, root, v1.ViewTooltip, 200, shelllint.TooltipHeight)
 	text := nodeText(root)
 	for _, want := range []string{
 		"Storm: Moderate", "AirHealth", "University of Tasmania", "University of Melbourne",
-		"EPA Victoria", "CC BY 4.0", "CAMS ENSEMBLE", "Open-Meteo",
+		"CAMS ENSEMBLE", "Open-Meteo",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("narrow tooltip text %q is missing %q", text, want)
@@ -309,8 +309,8 @@ func TestPanelFitsDeclaredBox(t *testing.T) {
 func TestPanelFitsWithLongAttributionAndErrors(t *testing.T) {
 	t.Parallel()
 	report := sampleReport()
-	report.Snapshot.Attribution = AirHealthAttribution + " · " + EPAAttribution
-	report.Errors = []string{"epa unavailable"}
+	report.Snapshot.Attribution = AirHealthAttribution + " · " + OpenMeteoAttribution
+	report.Errors = []string{"airhealth unavailable"}
 	report.Stale = true
 	lintView(t, Panel(report), v1.ViewPanel, PanelWidth, PanelHeight)
 }
@@ -482,7 +482,7 @@ func TestPanelFitsWithEveryMetric(t *testing.T) {
 		{Name: "O3", Metric: &Metric{Value: 57, Units: "µg/m³"}},
 		{Name: "NO2", Metric: &Metric{Value: 3.1, Units: "µg/m³"}},
 	}
-	report.Snapshot.Attribution = AirHealthAttribution + " · " + EPAAttribution + " · " + OpenMeteoAttribution
+	report.Snapshot.Attribution = AirHealthAttribution + " · " + OpenMeteoAttribution
 	lintView(t, Panel(report), v1.ViewPanel, PanelWidth, PanelHeight)
 }
 
@@ -898,8 +898,7 @@ func TestPanelStaysInsideItsDeclaredBox(t *testing.T) {
 			Metric: &Metric{Subcat: "PM2.5", Value: 12, Units: "µg/m³"}},
 	)
 	report.Snapshot.Attribution = "Data provided in collaboration with the University of Tasmania and " +
-		"University of Melbourne · Air quality data: EPA Victoria (CC BY 4.0) · " +
-		"Air quality and UV: CAMS ENSEMBLE via Open-Meteo"
+		"University of Melbourne · " + OpenMeteoAttribution
 	report.Snapshot.Forecast = []Day{
 		{Title: "Sunday", Measures: map[string]Measure{MeasureGrass: {Name: MeasureGrass, Level: Level{Name: "High", Severity: SeverityHigh}}}},
 		{Title: "Monday", Measures: map[string]Measure{MeasureGrass: {Name: MeasureGrass, Level: Level{Name: "Moderate", Severity: SeverityModerate}}}},
@@ -985,7 +984,7 @@ func TestDialReplacesTheRowItDraws(t *testing.T) {
 func TestWrapTextKeepsTheAttributionReadable(t *testing.T) {
 	// Attribution is a licence condition. A single text node is ellipsised past
 	// the panel width, so a long dual-source attribution lost its tail.
-	const long = "Air quality data: EPA Victoria (CC BY 4.0) · Air quality and UV: CAMS ENSEMBLE via Open-Meteo"
+	const long = OpenMeteoAttribution + " · " + GoogleAttribution
 	lines := wrapText(long, attributionBytes)
 	if len(lines) < 2 {
 		t.Fatalf("wrapText(%q) = %v, want it split", long, lines)
@@ -1001,7 +1000,7 @@ func TestWrapTextKeepsTheAttributionReadable(t *testing.T) {
 }
 
 func TestWrapTextKeepsAShortAttributionOnOneLine(t *testing.T) {
-	const short = "Air quality data: EPA Victoria (CC BY 4.0)"
+	const short = GoogleAttribution
 	if lines := wrapText(short, attributionBytes); len(lines) != 1 || lines[0] != short {
 		t.Fatalf("wrapText(%q) = %v, want one unchanged line", short, lines)
 	}
@@ -1009,20 +1008,20 @@ func TestWrapTextKeepsAShortAttributionOnOneLine(t *testing.T) {
 
 func TestPanelGroupsAndShowsEveryAttributionSource(t *testing.T) {
 	report := sampleReport()
-	report.Snapshot.Attribution = "Air quality data: EPA Victoria (CC BY 4.0) · Air quality and UV: CAMS ENSEMBLE via Open-Meteo"
+	report.Snapshot.Attribution = GoogleAttribution + " · " + OpenMeteoAttribution
 	root := PanelFor(report, 24)
 	credits := root.Children[len(root.Children)-1]
 	if credits.Kind != v1.KindColumn || len(credits.Children) != 2 {
 		t.Fatalf("source credits = %+v, want two grouped sources", credits)
 	}
-	if got := credits.Children[0].Children[0].Text; got != "Air quality data: EPA Victoria (CC BY 4.0)" {
+	if got := credits.Children[0].Children[0].Text; got != GoogleAttribution {
 		t.Errorf("first source = %q", got)
 	}
-	if got := credits.Children[1].Children[0].Text; got != "Air quality and UV: CAMS ENSEMBLE via Open-Meteo" {
+	if got := nodeText(credits.Children[1]); !strings.Contains(got, "CAMS ENSEMBLE") {
 		t.Errorf("second source = %q", got)
 	}
 	joined := nodeText(credits)
-	for _, want := range []string{"EPA Victoria", "CAMS ENSEMBLE", "Open-Meteo"} {
+	for _, want := range []string{"Google", "CAMS ENSEMBLE", "Open-Meteo"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("panel attribution is missing %q: %q", want, joined)
 		}

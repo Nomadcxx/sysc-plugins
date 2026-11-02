@@ -204,6 +204,11 @@ func toDiskMeasure(m Measure) diskMeasure {
 	return out
 }
 
+// removedEPASource is the source of EPA Victoria rows, which earlier releases
+// saved. The source is gone, so a saved row is dropped rather than shown as a
+// current reading with no credit.
+const removedEPASource = "epa"
+
 // DecodeReport restores a persisted report. A report from a newer version, or
 // one with no usable measures, is rejected so the caller refetches instead of
 // showing a half-decoded cache.
@@ -233,11 +238,17 @@ func DecodeReport(raw []byte) (Report, bool) {
 		report.Origin = &Coordinates{Latitude: disk.Origin.Latitude, Longitude: disk.Origin.Longitude}
 	}
 	for _, m := range disk.Measures {
+		if m.Source == removedEPASource {
+			continue
+		}
 		measure := fromDiskMeasure(m)
 		if measure.Updated.IsZero() {
 			measure.Updated = report.UpdatedAt
 		}
 		report.Snapshot.Measures = append(report.Snapshot.Measures, measure)
+	}
+	if len(report.Snapshot.Measures) == 0 {
+		return Report{}, false
 	}
 	if disk.Alert != nil {
 		report.Snapshot.Alert = &Alert{

@@ -1,10 +1,9 @@
-// Package airquality fetches worldwide model air quality and UV, plus regional
-// pollen and station data for sysc-shell.
+// Package airquality fetches worldwide model air quality, UV and pollen, plus
+// Australian regional pollen and air quality, for sysc-shell.
 //
-// The data comes from three providers behind one snapshot type: the
-// AirHealth service behind several regional pollen apps, EPA Victoria's air
-// monitoring network, and Open-Meteo's global model. AirHealth supplies pollen
-// categories; EPA is the authority on Victorian particulate readings.
+// The data comes from three providers behind one snapshot type: the AirHealth
+// service behind several Australian regional pollen apps, Open-Meteo's global
+// model, and Google's Pollen API where the user supplies a key.
 package airquality
 
 import (

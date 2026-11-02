@@ -55,13 +55,10 @@ type environment struct {
 // plain values with the manifest's defaults so a missing key is harmless.
 type settings struct {
 	airHealth   bool
-	epa         bool
 	openMeteo   bool
 	latitude    float64
 	longitude   float64
-	site        string
 	refresh     time.Duration
-	radiusKM    float64
 	notifyHigh  bool
 	notifyStorm bool
 	// useShell follows the shell's weather location when it has one; the
@@ -75,12 +72,10 @@ type settings struct {
 func defaultSettings() settings {
 	return settings{
 		airHealth:   true,
-		epa:         true,
 		openMeteo:   true,
 		latitude:    airquality.DefaultLatitude,
 		longitude:   airquality.DefaultLongitude,
 		refresh:     15 * time.Minute,
-		radiusKM:    airquality.DefaultRadiusKM,
 		notifyHigh:  true,
 		notifyStorm: true,
 		useShell:    true,
@@ -93,9 +88,6 @@ func defaultSettings() settings {
 func (s *settings) apply(values map[string]any) {
 	if v, ok := values["source_airhealth"].(bool); ok {
 		s.airHealth = v
-	}
-	if v, ok := values["source_epa"].(bool); ok {
-		s.epa = v
 	}
 	if v, ok := values["source_openmeteo"].(bool); ok {
 		s.openMeteo = v
@@ -110,14 +102,8 @@ func (s *settings) apply(values map[string]any) {
 			s.longitude = v
 		}
 	}
-	if v, ok := values["site"].(string); ok {
-		s.site = strings.TrimSpace(v)
-	}
 	if v, ok := values["refresh_minutes"].(float64); ok {
 		s.refresh = time.Duration(clamp(v, 5, 180)) * time.Minute
-	}
-	if v, ok := values["radius_km"].(float64); ok {
-		s.radiusKM = clamp(v, 1, 100)
 	}
 	if v, ok := values["notify_high"].(bool); ok {
 		s.notifyHigh = v
@@ -147,12 +133,9 @@ func (s settings) sources() airquality.Sources {
 func (s settings) sourcesAt(lat, lon float64, label string) airquality.Sources {
 	return airquality.Sources{
 		AirHealth: s.airHealth && airquality.AirHealthSupportsCoordinates(lat, lon),
-		EPA:       s.epa && airquality.EPAVictoriaMayCoverCoordinates(lat, lon),
 		OpenMeteo: s.openMeteo,
 		Latitude:  lat,
 		Longitude: lon,
-		Site:      s.site,
-		RadiusKM:  s.radiusKM,
 		GoogleKey: s.googleKey,
 		Label:     label,
 	}
@@ -457,7 +440,6 @@ func (s *session) refreshLoop(ctx context.Context, results chan<- refreshResult)
 		fetchCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 		fetcher := airquality.Fetcher{
 			AirHealth: airquality.AirHealth{Do: s.env.do},
-			EPA:       airquality.EPAArcGIS{Do: s.env.do},
 			OpenMeteo: airquality.OpenMeteo{Do: s.env.do},
 			Google:    airquality.GooglePollen{Do: s.env.do},
 			Now:       s.env.now,

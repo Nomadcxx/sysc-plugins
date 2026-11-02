@@ -259,28 +259,3 @@ func TestGoogleRowsAreNeverStored(t *testing.T) {
 	stored, _ = cache.Get()
 	assertNoGoogle("Restore/Get", stored)
 }
-
-func TestEPAOnlyForVictorianCoordinates(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		lat, lon float64
-		want     bool
-	}{
-		{"Melbourne", -37.8136, 144.9631, true},
-		{"Mildura", -34.19, 142.16, true},
-		{"Sydney", -33.8688, 151.2093, false},
-		{"Adelaide", -34.93, 138.6, false},
-		{"Hobart", -42.88, 147.33, false},
-		{"Canberra", -35.28, 149.13, false},
-		// Albury shares an airshed with Wodonga across the Murray, whose station
-		// is the right reading for it; the outline errs outside the border.
-		{"Albury", -36.08, 146.92, true},
-		{"Wodonga", -36.12, 146.89, true},
-		{"Geelong", -38.15, 144.36, true},
-		{"Mallacoota", -37.56, 149.75, true},
-	} {
-		if got := EPAVictoriaMayCoverCoordinates(tc.lat, tc.lon); got != tc.want {
-			t.Errorf("%s: EPA = %v, want %v", tc.name, got, tc.want)
-		}
-	}
-}

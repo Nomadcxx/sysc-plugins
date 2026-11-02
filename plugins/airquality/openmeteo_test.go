@@ -27,8 +27,9 @@ func TestParseOpenMeteoAirAndUV(t *testing.T) {
 	if air.Metric == nil || air.Metric.Value != 28 {
 		t.Errorf("metric = %+v, want US AQI 28", air.Metric)
 	}
-	// The constituents are the reason this provider exists: EPA's mirror
-	// carries particulates only, so the gases have nowhere else to come from.
+	// The constituents are a reason this provider exists: the regional
+	// sources carry particulates only, so the gases have nowhere else to come
+	// from.
 	names := breakdownNames(air.Breakdown)
 	for _, want := range []string{"PM2.5", "PM10", "O3", "NO2", "SO2", "CO"} {
 		if !contains(names, want) {

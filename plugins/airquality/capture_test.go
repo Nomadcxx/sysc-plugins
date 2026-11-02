@@ -27,8 +27,6 @@ func TestCapturePanel(t *testing.T) {
 		Metric: &Metric{Subcat: "today's peak", Value: 5.8},
 		Max:    11, Bands: UVBands(), Source: "open-meteo",
 	})
-	report.Snapshot.Attribution = joinAttribution(
-		joinAttribution(AirHealthAttribution, EPAAttribution), OpenMeteoAttribution,
-	)
+	report.Snapshot.Attribution = joinAttribution(AirHealthAttribution, OpenMeteoAttribution)
 	capture.Panel(t, "airquality", PanelFor(report, dialBandLabelsProtocolMinor))
 }

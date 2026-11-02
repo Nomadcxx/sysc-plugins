@@ -436,7 +436,6 @@ func tooltipAttribution(attribution string, width int) string {
 	// the full source attribution.
 	return strings.NewReplacer(
 		AirHealthAttribution, "AirHealth: University of Tasmania & University of Melbourne",
-		EPAAttribution, "EPA Victoria (CC BY 4.0)",
 		OpenMeteoAttribution, "CAMS ENSEMBLE via Open-Meteo",
 	).Replace(attribution)
 }

@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestParseDashboardNormalisesMeasures(t *testing.T) {
@@ -501,15 +500,6 @@ func TestCanonicalMeasure(t *testing.T) {
 		if got := CanonicalMeasure(tc.in); got != tc.want {
 			t.Errorf("CanonicalMeasure(%q) = %q, want %q", tc.in, got, tc.want)
 		}
-	}
-}
-
-func TestEpochMillisZeroStaysZero(t *testing.T) {
-	if got := epochMillis(0); !got.IsZero() {
-		t.Errorf("epochMillis(0) = %v, want zero", got)
-	}
-	if got := epochMillis(1793433600000); !got.Equal(time.Date(2026, 10, 31, 8, 0, 0, 0, time.UTC)) {
-		t.Errorf("epochMillis = %v", got)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 )
 
 // maxBody caps how much a source may send. The largest response the plugin
@@ -55,4 +56,10 @@ func statusError(source string, resp *http.Response) error {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return err
+}
+
+// trimFloat formats a coordinate without an exponent, which the query parsers
+// on the other side do not accept.
+func trimFloat(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }

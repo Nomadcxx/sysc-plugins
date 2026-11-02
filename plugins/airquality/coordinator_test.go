@@ -158,91 +158,6 @@ func TestFetchRoutesAirHealthByConfiguredAustralianLocation(t *testing.T) {
 	}
 }
 
-// AirHealth already reports a category for the location, so the EPA lookup is
-// skipped entirely rather than issuing a request whose answer would be ignored.
-func TestFetchSkipsEPAWhenAirHealthHasAirQuality(t *testing.T) {
-	var paths []string
-	ah := airHealthServer(t, &paths)
-	defer ah.Close()
-
-	epa := mustServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("EPA queried although AirHealth supplied air quality")
-	})
-	defer epa.Close()
-
-	f := Fetcher{AirHealth: AirHealth{Base: ah.URL}, EPA: EPAArcGIS{Base: epa.URL}, Now: fixtureNow}
-	if _, err := f.Fetch(context.Background(), Sources{AirHealth: true, EPA: true}); err != nil {
-		t.Fatalf("Fetch: %v", err)
-	}
-}
-
-// With AirHealth off, air quality comes from EPA and carries EPA's attribution.
-func TestFetchUsesEPAWhenAirHealthDisabled(t *testing.T) {
-	epa := mustServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(epaFixture))
-	})
-	defer epa.Close()
-
-	f := Fetcher{EPA: EPAArcGIS{Base: epa.URL}, Now: fixtureNow}
-	report, err := f.Fetch(context.Background(), Sources{EPA: true, Latitude: -37.8136, Longitude: 144.9631})
-	if err != nil {
-		t.Fatalf("Fetch: %v", err)
-	}
-	m, ok := report.Snapshot.Measure(MeasureAirQuality)
-	if !ok {
-		t.Fatal("air quality missing")
-	}
-	if m.Source != "epa" {
-		t.Errorf("source = %q, want epa", m.Source)
-	}
-	if !strings.Contains(report.Snapshot.Attribution, "EPA Victoria") {
-		t.Errorf("attribution = %q", report.Snapshot.Attribution)
-	}
-	if report.Snapshot.Location.Suburb != "Melbourne CBD" {
-		t.Errorf("suburb = %q, want the station name", report.Snapshot.Location.Suburb)
-	}
-}
-
-// When AirHealth is enabled but its dashboard has no air quality row, EPA
-// fills the gap and both attributions appear.
-func TestFetchFallsBackToEPAForSparseAirHealth(t *testing.T) {
-	sparse := strings.Replace(dashboardFixture,
-		`{"name":"Air Quality","text":"Good","value":1,"colour":"#ffffff","background_colour":"#4bd964","image":"https://app-api.airhealthservices.au/media/resourceimg/Air_Quality_1.svg","show_metric":{"subcat":"PM2.5","value":0.0,"monitor_is_close":true,"units":"ug/m3"}},`,
-		"", 1)
-	ah := mustServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/locations/") {
-			_, _ = w.Write([]byte(locationsFixture))
-			return
-		}
-		_, _ = w.Write([]byte(sparse))
-	})
-	defer ah.Close()
-	epa := mustServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(epaFixture))
-	})
-	defer epa.Close()
-
-	f := Fetcher{AirHealth: AirHealth{Base: ah.URL}, EPA: EPAArcGIS{Base: epa.URL}, Now: fixtureNow}
-	report, err := f.Fetch(context.Background(), Sources{AirHealth: true, EPA: true})
-	if err != nil {
-		t.Fatalf("Fetch: %v", err)
-	}
-	m, ok := report.Snapshot.Measure(MeasureAirQuality)
-	if !ok {
-		t.Fatal("air quality missing after fallback")
-	}
-	if m.Source != "epa" {
-		t.Errorf("source = %q, want epa", m.Source)
-	}
-	if !strings.Contains(report.Snapshot.Attribution, "University of Melbourne") ||
-		!strings.Contains(report.Snapshot.Attribution, "EPA Victoria") {
-		t.Errorf("attribution = %q, want both sources", report.Snapshot.Attribution)
-	}
-	if _, ok := report.Snapshot.Measure(MeasureGrass); !ok {
-		t.Error("grass missing")
-	}
-}
-
 // A failed source is reported alongside the readings that did arrive, so the
 // panel can say which part is old instead of implying all of it is current.
 func TestFetchReportsPartialFailure(t *testing.T) {
@@ -250,13 +165,11 @@ func TestFetchReportsPartialFailure(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 	defer ah.Close()
-	epa := mustServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(epaFixture))
-	})
-	defer epa.Close()
+	model := bodyServer(t, openMeteoFixture)
+	defer model.Close()
 
-	f := Fetcher{AirHealth: AirHealth{Base: ah.URL}, EPA: EPAArcGIS{Base: epa.URL}, Now: fixtureNow}
-	report, err := f.Fetch(context.Background(), Sources{AirHealth: true, EPA: true})
+	f := Fetcher{AirHealth: AirHealth{Base: ah.URL}, OpenMeteo: OpenMeteo{Base: model.URL}, Now: fixtureNow}
+	report, err := f.Fetch(context.Background(), Sources{AirHealth: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631})
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -277,8 +190,8 @@ func TestFetchFailsWhenEverySourceFails(t *testing.T) {
 	})
 	defer bad.Close()
 
-	f := Fetcher{AirHealth: AirHealth{Base: bad.URL}, EPA: EPAArcGIS{Base: bad.URL}}
-	report, err := f.Fetch(context.Background(), Sources{AirHealth: true, EPA: true})
+	f := Fetcher{AirHealth: AirHealth{Base: bad.URL}, OpenMeteo: OpenMeteo{Base: bad.URL}}
+	report, err := f.Fetch(context.Background(), Sources{AirHealth: true, OpenMeteo: true})
 	if err == nil {
 		t.Fatal("want an error when every source fails")
 	}
@@ -302,10 +215,6 @@ func TestFetchUsesGlobalModelWhenRegionalFeedsHaveNoCoverage(t *testing.T) {
 		_, _ = w.Write([]byte(`{"locations":[]}`))
 	})
 	defer airHealth.Close()
-	epa := mustServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"features":[]}`))
-	})
-	defer epa.Close()
 	model := mustServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"current":{"time":"2026-11-01T12:00","pm2_5":6.2,"us_aqi":28,"uv_index":3.5},"daily":{"time":["2026-11-01"],"uv_index_max":[4.0]}}`))
 	})
@@ -313,12 +222,11 @@ func TestFetchUsesGlobalModelWhenRegionalFeedsHaveNoCoverage(t *testing.T) {
 
 	f := Fetcher{
 		AirHealth: AirHealth{Base: airHealth.URL},
-		EPA:       EPAArcGIS{Base: epa.URL},
 		OpenMeteo: OpenMeteo{Base: model.URL},
 	}
 	report, err := f.Fetch(context.Background(), Sources{
-		AirHealth: true, EPA: true, OpenMeteo: true,
-		Latitude: 51.5072, Longitude: -0.1276, RadiusKM: 15,
+		AirHealth: true, OpenMeteo: true,
+		Latitude: 51.5072, Longitude: -0.1276,
 	})
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
@@ -351,31 +259,6 @@ func TestFetchOrdersMeasures(t *testing.T) {
 	want := []string{MeasureGrass, MeasureAllergens, MeasureAirQuality, MeasureThunderstorm}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("order = %v, want %v", got, want)
-	}
-}
-
-// A configured station beats proximity, which is the whole point of the
-// setting: the user's local station is more representative than a closer
-// roadside sensor.
-func TestFetchPrefersConfiguredSite(t *testing.T) {
-	epa := mustServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(epaFixture))
-	})
-	defer epa.Close()
-
-	f := Fetcher{EPA: EPAArcGIS{Base: epa.URL}, Now: fixtureNow}
-	report, err := f.Fetch(context.Background(), Sources{
-		EPA: true, Latitude: -37.8136, Longitude: 144.9631, Site: "Spotswood",
-	})
-	if err != nil {
-		t.Fatalf("Fetch: %v", err)
-	}
-	m, ok := report.Snapshot.Measure(MeasureAirQuality)
-	if !ok {
-		t.Fatal("air quality missing")
-	}
-	if m.Metric == nil || m.Metric.Value != 4.08 {
-		t.Errorf("metric = %+v, want the Spotswood reading", m.Metric)
 	}
 }
 
@@ -425,7 +308,7 @@ func TestEncodeDecodeReportRoundTrips(t *testing.T) {
 				{Name: MeasureGrass, Title: Title(MeasureGrass), Level: Level{Name: "High", Index: 2, Severity: SeverityHigh}, Source: "airhealth",
 					Bands: []Band{{Label: "Low", Until: .25, Severity: SeverityGood}, {Label: "Moderate", Until: .5, Severity: SeverityModerate}, {Label: "High", Until: .75, Severity: SeverityHigh}, {Label: "Extreme", Until: 1, Severity: SeverityHigh}}},
 				{Name: MeasureAirQuality, Title: Title(MeasureAirQuality), Level: Level{Name: "Good", Index: 1, Severity: SeverityGood},
-					Metric: &Metric{Subcat: "PM2.5", Value: 7.5, Units: "ug/m3"}, Source: "epa",
+					Metric: &Metric{Subcat: "PM2.5", Value: 7.5, Units: "ug/m3"}, Source: "airhealth",
 					Breakdown: []Breakdown{{Name: "Alternaria", Level: Level{Name: "Moderate", Index: 1, Severity: SeverityModerate}}}},
 			},
 			Alert: &Alert{Title: "Thunderstorm Asthma", Text: "Take care.", Level: Level{Name: "Moderate", Index: 1, Severity: SeverityModerate}},
@@ -462,9 +345,8 @@ func TestEncodeDecodeReportRoundTrips(t *testing.T) {
 	if len(air.Breakdown) != 1 || air.Breakdown[0].Name != "Alternaria" {
 		t.Errorf("restored air breakdown = %+v", air.Breakdown)
 	}
-	epaMeasure := restored.Snapshot.Measures[1]
-	if epaMeasure.Metric == nil || epaMeasure.Metric.Value != 7.5 {
-		t.Errorf("metric = %+v", epaMeasure.Metric)
+	if air.Metric == nil || air.Metric.Value != 7.5 {
+		t.Errorf("metric = %+v", air.Metric)
 	}
 	if restored.Snapshot.Alert == nil || restored.Snapshot.Alert.Level.Severity != SeverityModerate {
 		t.Errorf("alert = %+v", restored.Snapshot.Alert)
@@ -472,6 +354,28 @@ func TestEncodeDecodeReportRoundTrips(t *testing.T) {
 	day := restored.Snapshot.Forecast[0]
 	if got, ok := day.Measures[MeasureGrass]; !ok || got.Level.Name != "Moderate" {
 		t.Errorf("forecast = %+v", day.Measures)
+	}
+}
+
+// EPA Victoria rows that earlier releases saved are dropped on restore, and a
+// report holding nothing else is rejected so the plugin refetches.
+func TestDecodeReportDropsRemovedEPARows(t *testing.T) {
+	mixed := `{"version":1,"updated_unix":1793433600,"measures":[` +
+		`{"name":"Air Quality","level":"Fair","index":2,"severity":1,"source":"epa"},` +
+		`{"name":"Grass","level":"Low","index":0,"severity":0,"source":"airhealth"}]}`
+	report, ok := DecodeReport([]byte(mixed))
+	if !ok {
+		t.Fatal("a report with a current row was rejected")
+	}
+	if _, has := report.Snapshot.Measure(MeasureAirQuality); has {
+		t.Errorf("the saved EPA row survived: %+v", report.Snapshot.Measures)
+	}
+	if _, has := report.Snapshot.Measure(MeasureGrass); !has {
+		t.Error("the AirHealth row was dropped with it")
+	}
+	only := `{"version":1,"updated_unix":1793433600,"measures":[{"name":"Air Quality","level":"Fair","source":"epa"}]}`
+	if _, ok := DecodeReport([]byte(only)); ok {
+		t.Error("a report of EPA rows alone was restored")
 	}
 }
 
@@ -505,14 +409,13 @@ func mustServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 }
 
 func TestOpenMeteoSuppliesUVWhenOthersCannot(t *testing.T) {
-	epa := epaServer(t, epaFixture)
 	f := Fetcher{
-		EPA:       EPAArcGIS{Base: epa.URL},
+		AirHealth: AirHealth{Base: airHealthServer(t, new([]string)).URL},
 		OpenMeteo: OpenMeteo{Base: bodyServer(t, openMeteoFixture).URL},
 		Now:       fixtureNow,
 	}
 	report, err := f.Fetch(context.Background(), Sources{
-		EPA: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631,
+		AirHealth: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631,
 	})
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
@@ -526,40 +429,26 @@ func TestOpenMeteoSuppliesUVWhenOthersCannot(t *testing.T) {
 		t.Errorf("UV = %q, want Moderate", uv.Level.Name)
 	}
 
-	// EPA's station category must survive as the authoritative air quality
-	// reading, not be replaced by the model's AQI.
-	air, ok := report.Snapshot.Measure(MeasureAirQuality)
-	if !ok {
-		t.Fatal("air quality missing")
-	}
-	if air.Source != "epa" {
-		t.Errorf("air source = %q, want epa", air.Source)
-	}
-	// But the model's gases are attached, because EPA's mirror carries none.
-	if !contains(breakdownNames(air.Breakdown), "NO2") {
-		t.Errorf("breakdown = %v, want the model's gaseous pollutants", breakdownNames(air.Breakdown))
-	}
-
-	for _, want := range []string{EPAAttribution, OpenMeteoAttribution} {
+	for _, want := range []string{AirHealthAttribution, OpenMeteoAttribution} {
 		if !containsString(report.Snapshot.Attribution, want) {
 			t.Errorf("attribution = %q, missing %q", report.Snapshot.Attribution, want)
 		}
 	}
 }
 
-func TestOpenMeteoFillsAirQualityWhenEPAFails(t *testing.T) {
+func TestOpenMeteoFillsAirQualityWhenAirHealthFails(t *testing.T) {
 	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer down.Close()
 
 	f := Fetcher{
-		EPA:       EPAArcGIS{Base: down.URL},
+		AirHealth: AirHealth{Base: down.URL},
 		OpenMeteo: OpenMeteo{Base: bodyServer(t, openMeteoFixture).URL},
 		Now:       fixtureNow,
 	}
 	report, err := f.Fetch(context.Background(), Sources{
-		EPA: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631,
+		AirHealth: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631,
 	})
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
@@ -573,7 +462,7 @@ func TestOpenMeteoFillsAirQualityWhenEPAFails(t *testing.T) {
 	}
 	// The failure is still reported so the panel can say which part is stale.
 	if len(report.Errors) == 0 {
-		t.Error("EPA failure was swallowed")
+		t.Error("AirHealth failure was swallowed")
 	}
 }
 
@@ -612,13 +501,13 @@ func TestAirHealthAirQualityWinsOverModel(t *testing.T) {
 }
 
 func TestMergeMeasuresIsIdempotentForAttribution(t *testing.T) {
-	if got := joinAttribution(EPAAttribution, EPAAttribution); got != EPAAttribution {
+	if got := joinAttribution(AirHealthAttribution, AirHealthAttribution); got != AirHealthAttribution {
 		t.Errorf("duplicate attribution = %q", got)
 	}
 	if got := joinAttribution("", OpenMeteoAttribution); got != OpenMeteoAttribution {
 		t.Errorf("first attribution = %q", got)
 	}
-	if got := joinAttribution(EPAAttribution, OpenMeteoAttribution); !containsString(got, " · ") {
+	if got := joinAttribution(AirHealthAttribution, OpenMeteoAttribution); !containsString(got, " · ") {
 		t.Errorf("joined attribution = %q", got)
 	}
 }
@@ -633,17 +522,17 @@ func bodyServer(t *testing.T, body string) *httptest.Server {
 }
 
 // TestAirQualityBreakdownAgreesWithHeadline guards against the panel showing a
-// headline value that contradicts its own breakdown. EPA's 19.9 µg/m³ and the
-// model's 4.8 µg/m³ are both correct for their own source; putting them on the
-// same row without reconciling them reads as a bug in the reading.
+// headline value that contradicts its own breakdown. AirHealth's station PM2.5
+// and the model's PM2.5 are both correct for their own source; putting them on
+// the same row without reconciling them reads as a bug in the reading.
 func TestAirQualityBreakdownAgreesWithHeadline(t *testing.T) {
 	f := Fetcher{
-		EPA:       EPAArcGIS{Base: epaServer(t, epaFixture).URL},
+		AirHealth: AirHealth{Base: airHealthServer(t, new([]string)).URL},
 		OpenMeteo: OpenMeteo{Base: bodyServer(t, openMeteoFixture).URL},
 		Now:       fixtureNow,
 	}
 	report, err := f.Fetch(context.Background(), Sources{
-		EPA: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631,
+		AirHealth: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631,
 	})
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
@@ -805,36 +694,5 @@ func TestShortErrorUsesPlainWords(t *testing.T) {
 	}
 }
 
-// The keyless EPA mirror stopped updating on 2025-12-05. A station reading that
-// old must not be shown as current air quality; the model fills the row and
-// the panel says why EPA was not used.
-func TestFetchRejectsStaleEPAReadings(t *testing.T) {
-	frozen := strings.ReplaceAll(strings.ReplaceAll(epaFixture, "1793430000000", "1764910800000"), "1793433600000", "1764914400000")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "air-quality") {
-			_, _ = w.Write([]byte(`{"current":{"pm2_5":4.3,"us_aqi":28},"daily":{"time":["2026-10-31"],"uv_index_max":[4.9]}}`))
-			return
-		}
-		_, _ = w.Write([]byte(frozen))
-	}))
-	defer srv.Close()
-	f := Fetcher{
-		EPA:       EPAArcGIS{Base: srv.URL + "/epa"},
-		OpenMeteo: OpenMeteo{Base: srv.URL + "/air-quality"},
-		Now:       func() time.Time { return time.Date(2026, 10, 31, 10, 0, 0, 0, time.UTC) },
-	}
-	report, err := f.Fetch(context.Background(), Sources{EPA: true, OpenMeteo: true, Latitude: -37.8136, Longitude: 144.9631, RadiusKM: 15})
-	if err != nil {
-		t.Fatalf("Fetch: %v", err)
-	}
-	air, ok := report.Snapshot.Measure(MeasureAirQuality)
-	if !ok || air.Source != "open-meteo" {
-		t.Fatalf("air quality = %+v, want the model's current reading instead of an 11-month-old station", air)
-	}
-	if len(report.Errors) != 1 || !strings.Contains(report.Errors[0], "EPA Victoria: no current station reading") {
-		t.Fatalf("errors = %q, want EPA named as out of date", report.Errors)
-	}
-}
-
-// fixtureNow is an hour or two after the EPA fixtures' averaging window.
+// fixtureNow is a fixed time on the fixtures' day.
 func fixtureNow() time.Time { return time.Date(2026, 10, 31, 10, 0, 0, 0, time.UTC) }
