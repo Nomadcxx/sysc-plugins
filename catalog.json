@@ -2,6 +2,52 @@
   "schema": 1,
   "plugins": [
     {
+      "id": "org.sysc.airquality",
+      "name": "Air Quality \u0026 Pollen",
+      "author": "Nomadcxx",
+      "description": "Air quality and UV worldwide, with pollen for Australia, Europe and beyond, and thunderstorm asthma.",
+      "category": "weather",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/airquality-v0.3.0/plugins/airquality/thumbnail.webp",
+        "sha256": "e5989af58448da241d3d9d93b599f43b93295074b095b8c0bc8675e3b28449d7"
+      },
+      "readme": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/airquality-v0.3.0/plugins/airquality/README.md",
+        "sha256": "52d0b440630eea553a03b8e8c27be5f4049d9d56126ec55c42da9f1436f70d6c"
+      },
+      "added_at": "2026-11-02T05:08:07.248031369Z",
+      "updated_at": "2026-11-02T05:08:07.248031369Z",
+      "version": "0.3.0",
+      "protocol": {
+        "major": 1,
+        "minor": 26
+      },
+      "capabilities": [
+        "location",
+        "notifications",
+        "panels",
+        "settings",
+        "state"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/airquality-v0.3.0/org.sysc.airquality-0.3.0-linux-amd64.tar.gz",
+          "sha256": "f100762636177a47249e38a994daec013ad6ff32e29f40d4b1aded933802b2c6",
+          "size": 6351469
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/airquality-v0.3.0/org.sysc.airquality-0.3.0-linux-arm64.tar.gz",
+          "sha256": "179f1caf3f8791298497cb2c2c0a06d406220a1740becd0d6bd4fc74fbd0a6e0",
+          "size": 4917609
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/airquality-v0.3.0"
+    },
+    {
       "id": "org.sysc.aiusage",
       "name": "AI Usage",
       "author": "Nomadcxx",
