@@ -102,10 +102,11 @@ func BarTreeAtWidth(f Frame, s Settings, height, width int) *v1.Node {
 			cat.Frames[i] += "-side"
 		}
 	}
-	// Fill "card" resolves to the capsule colour the shell already paints,
-	// so the button does not add a lighter inner pill over it.
+	// No fill: the bar's pill is the cat's chrome, and the host draws an
+	// unfilled bar button bare. A "card" fill painted an opaque layer inside
+	// a translucent pill, which read as a darker pill within the pill.
 	open := &v1.Node{Kind: v1.KindButton, ID: "open", Name: "Open the cat", Role: "button",
-		Fill: "card", Height: buttonHeight, Padding: padding, Gap: 4, Events: []v1.EventKind{v1.EventActivate},
+		Height: buttonHeight, Padding: padding, Gap: 4, Events: []v1.EventKind{v1.EventActivate},
 		Children: []*v1.Node{cat}}
 	if s.ShowPercent && !compact {
 		tone := v1.ToneNormal

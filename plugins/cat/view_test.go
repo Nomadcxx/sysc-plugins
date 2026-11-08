@@ -321,3 +321,20 @@ func TestSideCatKeepsFullSizeAndRotatesOnlyBarFrames(t *testing.T) {
 		t.Fatal("side rendering changed animation identity or pace")
 	}
 }
+
+// The bar paints the cat's pill. A fill on the button drew a second, opaque
+// layer inside it, which a translucent pill showed as a darker inner pill.
+// Without a fill the host draws the button bare; the padding and height stay,
+// so the pill keeps the width it had.
+func TestBarButtonLeavesThePillToTheBar(t *testing.T) {
+	t.Parallel()
+	s := DefaultSettings()
+	open := BarTree(frames()["strolling"], s, 32).Children[0]
+	if open.Fill != "" {
+		t.Fatalf("bar button fill = %q, want none so the bar's pill is the only one", open.Fill)
+	}
+	if open.Padding != barInset || open.Height != s.Size {
+		t.Fatalf("bar button padding %d height %d, want %d and %d so the pill width is unchanged",
+			open.Padding, open.Height, barInset, s.Size)
+	}
+}
