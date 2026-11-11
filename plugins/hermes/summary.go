@@ -44,7 +44,7 @@ type CronJob struct {
 
 // SummaryState is the slice of the bridge snapshot the summary popup reads,
 // on top of the bar's: summary.model, summary.cron, summary.mcp,
-// summary.activity, summary.gateway.platforms, approval and
+// summary.activity, usage, summary.gateway.platforms, approval and
 // session.running. It stands in until the runtime snapshot lands.
 type SummaryState struct {
 	BarState
@@ -61,19 +61,48 @@ type SummaryState struct {
 	ApprovalPending  bool
 	ApprovalMessage  string
 	SessionRunning   bool
+	// UsageInput, UsageOutput, UsageTotal and UsageCostUSD match the
+	// runtime Usage shape (input, output, total, cost_usd) without
+	// declaring a second type Usage.
+	UsageInput   int64
+	UsageOutput  int64
+	UsageTotal   int64
+	UsageCostUSD *float64
 }
 
 type summaryRow struct{ Label, Value string }
 
-// summaryRows are noctalia's five summary lines, with its wording.
+// summaryRows are noctalia's summary lines, with its wording. Usage is
+// added immediately below Activity when the bridge reports it.
 func summaryRows(s SummaryState) []summaryRow {
-	return []summaryRow{
+	rows := []summaryRow{
 		{"Model", modelLabel(s)},
 		{"Cron", fmt.Sprintf("%d active / %d total", s.CronActive, s.CronTotal)},
 		{"MCP", mcpLabel(s)},
 		{"Gateway", gatewayLabel(s)},
 		{"Activity", activityLabel(s)},
 	}
+	if usageReported(s) {
+		rows = append(rows, summaryRow{"Usage", usageLabel(s)})
+	}
+	return rows
+}
+
+func usageReported(s SummaryState) bool {
+	return s.UsageInput != 0 || s.UsageOutput != 0 || s.UsageTotal != 0 || s.UsageCostUSD != nil
+}
+
+func usageLabel(s SummaryState) string {
+	var value string
+	if s.UsageInput == 0 && s.UsageOutput == 0 && s.UsageTotal != 0 {
+		value = fmt.Sprintf("%d tokens", s.UsageTotal)
+	} else {
+		value = fmt.Sprintf("%d in · %d out", s.UsageInput, s.UsageOutput)
+	}
+	if s.UsageCostUSD != nil {
+		value += fmt.Sprintf(" · $%.4f", *s.UsageCostUSD)
+	}
+	return value
 }
 
 func modelLabel(s SummaryState) string {
@@ -129,9 +158,10 @@ func activityLabel(s SummaryState) string {
 }
 
 // SummaryTree renders the left-click summary: the header with the avatar,
-// status and Open Hermes; the five summary lines; the cron jobs; the
-// approval or error banner; and New session, Interrupt, Refresh and Hermes
-// Settings. It fills the width by height box the host opened.
+// status and Open Hermes; the summary lines (Usage below Activity when
+// reported); the cron jobs; the approval or error banner; and New session,
+// Interrupt, Refresh and Hermes Settings. It fills the width by height box
+// the host opened.
 func SummaryTree(s SummaryState, avatar string, width, height int) *v1.Node {
 	status := DeriveStatus(s.BarState)
 	inner := width - 2*summaryPad
@@ -145,7 +175,7 @@ func SummaryTree(s SummaryState, avatar string, width, height int) *v1.Node {
 	actions := summaryActions(s, status, inner)
 
 	if len(s.CronJobs) > 0 {
-		used := 2*summaryPad + headerHeight + 1 + gridHeight() + lineHeight + 2*buttonHeight
+		used := 2*summaryPad + headerHeight + 1 + gridHeight(len(summaryRows(s))) + lineHeight + 2*buttonHeight
 		// Gaps between header, separator, grid, title, list, actions and
 		// settings, plus one more for the banner.
 		gaps := 6
@@ -208,14 +238,18 @@ func summaryHeader(status Status, avatar string, inner int) *v1.Node {
 	}
 }
 
-func gridHeight() int {
-	return 5*lineHeight + 4*rowGap
+func gridHeight(rows int) int {
+	if rows <= 0 {
+		return 0
+	}
+	return rows*lineHeight + (rows-1)*rowGap
 }
 
 func summaryGrid(s SummaryState, inner int) *v1.Node {
+	rows := summaryRows(s)
 	valueBytes := (inner - labelWidth - 8) / 8
-	grid := &v1.Node{Kind: v1.KindColumn, Width: inner, Height: gridHeight(), Gap: rowGap}
-	for _, r := range summaryRows(s) {
+	grid := &v1.Node{Kind: v1.KindColumn, Width: inner, Height: gridHeight(len(rows)), Gap: rowGap}
+	for _, r := range rows {
 		grid.Children = append(grid.Children, &v1.Node{
 			Kind: v1.KindRow, Width: inner, Height: lineHeight, Gap: 8, PinEnd: true,
 			Children: []*v1.Node{

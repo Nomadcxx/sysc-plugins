@@ -402,6 +402,75 @@ func TestSummaryBanner(t *testing.T) {
 	}
 }
 
+func TestSummaryUsageRow(t *testing.T) {
+	cost := func(v float64) *float64 { return &v }
+	base := SummaryState{BarState: stateFor(StatusIdle)}
+	cases := []struct {
+		name  string
+		state SummaryState
+		want  *summaryRow
+	}{
+		{"placeholder zeros", base, nil},
+		{"input and output", withUsage(base, 12, 34, 46, nil), &summaryRow{"Usage", "12 in · 34 out"}},
+		{"input, output and cost", withUsage(base, 12, 34, 46, cost(0.0123)), &summaryRow{"Usage", "12 in · 34 out · $0.0123"}},
+		{"total only", withUsage(base, 0, 0, 100, nil), &summaryRow{"Usage", "100 tokens"}},
+		{"total only with cost", withUsage(base, 0, 0, 100, cost(1.25)), &summaryRow{"Usage", "100 tokens · $1.2500"}},
+		{"cost only", withUsage(base, 0, 0, 0, cost(0.0001)), &summaryRow{"Usage", "0 in · 0 out · $0.0001"}},
+	}
+	for _, c := range cases {
+		got := summaryRows(c.state)
+		activity := -1
+		for i, r := range got {
+			if r.Label == "Activity" {
+				activity = i
+			}
+		}
+		if activity < 0 {
+			t.Fatalf("%s: no Activity row in %v", c.name, got)
+		}
+		var usage *summaryRow
+		for i, r := range got {
+			if r.Label == "Usage" {
+				row := r
+				usage = &row
+				if i != activity+1 {
+					t.Errorf("%s: Usage is row %d, want immediately below Activity at %d", c.name, i, activity+1)
+				}
+			}
+		}
+		switch {
+		case c.want == nil && usage != nil:
+			t.Errorf("%s: unexpected Usage row %v", c.name, *usage)
+		case c.want != nil && usage == nil:
+			t.Errorf("%s: missing Usage row %v in %v", c.name, *c.want, got)
+		case c.want != nil && usage != nil && *usage != *c.want:
+			t.Errorf("%s: Usage = %v, want %v", c.name, *usage, *c.want)
+		}
+		for _, size := range summarySizes {
+			tree := SummaryTree(c.state, "", size[0], size[1])
+			label := c.name
+			lintView(t, label, tree, v1.ViewPanel, size[0], size[1])
+			checkBudget(t, label, tree, size[0], size[1])
+			checkGlyphs(t, label, tree)
+			joined := strings.Join(texts(tree), "|")
+			if c.want == nil {
+				if strings.Contains(joined, "Usage") {
+					t.Errorf("%s: tree should hide the Usage row, got %q", c.name, joined)
+				}
+				continue
+			}
+			if !strings.Contains(joined, c.want.Label) || !strings.Contains(joined, c.want.Value) {
+				t.Errorf("%s: tree is missing %v in %q", c.name, *c.want, joined)
+			}
+		}
+	}
+}
+
+func withUsage(state SummaryState, input, output, total int64, cost *float64) SummaryState {
+	state.UsageInput, state.UsageOutput, state.UsageTotal, state.UsageCostUSD = input, output, total, cost
+	return state
+}
+
 func TestSummaryNeverOffersGatewayControl(t *testing.T) {
 	for _, s := range Statuses {
 		for _, state := range summaryStates(s) {
