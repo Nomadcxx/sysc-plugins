@@ -54,7 +54,7 @@ type Settings struct {
 	ClientOnly       bool
 	Host             string
 	Port             int
-	TokenManual      string
+	TokenManual      string `json:"-"`
 	TokenFile        string
 	SSHTarget        string
 	StateFile        string

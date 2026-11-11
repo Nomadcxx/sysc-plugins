@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -411,6 +412,28 @@ func TestSettingsFromValues(t *testing.T) {
 }
 
 // --- local mode ------------------------------------------------------------
+
+func TestSettingsNeverLeaksThePastedToken(t *testing.T) {
+	const pasted = "fake-settings-token-9f3a"
+	s := DefaultSettings()
+	s.TokenManual = pasted
+	for _, text := range []string{
+		fmt.Sprint(s),
+		fmt.Sprintf("%v %+v %#v %s %q", s, s, s, s, s),
+		fmt.Sprintf("%v %+v %#v", &s, &s, &s),
+	} {
+		if strings.Contains(text, pasted) {
+			t.Fatalf("formatted Settings %q contains the pasted token", text)
+		}
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), pasted) {
+		t.Fatalf("json.Marshal(Settings) includes the pasted token: %s", data)
+	}
+}
 
 func TestLocalSpawnsOnceWithTheExactArgvWhenNoBridge(t *testing.T) {
 	h := newHarness(t)

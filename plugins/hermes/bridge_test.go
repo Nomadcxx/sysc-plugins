@@ -147,6 +147,17 @@ func TestForbiddenStateNeverEchoesTheToken(t *testing.T) {
 	}
 }
 
+func TestBridgeJSONOmitsTheToken(t *testing.T) {
+	b := Bridge{BaseURL: "http://127.0.0.1:19777", token: fakeToken}
+	data, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), fakeToken) {
+		t.Fatalf("json.Marshal(Bridge) includes the token: %s", data)
+	}
+}
+
 func TestEveryEnvelopeNormalizes(t *testing.T) {
 	for name, body := range map[string]string{
 		"bare":   snapshotJSON,

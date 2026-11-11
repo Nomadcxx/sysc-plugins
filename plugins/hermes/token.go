@@ -112,12 +112,28 @@ func (t Token) Format(f fmt.State, verb rune) {
 	io.WriteString(f, t.String())
 }
 
-// TokenSource holds the settings that choose a token.
+// TokenSource holds the settings that choose a token. Pasted is omitted
+// from JSON, and every formatting verb prints only the mode and paths.
 type TokenSource struct {
 	ClientOnly bool
-	Pasted     string // bridge_token_manual
+	Pasted     string `json:"-"` // bridge_token_manual
 	File       string // bridge_token_file
 	StateFile  string // state_file, Local mode
+}
+
+func (s TokenSource) String() string {
+	return fmt.Sprintf("token-source(client-only=%t file=%q state=%q)", s.ClientOnly, s.File, s.StateFile)
+}
+
+func (s TokenSource) GoString() string { return s.String() }
+
+// Format makes every verb, including %#v and %+v, print String.
+func (s TokenSource) Format(f fmt.State, verb rune) {
+	if verb == 'q' {
+		fmt.Fprintf(f, "%q", s.String())
+		return
+	}
+	io.WriteString(f, s.String())
 }
 
 // LocalCandidates are the Local-mode token files in the order they are

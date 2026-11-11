@@ -123,7 +123,7 @@ type SessionSummary struct {
 // Bridge is an HTTP client for one Hermes bridge.
 type Bridge struct {
 	BaseURL string
-	Token   string
+	token   string
 	HTTP    *http.Client
 }
 
@@ -144,7 +144,7 @@ func NewBridge(host string, port int, token string) (*Bridge, error) {
 	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 	return &Bridge{
 		BaseURL: "http://" + net.JoinHostPort(host, strconv.Itoa(port)),
-		Token:   token,
+		token:   token,
 		HTTP:    &http.Client{Transport: newTransport()},
 	}, nil
 }
@@ -319,8 +319,8 @@ func (b *Bridge) do(ctx context.Context, method, path string, body []byte, auth 
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	if auth && b.Token != "" {
-		req.Header.Set("X-Bridge-Token", b.Token)
+	if auth && b.token != "" {
+		req.Header.Set("X-Bridge-Token", b.token)
 	}
 	client := b.HTTP
 	if client == nil {

@@ -1,6 +1,7 @@
 package hermes
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -173,5 +174,25 @@ func TestTokenNeverFormatsItsValue(t *testing.T) {
 		if strings.Contains(s, fakePasted) {
 			t.Fatalf("formatted token %q contains the value", s)
 		}
+	}
+}
+
+func TestTokenSourceNeverFormatsPasted(t *testing.T) {
+	src := TokenSource{ClientOnly: true, Pasted: fakePasted, File: "/tmp/token", StateFile: "/tmp/state"}
+	for _, s := range []string{
+		fmt.Sprint(src),
+		fmt.Sprintf("%v %+v %#v", src, src, src),
+		fmt.Sprintf("%v %+v %#v", &src, &src, &src),
+	} {
+		if strings.Contains(s, fakePasted) {
+			t.Fatalf("formatted TokenSource %q contains the pasted token", s)
+		}
+	}
+	data, err := json.Marshal(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), fakePasted) {
+		t.Fatalf("json.Marshal(TokenSource) includes the pasted token: %s", data)
 	}
 }
