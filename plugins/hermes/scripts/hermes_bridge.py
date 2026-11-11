@@ -628,6 +628,8 @@ class HermesState:
             "message": str(payload.get("message") or ""),
             "tool_name": str(payload.get("tool_name") or payload.get("name") or ""),
             "request": deepcopy(payload),
+            # sysc-shell: the queue entry's identity, so /approval can name it.
+            "request_id": str(payload.get("request_id") or ""),
         }
         self._state["hermes"]["status"] = "attention"
 
@@ -996,13 +998,39 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"result": response.get("result", response), "state": self.server.state.snapshot()})
 
     def _handle_approval(self, payload: dict[str, Any]) -> None:
-        session_id = self.server.state.snapshot()["session"]["id"]
+        snapshot = self.server.state.snapshot()
+        session_id = snapshot["session"]["id"]
         params = {
             "session_id": session_id,
             "choice": str(payload.get("choice") or "deny"),
             "all": bool(payload.get("all", False)),
         }
-        response = self.server.rpc.dispatch("approval.respond", params)
+        # sysc-shell: with request_id, resolve only the request the client
+        # showed. A missing request_id keeps the stock behavior.
+        request_id = str(payload.get("request_id") or "").strip()
+        if request_id:
+            shown = snapshot["approval"]
+            if not shown.get("pending") or str(shown.get("request_id") or "") != request_id:
+                self._send_json(409, {"error": "approval_mismatch", "state": snapshot})
+                return
+            try:
+                import inspect
+                from tools.approval import resolve_gateway_approval
+                forward = "request_id" in inspect.signature(resolve_gateway_approval).parameters
+            except Exception:
+                forward = False
+            if forward:
+                # The resolver resolves exactly this queue entry, or nothing.
+                params["request_id"] = request_id
+            # Otherwise the stock call resolves the oldest queued request,
+            # which is the one this bridge shows (the check above).
+            response = self.server.rpc.dispatch("approval.respond", params)
+            result = response.get("result", response)
+            if forward and isinstance(result, dict) and result.get("resolved") == 0:
+                self._send_json(409, {"error": "approval_mismatch", "state": self.server.state.snapshot()})
+                return
+        else:
+            response = self.server.rpc.dispatch("approval.respond", params)
         self.server.state.clear_approval()
         self.server.state.write()
         self._send_json(200, {"result": response.get("result", response), "state": self.server.state.snapshot()})
@@ -1011,8 +1039,16 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         model = str(payload.get("model") or "").strip()
         provider = str(payload.get("provider") or "").strip()
         persist = bool(payload.get("persist", False))
-        if not model:
-            self._send_json(400, {"error": "empty_model"})
+        # sysc-shell: config.set gets "model --provider p --global" as one
+        # string, so a name with whitespace or a leading "-" could smuggle a
+        # flag. Refuse those, and an empty name, before building the value.
+        provider_given = str(payload.get("provider") or "") != ""
+
+        def valid_name(name: str) -> bool:
+            return bool(name) and not name.startswith("-") and not any(c.isspace() for c in name)
+
+        if not valid_name(model) or (provider_given and not valid_name(provider)):
+            self._send_json(400, {"error": "invalid_model"})
             return
 
         value_parts = [model]
