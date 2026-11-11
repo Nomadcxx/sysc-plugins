@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -160,13 +161,12 @@ func TestEveryEnvelopeNormalizes(t *testing.T) {
 		if !snap.HasState || snap.State.Bridge.Status != "online" {
 			t.Fatalf("%s: state = %+v", name, snap.State)
 		}
-		var got, want any
-		if err := json.Unmarshal(snap.State.Raw, &got); err != nil {
-			t.Fatalf("%s: raw state: %v", name, err)
+		var want State
+		if err := json.Unmarshal([]byte(snapshotJSON), &want); err != nil {
+			t.Fatal(err)
 		}
-		_ = json.Unmarshal([]byte(snapshotJSON), &want)
-		if fmt.Sprint(got) != fmt.Sprint(want) {
-			t.Fatalf("%s: raw state differs from the bare snapshot", name)
+		if !reflect.DeepEqual(snap.State, want) {
+			t.Fatalf("%s: state %+v differs from the bare snapshot %+v", name, snap.State, want)
 		}
 		if name == "result" && string(snap.Result) != `{"status":"completed"}` {
 			t.Fatalf("result envelope lost its result: %s", snap.Result)

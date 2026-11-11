@@ -73,12 +73,6 @@ func (e *unreachableError) Error() string        { return "bridge unreachable: "
 func (e *unreachableError) Unwrap() error        { return e.err }
 func (e *unreachableError) Is(target error) bool { return target == ErrUnreachable }
 
-// BridgeInfo is the snapshot's bridge object.
-type BridgeInfo struct {
-	Status string `json:"status"`
-	Error  string `json:"error"`
-}
-
 // Health is the /health reply.
 type Health struct {
 	Bridge BridgeInfo `json:"bridge"`
@@ -108,13 +102,6 @@ type DetectGateway struct {
 type DetectModel struct {
 	Name     string `json:"name"`
 	Provider string `json:"provider"`
-}
-
-// State is one bridge snapshot. Bridge is decoded here; Raw keeps the whole
-// object for the state normalizer.
-type State struct {
-	Bridge BridgeInfo
-	Raw    json.RawMessage
 }
 
 // Snapshot is a normalized reply: the state when the reply carried one, and
@@ -451,17 +438,12 @@ func snapshotOf(data []byte) (Snapshot, error) {
 	return snap, nil
 }
 
-// stateOf decodes one snapshot object. A bridge object of the wrong shape
-// leaves Bridge zero for the normalizer rather than failing the reply.
+// stateOf decodes one snapshot object into the State mirror. A field of the
+// wrong shape is left zero for Normalize rather than failing the reply.
 func stateOf(raw json.RawMessage) (State, error) {
-	var top map[string]json.RawMessage
-	if err := decodeObject(raw, &top); err != nil {
+	var state State
+	if err := decodeObject(raw, &state); err != nil {
 		return State{}, err
 	}
-	var state State
-	if b, ok := top["bridge"]; ok {
-		_ = json.Unmarshal(b, &state.Bridge)
-	}
-	state.Raw = append(json.RawMessage(nil), raw...)
 	return state, nil
 }
