@@ -13,6 +13,7 @@ Where each plugin's behavior comes from:
 | GitHub Notifications | port of noctalia community plugin |
 | Mini Docker | port of noctalia community plugin |
 | Herdr | port of the noctalia community plugin [herdr](https://github.com/noctalia-dev/community-plugins/tree/main/herdr) by Hy4ri |
+| Hermes Agent | Hermes Agent is a Go rewrite of the behavior of Nomadcxx/noctalia-hermes-agent, MIT. The bridge script is bundled from that project's v5 port, with local changes to approval request identity and model-name validation. |
 | Wallpaper Depth | port of noctalia official plugin |
 | Phone Connect | port of DMS DankKDEConnect |
 | AI Usage | new; patterns from noctalia ai-usagebar and DMS usage widgets |

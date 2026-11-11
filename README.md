@@ -25,6 +25,7 @@ it.
 | **Games** | Multi-launcher game deck: Steam, Lutris, Heroic and Faugus — launch games, see what's running, session history, cover art | Steam / Lutris / Heroic / Faugus (any subset) |
 | **GitHub Notifications** | Triage unread GitHub notifications and contribution activity from the panel | `gh` |
 | **Herdr** | Monitor herdr terminal sessions and coding agents from the bar, with a session panel | `herdr` |
+| **Hermes Agent** | Hermes status, chat, approvals, sessions and models from the bar, for a local or remote bridge | `python3` and `hermes` (Local mode) |
 | **Lid Guard** | Toggle lid-close inhibition from the bar, Control Center, or detail panel | systemd user manager, `systemctl`, `systemd-run`, `systemd-inhibit`, `sleep` |
 | **Mini Docker** | The Docker whale in the bar, with a panel to manage containers | `docker` |
 | **Moonbit** | System cleaner: scan and clean progress from the bar, with a category review panel | `moonbit` |
