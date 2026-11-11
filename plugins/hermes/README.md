@@ -6,8 +6,9 @@ this machine or one running somewhere else.
 
 ![Hermes Agent panel](screenshot.png)
 
-> **Status:** scaffold. The plugin loads and every view shows
-> **Connecting…**; the bridge client and the real views are not in yet.
+> **Status:** in progress. The plugin connects in both modes and shows the
+> bridge status in every view; the real bar, panels and settings views are
+> not in yet.
 
 ## Local mode
 
@@ -29,6 +30,12 @@ plugin never starts or signals a process.
 Bridge traffic is plain HTTP. Across an untrusted network, forward the port
 over SSH; **SSH target** fills in the command for the **Copy SSH command**
 button. The token is never logged or shown.
+
+## One-shot questions
+
+Cancelling a one-shot question ends only the plugin's request. The bridge
+keeps running that `hermes` process until it finishes or hits the bridge's own
+600 s timeout.
 
 ## Attribution
 
