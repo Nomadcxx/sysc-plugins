@@ -2,6 +2,7 @@
 package hermes
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,15 +63,13 @@ type statusLook struct {
 }
 
 // statusLooks carries noctalia's labels (translations/en.json) and colours.
-// Glyphs come from the pinned sysc-shell catalogue; the two noctalia alert
-// glyphs have no warning-free match, so degraded and error use link_off and
-// cancel.
+// Glyphs follow the locked design table on the pinned v0.2.5 catalogue.
 var statusLooks = map[Status]statusLook{
 	StatusOffline:   {"Offline", "power_settings_new", v1.ToneError},
 	StatusIdle:      {"Online", "check", v1.ToneAccent},
-	StatusBusy:      {"Working", "bolt", v1.ToneAccent},
+	StatusBusy:      {"Working", "refresh", v1.ToneAccent},
 	StatusAttention: {"Needs You", "notifications-active", v1.ToneWarning},
-	StatusDegraded:  {"Degraded", "link_off", v1.ToneWarning},
+	StatusDegraded:  {"Degraded", "gpp_maybe", v1.ToneWarning},
 	StatusError:     {"Error", "cancel", v1.ToneError},
 	StatusUnknown:   {"Unknown", "ai-usage", v1.ToneNormal},
 }
@@ -101,12 +100,19 @@ type BarState struct {
 	HermesStatus  string
 	GatewayStatus string
 	Model         string
+	// ClientOnly and Host feed the tooltip's cleartext warning.
+	ClientOnly bool
+	Host       string
 }
 
-// DeriveStatus follows noctalia's deriveStatus: a bridge that is not online
-// is offline; otherwise Hermes's own status wins, and while Hermes has not
+// DeriveStatus follows the design's first steps on this stand-in: a bridge
+// status of "error" is error; any other bridge that is not online is
+// offline; otherwise Hermes's own status wins, and while Hermes has not
 // reported one a running gateway reads as idle.
 func DeriveStatus(s BarState) Status {
+	if s.BridgeStatus == "error" {
+		return StatusError
+	}
 	if s.BridgeStatus != "online" {
 		return StatusOffline
 	}
@@ -174,7 +180,8 @@ func barText(s Status) string {
 }
 
 // TooltipTree renders noctalia's tooltip: "Hermes: <status> · <model>",
-// then the bridge error on its own line.
+// then the bridge error on its own line, then a cleartext warning when
+// client-only mode talks to a non-loopback host.
 func TooltipTree(state BarState) *v1.Node {
 	root := &v1.Node{Kind: v1.KindColumn, Gap: 2}
 	root.Children = append(root.Children, &v1.Node{
@@ -185,7 +192,53 @@ func TooltipTree(state BarState) *v1.Node {
 			Kind: v1.KindText, Text: clip(e, tooltipLineBytes), Tone: v1.ToneError,
 		})
 	}
+	if w := cleartextWarning(state.ClientOnly, state.Host); w != "" {
+		for _, line := range wrapLines(w, tooltipLineBytes) {
+			root.Children = append(root.Children, &v1.Node{
+				Kind: v1.KindText, Text: line, Tone: v1.ToneWarning,
+			})
+		}
+	}
 	return root
+}
+
+func cleartextWarning(clientOnly bool, host string) string {
+	host = strings.TrimSpace(host)
+	if !clientOnly || host == "" || loopbackHost(host) {
+		return ""
+	}
+	return "Cleartext HTTP to " + host + ": the token and prompts are not encrypted."
+}
+
+func loopbackHost(host string) bool {
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func wrapLines(text string, maxBytes int) []string {
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return nil
+	}
+	var lines []string
+	cur := words[0]
+	for _, w := range words[1:] {
+		next := cur + " " + w
+		if len(next) <= maxBytes {
+			cur = next
+			continue
+		}
+		lines = append(lines, clip(cur, maxBytes))
+		cur = w
+	}
+	if cur != "" {
+		lines = append(lines, clip(cur, maxBytes))
+	}
+	return lines
 }
 
 func headline(state BarState, prefix string) string {

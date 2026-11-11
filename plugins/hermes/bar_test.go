@@ -76,20 +76,21 @@ func TestStatusVocabularyMatchesNoctalia(t *testing.T) {
 	want := []struct {
 		status Status
 		label  string
+		glyph  string
 		tone   v1.Tone
 	}{
-		{StatusOffline, "Offline", v1.ToneError},
-		{StatusIdle, "Online", v1.ToneAccent},
-		{StatusBusy, "Working", v1.ToneAccent},
-		{StatusAttention, "Needs You", v1.ToneWarning},
-		{StatusDegraded, "Degraded", v1.ToneWarning},
-		{StatusError, "Error", v1.ToneError},
-		{StatusUnknown, "Unknown", v1.ToneNormal},
+		{StatusOffline, "Offline", "power_settings_new", v1.ToneError},
+		{StatusIdle, "Online", "check", v1.ToneAccent},
+		{StatusBusy, "Working", "refresh", v1.ToneAccent},
+		{StatusAttention, "Needs You", "notifications-active", v1.ToneWarning},
+		{StatusDegraded, "Degraded", "gpp_maybe", v1.ToneWarning},
+		{StatusError, "Error", "cancel", v1.ToneError},
+		{StatusUnknown, "Unknown", "ai-usage", v1.ToneNormal},
 	}
 	if len(Statuses) != len(want) {
 		t.Fatalf("Statuses has %d entries, want the seven noctalia statuses", len(Statuses))
 	}
-	forbidden := []string{"warning", "history", "alert", "gpp_maybe", "error"}
+	forbidden := []string{"warning", "history", "alert", "error"}
 	seen := map[string]Status{}
 	for i, w := range want {
 		s := Statuses[i]
@@ -101,6 +102,9 @@ func TestStatusVocabularyMatchesNoctalia(t *testing.T) {
 		}
 		if got := s.Tone(); got != w.tone {
 			t.Errorf("%s tone = %q, want %q", s, got, w.tone)
+		}
+		if got := s.Glyph(); got != w.glyph {
+			t.Errorf("%s glyph = %q, want %q", s, got, w.glyph)
 		}
 		glyph := s.Glyph()
 		if !icons.ValidName(glyph) {
@@ -127,6 +131,7 @@ func TestDeriveStatusFollowsNoctalia(t *testing.T) {
 		{"zero state", BarState{}, StatusOffline},
 		{"bridge offline wins", BarState{BridgeStatus: "offline", HermesStatus: "busy"}, StatusOffline},
 		{"bridge starting", BarState{BridgeStatus: "starting", HermesStatus: "idle"}, StatusOffline},
+		{"bridge error", BarState{BridgeStatus: "error", HermesStatus: "idle"}, StatusError},
 		{"hermes idle", BarState{BridgeStatus: "online", HermesStatus: "idle"}, StatusIdle},
 		{"hermes busy", BarState{BridgeStatus: "online", HermesStatus: "busy"}, StatusBusy},
 		{"hermes attention", BarState{BridgeStatus: "online", HermesStatus: "attention"}, StatusAttention},
@@ -340,6 +345,47 @@ func TestTooltipMatchesNoctalia(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestTooltipWarnsOnCleartextRemoteClient(t *testing.T) {
+	warning := func(host string) string {
+		return "Cleartext HTTP to " + host + ": the token and prompts are not encrypted."
+	}
+	online := BarState{BridgeStatus: "online", HermesStatus: "idle", Model: "example-model"}
+	cases := []struct {
+		name    string
+		state   BarState
+		wantMsg string
+	}{
+		{"client-only remote", withHost(online, true, "example.com"), warning("example.com")},
+		{"client-only LAN", withHost(online, true, "192.168.0.10"), warning("192.168.0.10")},
+		{"client-only loopback", withHost(online, true, "127.0.0.1"), ""},
+		{"client-only localhost", withHost(online, true, "localhost"), ""},
+		{"client-only IPv6 loopback", withHost(online, true, "::1"), ""},
+		{"local mode remote host", withHost(online, false, "example.com"), ""},
+	}
+	for _, c := range cases {
+		tip := TooltipTree(c.state)
+		got := strings.Join(texts(tip), " ")
+		switch {
+		case c.wantMsg == "" && strings.Contains(got, "Cleartext HTTP"):
+			t.Errorf("%s: tooltip %q should omit the cleartext warning", c.name, got)
+		case c.wantMsg != "" && !strings.Contains(got, c.wantMsg):
+			t.Errorf("%s: tooltip %q does not show %q", c.name, got, c.wantMsg)
+		}
+		lintView(t, c.name+" tooltip", tip, v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight)
+		for i, line := range texts(tip) {
+			if len(line) > tooltipLineBytes {
+				t.Errorf("%s: line %d is %d bytes, past the %d-byte budget", c.name, i, len(line), tooltipLineBytes)
+			}
+		}
+	}
+}
+
+func withHost(state BarState, clientOnly bool, host string) BarState {
+	state.ClientOnly = clientOnly
+	state.Host = host
+	return state
 }
 
 func TestAvatarPathResolvesTheShippedAsset(t *testing.T) {
