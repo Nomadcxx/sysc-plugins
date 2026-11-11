@@ -36,6 +36,11 @@ bar glyph and a panel that watch herdr terminal sessions and the coding agents
 running in them. It reads herdr's own session state over its local sockets,
 never the network. No reference code or artwork is used.
 
+The Hermes Agent bar avatar `plugins/hermes/assets/hermes-icon.png` is copied
+from [Nomadcxx/noctalia-hermes-agent](https://github.com/Nomadcxx/noctalia-hermes-agent)
+(`hermes-agent/assets/hermes-icon.png`), under that project's MIT license,
+Copyright (c) 2026 nomadx.
+
 Cat ports the behaviour of noctalia's `cat` community plugin (DotNetRob) and
 the DMS Cat Widget (xi-ve/cat-dms, dms-plugin-registry #562): a bar cat
 whose pace follows CPU load. Neither reference's artwork is used. The cat is
