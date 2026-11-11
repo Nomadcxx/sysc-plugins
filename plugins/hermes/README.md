@@ -6,8 +6,9 @@ this machine or one running somewhere else.
 
 ![Hermes Agent panel](screenshot.png)
 
-> **Status:** scaffold. The plugin loads and every view shows
-> **Connecting…**; the bridge client and the real views are not in yet.
+> **Status:** in development. The bar, tooltip, summary, menu and chat
+> panel views are drawn from fixture state. The bridge client and runtime
+> are not in yet, so the installed plugin still shows **Connecting…**.
 
 ## Local mode
 
