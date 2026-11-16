@@ -82,15 +82,6 @@ func SectionForNode(id string) (Section, bool) {
 	return s, true
 }
 
-// Message is one transcript entry. Roles other than "user" render as
-// Hermes, as noctalia does.
-type Message struct {
-	ID        string
-	Role      string
-	Text      string
-	Streaming bool
-}
-
 // ToolEvent is one background action from the bridge's event stream.
 type ToolEvent struct {
 	ID   string
@@ -172,20 +163,20 @@ func ResetPlan() []BridgeCall {
 }
 
 // panelStatusIcon is the design's panel status table. It is not
-// Status.Glyph: the panel keeps its own locked set.
-func panelStatusIcon(s Status) string {
+// BarStatus.Glyph: the panel keeps its own locked set.
+func panelStatusIcon(s BarStatus) string {
 	switch s {
-	case StatusOffline:
+	case BarStatusOffline:
 		return "power_settings_new"
-	case StatusIdle:
+	case BarStatusIdle:
 		return "check"
-	case StatusBusy:
+	case BarStatusBusy:
 		return "refresh"
-	case StatusAttention:
+	case BarStatusAttention:
 		return "notifications-active"
-	case StatusDegraded:
+	case BarStatusDegraded:
 		return "gpp_maybe"
-	case StatusError:
+	case BarStatusError:
 		return "cancel"
 	}
 	return "ai-usage"
@@ -213,7 +204,7 @@ func panelModelLabel(p PanelState) string {
 }
 
 func turnRunning(p PanelState) bool {
-	return p.Summary.SessionRunning || DeriveStatus(p.Summary.BarState) == StatusBusy
+	return p.Summary.SessionRunning || deriveBarStatus(p.Summary.BarState) == BarStatusBusy
 }
 
 // activityLine is noctalia's background-action caption.
@@ -239,7 +230,7 @@ func showActivity(p PanelState) bool {
 // is left over a 160 transcript, and a pending approval always stays.
 func PanelTree(p PanelState, width, height int) *v1.Node {
 	inner := width - 2*panelPad
-	status := DeriveStatus(p.Summary.BarState)
+	status := deriveBarStatus(p.Summary.BarState)
 	running := turnRunning(p)
 
 	header := panelHeader(p, status, inner)
@@ -325,7 +316,7 @@ func autoButton(id, text, name, icon string, height int) *v1.Node {
 	return button(id, text, name, icon, buttonWidth(text, icon), height)
 }
 
-func panelHeader(p PanelState, status Status, inner int) *v1.Node {
+func panelHeader(p PanelState, status BarStatus, inner int) *v1.Node {
 	pin := "Pin"
 	if p.Pinned {
 		pin = "Unpin"
@@ -576,7 +567,7 @@ func emptyTranscript(p PanelState, inner, height int) *v1.Node {
 	tone := v1.ToneSubtle
 	icon := iconChat
 	switch {
-	case DeriveStatus(p.Summary.BarState) == StatusOffline:
+	case deriveBarStatus(p.Summary.BarState) == BarStatusOffline:
 		lines = []string{"Bridge offline", strings.TrimSpace(p.Summary.BridgeError)}
 		tone, icon = v1.ToneError, iconStartGate
 	case p.SessionID != "":

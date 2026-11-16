@@ -24,14 +24,6 @@ const (
 // errInvalidModel is the local refusal for a name the bridge would reject.
 var errInvalidModel = errors.New("Invalid model or provider name")
 
-// ModelOption is one entry of the bridge's model_options: name is
-// "label (provider)".
-type ModelOption struct {
-	Provider string
-	Model    string
-	Name     string
-}
-
 // ModelPicker is the panel's local choice. It seeds from the live model
 // until the user touches it; Provider "" means Current/default.
 type ModelPicker struct {
@@ -49,9 +41,9 @@ type ModelRequest struct {
 	Persist  bool   `json:"persist"`
 }
 
-// ValidModelName refuses what the bridge would: empty names, any
+// validModelNameUI refuses what the bridge would: empty names, any
 // whitespace, and a leading dash that would read as a flag.
-func ValidModelName(s string) bool {
+func validModelNameUI(s string) bool {
 	if s == "" || strings.HasPrefix(s, "-") {
 		return false
 	}
@@ -150,7 +142,7 @@ func ApplyModel(p ModelPicker, liveProvider string) (ModelRequest, error) {
 	if provider == "" {
 		provider = liveProvider
 	}
-	if !ValidModelName(provider) || !ValidModelName(p.Model) {
+	if !validModelNameUI(provider) || !validModelNameUI(p.Model) {
 		return ModelRequest{}, errInvalidModel
 	}
 	return ModelRequest{Provider: provider, Model: p.Model, Persist: p.Persist}, nil

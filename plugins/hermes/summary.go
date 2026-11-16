@@ -32,16 +32,6 @@ const (
 	summaryAvatarSize = 28
 )
 
-// CronJob is one Hermes cron job as the bridge normalizes it.
-type CronJob struct {
-	Name       string
-	Active     bool
-	State      string
-	Schedule   string
-	NextRun    string
-	LastStatus string
-}
-
 // SummaryState is the slice of the bridge snapshot the summary popup reads,
 // on top of the bar's: summary.model, summary.cron, summary.mcp,
 // summary.activity, usage, summary.gateway.platforms, approval and
@@ -163,7 +153,7 @@ func activityLabel(s SummaryState) string {
 // Interrupt, Refresh and Hermes Settings. It fills the width by height box
 // the host opened.
 func SummaryTree(s SummaryState, avatar string, width, height int) *v1.Node {
-	status := DeriveStatus(s.BarState)
+	status := deriveBarStatus(s.BarState)
 	inner := width - 2*summaryPad
 
 	children := []*v1.Node{
@@ -208,14 +198,14 @@ func SummaryTree(s SummaryState, avatar string, width, height int) *v1.Node {
 	}
 }
 
-func summaryHeader(status Status, avatar string, inner int) *v1.Node {
+func summaryHeader(status BarStatus, avatar string, inner int) *v1.Node {
 	var mark *v1.Node
 	if avatar != "" {
 		mark = &v1.Node{Kind: v1.KindImage, Path: avatar, Name: "Hermes", Role: "img", ImageSize: summaryAvatarSize}
 	} else {
 		glyph := fallbackAvatarIcon
-		if status == StatusBusy {
-			glyph = StatusBusy.Glyph()
+		if status == BarStatusBusy {
+			glyph = BarStatusBusy.Glyph()
 		}
 		mark = &v1.Node{Kind: v1.KindIcon, Icon: glyph, IconSize: 24, Tone: status.Tone(), Name: "Hermes"}
 	}
@@ -331,7 +321,7 @@ func summaryBanner(s SummaryState, inner int) *v1.Node {
 
 // summaryActions is New session, Interrupt and Refresh. Interrupt is live
 // only while a session runs or Hermes is busy, as in noctalia.
-func summaryActions(s SummaryState, status Status, inner int) *v1.Node {
+func summaryActions(s SummaryState, status BarStatus, inner int) *v1.Node {
 	w := (inner - 2*8) / 3
 	button := func(id, text, icon string) *v1.Node {
 		return &v1.Node{
@@ -341,7 +331,7 @@ func summaryActions(s SummaryState, status Status, inner int) *v1.Node {
 		}
 	}
 	interrupt := button("interrupt", "Interrupt", menuIconInterrupt)
-	interrupt.Disabled = !(s.SessionRunning || status == StatusBusy)
+	interrupt.Disabled = !(s.SessionRunning || status == BarStatusBusy)
 	return &v1.Node{
 		Kind: v1.KindRow, Width: inner, Height: buttonHeight, Gap: 8,
 		Children: []*v1.Node{

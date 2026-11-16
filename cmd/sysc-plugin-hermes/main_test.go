@@ -1,17 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/plugins/hermes"
 	shelllint "github.com/Nomadcxx/sysc-shell/plugin/lint"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -87,15 +94,43 @@ type testHost struct {
 	msgs     chan v1.Message
 	done     chan error
 	fromPlug *io.PipeReader
+	// silent makes the host never answer host calls, like a wedged shell.
+	silent atomic.Bool
+	calls  atomic.Int64
+	stderr *lockedBuffer
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
 
 func startPlugin(t *testing.T) (*testHost, *v1.PluginHello) {
 	t.Helper()
+	return startPluginWith(t, func(*testHost) {})
+}
+
+func startPluginWith(t *testing.T, setup func(*testHost)) (*testHost, *v1.PluginHello) {
+	t.Helper()
 	pluginIn, hostOut := io.Pipe()
 	hostIn, pluginOut := io.Pipe()
-	h := &testHost{t: t, enc: v1.NewEncoder(hostOut), msgs: make(chan v1.Message, 128), done: make(chan error, 1), fromPlug: hostIn}
+	h := &testHost{t: t, enc: v1.NewEncoder(hostOut), msgs: make(chan v1.Message, 128), done: make(chan error, 1),
+		fromPlug: hostIn, stderr: &lockedBuffer{}}
+	setup(h)
 	go func() {
-		h.done <- run(pluginIn, pluginOut)
+		h.done <- runWith(pluginIn, pluginOut, h.stderr, hermes.Options{})
 		_ = pluginOut.Close()
 	}()
 	go h.read()
@@ -142,7 +177,10 @@ func (h *testHost) read() {
 			return
 		}
 		if call, ok := msg.(*v1.HostCall); ok {
-			_ = h.send(&v1.HostReply{ID: call.ID, OK: true})
+			h.calls.Add(1)
+			if !h.silent.Load() {
+				_ = h.send(&v1.HostReply{ID: call.ID, OK: true})
+			}
 		}
 		select {
 		case h.msgs <- msg:
@@ -277,5 +315,283 @@ func TestConnectingTreesLayOutAtDeclaredAndFittedSizes(t *testing.T) {
 		for _, f := range shelllint.Tree(tree, tc.view, tc.w, tc.h) {
 			t.Errorf("%s %s %dx%d: %s", tc.view, tc.entry, tc.w, tc.h, f)
 		}
+	}
+}
+
+// fakeRemote is an httptest stand-in for a client-only bridge, with a fake
+// token.
+func fakeRemote(t *testing.T, hermesStatus string) (host string, port int) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Bridge-Token") != "fake-token" && r.URL.Path != "/detect" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"bridge": map[string]any{"status": "online"},
+			"hermes": map[string]any{"status": hermesStatus},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	h, p, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	port, _ = strconv.Atoi(p)
+	return h, port
+}
+
+func clientOnlyValues(host string, port int) map[string]any {
+	return map[string]any{
+		"client_only_mode":    true,
+		"bridge_host":         host,
+		"bridge_port":         float64(port),
+		"bridge_token_manual": "fake-token",
+		"bridge_token_file":   "/nonexistent/hermes.token",
+	}
+}
+
+func (h *testHost) waitSnapshot(viewID string, accept func(*v1.ViewSnapshot) bool) *v1.ViewSnapshot {
+	h.t.Helper()
+	return h.wait(func(m v1.Message) bool {
+		s, ok := m.(*v1.ViewSnapshot)
+		return ok && s.ViewID == viewID && accept(s)
+	}).(*v1.ViewSnapshot)
+}
+
+func TestSettingsChangedConnectsAndRepublishes(t *testing.T) {
+	host, port := fakeRemote(t, "idle")
+	h, _ := startPlugin(t)
+	if err := h.send(&v1.ViewOpen{ViewID: "bar-1", View: v1.ViewBar, Entry: "bar", Width: 240, Height: 32}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitSnapshot("bar-1", func(s *v1.ViewSnapshot) bool { return strings.Contains(treeText(s.Root), "Connecting…") })
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(host, port)}); err != nil {
+		t.Fatal(err)
+	}
+	snap := h.waitSnapshot("bar-1", func(s *v1.ViewSnapshot) bool { return strings.Contains(treeText(s.Root), "Online") })
+	if err := v1.Validate(snap.Root, v1.ViewBar); err != nil {
+		t.Fatal(err)
+	}
+	status := h.wait(func(m v1.Message) bool {
+		s, ok := m.(*v1.ServiceStatus)
+		return ok && s.State == v1.ServiceStateActive
+	}).(*v1.ServiceStatus)
+	if status.ServiceID != serviceID || status.Message != "Online" {
+		t.Fatalf("service status = %+v", status)
+	}
+}
+
+func TestAWedgedHostCallNeverBlocksTheEventLoop(t *testing.T) {
+	host, port := fakeRemote(t, "idle")
+	h, _ := startPluginWith(t, func(h *testHost) { h.silent.Store(true) })
+	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Width: 780, Height: 720}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(host, port)}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool { return strings.Contains(treeText(s.Root), "Online") })
+	// Auto-configure's state.get is now waiting on a host that never answers.
+	deadline := time.Now().Add(2 * time.Second)
+	for h.calls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if h.calls.Load() == 0 {
+		t.Fatal("auto-configure made no host call")
+	}
+	start := time.Now()
+	for i := 0; i < 20; i++ {
+		if err := h.send(&v1.ViewResize{ViewID: "panel-1", Width: 640 + i, Height: 520}); err != nil {
+			t.Fatal(err)
+		}
+		w := 640 + i
+		h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool { return s.Root.Width == w })
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("20 resizes took %s behind a wedged host call", d)
+	}
+}
+
+func TestViewErrorIsLoggedAndShownOnTheConnectionLine(t *testing.T) {
+	host, port := fakeRemote(t, "idle")
+	h, _ := startPlugin(t)
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(host, port)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.send(&v1.ViewOpen{ViewID: "settings-1", View: v1.ViewPanel, Entry: "settings", Width: 640, Height: 720}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitSnapshot("settings-1", func(*v1.ViewSnapshot) bool { return true })
+	if err := h.send(&v1.ViewError{ViewID: "settings-1", Revision: 1, Reason: "node too wide"}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitSnapshot("settings-1", func(s *v1.ViewSnapshot) bool { return strings.Contains(treeText(s.Root), "node too wide") })
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(h.stderr.String(), "node too wide") {
+		if time.Now().After(deadline) {
+			t.Fatalf("view.error not logged; stderr = %q", h.stderr.String())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if strings.Contains(h.stderr.String(), "fake-token") {
+		t.Fatal("the token reached the log")
+	}
+}
+
+func TestViewCloseDropsTheView(t *testing.T) {
+	h, _ := startPlugin(t)
+	for _, id := range []string{"panel-1", "panel-2"} {
+		if err := h.send(&v1.ViewOpen{ViewID: id, View: v1.ViewPanel, Entry: "panel", Width: 780, Height: 720}); err != nil {
+			t.Fatal(err)
+		}
+		h.waitSnapshot(id, func(*v1.ViewSnapshot) bool { return true })
+	}
+	if err := h.send(&v1.ViewClose{ViewID: "panel-1"}); err != nil {
+		t.Fatal(err)
+	}
+	// Messages for the closed view are ignored; the open one still answers.
+	_ = h.send(&v1.ViewResize{ViewID: "panel-1", Width: 600, Height: 500})
+	_ = h.send(&v1.ViewResync{ViewID: "panel-1"})
+	_ = h.send(&v1.ViewResize{ViewID: "panel-2", Width: 600, Height: 500})
+	h.wait(func(m v1.Message) bool {
+		s, ok := m.(*v1.ViewSnapshot)
+		if ok && s.ViewID == "panel-1" {
+			t.Fatal("closed view republished")
+		}
+		return ok && s.ViewID == "panel-2" && s.Root.Width == 600
+	})
+}
+
+func TestViewOpenRecordsItsPlacement(t *testing.T) {
+	vs := newViewSet()
+	v := vs.open(&v1.ViewOpen{ViewID: "p", View: v1.ViewPanel, Entry: "summary", Instance: "i1",
+		Output: "DP-1", Generation: 7, Width: 380, Height: 480})
+	if v.kind != v1.ViewPanel || v.entry != "summary" || v.instance != "i1" || v.output != "DP-1" ||
+		v.generation != 7 || v.width != 380 || v.height != 480 || v.rev != 0 {
+		t.Fatalf("open recorded %+v", v)
+	}
+	v.section, v.composer = "chat", "draft"
+	other := vs.open(&v1.ViewOpen{ViewID: "q", View: v1.ViewPanel, Entry: "panel"})
+	if other.section != "" || other.composer != "" {
+		t.Fatal("per-view state leaked between views")
+	}
+	vs.close("p")
+	if vs.get("p") != nil {
+		t.Fatal("close kept the view")
+	}
+	if again := vs.open(&v1.ViewOpen{ViewID: "p", View: v1.ViewPanel, Entry: "summary"}); again.section != "" || again.composer != "" {
+		t.Fatal("reopened view kept the closed view's state")
+	}
+}
+
+func TestStaleRevisionDroppedStatusOnlyRepublishAccepted(t *testing.T) {
+	vs := newViewSet()
+	v := vs.open(&v1.ViewOpen{ViewID: "p", View: v1.ViewPanel, Entry: "panel", Width: 780, Height: 720})
+	state := hermes.View{Mode: hermes.ModeClientOnly, Status: hermes.StatusFor(hermes.StatusIdle)}
+
+	rev1, ok := v.next(viewTree(v, state, true))
+	if !ok || rev1 != 1 {
+		t.Fatalf("first publish rev %d sent=%v", rev1, ok)
+	}
+	// Same tree again: nothing to send.
+	if _, ok := v.next(viewTree(v, state, true)); ok {
+		t.Fatal("an unchanged tree was republished")
+	}
+	// Status-only change: the text moves, the addressable nodes do not.
+	state.Status = hermes.StatusFor(hermes.StatusOffline)
+	state.Message = hermes.MsgOffline
+	rev2, ok := v.next(viewTree(v, state, true))
+	if !ok || rev2 != 2 {
+		t.Fatalf("status republish rev %d sent=%v", rev2, ok)
+	}
+	click := func(rev uint64) bool {
+		return v.accepts(&v1.InputEvent{ViewID: "p", Revision: rev, Node: "refresh", Event: v1.EventActivate})
+	}
+	if !click(rev1) || !click(rev2) {
+		t.Fatal("a click on the unchanged Refresh button was dropped after a status-only republish")
+	}
+	// Content change: Refresh is disabled while an action is pending.
+	state.Pending = true
+	rev3, ok := v.next(viewTree(v, state, true))
+	if !ok {
+		t.Fatal("content change not sent")
+	}
+	if click(rev2) {
+		t.Fatal("a stale revision was accepted after the content changed")
+	}
+	if !click(rev3) {
+		t.Fatal("the current revision was dropped")
+	}
+	if click(rev3 + 1) {
+		t.Fatal("a revision from the future was accepted")
+	}
+	// Resync restarts the revision count.
+	v.resync()
+	if rev, ok := v.next(viewTree(v, state, true)); !ok || rev != 1 {
+		t.Fatalf("after resync rev %d sent=%v", rev, ok)
+	}
+}
+
+func TestActionSignatureCoversAddressableNodesOnly(t *testing.T) {
+	base := func() *v1.Node {
+		return &v1.Node{Kind: v1.KindColumn, Children: []*v1.Node{
+			{Kind: v1.KindText, Text: "Online"},
+			{Kind: v1.KindButton, ID: "refresh", Text: "Refresh", Events: []v1.EventKind{v1.EventActivate}},
+		}}
+	}
+	a := actionSignature(base())
+	status := base()
+	status.Children[0].Text = "Offline"
+	if actionSignature(status) != a {
+		t.Fatal("a text change on a node without an id changed the signature")
+	}
+	for name, mutate := range map[string]func(n *v1.Node){
+		"label":    func(n *v1.Node) { n.Text = "Reload" },
+		"disabled": func(n *v1.Node) { n.Disabled = true },
+		"events":   func(n *v1.Node) { n.Events = append(n.Events, v1.EventPointer) },
+		"kind":     func(n *v1.Node) { n.Kind = v1.KindText },
+		"id":       func(n *v1.Node) { n.ID = "other" },
+	} {
+		n := base()
+		mutate(n.Children[1])
+		if actionSignature(n) == a {
+			t.Errorf("%s change kept the signature", name)
+		}
+	}
+}
+
+func TestStatusTreesLayOut(t *testing.T) {
+	vs := newViewSet()
+	for _, st := range []hermes.View{
+		{Mode: hermes.ModeLocal, Status: hermes.StatusFor(hermes.StatusIdle)},
+		{Mode: hermes.ModeClientOnly, Status: hermes.StatusFor(hermes.StatusError), Message: hermes.MsgNoToken,
+			Warning: hermes.MsgCleartext("192.168.0.10"), Pending: true, ViewError: "node too wide"},
+	} {
+		for _, tc := range []struct {
+			view  v1.ViewKind
+			entry string
+			w, h  int
+		}{
+			{v1.ViewBar, "bar", 240, 32}, {v1.ViewBar, "bar", 32, 32},
+			{v1.ViewTooltip, "bar", 280, 200},
+			{v1.ViewPanel, "panel", 780, 720}, {v1.ViewPanel, "summary", 320, 400},
+			{v1.ViewPanel, "menu", 260, 300}, {v1.ViewPanel, "settings", 560, 520},
+			{v1.ViewFloating, "pinned", 400, 480},
+		} {
+			v := vs.open(&v1.ViewOpen{ViewID: "x", View: tc.view, Entry: tc.entry, Width: tc.w, Height: tc.h})
+			tree := viewTree(v, st, true)
+			if err := v1.Validate(tree, tc.view); err != nil {
+				t.Errorf("%s %s %dx%d: %v", tc.view, tc.entry, tc.w, tc.h, err)
+			}
+			for _, f := range shelllint.Tree(tree, tc.view, tc.w, tc.h) {
+				t.Errorf("%s %s %dx%d: %s", tc.view, tc.entry, tc.w, tc.h, f)
+			}
+		}
+	}
+}
+
+func TestBundledScriptPath(t *testing.T) {
+	got := bundledScript("/usr/lib/sysc-shell/plugins/hermes/bin/sysc-plugin-hermes")
+	if want := "/usr/lib/sysc-shell/plugins/hermes/scripts/hermes_bridge.py"; got != want {
+		t.Fatalf("bundled script = %q, want %q", got, want)
 	}
 }

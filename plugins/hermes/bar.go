@@ -37,58 +37,58 @@ const (
 	avatarSize = 22
 )
 
-// Status is the bar's reading of the bridge and Hermes, the seven values
+// BarStatus is the bar's reading of the bridge and Hermes, the seven values
 // noctalia-hermes-agent shows.
-type Status string
+type BarStatus string
 
 const (
-	StatusOffline   Status = "offline"
-	StatusIdle      Status = "idle"
-	StatusBusy      Status = "busy"
-	StatusAttention Status = "attention"
-	StatusDegraded  Status = "degraded"
-	StatusError     Status = "error"
-	StatusUnknown   Status = "unknown"
+	BarStatusOffline   BarStatus = "offline"
+	BarStatusIdle      BarStatus = "idle"
+	BarStatusBusy      BarStatus = "busy"
+	BarStatusAttention BarStatus = "attention"
+	BarStatusDegraded  BarStatus = "degraded"
+	BarStatusError     BarStatus = "error"
+	BarStatusUnknown   BarStatus = "unknown"
 )
 
-// Statuses lists every status in noctalia's order.
-var Statuses = []Status{
-	StatusOffline, StatusIdle, StatusBusy, StatusAttention,
-	StatusDegraded, StatusError, StatusUnknown,
+// BarStatuses lists every status in noctalia's order.
+var BarStatuses = []BarStatus{
+	BarStatusOffline, BarStatusIdle, BarStatusBusy, BarStatusAttention,
+	BarStatusDegraded, BarStatusError, BarStatusUnknown,
 }
 
-type statusLook struct {
+type barStatusLook struct {
 	label, glyph string
 	tone         v1.Tone
 }
 
-// statusLooks carries noctalia's labels (translations/en.json) and colours.
+// barStatusLooks carries noctalia's labels (translations/en.json) and colours.
 // Glyphs follow the locked design table on the pinned v0.2.5 catalogue.
-var statusLooks = map[Status]statusLook{
-	StatusOffline:   {"Offline", "power_settings_new", v1.ToneError},
-	StatusIdle:      {"Online", "check", v1.ToneAccent},
-	StatusBusy:      {"Working", "refresh", v1.ToneAccent},
-	StatusAttention: {"Needs You", "notifications-active", v1.ToneWarning},
-	StatusDegraded:  {"Degraded", "gpp_maybe", v1.ToneWarning},
-	StatusError:     {"Error", "cancel", v1.ToneError},
-	StatusUnknown:   {"Unknown", "ai-usage", v1.ToneNormal},
+var barStatusLooks = map[BarStatus]barStatusLook{
+	BarStatusOffline:   {"Offline", "power_settings_new", v1.ToneError},
+	BarStatusIdle:      {"Online", "check", v1.ToneAccent},
+	BarStatusBusy:      {"Working", "refresh", v1.ToneAccent},
+	BarStatusAttention: {"Needs You", "notifications-active", v1.ToneWarning},
+	BarStatusDegraded:  {"Degraded", "gpp_maybe", v1.ToneWarning},
+	BarStatusError:     {"Error", "cancel", v1.ToneError},
+	BarStatusUnknown:   {"Unknown", "ai-usage", v1.ToneNormal},
 }
 
-func (s Status) look() statusLook {
-	if l, ok := statusLooks[s]; ok {
+func (s BarStatus) look() barStatusLook {
+	if l, ok := barStatusLooks[s]; ok {
 		return l
 	}
-	return statusLooks[StatusUnknown]
+	return barStatusLooks[BarStatusUnknown]
 }
 
 // Label is the status as the user reads it.
-func (s Status) Label() string { return s.look().label }
+func (s BarStatus) Label() string { return s.look().label }
 
 // Glyph is the status icon name.
-func (s Status) Glyph() string { return s.look().glyph }
+func (s BarStatus) Glyph() string { return s.look().glyph }
 
 // Tone is the status colour role.
-func (s Status) Tone() v1.Tone { return s.look().tone }
+func (s BarStatus) Tone() v1.Tone { return s.look().tone }
 
 // BarState is the narrow slice of the bridge snapshot the bar and tooltip
 // read. It stands in until the runtime snapshot lands; the runtime fills it
@@ -105,27 +105,27 @@ type BarState struct {
 	Host       string
 }
 
-// DeriveStatus follows the design's first steps on this stand-in: a bridge
+// deriveBarStatus follows the design's first steps on this stand-in: a bridge
 // status of "error" is error; any other bridge that is not online is
 // offline; otherwise Hermes's own status wins, and while Hermes has not
 // reported one a running gateway reads as idle.
-func DeriveStatus(s BarState) Status {
+func deriveBarStatus(s BarState) BarStatus {
 	if s.BridgeStatus == "error" {
-		return StatusError
+		return BarStatusError
 	}
 	if s.BridgeStatus != "online" {
-		return StatusOffline
+		return BarStatusOffline
 	}
-	if s.HermesStatus != "" && s.HermesStatus != string(StatusUnknown) {
-		if _, ok := statusLooks[Status(s.HermesStatus)]; ok {
-			return Status(s.HermesStatus)
+	if s.HermesStatus != "" && s.HermesStatus != string(BarStatusUnknown) {
+		if _, ok := barStatusLooks[BarStatus(s.HermesStatus)]; ok {
+			return BarStatus(s.HermesStatus)
 		}
-		return StatusUnknown
+		return BarStatusUnknown
 	}
 	if s.GatewayStatus == "running" {
-		return StatusIdle
+		return BarStatusIdle
 	}
-	return StatusUnknown
+	return BarStatusUnknown
 }
 
 // BarTree renders the bar at the standard width.
@@ -139,8 +139,8 @@ func BarTree(state BarState, hideWhenIdle bool, avatar string) *v1.Node {
 // hide_when_idle on, an idle bar is an empty row, as plugins/updates hides
 // at zero.
 func BarTreeAtWidth(state BarState, hideWhenIdle bool, avatar string, width int) *v1.Node {
-	status := DeriveStatus(state)
-	if hideWhenIdle && status == StatusIdle {
+	status := deriveBarStatus(state)
+	if hideWhenIdle && status == BarStatusIdle {
 		return &v1.Node{Kind: v1.KindRow}
 	}
 	button := &v1.Node{
@@ -169,11 +169,11 @@ func BarTreeAtWidth(state BarState, hideWhenIdle bool, avatar string, width int)
 	return row
 }
 
-func barText(s Status) string {
+func barText(s BarStatus) string {
 	switch s {
-	case StatusIdle, StatusUnknown:
+	case BarStatusIdle, BarStatusUnknown:
 		return ""
-	case StatusAttention:
+	case BarStatusAttention:
 		return "!"
 	}
 	return s.Label()
@@ -222,7 +222,7 @@ func loopbackHost(host string) bool {
 }
 
 func headline(state BarState, prefix string) string {
-	line := prefix + DeriveStatus(state).Label()
+	line := prefix + deriveBarStatus(state).Label()
 	if m := strings.TrimSpace(state.Model); m != "" {
 		line += " · " + m
 	}
@@ -254,18 +254,18 @@ func AvatarPath(exeDir string) string {
 // Busy stays false: it reports a running service action, which the runtime
 // owns.
 func ServiceStatusFor(state BarState, revision uint64) *v1.ServiceStatus {
-	status := DeriveStatus(state)
+	status := deriveBarStatus(state)
 	service := v1.ServiceStateActive
 	switch status {
-	case StatusOffline:
+	case BarStatusOffline:
 		service = v1.ServiceStateInactive
-	case StatusError:
+	case BarStatusError:
 		service = v1.ServiceStateError
-	case StatusUnknown:
+	case BarStatusUnknown:
 		service = v1.ServiceStateUnknown
 	}
 	msg := headline(state, "")
-	if e := strings.TrimSpace(state.BridgeError); e != "" && (status == StatusOffline || status == StatusError) {
+	if e := strings.TrimSpace(state.BridgeError); e != "" && (status == BarStatusOffline || status == BarStatusError) {
 		msg = status.Label() + " · " + e
 	}
 	return &v1.ServiceStatus{
@@ -276,8 +276,8 @@ func ServiceStatusFor(state BarState, revision uint64) *v1.ServiceStatus {
 
 // CanStartGateway follows noctalia's menu: Start gateway is offered only
 // outside client-only mode, while Hermes is offline or unknown.
-func CanStartGateway(s Status, clientOnly bool) bool {
-	return !clientOnly && (s == StatusOffline || s == StatusUnknown)
+func CanStartGateway(s BarStatus, clientOnly bool) bool {
+	return !clientOnly && (s == BarStatusOffline || s == BarStatusUnknown)
 }
 
 // clip collapses whitespace and cuts text to maxBytes on a rune boundary,

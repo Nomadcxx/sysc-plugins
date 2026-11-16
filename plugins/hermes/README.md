@@ -6,9 +6,9 @@ this machine or one running somewhere else.
 
 ![Hermes Agent panel](screenshot.png)
 
-> **Status:** in development. The bar, tooltip, summary, menu and chat
-> panel views are drawn from fixture state. The bridge client and runtime
-> are not in yet, so the installed plugin still shows **Connecting…**.
+> **Status:** in progress. The plugin connects in both modes, and the bar,
+> tooltip, summary, menu, chat panel, pinned panel and settings views are
+> drawn from the live bridge.
 
 ## Local mode
 
@@ -30,6 +30,32 @@ plugin never starts or signals a process.
 Bridge traffic is plain HTTP. Across an untrusted network, forward the port
 over SSH; **SSH target** fills in the command for the **Copy SSH command**
 button. The token is never logged or shown.
+
+## Approvals
+
+A pending approval shows Deny, Allow and Allow Session. Each button carries a
+signature of the request that was on screen when the card was drawn. On a
+click the plugin compares that signature with the approval it has cached,
+fetches `/state` once more and compares it again before it posts the choice.
+If either comparison fails the click is dropped and the card says
+`The approval changed; check the card again`.
+
+The plugin always sends the clicked approval's `request_id` when the state
+carried one. The bundled bridge answers a POST that does not match its
+`request_id` with 409 `approval_mismatch`; the plugin shows the same message
+and refetches the state. With the bundled bridge no approval race remains.
+
+A stock bridge without `request_id` does not give that guarantee. Between the
+plugin's last `/state` and its POST, Hermes can queue a second approval, and
+the stock bridge resolves the oldest queued one, which may not be the one on
+screen. The window is one round trip. Run the bundled bridge on the remote
+side too when approvals matter.
+
+## One-shot questions
+
+Cancelling a one-shot question ends only the plugin's request. The bridge
+keeps running that `hermes` process until it finishes or hits the bridge's own
+600 s timeout.
 
 ## Attribution
 

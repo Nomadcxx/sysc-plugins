@@ -47,13 +47,13 @@ func SettingsInnerWidth(granted int) int {
 
 // TokenSource names where the bridge token came from. The view shows the
 // source, never the token.
-type TokenSource string
+type ConnectionTokenSource string
 
 const (
-	TokenPasted TokenSource = "pasted"
-	TokenFile   TokenSource = "file"
-	TokenLocal  TokenSource = "local bridge.token"
-	TokenNone   TokenSource = "none"
+	SourcePasted ConnectionTokenSource = "pasted"
+	SourceFile   ConnectionTokenSource = "file"
+	SourceLocal  ConnectionTokenSource = "local bridge.token"
+	SourceNone   ConnectionTokenSource = "none"
 )
 
 // TokenCandidates are the tokens the runtime found: the pasted setting, the
@@ -70,7 +70,7 @@ type ConnectionInfo struct {
 	ClientOnly  bool
 	Host        string
 	Port        int
-	TokenSource TokenSource
+	TokenSource ConnectionTokenSource
 	LastError   string
 	ViewError   string
 }
@@ -82,14 +82,14 @@ const redacted = "[redacted]"
 // file; in local mode the local bridge.token. Every candidate token is
 // redacted out of the last error and the last view.error.
 func ConnectionFor(clientOnly bool, host string, port int, tokens TokenCandidates, lastErr, viewErr string) ConnectionInfo {
-	source := TokenNone
+	source := SourceNone
 	switch {
 	case clientOnly && strings.TrimSpace(tokens.Pasted) != "":
-		source = TokenPasted
+		source = SourcePasted
 	case clientOnly && strings.TrimSpace(tokens.File) != "":
-		source = TokenFile
+		source = SourceFile
 	case !clientOnly && strings.TrimSpace(tokens.Local) != "":
-		source = TokenLocal
+		source = SourceLocal
 	}
 	redact := func(s string) string {
 		for _, tok := range []string{tokens.Pasted, tokens.File, tokens.Local} {
@@ -176,7 +176,7 @@ func CleartextWarning(clientOnly bool, host string) string {
 
 // Detected holds what auto-configure recorded from /detect; client-only
 // mode records only the provider and model.
-type Detected struct {
+type SettingsDetected struct {
 	HermesHome    string
 	HermesCommand string
 	Provider      string
@@ -193,7 +193,7 @@ type SettingsState struct {
 	Pinned          bool
 	TestResult      string
 	Testing         bool
-	Detected        Detected
+	Detected        SettingsDetected
 	SSHTarget       string
 }
 
@@ -261,7 +261,7 @@ func connectionBlock(c ConnectionInfo, width int) *v1.Node {
 	}
 	source := c.TokenSource
 	if source == "" {
-		source = TokenNone
+		source = SourceNone
 	}
 	col := captions("connection", width, v1.ToneNormal,
 		fmt.Sprintf("%s · %s · token: %s", mode, net.JoinHostPort(strings.Trim(host, "[]"), fmt.Sprint(port)), source))
@@ -302,7 +302,7 @@ func testConnectionBlock(s SettingsState, width int) *v1.Node {
 	return col
 }
 
-func detectedBlock(d Detected, width int) *v1.Node {
+func detectedBlock(d SettingsDetected, width int) *v1.Node {
 	var lines []string
 	if d.HermesHome != "" {
 		lines = append(lines, "Detected: Hermes home "+d.HermesHome)
