@@ -348,3 +348,42 @@ func TestPinRollbackClosesTheOpenedSurface(t *testing.T) {
 		t.Fatalf("Pin rollback left pinned=%v view=%q", p.Pinned(), p.ViewID())
 	}
 }
+
+// TestPinnedGeometryIsTheDesignLiterals pins qa-9 defect 1: the surface is
+// 640x720 at 32,32, and the test states the numbers rather than reading the
+// constants it is checking.
+func TestPinnedGeometryIsTheDesignLiterals(t *testing.T) {
+	if pinnedWidth != 640 || pinnedHeight != 720 || pinnedX != 32 || pinnedY != 32 {
+		t.Fatalf("pinned geometry constants = %dx%d at %d,%d, want 640x720 at 32,32",
+			pinnedWidth, pinnedHeight, pinnedX, pinnedY)
+	}
+	c, calls, stop := pinnedHost(t, false, "")
+	defer stop()
+	if err := NewPinnedSurface(c).Pin(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	params := surfaceParams(t, nextCall(t, calls))
+	if params.Width != 640 || params.Height != 720 || params.X != 32 || params.Y != 32 {
+		t.Fatalf("surface.open = %dx%d at %d,%d, want 640x720 at 32,32",
+			params.Width, params.Height, params.X, params.Y)
+	}
+}
+
+// TestPinnedTreeAlwaysOffersUnpin pins qa-9 defect 2: PinnedTree sets
+// Pinned itself, so an unpinned input still renders the Unpin action.
+func TestPinnedTreeAlwaysOffersUnpin(t *testing.T) {
+	p := heavyPanel(StatusIdle, SectionNone, false)
+	p.Pinned = false
+	var pin *v1.Node
+	walk(PinnedTree(p, 640, 720), func(n *v1.Node) {
+		if n.ID == "pin" {
+			pin = n
+		}
+	})
+	if pin == nil {
+		t.Fatal("pinned tree has no pin control")
+	}
+	if pin.Text != "Unpin" {
+		t.Fatalf("unpinned input rendered pin %q, want Unpin", pin.Text)
+	}
+}
