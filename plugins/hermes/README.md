@@ -57,6 +57,41 @@ Cancelling a one-shot question ends only the plugin's request. The bridge
 keeps running that `hermes` process until it finishes or hits the bridge's own
 600 s timeout.
 
+## Launcher
+
+The `/hermes` rows are a user-config launcher provider, not a plugin
+surface: add this to `~/.config/sysc-shell/config.json` (keeping the rest of
+your config). The shell applies the file when you save it; if it refuses the
+file the bar stays as it was and Settings shows the reason.
+
+```json
+{
+  "launcher": {
+    "providers": [
+      {
+        "name": "Hermes",
+        "prefix": "/hermes",
+        "glyph": "ai-usage",
+        "description": "Ask Hermes, open the panel or start a session",
+        "command": ["sysc-plugin-hermes", "launcher-list", "{query}"],
+        "on_select": ["sysc-plugin-hermes", "launcher-select", "{selection}", "{query}"]
+      }
+    ]
+  }
+}
+```
+
+Type `/hermes` and a prompt, then pick **Ask Hermes**: the plugin runs a
+one-shot and opens the chat panel. The other rows open the panel, start a new
+session, and resume the latest session. **Resume latest** needs a session the
+plugin has already seen.
+
+`sysc-plugin-hermes` must be on the shell's `PATH`; otherwise use the full
+path to the plugin's `bin/sysc-plugin-hermes` in both argv lists. The prompt
+travels to the plugin in `$XDG_RUNTIME_DIR/sysc-hermes/ask` (mode `0600`, one
+pending item, at most 1 MB), because a service action carries no payload. The
+plugin reads and deletes it when it runs `launcher-ask`.
+
 ## Attribution
 
 See [ATTRIBUTION.md](../../ATTRIBUTION.md).

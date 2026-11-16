@@ -150,6 +150,12 @@ func actionSignature(root *v1.Node) string {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "launcher-list", "launcher-select":
+			os.Exit(runLauncher(os.Args[1:], os.Stdout, os.Stderr, os.Getenv, runArgv))
+		}
+	}
 	if err := runWith(os.Stdin, os.Stdout, os.Stderr, hermes.Options{}); err != nil {
 		fmt.Fprintln(os.Stderr, "sysc-plugin-hermes:", err)
 		os.Exit(1)
@@ -432,8 +438,28 @@ func (a *app) serviceAction(action string) {
 	case "settings":
 		a.openPanelFrom(nil, "settings")
 	case "launcher-ask":
-		// The launcher hand-off is Task 10; nothing to do here yet.
+		a.launcherAsk()
 	}
+}
+
+// launcherAsk consumes the launcher's hand-off file, asks the one-shot and
+// raises the chat surface. A missing or unusable file is logged and dropped;
+// the launcher already reported its own failure.
+func (a *app) launcherAsk() {
+	dir, err := launcherAskDir(os.Getenv)
+	if err != nil {
+		a.logf("hermes: %v", err)
+		return
+	}
+	text, msg := takeLauncherAsk(dir)
+	if msg != "" {
+		a.logf("hermes: %s", msg)
+	}
+	if text == "" {
+		return
+	}
+	a.svc.OneShot(text)
+	a.openChat()
 }
 
 // openChat raises the pinned surface when one is pinned, else opens the
