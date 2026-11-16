@@ -2,7 +2,6 @@
 package hermes
 
 import (
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,7 +105,7 @@ func TooltipTree(state BarState) *v1.Node {
 			Kind: v1.KindText, Text: clip(e, tooltipLineBytes), Tone: v1.ToneError,
 		})
 	}
-	if w := cleartextWarning(state.ClientOnly, state.Host); w != "" {
+	if w := CleartextWarning(state.ClientOnly, state.Host); w != "" {
 		// len(w) bounds the line count (every line holds at least one
 		// byte), so the warning is never capped or ellipsised.
 		for _, line := range wrapLines(w, tooltipLineBytes, len(w)) {
@@ -116,23 +115,6 @@ func TooltipTree(state BarState) *v1.Node {
 		}
 	}
 	return root
-}
-
-func cleartextWarning(clientOnly bool, host string) string {
-	host = strings.TrimSpace(host)
-	if !clientOnly || host == "" || loopbackHost(host) {
-		return ""
-	}
-	return "Cleartext HTTP to " + host + ": the token and prompts are not encrypted."
-}
-
-func loopbackHost(host string) bool {
-	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func headline(state BarState, prefix string) string {

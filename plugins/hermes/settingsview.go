@@ -168,7 +168,8 @@ func CopySSHCommand(ctx context.Context, c *v1.Client, target string, port int) 
 // CleartextWarning is the design's warning for client-only mode to a host
 // off this machine. The plugin warns and does not block.
 func CleartextWarning(clientOnly bool, host string) string {
-	if !clientOnly || host == "" || loopbackHost(host) {
+	host = strings.TrimSpace(host)
+	if !clientOnly || host == "" || IsLoopback(host) {
 		return ""
 	}
 	return "Cleartext HTTP to " + host + ": the token and prompts are not encrypted."
