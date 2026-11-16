@@ -163,20 +163,20 @@ func ResetPlan() []BridgeCall {
 }
 
 // panelStatusIcon is the design's panel status table. It is not
-// BarStatus.Glyph: the panel keeps its own locked set.
-func panelStatusIcon(s BarStatus) string {
-	switch s {
-	case BarStatusOffline:
+// Status.Icon: the panel keeps its own locked set.
+func panelStatusIcon(s Status) string {
+	switch s.Key {
+	case StatusOffline:
 		return "power_settings_new"
-	case BarStatusIdle:
+	case StatusIdle:
 		return "check"
-	case BarStatusBusy:
+	case StatusBusy:
 		return "refresh"
-	case BarStatusAttention:
+	case StatusAttention:
 		return "notifications-active"
-	case BarStatusDegraded:
+	case StatusDegraded:
 		return "gpp_maybe"
-	case BarStatusError:
+	case StatusError:
 		return "cancel"
 	}
 	return "ai-usage"
@@ -204,7 +204,7 @@ func panelModelLabel(p PanelState) string {
 }
 
 func turnRunning(p PanelState) bool {
-	return p.Summary.SessionRunning || deriveBarStatus(p.Summary.BarState) == BarStatusBusy
+	return p.Summary.SessionRunning || p.Summary.Status.Key == StatusBusy
 }
 
 // activityLine is noctalia's background-action caption.
@@ -230,7 +230,7 @@ func showActivity(p PanelState) bool {
 // is left over a 160 transcript, and a pending approval always stays.
 func PanelTree(p PanelState, width, height int) *v1.Node {
 	inner := width - 2*panelPad
-	status := deriveBarStatus(p.Summary.BarState)
+	status := p.Summary.Status
 	running := turnRunning(p)
 
 	header := panelHeader(p, status, inner)
@@ -316,7 +316,7 @@ func autoButton(id, text, name, icon string, height int) *v1.Node {
 	return button(id, text, name, icon, buttonWidth(text, icon), height)
 }
 
-func panelHeader(p PanelState, status BarStatus, inner int) *v1.Node {
+func panelHeader(p PanelState, status Status, inner int) *v1.Node {
 	pin := "Pin"
 	if p.Pinned {
 		pin = "Unpin"
@@ -342,10 +342,10 @@ func panelHeader(p PanelState, status BarStatus, inner int) *v1.Node {
 	if p.Avatar != "" {
 		mark = &v1.Node{Kind: v1.KindImage, Path: p.Avatar, Name: "Hermes", Role: "img", ImageSize: panelAvatarSize}
 	} else {
-		mark = &v1.Node{Kind: v1.KindIcon, Icon: fallbackAvatarIcon, IconSize: 32, Tone: status.Tone(), Name: "Hermes"}
+		mark = &v1.Node{Kind: v1.KindIcon, Icon: fallbackAvatarIcon, IconSize: 32, Tone: status.Tone, Name: "Hermes"}
 	}
 	textW := inner - rightW - panelAvatarSize - 2*10
-	label := clip(status.Label(), textW/8-3)
+	label := clip(status.Text, textW/8-3)
 	left := &v1.Node{Kind: v1.KindRow, Gap: 10, Height: panelHeaderH, Width: inner - rightW - 10, Children: []*v1.Node{
 		mark,
 		{Kind: v1.KindColumn, Width: textW, Gap: 0, Children: []*v1.Node{
@@ -353,8 +353,8 @@ func panelHeader(p PanelState, status BarStatus, inner int) *v1.Node {
 				{Kind: v1.KindText, Text: "Hermes", Bold: true, Size: "title"},
 			}},
 			{Kind: v1.KindRow, Height: lineHeight, Gap: 6, Children: []*v1.Node{
-				{Kind: v1.KindIcon, Key: "header-status-icon", Icon: panelStatusIcon(status), IconSize: 14, Tone: status.Tone(), Name: label},
-				{Kind: v1.KindText, Text: label, Size: "caption", Tone: status.Tone()},
+				{Kind: v1.KindIcon, Key: "header-status-icon", Icon: panelStatusIcon(status), IconSize: 14, Tone: status.Tone, Name: label},
+				{Kind: v1.KindText, Text: label, Size: "caption", Tone: status.Tone},
 			}},
 			{Kind: v1.KindText, Text: clip(panelModelLabel(p), textW/8), Size: "caption", Tone: v1.ToneSubtle},
 		}},
@@ -567,7 +567,7 @@ func emptyTranscript(p PanelState, inner, height int) *v1.Node {
 	tone := v1.ToneSubtle
 	icon := iconChat
 	switch {
-	case deriveBarStatus(p.Summary.BarState) == BarStatusOffline:
+	case p.Summary.Status.Key == StatusOffline:
 		lines = []string{"Bridge offline", strings.TrimSpace(p.Summary.BridgeError)}
 		tone, icon = v1.ToneError, iconStartGate
 	case p.SessionID != "":

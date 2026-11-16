@@ -20,7 +20,7 @@ const (
 func captureFixture(avatar string) PanelState {
 	return PanelState{
 		Summary: SummaryState{
-			BarState:        BarState{BridgeStatus: "online", HermesStatus: "idle", GatewayStatus: "running", Model: "example-model"},
+			BarState:        BarState{Status: StatusFor(StatusIdle), GatewayStatus: "running", Model: "example-model"},
 			Provider:        "openrouter",
 			ModelName:       "example-model",
 			ToolEvents:      2,

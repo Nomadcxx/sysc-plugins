@@ -28,7 +28,7 @@ const (
 func PinnedTree(p PanelState, width, height int) *v1.Node {
 	p.Pinned = true
 	inner := width - 2*panelPad
-	header := panelHeader(p, deriveBarStatus(p.Summary.BarState), inner)
+	header := panelHeader(p, p.Summary.Status, inner)
 	composer := panelComposer(p, turnRunning(p), inner)
 	var approval *v1.Node
 	if p.Summary.ApprovalPending {

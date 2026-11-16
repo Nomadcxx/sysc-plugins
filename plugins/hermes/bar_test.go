@@ -27,19 +27,21 @@ func repoAvatar(t *testing.T) string {
 	return abs
 }
 
-// stateFor builds the bar input that derives to the given status, the way
-// the bridge would report it.
-func stateFor(s BarStatus) BarState {
+// stateFor builds the bar input for the given status, the way the runtime
+// publishes it.
+func stateFor(s StatusKey) BarState {
+	b := BarState{Status: StatusFor(s)}
 	switch s {
-	case BarStatusOffline:
-		return BarState{BridgeStatus: "offline", BridgeError: "Connection failed: 127.0.0.1:19777 unreachable"}
-	case BarStatusIdle:
-		return BarState{BridgeStatus: "online", HermesStatus: "idle", Model: "example-model"}
-	case BarStatusUnknown:
-		return BarState{BridgeStatus: "online", HermesStatus: "unknown", GatewayStatus: "stopped"}
+	case StatusOffline:
+		b.BridgeError = "Connection failed: 127.0.0.1:19777 unreachable"
+	case StatusIdle:
+		b.Model = "example-model"
+	case StatusUnknown:
+		b.GatewayStatus = "stopped"
 	default:
-		return BarState{BridgeStatus: "online", HermesStatus: string(s), Model: "example-model"}
+		b.Model = "example-model"
 	}
+	return b
 }
 
 func lintView(t *testing.T, name string, root *v1.Node, view v1.ViewKind, width, height int) {
@@ -74,39 +76,39 @@ func texts(n *v1.Node) []string {
 
 func TestStatusVocabularyMatchesNoctalia(t *testing.T) {
 	want := []struct {
-		status BarStatus
+		status StatusKey
 		label  string
 		glyph  string
 		tone   v1.Tone
 	}{
-		{BarStatusOffline, "Offline", "power_settings_new", v1.ToneError},
-		{BarStatusIdle, "Online", "check", v1.ToneAccent},
-		{BarStatusBusy, "Working", "refresh", v1.ToneAccent},
-		{BarStatusAttention, "Needs You", "notifications-active", v1.ToneWarning},
-		{BarStatusDegraded, "Degraded", "gpp_maybe", v1.ToneWarning},
-		{BarStatusError, "Error", "cancel", v1.ToneError},
-		{BarStatusUnknown, "Unknown", "ai-usage", v1.ToneNormal},
+		{StatusOffline, "Offline", "power_settings_new", v1.ToneError},
+		{StatusIdle, "Online", "check", v1.ToneAccent},
+		{StatusBusy, "Working", "refresh", v1.ToneAccent},
+		{StatusAttention, "Needs You", "notifications-active", v1.ToneWarning},
+		{StatusDegraded, "Degraded", "gpp_maybe", v1.ToneWarning},
+		{StatusError, "Error", "cancel", v1.ToneError},
+		{StatusUnknown, "Unknown", "ai-usage", v1.ToneNormal},
 	}
-	if len(BarStatuses) != len(want) {
-		t.Fatalf("BarStatuses has %d entries, want the seven noctalia statuses", len(BarStatuses))
+	if len(AllStatusKeys) != len(want) {
+		t.Fatalf("AllStatusKeys has %d entries, want the seven noctalia statuses", len(AllStatusKeys))
 	}
 	forbidden := []string{"warning", "history", "alert", "error"}
-	seen := map[string]BarStatus{}
+	seen := map[string]StatusKey{}
 	for i, w := range want {
-		s := BarStatuses[i]
+		s := AllStatusKeys[i]
 		if s != w.status {
-			t.Errorf("BarStatuses[%d] = %q, want %q", i, s, w.status)
+			t.Errorf("AllStatusKeys[%d] = %q, want %q", i, s, w.status)
 		}
-		if got := s.Label(); got != w.label {
+		if got := StatusFor(s).Text; got != w.label {
 			t.Errorf("%s label = %q, want %q", s, got, w.label)
 		}
-		if got := s.Tone(); got != w.tone {
+		if got := StatusFor(s).Tone; got != w.tone {
 			t.Errorf("%s tone = %q, want %q", s, got, w.tone)
 		}
-		if got := s.Glyph(); got != w.glyph {
+		if got := StatusFor(s).Icon; got != w.glyph {
 			t.Errorf("%s glyph = %q, want %q", s, got, w.glyph)
 		}
-		glyph := s.Glyph()
+		glyph := StatusFor(s).Icon
 		if !icons.ValidName(glyph) {
 			t.Errorf("%s glyph %q is not in the pinned icon catalogue", s, glyph)
 		}
@@ -125,31 +127,26 @@ func TestStatusVocabularyMatchesNoctalia(t *testing.T) {
 func TestDeriveStatusFollowsNoctalia(t *testing.T) {
 	cases := []struct {
 		name  string
-		state BarState
-		want  BarStatus
+		state State
+		want  StatusKey
 	}{
-		{"zero state", BarState{}, BarStatusOffline},
-		{"bridge offline wins", BarState{BridgeStatus: "offline", HermesStatus: "busy"}, BarStatusOffline},
-		{"bridge starting", BarState{BridgeStatus: "starting", HermesStatus: "idle"}, BarStatusOffline},
-		{"bridge error", BarState{BridgeStatus: "error", HermesStatus: "idle"}, BarStatusError},
-		{"hermes idle", BarState{BridgeStatus: "online", HermesStatus: "idle"}, BarStatusIdle},
-		{"hermes busy", BarState{BridgeStatus: "online", HermesStatus: "busy"}, BarStatusBusy},
-		{"hermes attention", BarState{BridgeStatus: "online", HermesStatus: "attention"}, BarStatusAttention},
-		{"hermes degraded", BarState{BridgeStatus: "online", HermesStatus: "degraded"}, BarStatusDegraded},
-		{"hermes error", BarState{BridgeStatus: "online", HermesStatus: "error"}, BarStatusError},
-		{"unknown, gateway running", BarState{BridgeStatus: "online", HermesStatus: "unknown", GatewayStatus: "running"}, BarStatusIdle},
-		{"empty, gateway running", BarState{BridgeStatus: "online", GatewayStatus: "running"}, BarStatusIdle},
-		{"unknown, gateway stopped", BarState{BridgeStatus: "online", HermesStatus: "unknown", GatewayStatus: "stopped"}, BarStatusUnknown},
-		{"unrecognised hermes status", BarState{BridgeStatus: "online", HermesStatus: "thinking"}, BarStatusUnknown},
+		{"zero state", State{}, StatusOffline},
+		{"bridge offline wins", State{Bridge: BridgeInfo{Status: "offline"}, Hermes: HermesInfo{Status: "busy"}}, StatusOffline},
+		{"bridge starting", State{Bridge: BridgeInfo{Status: "starting"}, Hermes: HermesInfo{Status: "idle"}}, StatusOffline},
+		{"bridge error", State{Bridge: BridgeInfo{Status: "error"}, Hermes: HermesInfo{Status: "idle"}}, StatusError},
+		{"hermes idle", State{Bridge: BridgeInfo{Status: "online"}, Hermes: HermesInfo{Status: "idle"}}, StatusIdle},
+		{"hermes busy", State{Bridge: BridgeInfo{Status: "online"}, Hermes: HermesInfo{Status: "busy"}}, StatusBusy},
+		{"hermes attention", State{Bridge: BridgeInfo{Status: "online"}, Hermes: HermesInfo{Status: "attention"}}, StatusAttention},
+		{"hermes degraded", State{Bridge: BridgeInfo{Status: "online"}, Hermes: HermesInfo{Status: "degraded"}}, StatusDegraded},
+		{"hermes error", State{Bridge: BridgeInfo{Status: "online"}, Hermes: HermesInfo{Status: "error"}}, StatusError},
+		{"unknown, gateway running", State{Bridge: BridgeInfo{Status: "online"}, Hermes: HermesInfo{Status: "unknown"}, Summary: Summary{Gateway: SummaryGateway{Status: "running"}}}, StatusIdle},
+		{"empty, gateway running", State{Bridge: BridgeInfo{Status: "online"}, Summary: Summary{Gateway: SummaryGateway{Status: "running"}}}, StatusIdle},
+		{"unknown, gateway stopped", State{Bridge: BridgeInfo{Status: "online"}, Hermes: HermesInfo{Status: "unknown"}, Summary: Summary{Gateway: SummaryGateway{Status: "stopped"}}}, StatusUnknown},
+		{"unrecognised hermes status", State{Bridge: BridgeInfo{Status: "online"}, Hermes: HermesInfo{Status: "thinking"}}, StatusUnknown},
 	}
 	for _, c := range cases {
-		if got := deriveBarStatus(c.state); got != c.want {
-			t.Errorf("%s: deriveBarStatus = %q, want %q", c.name, got, c.want)
-		}
-	}
-	for _, s := range BarStatuses {
-		if got := deriveBarStatus(stateFor(s)); got != s {
-			t.Errorf("stateFor(%s) derives %q", s, got)
+		if got := DeriveStatus(c.state).Key; got != c.want {
+			t.Errorf("%s: DeriveStatus = %q, want %q", c.name, got, c.want)
 		}
 	}
 }
@@ -157,7 +154,7 @@ func TestDeriveStatusFollowsNoctalia(t *testing.T) {
 func TestViewsLayOutInEveryStatus(t *testing.T) {
 	avatar := repoAvatar(t)
 	long := strings.Repeat("a-very-long-model-name-", 4)
-	for _, s := range BarStatuses {
+	for _, s := range AllStatusKeys {
 		t.Run(string(s), func(t *testing.T) {
 			states := map[string]BarState{"plain": stateFor(s)}
 			noisy := stateFor(s)
@@ -184,7 +181,7 @@ func TestViewsLayOutInEveryStatus(t *testing.T) {
 
 func TestEveryGlyphIsInTheCatalogue(t *testing.T) {
 	avatar := repoAvatar(t)
-	for _, s := range BarStatuses {
+	for _, s := range AllStatusKeys {
 		for _, av := range []string{avatar, ""} {
 			for _, width := range barWidths {
 				walk(BarTreeAtWidth(stateFor(s), false, av, width), func(n *v1.Node) {
@@ -208,16 +205,16 @@ func TestEveryGlyphIsInTheCatalogue(t *testing.T) {
 // tree, so the host keeps a valid view and lays nothing out.
 func TestBarHidesWhenIdleWhenAsked(t *testing.T) {
 	avatar := repoAvatar(t)
-	hidden := BarTree(stateFor(BarStatusIdle), true, avatar)
+	hidden := BarTree(stateFor(StatusIdle), true, avatar)
 	if hidden.Kind != v1.KindRow || len(hidden.Children) != 0 {
 		t.Fatalf("bar should be an empty row when idle and hide_when_idle is on, got %+v", hidden)
 	}
-	shown := BarTree(stateFor(BarStatusIdle), false, avatar)
+	shown := BarTree(stateFor(StatusIdle), false, avatar)
 	if len(shown.Children) == 0 {
 		t.Fatal("bar should still show the pill when hide_when_idle is off")
 	}
-	for _, s := range BarStatuses {
-		if s == BarStatusIdle {
+	for _, s := range AllStatusKeys {
+		if s == StatusIdle {
 			continue
 		}
 		if bar := BarTree(stateFor(s), true, avatar); len(bar.Children) == 0 {
@@ -253,16 +250,16 @@ func openButton(t *testing.T, bar *v1.Node) *v1.Node {
 
 func TestBarShowsAvatarStatusAndLabel(t *testing.T) {
 	avatar := repoAvatar(t)
-	wantText := map[BarStatus]string{
-		BarStatusOffline:   "Offline",
-		BarStatusIdle:      "",
-		BarStatusBusy:      "Working",
-		BarStatusAttention: "!",
-		BarStatusDegraded:  "Degraded",
-		BarStatusError:     "Error",
-		BarStatusUnknown:   "",
+	wantText := map[StatusKey]string{
+		StatusOffline:   "Offline",
+		StatusIdle:      "",
+		StatusBusy:      "Working",
+		StatusAttention: "!",
+		StatusDegraded:  "Degraded",
+		StatusError:     "Error",
+		StatusUnknown:   "",
 	}
-	for _, s := range BarStatuses {
+	for _, s := range AllStatusKeys {
 		bar := BarTreeAtWidth(stateFor(s), false, avatar, shelllint.BarWidth)
 		if bar.Kind != v1.KindRow {
 			t.Fatalf("%s bar root is %s, want row", s, bar.Kind)
@@ -277,14 +274,14 @@ func TestBarShowsAvatarStatusAndLabel(t *testing.T) {
 				glyph = n
 			}
 		})
-		if glyph == nil || glyph.Icon != s.Glyph() || glyph.Tone != s.Tone() {
-			t.Errorf("%s: bar status glyph = %+v, want %q in tone %q", s, glyph, s.Glyph(), s.Tone())
+		if glyph == nil || glyph.Icon != StatusFor(s).Icon || glyph.Tone != StatusFor(s).Tone {
+			t.Errorf("%s: bar status glyph = %+v, want %q in tone %q", s, glyph, StatusFor(s).Icon, StatusFor(s).Tone)
 		}
 		got := strings.Join(texts(bar), "|")
 		if got != wantText[s] {
 			t.Errorf("%s: bar text = %q, want %q", s, got, wantText[s])
 		}
-		if !strings.Contains(btn.Name, s.Label()) {
+		if !strings.Contains(btn.Name, StatusFor(s).Text) {
 			t.Errorf("%s: open button name %q should carry the status label", s, btn.Name)
 		}
 	}
@@ -292,14 +289,14 @@ func TestBarShowsAvatarStatusAndLabel(t *testing.T) {
 
 func TestCompactBarIsTheStatusGlyphOnly(t *testing.T) {
 	avatar := repoAvatar(t)
-	for _, s := range BarStatuses {
+	for _, s := range AllStatusKeys {
 		bar := BarTreeAtWidth(stateFor(s), false, avatar, 32)
 		if len(bar.Children) != 1 {
 			t.Fatalf("%s compact bar has %d children, want the open button alone", s, len(bar.Children))
 		}
 		btn := openButton(t, bar)
-		if btn.Icon != s.Glyph() || btn.Tone != s.Tone() || len(btn.Children) != 0 {
-			t.Errorf("%s: compact open button = icon %q tone %q children %d, want %q in %q", s, btn.Icon, btn.Tone, len(btn.Children), s.Glyph(), s.Tone())
+		if btn.Icon != StatusFor(s).Icon || btn.Tone != StatusFor(s).Tone || len(btn.Children) != 0 {
+			t.Errorf("%s: compact open button = icon %q tone %q children %d, want %q in %q", s, btn.Icon, btn.Tone, len(btn.Children), StatusFor(s).Icon, StatusFor(s).Tone)
 		}
 		if len(texts(bar)) != 0 {
 			t.Errorf("%s: compact bar carries text %v", s, texts(bar))
@@ -308,7 +305,7 @@ func TestCompactBarIsTheStatusGlyphOnly(t *testing.T) {
 }
 
 func TestBarFallsBackToAGlyphWithoutTheAvatar(t *testing.T) {
-	btn := openButton(t, BarTreeAtWidth(stateFor(BarStatusBusy), false, "", shelllint.BarWidth))
+	btn := openButton(t, BarTreeAtWidth(stateFor(StatusBusy), false, "", shelllint.BarWidth))
 	if btn.Icon != fallbackAvatarIcon || len(btn.Children) != 0 {
 		t.Errorf("open button without avatar = icon %q children %d, want %q", btn.Icon, len(btn.Children), fallbackAvatarIcon)
 	}
@@ -324,9 +321,9 @@ func TestTooltipMatchesNoctalia(t *testing.T) {
 		want  []string
 		tones []v1.Tone
 	}{
-		{"idle with model", stateFor(BarStatusIdle), []string{"Hermes: Online · example-model"}, []v1.Tone{v1.ToneNormal}},
-		{"unknown without model", stateFor(BarStatusUnknown), []string{"Hermes: Unknown"}, []v1.Tone{v1.ToneNormal}},
-		{"offline with error", stateFor(BarStatusOffline), []string{"Hermes: Offline", "Connection failed: 127.0.0.1:19…"}, []v1.Tone{v1.ToneNormal, v1.ToneError}},
+		{"idle with model", stateFor(StatusIdle), []string{"Hermes: Online · example-model"}, []v1.Tone{v1.ToneNormal}},
+		{"unknown without model", stateFor(StatusUnknown), []string{"Hermes: Unknown"}, []v1.Tone{v1.ToneNormal}},
+		{"offline with error", stateFor(StatusOffline), []string{"Hermes: Offline", "Connection failed: 127.0.0.1:19…"}, []v1.Tone{v1.ToneNormal, v1.ToneError}},
 	}
 	for _, c := range cases {
 		tip := TooltipTree(c.state)
@@ -351,7 +348,7 @@ func TestTooltipWarnsOnCleartextRemoteClient(t *testing.T) {
 	warning := func(host string) string {
 		return "Cleartext HTTP to " + host + ": the token and prompts are not encrypted."
 	}
-	online := BarState{BridgeStatus: "online", HermesStatus: "idle", Model: "example-model"}
+	online := BarState{Status: StatusFor(StatusIdle), Model: "example-model"}
 	cases := []struct {
 		name    string
 		state   BarState
@@ -411,16 +408,16 @@ func TestAvatarPathResolvesTheShippedAsset(t *testing.T) {
 }
 
 func TestServiceStatusReflectsTheBarStatus(t *testing.T) {
-	want := map[BarStatus]v1.ServiceState{
-		BarStatusOffline:   v1.ServiceStateInactive,
-		BarStatusIdle:      v1.ServiceStateActive,
-		BarStatusBusy:      v1.ServiceStateActive,
-		BarStatusAttention: v1.ServiceStateActive,
-		BarStatusDegraded:  v1.ServiceStateActive,
-		BarStatusError:     v1.ServiceStateError,
-		BarStatusUnknown:   v1.ServiceStateUnknown,
+	want := map[StatusKey]v1.ServiceState{
+		StatusOffline:   v1.ServiceStateInactive,
+		StatusIdle:      v1.ServiceStateActive,
+		StatusBusy:      v1.ServiceStateActive,
+		StatusAttention: v1.ServiceStateActive,
+		StatusDegraded:  v1.ServiceStateActive,
+		StatusError:     v1.ServiceStateError,
+		StatusUnknown:   v1.ServiceStateUnknown,
 	}
-	for _, s := range BarStatuses {
+	for _, s := range AllStatusKeys {
 		st := ServiceStatusFor(stateFor(s), 7)
 		if st.ServiceID != serviceID || st.Revision != 7 {
 			t.Errorf("%s: service status id %q revision %d", s, st.ServiceID, st.Revision)
@@ -431,22 +428,22 @@ func TestServiceStatusReflectsTheBarStatus(t *testing.T) {
 		if st.Busy {
 			t.Errorf("%s: busy is the host's action flag, the view must leave it false", s)
 		}
-		if !strings.HasPrefix(st.Message, s.Label()) {
-			t.Errorf("%s: message %q should lead with %q", s, st.Message, s.Label())
+		if !strings.HasPrefix(st.Message, StatusFor(s).Text) {
+			t.Errorf("%s: message %q should lead with %q", s, st.Message, StatusFor(s).Text)
 		}
 		if len(st.Message) > v1.MaxServiceStatusMessageBytes {
 			t.Errorf("%s: message is %d bytes", s, len(st.Message))
 		}
 	}
-	offline := ServiceStatusFor(stateFor(BarStatusOffline), 1)
+	offline := ServiceStatusFor(stateFor(StatusOffline), 1)
 	if offline.Message != "Offline · Connection failed: 127.0.0.1:19777 unreachable" {
 		t.Errorf("offline message = %q", offline.Message)
 	}
-	idle := ServiceStatusFor(stateFor(BarStatusIdle), 1)
+	idle := ServiceStatusFor(stateFor(StatusIdle), 1)
 	if idle.Message != "Online · example-model" {
 		t.Errorf("idle message = %q", idle.Message)
 	}
-	huge := stateFor(BarStatusOffline)
+	huge := stateFor(StatusOffline)
 	huge.BridgeError = strings.Repeat("x", 2*v1.MaxServiceStatusMessageBytes)
 	if msg := ServiceStatusFor(huge, 1).Message; len(msg) > v1.MaxServiceStatusMessageBytes {
 		t.Errorf("message is %d bytes, past the protocol limit", len(msg))
@@ -457,16 +454,38 @@ func TestServiceStatusReflectsTheBarStatus(t *testing.T) {
 // Start gateway appears only outside client-only mode, while offline or
 // unknown.
 func TestStartGatewayOnlyWhenLocalAndDown(t *testing.T) {
-	if len(BarStatuses) != 7 {
-		t.Fatalf("BarStatuses has %d entries, want seven", len(BarStatuses))
+	if len(AllStatusKeys) != 7 {
+		t.Fatalf("AllStatusKeys has %d entries, want seven", len(AllStatusKeys))
 	}
-	for _, s := range BarStatuses {
-		down := s == BarStatusOffline || s == BarStatusUnknown
-		if got := CanStartGateway(s, false); got != down {
+	for _, s := range AllStatusKeys {
+		down := s == StatusOffline || s == StatusUnknown
+		if got := CanStartGateway(StatusFor(s), false); got != down {
 			t.Errorf("CanStartGateway(%s, local) = %v, want %v", s, got, down)
 		}
-		if CanStartGateway(s, true) {
+		if CanStartGateway(StatusFor(s), true) {
 			t.Errorf("CanStartGateway(%s, client-only) = true; client-only never starts processes", s)
 		}
+	}
+}
+
+// TestViewsConsumeTheUnifiedStatus pins that the UI views take the one
+// runtime Status, not a bar-local stand-in.
+func TestViewsConsumeTheUnifiedStatus(t *testing.T) {
+	st := DeriveStatus(State{Bridge: BridgeInfo{Status: "online"}, Hermes: HermesInfo{Status: "idle"}})
+	if st.Key != StatusIdle {
+		t.Fatalf("DeriveStatus = %q, want idle", st.Key)
+	}
+	p := PanelState{Summary: SummaryState{BarState: BarState{Status: st}}}
+	if panelHeader(p, st, 400) == nil {
+		t.Fatal("panel header does not take the unified status")
+	}
+	if summaryHeader(st, "", 300) == nil {
+		t.Fatal("summary header does not take the unified status")
+	}
+	if MenuTree(st, false, 200, 240) == nil {
+		t.Fatal("menu does not take the unified status")
+	}
+	if !CanStartGateway(StatusFor(StatusOffline), false) {
+		t.Fatal("offline local must offer the gateway")
 	}
 }

@@ -153,7 +153,7 @@ func activityLabel(s SummaryState) string {
 // Interrupt, Refresh and Hermes Settings. It fills the width by height box
 // the host opened.
 func SummaryTree(s SummaryState, avatar string, width, height int) *v1.Node {
-	status := deriveBarStatus(s.BarState)
+	status := s.Status
 	inner := width - 2*summaryPad
 
 	children := []*v1.Node{
@@ -198,16 +198,16 @@ func SummaryTree(s SummaryState, avatar string, width, height int) *v1.Node {
 	}
 }
 
-func summaryHeader(status BarStatus, avatar string, inner int) *v1.Node {
+func summaryHeader(status Status, avatar string, inner int) *v1.Node {
 	var mark *v1.Node
 	if avatar != "" {
 		mark = &v1.Node{Kind: v1.KindImage, Path: avatar, Name: "Hermes", Role: "img", ImageSize: summaryAvatarSize}
 	} else {
 		glyph := fallbackAvatarIcon
-		if status == BarStatusBusy {
-			glyph = BarStatusBusy.Glyph()
+		if status.Key == StatusBusy {
+			glyph = StatusFor(StatusBusy).Icon
 		}
-		mark = &v1.Node{Kind: v1.KindIcon, Icon: glyph, IconSize: 24, Tone: status.Tone(), Name: "Hermes"}
+		mark = &v1.Node{Kind: v1.KindIcon, Icon: glyph, IconSize: 24, Tone: status.Tone, Name: "Hermes"}
 	}
 	return &v1.Node{
 		Kind: v1.KindRow, Width: inner, Height: headerHeight, PinEnd: true,
@@ -216,7 +216,7 @@ func summaryHeader(status BarStatus, avatar string, inner int) *v1.Node {
 				mark,
 				{Kind: v1.KindColumn, Children: []*v1.Node{
 					{Kind: v1.KindText, Text: "Hermes", Bold: true, Size: "title"},
-					{Kind: v1.KindText, Text: status.Label(), Size: "caption", Tone: status.Tone()},
+					{Kind: v1.KindText, Text: status.Text, Size: "caption", Tone: status.Tone},
 				}},
 			}},
 			{
@@ -321,7 +321,7 @@ func summaryBanner(s SummaryState, inner int) *v1.Node {
 
 // summaryActions is New session, Interrupt and Refresh. Interrupt is live
 // only while a session runs or Hermes is busy, as in noctalia.
-func summaryActions(s SummaryState, status BarStatus, inner int) *v1.Node {
+func summaryActions(s SummaryState, status Status, inner int) *v1.Node {
 	w := (inner - 2*8) / 3
 	button := func(id, text, icon string) *v1.Node {
 		return &v1.Node{
@@ -331,7 +331,7 @@ func summaryActions(s SummaryState, status BarStatus, inner int) *v1.Node {
 		}
 	}
 	interrupt := button("interrupt", "Interrupt", menuIconInterrupt)
-	interrupt.Disabled = !(s.SessionRunning || status == BarStatusBusy)
+	interrupt.Disabled = !(s.SessionRunning || status.Key == StatusBusy)
 	return &v1.Node{
 		Kind: v1.KindRow, Width: inner, Height: buttonHeight, Gap: 8,
 		Children: []*v1.Node{

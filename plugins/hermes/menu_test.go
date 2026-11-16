@@ -21,16 +21,16 @@ func TestMenuItemsFollowNoctaliaOrder(t *testing.T) {
 		{"settings", "Hermes Settings", menuIconSettings},
 	}
 	withoutGateway := []MenuItem{full[0], full[1], full[2], full[3], full[5]}
-	if len(BarStatuses) != 7 {
-		t.Fatalf("BarStatuses has %d entries, want seven", len(BarStatuses))
+	if len(AllStatusKeys) != 7 {
+		t.Fatalf("AllStatusKeys has %d entries, want seven", len(AllStatusKeys))
 	}
-	for _, s := range BarStatuses {
+	for _, s := range AllStatusKeys {
 		for _, clientOnly := range []bool{false, true} {
 			want := withoutGateway
-			if CanStartGateway(s, clientOnly) {
+			if CanStartGateway(StatusFor(s), clientOnly) {
 				want = full
 			}
-			got := MenuItems(s, clientOnly)
+			got := MenuItems(StatusFor(s), clientOnly)
 			if len(got) != len(want) {
 				t.Errorf("%s clientOnly=%v: items = %v, want %v", s, clientOnly, got, want)
 				continue
@@ -42,18 +42,18 @@ func TestMenuItemsFollowNoctaliaOrder(t *testing.T) {
 			}
 		}
 	}
-	if len(MenuItems(BarStatusOffline, false)) != 6 {
+	if len(MenuItems(StatusFor(StatusOffline), false)) != 6 {
 		t.Error("local offline menu should offer Start gateway")
 	}
-	if len(MenuItems(BarStatusOffline, true)) != 5 {
+	if len(MenuItems(StatusFor(StatusOffline), true)) != 5 {
 		t.Error("client-only menu must not offer Start gateway")
 	}
 }
 
 func TestMenuNeverOffersStop(t *testing.T) {
-	for _, s := range BarStatuses {
+	for _, s := range AllStatusKeys {
 		for _, clientOnly := range []bool{false, true} {
-			items := MenuItems(s, clientOnly)
+			items := MenuItems(StatusFor(s), clientOnly)
 			if len(items) == 0 {
 				t.Errorf("%s clientOnly=%v: menu is empty", s, clientOnly)
 			}
@@ -68,17 +68,17 @@ func TestMenuNeverOffersStop(t *testing.T) {
 
 func TestMenuLaysOutAndMatchesItems(t *testing.T) {
 	actions := manifestActions(t)
-	for _, s := range BarStatuses {
+	for _, s := range AllStatusKeys {
 		for _, clientOnly := range []bool{false, true} {
 			name := string(s)
 			if clientOnly {
 				name += " client-only"
 			}
-			tree := MenuTree(s, clientOnly, menuSize[0], menuSize[1])
+			tree := MenuTree(StatusFor(s), clientOnly, menuSize[0], menuSize[1])
 			lintView(t, name+" menu", tree, v1.ViewPanel, menuSize[0], menuSize[1])
 			checkBudget(t, name+" menu", tree, menuSize[0], menuSize[1])
 			checkGlyphs(t, name+" menu", tree)
-			items := MenuItems(s, clientOnly)
+			items := MenuItems(StatusFor(s), clientOnly)
 			if len(tree.Children) != len(items) {
 				t.Fatalf("%s: menu has %d rows, want %d", name, len(tree.Children), len(items))
 			}

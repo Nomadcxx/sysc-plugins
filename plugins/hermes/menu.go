@@ -25,7 +25,7 @@ type MenuItem struct{ ID, Label, Icon string }
 // MenuItems is noctalia's right-click menu: Open, New session, Interrupt,
 // Refresh, then Start gateway only in local mode while offline or unknown,
 // then Settings. There is no stop entry, local or remote.
-func MenuItems(s BarStatus, clientOnly bool) []MenuItem {
+func MenuItems(s Status, clientOnly bool) []MenuItem {
 	items := []MenuItem{
 		{"open", "Open Hermes", menuIconOpen},
 		{"new-session", "New session", menuIconNewSession},
@@ -40,7 +40,7 @@ func MenuItems(s BarStatus, clientOnly bool) []MenuItem {
 
 // MenuTree renders the menu as one row per item in the width by height
 // menu panel.
-func MenuTree(s BarStatus, clientOnly bool, width, height int) *v1.Node {
+func MenuTree(s Status, clientOnly bool, width, height int) *v1.Node {
 	inner := width - 2*menuPad
 	root := &v1.Node{Kind: v1.KindColumn, Width: width, Height: height, Padding: menuPad, Gap: menuGap}
 	for _, it := range MenuItems(s, clientOnly) {
