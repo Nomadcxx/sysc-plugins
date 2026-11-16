@@ -841,7 +841,7 @@ func summaryStateFor(view hermes.View, env renderEnv) hermes.SummaryState {
 		RunningTools:     state.Summary.Activity.RunningTools,
 		GatewayPlatforms: state.Summary.Gateway.Platforms,
 		ApprovalPending:  state.Approval.Pending,
-		ApprovalMessage:  state.Approval.Message,
+		ApprovalMessage:  state.Approval.Display().Message,
 		ActionError:      strings.TrimSpace(view.ActionError),
 		SessionRunning:   state.Session.Running,
 		UsageInput:       state.Usage.Input,
@@ -861,6 +861,7 @@ func panelStateFor(v *viewState, view hermes.View, env renderEnv) hermes.PanelSt
 	return hermes.PanelState{
 		Summary:          summaryStateFor(view, env),
 		Approvals:        hermes.ApprovalButtons(state),
+		Approval:         state.Approval,
 		ApprovalTool:     state.Approval.ToolName,
 		SessionID:        state.Session.ID,
 		Messages:         state.Messages,

@@ -108,6 +108,7 @@ func AfterSend(c ComposerState) ComposerState {
 type PanelState struct {
 	Summary          SummaryState
 	Approvals        []ApprovalButton
+	Approval         Approval
 	ApprovalTool     string
 	SessionID        string
 	Messages         []Message
@@ -502,15 +503,21 @@ func summaryRowsFit(s SummaryState, inner, height int) *v1.Node {
 	return grid
 }
 
-// approvalCard is the design's approval card: the shield, the tool, the
-// message, and Deny, Allow, Allow Session. The buttons are approval.go's
-// signature-carrying ids, so a click resolves the request on screen.
+// approvalCard is the design's approval card: the shield, the tool, what is
+// being approved, and Deny, Allow, Allow Session. The buttons are
+// approval.go's signature-carrying ids, so a click resolves the request on
+// screen. Hermes puts the command and reason in the request object, so the
+// card reads those through Approval.Display; the explicit tool name and
+// message keep winning when a bridge sends them.
 func approvalCard(p PanelState, inner int) *v1.Node {
-	title := strings.TrimSpace(p.ApprovalTool)
-	if title == "" {
-		title = "Approval required"
+	display := p.Approval.Display()
+	if title := strings.TrimSpace(p.ApprovalTool); title != "" {
+		display.Title = title
 	}
-	msg := strings.TrimSpace(p.Summary.ApprovalMessage)
+	if msg := strings.TrimSpace(p.Summary.ApprovalMessage); msg != "" {
+		display.Message = msg
+	}
+	title, msg, command := display.Title, display.Message, display.Command
 	content := inner - 2*10
 	choices := p.Approvals
 	if len(choices) == 0 {
@@ -543,8 +550,20 @@ func approvalCard(p PanelState, inner int) *v1.Node {
 			}},
 		},
 	}
-	if msg != "" {
-		card.Children = append(card.Children, &v1.Node{Kind: v1.KindText, Text: clip(msg, content/8), Size: "caption", Height: lineHeight})
+	if msg != "" || command != "" {
+		// One column holds the reason over the command, so the extra line
+		// still fits the design's 112-pixel card.
+		lines := &v1.Node{Kind: v1.KindColumn, Width: content}
+		if msg != "" {
+			lines.Children = append(lines.Children, &v1.Node{Kind: v1.KindText, Text: clip(msg, content/8), Size: "caption", Height: lineHeight})
+		}
+		if command != "" {
+			lines.Children = append(lines.Children, &v1.Node{Kind: v1.KindText, Text: clip(command, content/8), Size: "caption", Height: lineHeight, Tone: v1.ToneSubtle})
+		}
+		card.Children = append(card.Children, lines)
+	}
+	if command != "" {
+		card.Gap = 4
 	}
 	card.Children = append(card.Children, buttons)
 	return card

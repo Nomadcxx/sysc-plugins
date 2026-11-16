@@ -186,3 +186,44 @@ func TestNormalizeReplacesLongBridgeErrors(t *testing.T) {
 		t.Fatal("a 200-byte one-line error was replaced")
 	}
 }
+
+// TestApprovalDisplayReadsTheRequest pins D5: Hermes 835a913 sends message and
+// tool_name empty and puts command, description and tool_name in the request
+// object, so the card must read that object.
+func TestApprovalDisplayReadsTheRequest(t *testing.T) {
+	a := Approval{Request: json.RawMessage(`{"command":"rm -r /tmp/x","description":"recursive delete","pattern_key":"rm -r","choices":["once","always"]}`)}
+	d := a.Display()
+	if d.Title != "Approval required" {
+		t.Errorf("title = %q, want %q", d.Title, "Approval required")
+	}
+	if d.Message != "recursive delete" {
+		t.Errorf("message = %q, want the request description", d.Message)
+	}
+	if d.Command != "rm -r /tmp/x" {
+		t.Errorf("command = %q, want the request command", d.Command)
+	}
+
+	multi := Approval{Request: json.RawMessage(`{"command":"go test ./...\n\t-race"}`)}
+	if got := multi.Display().Command; got != "go test ./... -race" {
+		t.Errorf("command = %q, want one line", got)
+	}
+
+	named := Approval{Request: json.RawMessage(`{"tool_name":"terminal","description":"ls"}`)}
+	if got := named.Display().Title; got != "terminal" {
+		t.Errorf("title = %q, want the request tool name", got)
+	}
+
+	explicit := Approval{Message: "Run go test ./...", ToolName: "terminal",
+		Request: json.RawMessage(`{"command":"go test","description":"tests","tool_name":"shell"}`)}
+	d = explicit.Display()
+	if d.Title != "terminal" || d.Message != "Run go test ./..." || d.Command != "go test" {
+		t.Errorf("display = %+v, want the explicit message and tool name to win", d)
+	}
+
+	for _, req := range []json.RawMessage{nil, json.RawMessage(`{`), json.RawMessage(`"flat"`)} {
+		d = Approval{Request: req}.Display()
+		if d.Title != "Approval required" || d.Message != "" || d.Command != "" {
+			t.Errorf("request %q: display = %+v, want the old fallback", req, d)
+		}
+	}
+}

@@ -971,3 +971,19 @@ func TestPanelStateCarriesTheLastActionError(t *testing.T) {
 		t.Fatalf("summary tree %q does not say the failed action", text)
 	}
 }
+
+// TestApprovalRequestReachesTheSummaryAlert pins the entrypoint wiring for
+// D5's summary half: the request's description is the alert's message.
+func TestApprovalRequestReachesTheSummaryAlert(t *testing.T) {
+	view := hermes.View{Status: hermes.StatusFor(hermes.StatusAttention)}
+	view.State.Approval = hermes.Approval{Pending: true,
+		Request: json.RawMessage(`{"command":"rm -r /tmp/x","description":"recursive delete"}`)}
+	s := summaryStateFor(view, renderEnv{})
+	if s.ApprovalMessage != "recursive delete" {
+		t.Fatalf("approval message = %q, want the request description", s.ApprovalMessage)
+	}
+	tree := viewTree(&viewState{kind: v1.ViewPanel, entry: "summary"}, view, true, renderEnv{})
+	if text := treeText(tree); !strings.Contains(text, "recursive delete") {
+		t.Fatalf("summary tree %q does not say the reason", text)
+	}
+}

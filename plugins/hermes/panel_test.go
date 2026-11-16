@@ -783,3 +783,44 @@ func TestPanelEmptyActionErrorAddsNothing(t *testing.T) {
 		}
 	}
 }
+
+// TestApprovalCardShowsTheCommandAndReason pins D5 on the card: the request's
+// command and description are said, without pattern_key or anything else.
+func TestApprovalCardShowsTheCommandAndReason(t *testing.T) {
+	p := basePanel(StatusAttention)
+	p.Summary.ApprovalPending = true
+	p.Summary.ApprovalMessage = ""
+	p.Approval = Approval{Pending: true, Request: json.RawMessage(`{"command":"rm -r /tmp/x","description":"recursive delete","pattern_key":"rm"}`)}
+	for _, size := range panelSizes {
+		tree := PanelTree(p, size[0], size[1])
+		lintView(t, "approval request", tree, v1.ViewPanel, size[0], size[1])
+		card := findKey(tree, "approval")
+		if card == nil {
+			t.Fatalf("%dx%d: no approval card", size[0], size[1])
+		}
+		joined := strings.Join(texts(card), "|")
+		for _, want := range []string{"rm -r /tmp/x", "recursive delete", "Approval required"} {
+			if !strings.Contains(joined, want) {
+				t.Errorf("%dx%d: card %q does not say %q", size[0], size[1], joined, want)
+			}
+		}
+	}
+}
+
+// TestApprovalCardFallsBackToTheOldText keeps stock bridges unchanged: a
+// malformed or missing request leaves the message and tool name as sent.
+func TestApprovalCardFallsBackToTheOldText(t *testing.T) {
+	p := basePanel(StatusAttention)
+	p.Summary.ApprovalPending = true
+	p.ApprovalTool = "terminal"
+	p.Summary.ApprovalMessage = "Run go test ./... in the repository"
+	p.Approval = Approval{Pending: true, Request: json.RawMessage(`not json`)}
+	tree := PanelTree(p, panelSizes[0][0], panelSizes[0][1])
+	lintView(t, "approval fallback", tree, v1.ViewPanel, panelSizes[0][0], panelSizes[0][1])
+	joined := strings.Join(texts(findKey(tree, "approval")), "|")
+	for _, want := range []string{"terminal", "Run go test ./... in the repository"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("card %q does not say %q", joined, want)
+		}
+	}
+}

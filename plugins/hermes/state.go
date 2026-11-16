@@ -381,3 +381,47 @@ func capText(s string) string {
 	}
 	return s[:cut] + TruncatedMarker
 }
+
+// ApprovalDisplay is what the approval card says: a title, a reason and the
+// command, all trimmed and ready to clip to the card's width.
+type ApprovalDisplay struct {
+	Title   string
+	Message string
+	Command string
+}
+
+// approvalRequest is the part of Hermes's request object the card reads.
+// pattern_key and choices are deliberately not here: the buttons already
+// carry the choices and the pattern is Hermes's own allowlist key.
+type approvalRequest struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+	ToolName    string `json:"tool_name"`
+}
+
+// Display resolves the card's lines. Hermes 835a913 sends message and
+// tool_name empty and puts the content in the request object, so those fields
+// are read too; an explicit message or tool name still wins, and a missing or
+// malformed request falls back to the text as sent. The command is squashed to
+// one line, since the card has room for one.
+func (a Approval) Display() ApprovalDisplay {
+	d := ApprovalDisplay{
+		Title:   strings.TrimSpace(a.ToolName),
+		Message: strings.TrimSpace(a.Message),
+	}
+	var req approvalRequest
+	if len(a.Request) > 0 {
+		_ = json.Unmarshal(a.Request, &req)
+	}
+	if d.Title == "" {
+		d.Title = strings.TrimSpace(req.ToolName)
+	}
+	if d.Title == "" {
+		d.Title = "Approval required"
+	}
+	if d.Message == "" {
+		d.Message = strings.TrimSpace(req.Description)
+	}
+	d.Command = strings.Join(strings.Fields(req.Command), " ")
+	return d
+}
