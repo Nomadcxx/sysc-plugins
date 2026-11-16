@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Nomadcxx/sysc-shell/plugin/icons"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -608,6 +609,67 @@ func TestWrapLinesSplitsAndCaps(t *testing.T) {
 		if len(l) > 20 {
 			t.Errorf("line %q past 20 bytes", l)
 		}
+	}
+}
+
+// TestWrapLinesShortLastLineDoesNotPanic pins D1 from the Task 11 live run:
+// a reply longer than maxLines whose kept last line is shorter than
+// maxBytes-len(" …") used to read one byte past that line.
+func TestWrapLinesShortLastLineDoesNotPanic(t *testing.T) {
+	got := wrapLines("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm", 92, 12)
+	if len(got) != 12 {
+		t.Fatalf("wrapLines returned %d lines: %q", len(got), got)
+	}
+	if !strings.HasSuffix(got[11], " …") {
+		t.Errorf("last line = %q, want the overflow marker", got[11])
+	}
+	if want := "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl …"; strings.Join(got, "\n") != want {
+		t.Errorf("kept lines = %q, want %q", strings.Join(got, "\n"), want)
+	}
+}
+
+// TestLongReplyThroughBubbleDoesNotPanic is the live shape: a 60-line
+// streamed reply rendered in a transcript bubble at the chat panel's real
+// width.
+func TestLongReplyThroughBubbleDoesNotPanic(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 60; i++ {
+		fmt.Fprintf(&b, "Line %02d of the long streamed reply for the scroll spike.\n", i)
+	}
+	inner := 780 - 2*panelPad
+	bub := bubble(Message{ID: "m1", Role: "assistant", Text: b.String()}, inner)
+	lines := texts(bub)
+	if len(lines) < 2 {
+		t.Fatalf("bubble texts = %q", lines)
+	}
+	body := lines[1:]
+	if len(body) != maxBubbleLines {
+		t.Fatalf("bubble body has %d lines: %q", len(body), body)
+	}
+	if !strings.HasSuffix(body[len(body)-1], " …") {
+		t.Errorf("last bubble line = %q, want the overflow marker", body[len(body)-1])
+	}
+	if !utf8.ValidString(strings.Join(body, "\n")) {
+		t.Errorf("bubble text is not valid UTF-8: %q", body)
+	}
+}
+
+// TestWrapLinesTruncatesOnARuneBoundary keeps the ellipsis from slicing a
+// multi-byte rune in half when the last kept line is cut.
+func TestWrapLinesTruncatesOnARuneBoundary(t *testing.T) {
+	got := wrapLines("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\naééé\nm", 10, 12)
+	if len(got) != 12 {
+		t.Fatalf("wrapLines returned %d lines: %q", len(got), got)
+	}
+	last := got[11]
+	if !strings.HasSuffix(last, " …") {
+		t.Errorf("last line = %q, want the overflow marker", last)
+	}
+	if !utf8.ValidString(last) {
+		t.Errorf("last line %q is not valid UTF-8", last)
+	}
+	if last != "aéé …" {
+		t.Errorf("last line = %q, want a rune-boundary cut", last)
 	}
 }
 

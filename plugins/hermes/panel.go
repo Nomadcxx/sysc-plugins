@@ -688,7 +688,7 @@ func wrapLines(text string, maxBytes, maxLines int) []string {
 		if cut > maxBytes-len(more) {
 			cut = maxBytes - len(more)
 		}
-		for cut > 0 && !utf8.RuneStart(last[cut]) {
+		for cut > 0 && cut < len(last) && !utf8.RuneStart(last[cut]) {
 			cut--
 		}
 		out[maxLines-1] = last[:cut] + more
