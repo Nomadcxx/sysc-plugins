@@ -642,3 +642,71 @@ func TestRunArgvExecutesArgvWithoutAShell(t *testing.T) {
 		t.Fatalf("child argv = %q, want %q", got, want)
 	}
 }
+
+// TestLauncherAskAcceptsExactlyOneMegabyte pins the hand-off limit at the
+// boundary on both sides. The existing refusal test uses max+1, so a
+// mutation from > to >= would otherwise survive.
+func TestLauncherAskAcceptsExactlyOneMegabyte(t *testing.T) {
+	text := strings.Repeat("a", launcherAskMax)
+	t.Run("write", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := writeLauncherAsk(dir, text); err != nil {
+			t.Fatalf("writeLauncherAsk(%d bytes) = %v, want accept", len(text), err)
+		}
+		info, err := os.Stat(filepath.Join(dir, launcherAskFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Size() != launcherAskMax {
+			t.Fatalf("hand-off size = %d, want %d", info.Size(), launcherAskMax)
+		}
+	})
+	t.Run("read", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, launcherAskFile)
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, msg := takeLauncherAsk(dir)
+		if msg != "" {
+			t.Fatalf("takeLauncherAsk(%d bytes) refused: %s", launcherAskMax, msg)
+		}
+		if got != text {
+			t.Fatalf("takeLauncherAsk returned %d bytes, want %d", len(got), len(text))
+		}
+	})
+}
+
+// TestLauncherSelectAskFallsBackToTheRowComment covers the case where the
+// host hands the row back without the {query} text: the Ask row comment is
+// the prompt the user typed, so it becomes the hand-off.
+func TestLauncherSelectAskFallsBackToTheRowComment(t *testing.T) {
+	root := t.TempDir()
+	fake := &launcherFake{}
+	getenv := func(key string) string {
+		if key == "XDG_RUNTIME_DIR" {
+			return root
+		}
+		return ""
+	}
+	const comment = "Summarise the bridge logs"
+	code, _, stderr := launcherRun([]string{"launcher-select", "Ask Hermes\t" + comment, ""}, getenv, fake.run)
+	if code != 0 {
+		t.Fatalf("launcher-select exit = %d, stderr = %q", code, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want none", stderr)
+	}
+	data, err := os.ReadFile(filepath.Join(root, launcherAskDirName, launcherAskFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != comment {
+		t.Fatalf("hand-off = %q, want the row comment %q", data, comment)
+	}
+	calls := fake.calls()
+	if len(calls) != 1 {
+		t.Fatalf("ran %d commands, want one", len(calls))
+	}
+	checkPluginAction(t, calls[0], "launcher-ask")
+}
