@@ -165,15 +165,6 @@ func CopySSHCommand(ctx context.Context, c *v1.Client, target string, port int) 
 	return nil
 }
 
-func loopbackHost(host string) bool {
-	h := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
-	if strings.EqualFold(h, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(h)
-	return ip != nil && ip.IsLoopback()
-}
-
 // CleartextWarning is the design's warning for client-only mode to a host
 // off this machine. The plugin warns and does not block.
 func CleartextWarning(clientOnly bool, host string) string {

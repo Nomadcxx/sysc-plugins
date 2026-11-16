@@ -459,7 +459,7 @@ func sectionBody(p PanelState, inner, room int) *v1.Node {
 	var natural, min int
 	switch p.Section {
 	case SectionSummary:
-		natural, min = gridHeight(), lineHeight
+		natural, min = gridHeight(len(summaryRows(p.Summary))), lineHeight
 	case SectionSessions:
 		natural, min = sessionsNaturalHeight(p.Sessions), sessionsMinHeight
 	case SectionModel:

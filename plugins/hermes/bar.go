@@ -193,7 +193,9 @@ func TooltipTree(state BarState) *v1.Node {
 		})
 	}
 	if w := cleartextWarning(state.ClientOnly, state.Host); w != "" {
-		for _, line := range wrapLines(w, tooltipLineBytes) {
+		// len(w) bounds the line count (every line holds at least one
+		// byte), so the warning is never capped or ellipsised.
+		for _, line := range wrapLines(w, tooltipLineBytes, len(w)) {
 			root.Children = append(root.Children, &v1.Node{
 				Kind: v1.KindText, Text: line, Tone: v1.ToneWarning,
 			})
@@ -217,28 +219,6 @@ func loopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-func wrapLines(text string, maxBytes int) []string {
-	words := strings.Fields(text)
-	if len(words) == 0 {
-		return nil
-	}
-	var lines []string
-	cur := words[0]
-	for _, w := range words[1:] {
-		next := cur + " " + w
-		if len(next) <= maxBytes {
-			cur = next
-			continue
-		}
-		lines = append(lines, clip(cur, maxBytes))
-		cur = w
-	}
-	if cur != "" {
-		lines = append(lines, clip(cur, maxBytes))
-	}
-	return lines
 }
 
 func headline(state BarState, prefix string) string {
