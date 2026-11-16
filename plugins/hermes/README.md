@@ -8,8 +8,9 @@ machine (Local mode) or one running elsewhere (Client-only mode).
 
 > **Status:** pre-release. The automated gates pass, and the individual
 > commits were reviewed as recorded in [ACCEPTANCE.md](ACCEPTANCE.md). The
-> live acceptance matrix in Task 11 has **not** been run, so this plugin is not
-> claimed to have passed live acceptance. Two known gaps are open: approval
+> Task 11 live matrix was run in part on 2026-11-17 and found a chat-panel
+> crash that blocks acceptance, so this plugin is not claimed to have passed
+> live acceptance. Two known gaps are open: approval
 > delivery on the newest Hermes build (see *Approvals*), and the host gaps
 > listed at the end.
 

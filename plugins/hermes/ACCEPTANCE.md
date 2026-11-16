@@ -1,9 +1,175 @@
 # Hermes Agent acceptance
 
-This record contains only results that exist. The live acceptance matrix in
-Task 11 has **not** been run, so the plugin is not claimed to have passed live
-acceptance. The final automated gate was run on the last commit of
-`feat/hermes-merge`; its raw output is in `evidence/task12/gate.txt`.
+This record contains only results that exist. The Task 11 live matrix was run
+in part on 2026-11-17 and found a crash that blocks acceptance (see *Task 11
+live run*), so the plugin is **not** claimed to have passed live acceptance.
+The final automated gate was run on the last commit of `feat/hermes-merge`;
+its raw output is in `evidence/task12/gate.txt`.
+
+## Task 11 live run (2026-11-17, 08:14 to 08:58 AEDT)
+
+**Result: not accepted.** A crash in the chat panel (D1 below) blocks
+acceptance. Several rows could not be run once the plugin had crashed.
+
+**Where it ran:**
+
+- archThink, in a separate nested session: `niri 26.04` in a window,
+  `dbus-run-session`, with a temporary `HOME`, `XDG_CONFIG_HOME`,
+  `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` and `XDG_RUNTIME_DIR`.
+- The shell was the installed `sysc-shell` binary (module
+  `v0.3.1-0.20261116032720-b50262d5227d`). The plugin was built from
+  `1b99cac` into the temporary config only, with `polkit_agent` off.
+- Hermes `835a913` (0.20.6) with a throwaway `HERMES_HOME` holding only a
+  stub config.
+- The model was a scripted OpenAI-compatible stub on `127.0.0.1:18877`. No
+  provider credentials were copied, and the Ollama cloud models had no
+  credit.
+- `hermes gateway start` and `stop` went through a shim that runs a
+  foreground `hermes gateway run` in the throwaway home, so no systemd unit
+  was created.
+- The bundled bridge ran on `127.0.0.1:19777`. Local mode fixes that port;
+  nothing else uses it on archThink.
+- Input came from a `zwlr_virtual_pointer_v1` client and `wtype`, both
+  against the nested display only.
+
+The daily session (`sysc-shell` pid 1092015, greetd, sysc-lock and the
+compositor) was not touched. Evidence: the Task 11 evidence folder
+(`shots/00`–`38`, `logs/`, `ps-before.txt`, `ps-after.txt`).
+
+### Matrix
+
+| Check | Result | Evidence |
+|---|---|---|
+| Local, no bridge | PASS: spawned one bridge, bar online, token read beside the state file | `shots/02-tooltip.png`, `logs/hermes-shim.log` |
+| Local, Noctalia bridge already running | NOT RUN: the plugin was stuck after D1's restart (D2) and never adopted the hand-started bridge | `shots/38-manual-bridge.png` |
+| Local, gateway stopped | PASS: `gateway start` called exactly once | `logs/hermes-shim.log` |
+| Local, state-file updates | PASS (observed, not timed): the card and status followed the state file at once in Local mode | `shots/10-approval-card.png` |
+| Local → client-only, client-only → local | NOT RUN (blocked by D1 and D2) | |
+| Collision warning | NOT RUN | |
+| Client-only: tunnel down, LAN host, token file, wrong or missing token | NOT RUN (blocked by D1 and D2; the VPS has no bridge, see Phase B) | |
+| Bar | PARTIAL: Online ✓, Working, Needs You with `!`; tooltip `Hermes: Online · t11-stub` | `shots/02`, `10`, `32` |
+| Left click | FAIL: opens the chat panel, not the summary; a second click closes it | `shots/03`, `04` (D3) |
+| Right click | FAIL: no menu opens | `shots/05-rightclick.png` (D3) |
+| Hide when idle, Control Center tile, `plugin.action` | NOT RUN | |
+| Send prompt | PASS: user message shown at once, reply rendered | `shots/07b-retry.png` |
+| Interrupt, Interrupt during one-shot, One-shot | NOT RUN | |
+| Approval Allow | PASS: ran once; the next identical call asked again | `shots/11`, `12`, `approvals-ui.txt` |
+| Approval Allow Session | PASS: ran, and the next call of the same pattern ran without asking. The queued-approvals part was NOT RUN | `shots/16`, `17`, `approvals-ui.txt` |
+| Approval Deny | PASS: `BLOCKED: Command denied by user` | `shots/14`, `15` |
+| Stale approval click | PARTIAL: the stale Allow was dropped and the tool did not run, but no message appeared (D4) | `stale-click.txt`, `shots/13` |
+| Mismatched `request_id` | PASS: 409 `approval_mismatch`, request still pending | `409-mismatch.txt` |
+| Queued second approval behind the shown one | NOT RUN: one approval per session could be queued with this setup | |
+| `/model` `gpt 4 --global` | PASS: 400 `invalid_model`, config hash unchanged | `model-invalid.txt` |
+| New session/Reset, Sessions/Resume, Resume latest, Model Apply/Persist, Start/Stop gateway, Pinned, Settings, Launcher | NOT RUN (blocked by D1 and D2) | |
+| Mid-turn drop | FAIL: D1 crashed the plugin mid-reply and took the owned bridge with it; recovery did not happen (D2). No token value appears in any captured log or evidence file | `crash-repro2.txt` |
+| Small output | NOT RUN | |
+| Scroll | see the scroll spike below | |
+| Approval card content | FAIL: the card shows only the title and buttons, not the command (D5) | `shots/10-approval-card.png` |
+
+### Defects found (not fixed in this run)
+
+**D1 (P1, blocks acceptance): panic in `wrapLines`.**
+
+- Where: `plugins/hermes/panel.go:686-693`, reached through `bubble`
+  (`panel.go:615`), `transcript` (`:566`), `PanelTree` (`:275`) and
+  `main.viewTree` (`cmd/sysc-plugin-hermes/main.go:801`).
+- Cause: when the text wraps to more than `maxLines` (12) lines, `cut :=
+  len(last)` is kept whenever `len(last) <= maxBytes-len(" …")`, so the
+  loop then reads `last[cut]` one past the end of the string.
+- Minimal repro: `wrapLines("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm", 92, 12)`.
+- Live: a 60-line reply in an open chat panel gave `index out of range [56]
+  with length 56`. The 12th line, `Line 12 of the long streamed reply for
+  the scroll spike.`, is 56 bytes.
+- Every render of that transcript crashes again.
+
+**D2 (P2): no recovery after the host restarts the plugin.**
+
+- After the host restarted the plugin following D1, the bar and the panel
+  stayed `Connecting…` and no bridge was spawned (observed for more than
+  2 minutes, twice).
+- The goroutine dump in `plugin-goroutines-stuck.txt` shows the event loop
+  idle in `select` and the reader in `Recv`.
+- The cause is not confirmed. The host's consent state may be involved:
+  after a manual install the host showed "enabled before approvals were
+  recorded", and a stderr wrapper produced `state.get … withheld because the
+  plugin changed`. Approving in Settings → Plugins restarted it cleanly.
+
+**D3 (P2): the bar never opens the summary or the menu.**
+
+- `cmd/sysc-plugin-hermes/main.go:659-664` opens the chat panel for the
+  bar's `open` activate.
+- `input` (`main.go:631-646`) ignores `EventPointer`.
+- Nothing calls `openPanelFrom(…, "summary")` or `(…, "menu")`, so neither
+  panel is reachable, which contradicts the README.
+
+**D4 (P2): action errors are never shown.**
+
+- `View.ActionError` (`plugins/hermes/service.go:298`) is set but no tree
+  reads it, so `The approval changed; check the card again` and every
+  action error are invisible.
+
+**D5 (P2): the approval card hides what is being approved.**
+
+- `approvalCard` (`panel.go:496-537`) shows only `ApprovalTool` and
+  `Summary.ApprovalMessage`.
+- Hermes `835a913` sends `command` and `description` inside
+  `approval.request`, with empty `message` and `tool_name`, so the card names
+  nothing.
+
+**D6 (docs):** Hermes `835a913` offers `always` in `choices`
+(`allow_permanent: true`). The README says Hermes offers no "always" choice.
+
+### Scroll spike
+
+Not a four-option comparison. Only what ships was observed:
+
+- The transcript list starts at its top, so the newest messages sit below the
+  fold (`shots/18`).
+- The mouse wheel scrolls it (`shots/19`).
+- During a streamed reply the plugin crashed on D1 before the scroll
+  position could be judged.
+
+Still open.
+
+### b200f5b approval path (read-only source check on archPC)
+
+Confirmed by reading the source:
+
+- In `tui_gateway/server.py`, `_emit_approval_request` sends an `approval`
+  server→client request through `server_requests.send_async`, not an
+  `approval.request` event.
+- `write_json` routes it to the session's transport, which for the bundled
+  bridge is `StateTransport`.
+- `HermesState.apply_event` acts only on `params.type == "approval.request"`
+  (`scripts/hermes_bridge.py:566-567`), so the request is dropped and no card
+  appears.
+- The bridge's transport is not a `WSTransport`, so
+  `_session_client_answers_requests` counts the session as answerable and
+  Hermes does not withdraw the request. The tool waits for
+  `approvals.timeout`.
+- `approval.respond` still resolves by `request_id` if the bridge learns the
+  ID, for example by handling the `approval` request frame or polling
+  `_pending_approval_request_payload`.
+
+This needs a bridge change, which is an owner decision. Evidence:
+`archpc-b200f5b-*.txt`.
+
+### Phase B (VPS, client-only)
+
+Skipped. The VPS (`hermes-vps`, Hermes `f0d94882e8`) runs only
+`hermes-gateway` and `hermes-dashboard`. It has no bridge listening, no bridge
+script and no bridge token (`vps-readonly-inventory.txt`). The bundled bridge
+has exactly one token, `bridge.token`, with no way to issue or revoke a
+second one.
+
+Phase B needs the owner to decide whether to:
+
+- install the bundled bridge on the VPS and run it, which starts a new
+  process against the lead's Hermes home;
+- use its single token, revoked by stopping the bridge and deleting the
+  token file;
+- and settle the b200f5b-style approval path first, because the VPS build
+  is newer than `835a913`.
 
 ## Automated gates
 
@@ -47,7 +213,8 @@ still outstanding.
 
 ## Scroll spike
 
-**Status: not run. No option has been chosen.**
+**Status: not run as a comparison. No option has been chosen.** The 2026-11-17
+observation is under *Task 11 live run*.
 
 The plan asks for four transcript strategies to be compared in a real
 sysc-shell session while a reply streams:
@@ -102,10 +269,11 @@ option, and record here:
 
 ## Approval check
 
-**Status: NOT RUN (Task 11 live matrix).**
+**Status: partial (2026-11-17).** Deny, Allow and Allow Session were exercised
+through the bundled bridge on Hermes `835a913`; see *Task 11 live run*. The
+`b200f5b` delivery path and a stock bridge were not exercised live.
 
-No approval was exercised against a live Hermes gateway, in either delivery
-path. The automated tests pin the plugin's request signature, the
+Before that run, no approval had been exercised against a live Hermes gateway. The automated tests pin the plugin's request signature, the
 `request_id` payload and the 409 handling, but they use a fake bridge.
 
 The open gap is on the bridge side: on Hermes `b200f5b`, approvals arrive as
@@ -118,7 +286,8 @@ click is refused with `The approval changed; check the card again`.
 
 ## Parity matrix
 
-**Status: NOT RUN.** No live parity comparison against Noctalia was produced.
+**Status: partial, not accepted.** See *Task 11 live run*. No side-by-side
+comparison against Noctalia was produced.
 The design's surface inventory and host-gap list describe what should be
 compared; they are not a substitute for the matrix.
 
