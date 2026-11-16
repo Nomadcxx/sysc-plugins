@@ -99,6 +99,8 @@ type testHost struct {
 	silent atomic.Bool
 	calls  atomic.Int64
 	stderr *lockedBuffer
+	// timeout overrides the default 2 s wait for slow tests. Zero means 2 s.
+	timeout time.Duration
 
 	// reply customizes host replies; nil means OK with no result.
 	reply func(*v1.HostCall) *v1.HostReply
@@ -206,9 +208,16 @@ func (h *testHost) read() {
 	}
 }
 
+func (h *testHost) deadline() time.Duration {
+	if h.timeout == 0 {
+		return 2 * time.Second
+	}
+	return h.timeout
+}
+
 func (h *testHost) wait(accept func(v1.Message) bool) v1.Message {
 	h.t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(h.deadline())
 	for {
 		select {
 		case msg := <-h.msgs:
@@ -446,6 +455,9 @@ func (h *testHost) waitSnapshot(viewID string, accept func(*v1.ViewSnapshot) boo
 func TestSettingsChangedConnectsAndRepublishes(t *testing.T) {
 	host, port := fakeRemote(t, "idle")
 	h, _ := startPlugin(t)
+	// This test republishes a full tree and races the rest of the suite under
+	// -race; the 2 s default is too tight. The assertions are unchanged.
+	h.timeout = 10 * time.Second
 	if err := h.send(&v1.ViewOpen{ViewID: "bar-1", View: v1.ViewBar, Entry: "bar", Width: 240, Height: 32}); err != nil {
 		t.Fatal(err)
 	}
@@ -453,14 +465,32 @@ func TestSettingsChangedConnectsAndRepublishes(t *testing.T) {
 	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(host, port)}); err != nil {
 		t.Fatal(err)
 	}
-	snap := h.waitSnapshot("bar-1", func(s *v1.ViewSnapshot) bool { return treeHasName(s.Root, "Online") })
+	// The Online snapshot and the active status can arrive in either order;
+	// take both from one stream so neither wait can consume the other's
+	// message.
+	var snap *v1.ViewSnapshot
+	var status *v1.ServiceStatus
+	deadline := time.After(h.deadline())
+	for snap == nil || status == nil {
+		select {
+		case m := <-h.msgs:
+			switch v := m.(type) {
+			case *v1.ViewSnapshot:
+				if v.ViewID == "bar-1" && treeHasName(v.Root, "Online") {
+					snap = v
+				}
+			case *v1.ServiceStatus:
+				if v.State == v1.ServiceStateActive {
+					status = v
+				}
+			}
+		case <-deadline:
+			h.t.Fatalf("timed out waiting for the Online bar and active status (snapshot=%v status=%v)", snap != nil, status != nil)
+		}
+	}
 	if err := v1.Validate(snap.Root, v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
-	status := h.wait(func(m v1.Message) bool {
-		s, ok := m.(*v1.ServiceStatus)
-		return ok && s.State == v1.ServiceStateActive
-	}).(*v1.ServiceStatus)
 	if status.ServiceID != serviceID || status.Message != "Online" {
 		t.Fatalf("service status = %+v", status)
 	}
