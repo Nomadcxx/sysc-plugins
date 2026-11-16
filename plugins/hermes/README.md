@@ -8,9 +8,10 @@ machine (Local mode) or one running elsewhere (Client-only mode).
 
 > **Status:** pre-release. The automated gates pass, and the individual
 > commits were reviewed as recorded in [ACCEPTANCE.md](ACCEPTANCE.md). The
-> Task 11 live matrix was run in part on 2026-11-17 and found a chat-panel
-> crash that blocks acceptance, so this plugin is not claimed to have passed
-> live acceptance. Two known gaps are open: approval
+> Task 11 local matrix was re-run on 2026-11-17 after the crash fix and is
+> not accepted yet: the pinned panel is not restored at shell start, and a
+> host restart of the plugin leaves it on `Connecting…` (a sysc-shell bug).
+> Client-only rows are not run yet. Two known gaps are open: approval
 > delivery on the newest Hermes build (see *Approvals*), and the host gaps
 > listed at the end.
 

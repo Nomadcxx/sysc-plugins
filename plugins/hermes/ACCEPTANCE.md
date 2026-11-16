@@ -1,12 +1,145 @@
 # Hermes Agent acceptance
 
 This record contains only results that exist. The Task 11 live matrix was run
-in part on 2026-11-17 and found a crash that blocks acceptance (see *Task 11
-live run*), so the plugin is **not** claimed to have passed live acceptance.
+on 2026-11-17, first in part (a crash, D1, blocked it) and then again on
+`bc810b9` after the fixes. The local re-run is **not accepted**: the pinned
+panel is not restored at shell start (D7), and a host restart of the plugin
+leaves it on `Connecting…` (D2, a sysc-shell bug). Client-only rows and the
+b200f5b approval path are pending the owner. See *Task 11 local re-run*.
 The final automated gate was run on the last commit of `feat/hermes-merge`;
 its raw output is in `evidence/task12/gate.txt`.
 
-## Task 11 live run (2026-11-17, 08:14 to 08:58 AEDT)
+## Task 11 local re-run (2026-11-17, 10:08 to 10:54 AEDT)
+
+**Result: local matrix not accepted.** D1 and D3 to D6 are fixed and hold up
+live. Two problems remain. The pinned panel is not restored when the shell
+starts (D7, a plugin bug). After the host restarts the plugin on its own, it
+stays on `Connecting…` (D2, a sysc-shell bug). Client-only rows and the
+b200f5b approval path wait on the owner.
+
+**Pending the owner:** the b200f5b approval path (Hermes `b200f5b` on archPC
+sends approvals as a server request that the bundled bridge drops; see
+*b200f5b approval path* below) and every client-only row, including the VPS
+(see *Phase B*). The bridge was not changed for either.
+
+**Where it ran:** the same nested setup as the first run (archThink, nested
+`niri` with `dbus-run-session`, temporary `HOME`, XDG directories and
+`HERMES_HOME`, stub model on `127.0.0.1:18877`, bundled bridge on
+`127.0.0.1:19777`). The shell was the installed `sysc-shell` (module
+`v0.3.1-0.20261116032720-b50262d5227d`) and Hermes was `835a913`. The plugin
+was built from `bc810b9`. The only change in that build was extra stderr logging
+(`evidence/task11b/ht11-final/debug-build.diff`). Evidence paths below are
+relative to `evidence/task11b/`. The setup was torn down at 10:54 AEDT and
+the daily session was not touched (see *Teardown*).
+
+### Matrix (re-run)
+
+| Check | Result | Evidence |
+|---|---|---|
+| Local, no bridge | PASS: after a nested shell restart the plugin spawned the bridge as its own child, and after a `kill -9` it spawned a new one within 5 s. The token came from `~/.cache/sysc-hermes/bridge.token` | `hide-idle.txt`, `midturn-drop.txt`, `ht11-final/logs/plugin-stderr.log` |
+| Local, Noctalia bridge already running | PASS: a hand-started bridge with its state in `~/.cache/noctalia-hermes/` was adopted, not spawned | `adopt.txt`, `shots/01-adopted-bar.png` |
+| Local, gateway stopped | PASS: `gateway start` ran once at start. No second start after two shell restarts and a bridge kill | `gateway.txt`, `ht11-final/logs/hermes-shim.log` |
+| Local, state-file updates | PASS: a prompt posted straight to the bridge was in the open panel by the next shot, about 7 s later. The idle HTTP poll is 30 s | `statefile.txt`, `shots/36-statefile-2s.png` |
+| Local → client-only | NOT RUN: client-only rows are pending the owner | |
+| Client-only → local | NOT RUN: pending the owner | |
+| Collision | NOT RUN: needs a tunnel on 19777 (client-only), pending the owner | |
+| Client-only, tunnel down | NOT RUN: pending the owner | |
+| Client-only, LAN host | NOT RUN: pending the owner. Not exposed on the LAN from the throwaway setup | |
+| Wrong or missing token | PARTIAL: in Local mode with the token file replaced, the bridge answered 403 and Settings showed `Last error: Wrong token`. The bar tooltip said only `Hermes: Error · t11-stub` (D8). With the file missing the bar showed Error, but the Settings text was not captured. No token value appears in any log or evidence file. It recovered after the file was restored | `wrong-token.txt`, `shots/27`–`35` |
+| Bar | PASS: Online, Needs You with `!`, Error and hidden-when-idle all render. Tooltip `Hermes: Online · t11-stub` | `shots/02b`, `14`, `27`, `25` |
+| Left click | PASS (D3 fixed): the summary opens with Model, Gateway and Activity rows | `shots/07b-summary.png` |
+| Right click | PASS (D3 fixed): menu with Open Hermes, New session, Interrupt, Refresh and Hermes Settings. Start gateway was hidden because the gateway was running (`menu.go:26-36`) | `shots/08b-right-menu.png` |
+| Hide when idle | PARTIAL: the pill was hidden when idle, and `plugin.action open` opened the panel while hidden. The Control Center tile was not clicked. A live `config.json` edit did not reach the plugin; the setting applied after a shell restart | `hide-idle.txt`, `shots/24`–`26` |
+| Send prompt | PASS | `shots/36-statefile-2s.png`, `sessions.txt` |
+| Interrupt | PASS: the stub saw the stream closed, and the status returned to idle | `interrupt.txt` |
+| Interrupt during one-shot | PARTIAL: the interrupt was accepted and the one-shot finished with its reply recorded. The bridge then kept `[Errno 32] Broken pipe` as its error and Hermes status `error` until the next session | `oneshot-interrupt.txt`, `sessions.txt` |
+| Approval Allow | PASS: Allow on the pinned card ran the command once, and the next call asked again | `pinned-approval.txt`, `shots/12*`, `16` |
+| Approval Allow Session | PASS in the first run (`910ed68`). Not re-run | first run `approvals-ui.txt` |
+| Approval Deny | PASS: the denied `rm` did not run | `pinned-approval.txt`, `shots/17` |
+| Stale approval click | PARTIAL: the request denied through the API never ran. In both tries, though, the card had re-rendered before the click landed, so the click resolved the next card (O1). The stale-drop message is covered by unit tests only | `stale-click.txt`, `stale-click2.txt`, `shots/13`, `15` |
+| Second approval queued (bundled bridge) | PASS: a wrong `request_id` got 409 `approval_mismatch` and resolved nothing. The shown request was then resolved from the card | `approval-409.txt` |
+| `/model` `gpt 4 --global` | PASS: 400 `invalid_model`, config unchanged | `model.txt` |
+| New session / Reset | PARTIAL: `new-session` started a new session. Reset was not run | `sessions.txt` |
+| Sessions / Resume | PASS: the list loaded 5 sessions, resume loaded the transcript, and sending worked | `sessions.txt`, `shots/22b-sessions.png` |
+| Resume latest | PARTIAL: the service action resumed the newest stored session. The launcher route was not run | `sessions.txt` |
+| Model Apply / Persist | PARTIAL: Persist wrote `default: t11-stub-b` to `config.yaml`, and it was reverted after. Hermes refused Apply with 5001 `Unknown provider 'custom'`, which comes from the stub provider. Whether Persist survives a bridge restart was not checked | `model.txt` |
+| Start / Stop gateway | PASS for Local: stop through the bridge, then start through the service action. The client-only half is NOT RUN | `gateway.txt` |
+| One-shot | PASS: `hermes -z` completed. Cancel was not run on its own | `gateway.txt`, `oneshot-interrupt.txt` |
+| Pinned | FAIL (D7): opens, and approvals work there, but it is not restored after a shell restart | `pinned-approval.txt`, `shots/11`, `14`–`17`, `25`, `ht11-final/logs/plugin-stderr.log` |
+| Settings | PASS: Test connection result, pin toggle and connection line. The model picker shows `No models reported by the bridge` (stub) | `shots/10-test-connection.png`, `35` |
+| Launcher | PARTIAL: the Ask hand-off file was 0600 in a 0700 directory, was deleted on read, and the prompt was sent. The `/hermes` provider rows were not captured | `launcher-ask.txt` |
+| Mid-turn drop | PASS: the bridge was killed mid-stream and the plugin respawned it within 5 s. The panel came back Online, with no token in any log. The in-flight turn was lost and no error was shown | `midturn-drop.txt`, `shots/37`, `38` |
+| Small output | NOT RUN: the nested output is 953x1033; no small output was available | |
+| Scroll | PASS (D1 fixed): a 60-line streamed reply rendered without a crash, the wheel scrolled up and down, and the plugin pid was unchanged | `scroll.txt`, `shots/18`–`20` |
+| Approval card content | PASS (D5 fixed): the card shows the description and the command | `shots/14-pinned-card.png` |
+| Restart by the host | FAIL (D2, sysc-shell): see below | `d2-root-cause.txt`, `shots/d2-01-after-kill.png` |
+
+### Defect status
+
+| ID | Status | Commit |
+|---|---|---|
+| D1 `wrapLines` panic | fixed, holds live | `8cdecc0` |
+| D2 `Connecting…` after the host restarts the plugin | open, **sysc-shell bug**, nothing changed in the plugin | |
+| D3 bar left and right click | fixed, holds live | `292d77a`, `fd7e810` |
+| D4 action errors not shown | fixed. The live stale-click message was not triggered (O1); Settings `Last error` shows live | `f6e6870`, `bc810b9` |
+| D5 approval card content | fixed, holds live | `803a844` |
+| D6 README on `always` | fixed | `0e60f4c` |
+| D7 pinned panel not restored at shell start | **new, open** | |
+| D8 bar does not say why it is in Error | **new, open** | |
+
+**D2 cause (sysc-shell `b50262d`, `internal/shell/pluginhost.go`).** The host
+sends the plugin-scope `SettingsChanged` only once, after the first
+`rt.Start` in `ensure()` (`:519-523`, `pushSettingsLocked` `:574-575`).
+When it relaunches the plugin on its own, the runtime calls only
+`SessionStarted` (`:479-482`): `serviceSessionStarted` (`:685-699`) and
+`reopenViews`. Only instance-scope settings are re-sent there, through
+`announceView` (`:1274`). Protocol v1 has no settings read call, so the
+plugin cannot ask. The plugin starts its service on the first plugin-scope
+`SettingsChanged` (`cmd/sysc-plugin-hermes/main.go:364-389`), so the new
+process waits forever. A settings change or a fresh `ensure()` clears it,
+which is why approving in Settings fixed it in the first run. A live repro
+had `kill -9` on the plugin, an instant respawn, no bridge after 70 s and
+`Connecting…` on the bar. Suggested host fix: push plugin-scope settings in
+`SessionStarted` before `reopenViews`. The plugin could work around it by
+saving the last settings with `state.set` and using them after a restart,
+but that needs an owner decision.
+
+**D7 (P2): the pinned panel is not restored at shell start.** At start,
+`cmd/sysc-plugin-hermes/main.go:256-272` calls `PinnedSurface.Restore`
+(`plugins/hermes/pinned.go:122-150`) once. During shell start no bar output
+exists yet, so `surface.open` is refused with `no output` (sysc-shell
+`pluginhost.go:2272-2275`). The plugin logs the error and never tries again.
+Live, `state.json` held `"pinned":true`, the nested shell was restarted, and
+the log showed `restore pinned surface: surface.open: no output` with no
+pinned panel. Fix: retry the restore when an output appears or after a
+short backoff.
+
+**D8 (P3): the bar does not say why it is in Error.** `publishConn` puts
+`Wrong token` or `No bridge token…` in `View.Message`
+(`plugins/hermes/service.go:705-711`). The bar tooltip and the summary read
+only `State.Bridge.Error` (`cmd/sysc-plugin-hermes/main.go:893`,
+`plugins/hermes/bar.go:103`, `summary.go:309`). So the reason shows only on
+the Settings page.
+
+**O1 (observation, not a defect):** an approval card can be replaced while
+the pointer is moving to it. The node ID carries the new signature, so the
+click then resolves the next request. The stale-drop protection works only
+when the click carries the old ID. Whether Noctalia behaves the same was not checked.
+
+### Teardown
+
+Only processes whose environment had `HOME=/tmp/ht11/home` were stopped, plus
+the stub on 18877, which was matched by its command line. Those were the
+nested shell, the plugin, the bridge, the throwaway gateway, niri, its D-Bus
+daemon and the stub. Ports 18877 and 19777 were free afterwards. Logs and
+scripts were copied to `ht11-final/` before `/tmp/ht11` was removed. The
+symlink to the Hermes checkout was removed, not followed. The daily
+`sysc-shell` (pid 1092015, started 01:20 AEDT), greetd, the session worker,
+the compositor and sysc-lock have the same pids and start times as in
+`daily-before.txt`, and the daily shell's child processes match
+`ps-before.txt` (`teardown.txt`, `daily-after.txt`).
+
+## Task 11 first live run (2026-11-17, 08:14 to 08:58 AEDT)
 
 **Result: not accepted.** A crash in the chat panel (D1 below) blocks
 acceptance. Several rows could not be run once the plugin had crashed.
@@ -66,7 +199,7 @@ compositor) was not touched. Evidence: the Task 11 evidence folder
 | Scroll | see the scroll spike below | |
 | Approval card content | FAIL: the card shows only the title and buttons, not the command (D5) | `shots/10-approval-card.png` |
 
-### Defects found (not fixed in this run)
+### Defects found (fixed later; see *Defect status* in the re-run)
 
 **D1 (P1, blocks acceptance): panic in `wrapLines`.**
 
@@ -286,7 +419,7 @@ click is refused with `The approval changed; check the card again`.
 
 ## Parity matrix
 
-**Status: partial, not accepted.** See *Task 11 live run*. No side-by-side
+**Status: partial, not accepted.** See *Task 11 local re-run*. No side-by-side
 comparison against Noctalia was produced.
 The design's surface inventory and host-gap list describe what should be
 compared; they are not a substitute for the matrix.
