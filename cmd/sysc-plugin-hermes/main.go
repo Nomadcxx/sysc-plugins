@@ -487,6 +487,31 @@ func (a *app) openChat() {
 	}()
 }
 
+// openChatFrom raises the chat from the summary or menu panel. Only the
+// pinned surface needs that panel closed first: it is a separate surface, so
+// panel.open does not replace the panel behind it, and the two host calls go
+// out on one goroutine in this order. Otherwise the chat is another plugin
+// panel and panel.open replaces the menu or summary itself; a panel.close of
+// ours would race that open and could close the panel the click just opened.
+func (a *app) openChatFrom(v *viewState) {
+	if v.kind == v1.ViewPanel && a.pinnedOpen {
+		params := v1.PanelParams{Entry: v.entry, Output: v.output, Generation: v.generation, Instance: v.instance}
+		go func() {
+			if err := a.callPanel(v1.CallPanelClose, params); err != nil {
+				a.post(func() { a.logf("hermes: panel.close: %v", err) })
+			}
+			a.surfaceMu.Lock()
+			err := a.pinned.Open(a.ctx)
+			a.surfaceMu.Unlock()
+			if err != nil {
+				a.post(func() { a.logf("hermes: open: %v", err) })
+			}
+		}()
+		return
+	}
+	a.openChat()
+}
+
 func (a *app) openPanelFrom(v *viewState, entry string) {
 	params := v1.PanelParams{Entry: entry}
 	if v != nil {
@@ -675,10 +700,18 @@ func (a *app) input(m *v1.InputEvent) {
 
 	snap := a.svc.Snapshot()
 	state := snap.State
-	// Every menu item closes the menu, as noctalia's does. The panel is not a
-	// native menu, so it replaces whatever plugin panel was open.
+	// Every menu item closes the menu, as noctalia's does — except the three
+	// that open another plugin panel. The host replaces the open panel on
+	// panel.open, so a close of ours would only race that open and could
+	// close whatever panel arrived just after it. openChatFrom still closes
+	// the menu first when the pinned surface, which panel.open does not
+	// replace, is what the choice raises.
 	if v.kind == v1.ViewPanel && v.entry == "menu" {
-		a.closePanel(v)
+		switch m.Node {
+		case "open", "new-session", "settings":
+		default:
+			a.closePanel(v)
+		}
 	}
 	switch {
 	case m.Node == "open":
@@ -689,15 +722,10 @@ func (a *app) input(m *v1.InputEvent) {
 			} else {
 				a.openPanelFrom(v, "summary")
 			}
-		case v.kind == v1.ViewPanel && v.entry == "summary":
-			// Every navigating button closes the summary first; Interrupt
-			// and Refresh leave it up, as noctalia's do.
-			a.closePanel(v)
-			a.openChat()
-		case v.kind == v1.ViewPanel && v.entry == "menu":
+		case v.kind == v1.ViewPanel && (v.entry == "summary" || v.entry == "menu"):
 			// Open Hermes goes through the same preferred surface as the
 			// service action, so a pinned panel is raised instead.
-			a.openChat()
+			a.openChatFrom(v)
 		default:
 			a.openPanelFrom(v, "panel")
 		}
@@ -709,13 +737,9 @@ func (a *app) input(m *v1.InputEvent) {
 		a.closePanel(v)
 	case m.Node == "new-session":
 		a.svc.Submit("/session/create", nil)
-		switch {
-		case v.kind == v1.ViewPanel && v.entry == "summary":
-			a.closePanel(v)
-			a.openChat()
-		case v.kind == v1.ViewPanel && v.entry == "menu":
-			a.openChat()
-		default:
+		if v.kind == v1.ViewPanel && (v.entry == "summary" || v.entry == "menu") {
+			a.openChatFrom(v)
+		} else {
 			a.openPanelFrom(v, "panel")
 		}
 	case m.Node == "interrupt":
@@ -729,9 +753,8 @@ func (a *app) input(m *v1.InputEvent) {
 			a.svc.Submit("/gateway/stop", map[string]any{})
 		}
 	case m.Node == "settings":
-		if v.kind == v1.ViewPanel && v.entry == "summary" {
-			a.closePanel(v)
-		}
+		// The settings panel replaces the menu or summary in place: one
+		// panel.open, no close that could land after it.
 		a.openPanelFrom(v, "settings")
 	case strings.HasPrefix(m.Node, "section:"):
 		section, ok := hermes.SectionForNode(m.Node)

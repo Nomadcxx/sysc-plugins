@@ -1013,6 +1013,61 @@ func clickNode(t *testing.T, h *testHost, viewID string, revision uint64, node s
 	}
 }
 
+// settle ends a click's host round trip: the plugin answers a fresh resync
+// for a view it still has open, so any host call that click started has
+// reached the host before a test checks what was not sent.
+func settle(t *testing.T, h *testHost, viewID string) {
+	t.Helper()
+	if err := h.send(&v1.ViewResync{ViewID: viewID}); err != nil {
+		t.Fatalf("view.resync %s: %v", viewID, err)
+	}
+	h.waitSnapshot(viewID, func(*v1.ViewSnapshot) bool { return true })
+}
+
+// callIndex is the position of the first observed host call of kind that
+// matches, or -1 when none did.
+func (h *testHost) callIndex(kind v1.CallKind, accept func(json.RawMessage) bool) int {
+	h.callMu.Lock()
+	defer h.callMu.Unlock()
+	for i, call := range h.callLog {
+		if call.Call == kind && accept(call.Params) {
+			return i
+		}
+	}
+	return -1
+}
+
+// lastCallIndex is the position of the last observed host call of kind.
+func (h *testHost) lastCallIndex(kind v1.CallKind) int {
+	h.callMu.Lock()
+	defer h.callMu.Unlock()
+	for i := len(h.callLog) - 1; i >= 0; i-- {
+		if h.callLog[i].Call == kind {
+			return i
+		}
+	}
+	return -1
+}
+
+// pinnedClientOnlyHost is clientOnlyHost with the floating surface pinned,
+// the state the close-before-raise ordering needs.
+func pinnedClientOnlyHost(t *testing.T) *testHost {
+	t.Helper()
+	remoteHost, remotePort := fakeRemoteState(t, idleState("example-model"))
+	h, _ := startPluginWith(t, func(h *testHost) { h.reply = surfaceReply(false, "") })
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(remoteHost, remotePort)}); err != nil {
+		t.Fatal(err)
+	}
+	settings := openTestView(t, h, &v1.ViewOpen{ViewID: "settings-1", View: v1.ViewPanel,
+		Entry: "settings", Width: 640, Height: 720})
+	clickNode(t, h, "settings-1", settings.Revision, "pin-side-panel")
+	h.waitCall(v1.CallSurfaceOpen)
+	// The loop sets the pinned flag in the post that follows the host call,
+	// and republishes with it, so that snapshot proves the flag is set.
+	h.waitSnapshot("settings-1", func(s *v1.ViewSnapshot) bool { return s.Revision > settings.Revision })
+	return h
+}
+
 func clientOnlyHost(t *testing.T) *testHost {
 	t.Helper()
 	remoteHost, remotePort := fakeRemoteState(t, idleState("example-model"))
@@ -1089,36 +1144,81 @@ func TestBarSecondaryOpensTheMenu(t *testing.T) {
 	}
 }
 
-// TestEveryMenuItemClosesTheMenu is Task 5: each item acts and the menu is
-// gone afterwards.
-func TestEveryMenuItemClosesTheMenu(t *testing.T) {
-	cases := []struct {
-		node  string
-		entry string
-		opens bool
-	}{
-		{"open", "panel", true},
-		{"new-session", "panel", true},
-		{"settings", "settings", true},
-		{"interrupt", "", false},
-		{"refresh", "", false},
+// TestMenuChoiceReplacesTheMenu is QA-2: the items that open another plugin
+// panel must not close the menu first. The host's panel.open already replaces
+// the menu, and a panel.close of ours can reach the host after that open and
+// close the panel the click just opened.
+func TestMenuChoiceReplacesTheMenu(t *testing.T) {
+	cases := []struct{ node, entry string }{
+		{"open", "panel"},
+		{"new-session", "panel"},
+		{"settings", "settings"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.node, func(t *testing.T) {
 			h := clientOnlyHost(t)
 			menu := openTestView(t, h, menuView())
-			opens := h.countCalls(v1.CallPanelOpen)
 			clickNode(t, h, "menu-1", menu.Revision, tc.node)
-			h.waitCallParams(v1.CallPanelClose, panelEntry("menu"))
-			if tc.opens {
-				h.waitCallParams(v1.CallPanelOpen, panelEntry(tc.entry))
-				return
+			h.waitCallParams(v1.CallPanelOpen, panelEntry(tc.entry))
+			settle(t, h, "menu-1")
+			if got := h.countCalls(v1.CallPanelClose); got != 0 {
+				t.Fatalf("%s sent %d panel.close calls, want the open to replace the menu", tc.node, got)
 			}
-			time.Sleep(200 * time.Millisecond)
-			if got := h.countCalls(v1.CallPanelOpen); got != opens {
-				t.Fatalf("%s opened %d panels, want none", tc.node, got-opens)
+			if got := h.countCalls(v1.CallPanelOpen); got != 1 {
+				t.Fatalf("%s opened %d panels, want exactly the %s panel", tc.node, got, tc.entry)
 			}
 		})
+	}
+}
+
+// TestMenuActsCloseOnly keeps the other menu items as they were: they do
+// their work and close the menu, and nothing opens.
+func TestMenuActsCloseOnly(t *testing.T) {
+	for _, node := range []string{"interrupt", "refresh"} {
+		t.Run(node, func(t *testing.T) {
+			h := clientOnlyHost(t)
+			menu := openTestView(t, h, menuView())
+			clickNode(t, h, "menu-1", menu.Revision, node)
+			h.waitCallParams(v1.CallPanelClose, panelEntry("menu"))
+			settle(t, h, "menu-1")
+			if got := h.countCalls(v1.CallPanelClose); got != 1 {
+				t.Fatalf("%s sent %d panel.close calls, want exactly one", node, got)
+			}
+			if got := h.countCalls(v1.CallPanelOpen); got != 0 {
+				t.Fatalf("%s opened %d panels, want none", node, got)
+			}
+		})
+	}
+}
+
+// TestMenuOpenWhilePinnedClosesTheMenuFirst is QA-2's other half: with the
+// surface pinned the menu is a separate surface, so it is closed before the
+// raise, in that order.
+func TestMenuOpenWhilePinnedClosesTheMenuFirst(t *testing.T) {
+	h := pinnedClientOnlyHost(t)
+	menu := openTestView(t, h, menuView())
+	raised := h.countCalls(v1.CallSurfaceOpen)
+	clickNode(t, h, "menu-1", menu.Revision, "open")
+	deadline := time.Now().Add(2 * time.Second)
+	for h.countCalls(v1.CallSurfaceOpen) == raised {
+		if time.Now().After(deadline) {
+			t.Fatal("open did not raise the pinned surface")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	closeAt := h.callIndex(v1.CallPanelClose, panelEntry("menu"))
+	openAt := h.lastCallIndex(v1.CallSurfaceOpen)
+	if closeAt < 0 {
+		t.Fatal("the menu was not closed before the pinned surface was raised")
+	}
+	if closeAt > openAt {
+		t.Fatalf("panel.close at %d reached the host after surface.open at %d", closeAt, openAt)
+	}
+	if got := h.countCalls(v1.CallPanelClose); got != 1 {
+		t.Fatalf("sent %d panel.close calls, want exactly the menu's", got)
+	}
+	if got := h.countCalls(v1.CallPanelOpen); got != 0 {
+		t.Fatalf("asked for %d plugin panels, want none while pinned", got)
 	}
 }
 
@@ -1138,9 +1238,9 @@ func TestMenuOmitsStartGatewayInClientOnly(t *testing.T) {
 	}
 }
 
-// TestSummaryClosesOnlyWhenNavigating is Task 5: Open Hermes, New session
-// and Settings close the summary first; nothing else does.
-func TestSummaryClosesOnlyWhenNavigating(t *testing.T) {
+// TestSummaryChoiceReplacesIt is QA-2 on the summary: Open Hermes, New
+// session and Settings must not pair a close with the open.
+func TestSummaryChoiceReplacesIt(t *testing.T) {
 	cases := []struct{ node, entry string }{
 		{"open", "panel"},
 		{"new-session", "panel"},
@@ -1151,18 +1251,23 @@ func TestSummaryClosesOnlyWhenNavigating(t *testing.T) {
 			h := clientOnlyHost(t)
 			sum := openTestView(t, h, summaryView())
 			clickNode(t, h, "summary-1", sum.Revision, tc.node)
-			h.waitCallParams(v1.CallPanelClose, panelEntry("summary"))
 			h.waitCallParams(v1.CallPanelOpen, panelEntry(tc.entry))
+			settle(t, h, "summary-1")
+			if got := h.countCalls(v1.CallPanelClose); got != 0 {
+				t.Fatalf("%s sent %d panel.close calls, want the open to replace the summary", tc.node, got)
+			}
+			if got := h.countCalls(v1.CallPanelOpen); got != 1 {
+				t.Fatalf("%s opened %d panels, want exactly the %s panel", tc.node, got, tc.entry)
+			}
 		})
 	}
 	for _, node := range []string{"interrupt", "refresh"} {
 		t.Run(node+"KeepsItOpen", func(t *testing.T) {
 			h := clientOnlyHost(t)
 			sum := openTestView(t, h, summaryView())
-			closes := h.countCalls(v1.CallPanelClose)
 			clickNode(t, h, "summary-1", sum.Revision, node)
-			time.Sleep(200 * time.Millisecond)
-			if got := h.countCalls(v1.CallPanelClose); got != closes {
+			settle(t, h, "summary-1")
+			if got := h.countCalls(v1.CallPanelClose); got != 0 {
 				t.Fatalf("%s closed the summary", node)
 			}
 		})
