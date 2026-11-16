@@ -683,8 +683,9 @@ func TestBundledScriptPath(t *testing.T) {
 }
 
 // fakeRemoteState is a client-only bridge that answers /health, /detect,
-// /state and /sessions; state is returned by /state.
-func fakeRemoteState(t *testing.T, state map[string]any) (host string, port int) {
+// /state, /sessions and /approval; state is returned by /state and an
+// approval body is passed to onApproval when one is given.
+func fakeRemoteState(t *testing.T, state map[string]any, onApproval ...func(map[string]any)) (host string, port int) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -703,6 +704,16 @@ func fakeRemoteState(t *testing.T, state map[string]any) (host string, port int)
 		switch r.URL.Path {
 		case "/sessions":
 			_, _ = io.WriteString(w, `{"sessions":[]}`)
+		case "/approval":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if len(onApproval) > 0 {
+				onApproval[0](body)
+			}
+			_, _ = io.WriteString(w, `{}`)
 		case "/state":
 			_ = json.NewEncoder(w).Encode(state)
 		default:
@@ -860,5 +871,58 @@ func TestPanelStateCarriesSignedApprovalButtons(t *testing.T) {
 	}
 	if len(p.Approvals) != 3 || p.Approvals[0].Label != "Deny" {
 		t.Fatalf("panel approvals = %#v", p.Approvals)
+	}
+}
+
+// treeButtonID returns the id of the first node whose id is an approval
+// action for the given choice, as the panel rendered it.
+func treeButtonID(n *v1.Node, action string) string {
+	if n == nil {
+		return ""
+	}
+	if strings.HasPrefix(n.ID, "approval:") && strings.HasSuffix(n.ID, ":"+action) {
+		return n.ID
+	}
+	for _, child := range n.Children {
+		if id := treeButtonID(child, action); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+// TestApprovalClickReachesTheBridge drives an approval button from the
+// rendered panel through the entrypoint and proves the click is routed to
+// Service.ApprovalClick: the bridge receives the signed request's answer.
+func TestApprovalClickReachesTheBridge(t *testing.T) {
+	state := idleState("example-model")
+	state["session"] = map[string]any{"id": "s1"}
+	state["approval"] = map[string]any{
+		"pending": true, "tool_name": "terminal", "message": "Run go test ./...",
+		"request": map[string]any{"cmd": "go test ./..."},
+	}
+	approvals := make(chan map[string]any, 4)
+	remoteHost, remotePort := fakeRemoteState(t, state, func(body map[string]any) { approvals <- body })
+	h, _ := startPlugin(t)
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(remoteHost, remotePort)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Width: 780, Height: 720}); err != nil {
+		t.Fatal(err)
+	}
+	snap := h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool {
+		return treeButtonID(s.Root, hermes.ApprovalAllow) != ""
+	})
+	node := treeButtonID(snap.Root, hermes.ApprovalAllow)
+	if err := h.send(&v1.InputEvent{ViewID: "panel-1", Revision: snap.Revision, Node: node, Event: v1.EventActivate}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case body := <-approvals:
+		if body["choice"] != "once" {
+			t.Fatalf("approval body = %#v, want choice once", body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("approval activate never reached the bridge")
 	}
 }
