@@ -100,16 +100,26 @@ func parseApprovalAction(id string) (sig, action string, ok bool) {
 	return sig, action, true
 }
 
+// approvalChoice is the table's body value for one button action, and
+// whether the table maps that action.
+func approvalChoice(action string) (string, bool) {
+	for _, c := range approvalChoices {
+		if c.Action == action {
+			return c.Choice, true
+		}
+	}
+	return "", false
+}
+
 // approvalBody is the POST /approval body for one button choice. all is
 // always false and an unmapped action becomes deny, so "denied", "approved",
 // "approve" and an empty choice can never leave the plugin.
 func approvalBody(action string, st State) map[string]any {
-	choice := "deny"
-	for _, c := range approvalChoices {
-		if c.Action == action {
-			choice = c.Choice
-			break
-		}
+	choice, ok := approvalChoice(action)
+	if !ok {
+		// Unmapped actions ask for deny, read from the table like any other
+		// choice.
+		choice, _ = approvalChoice(ApprovalDeny)
 	}
 	body := map[string]any{"choice": choice, "all": false}
 	if st.Approval.RequestID != "" {
