@@ -956,3 +956,18 @@ func TestApprovalClickReachesTheBridge(t *testing.T) {
 		t.Fatal("approval activate never reached the bridge")
 	}
 }
+
+// TestPanelStateCarriesTheLastActionError pins the entrypoint wiring for D4:
+// a published view's ActionError reaches the rendered panel and summary.
+func TestPanelStateCarriesTheLastActionError(t *testing.T) {
+	view := hermes.View{Status: hermes.StatusFor(hermes.StatusAttention)}
+	view.ActionError = hermes.MsgOffline
+	tree := viewTree(&viewState{kind: v1.ViewPanel, entry: "panel"}, view, true, renderEnv{})
+	if text := treeText(tree); !strings.Contains(text, hermes.MsgOffline) {
+		t.Fatalf("panel tree %q does not say the failed action", text)
+	}
+	summary := viewTree(&viewState{kind: v1.ViewPanel, entry: "summary"}, view, true, renderEnv{})
+	if text := treeText(summary); !strings.Contains(text, hermes.MsgOffline) {
+		t.Fatalf("summary tree %q does not say the failed action", text)
+	}
+}

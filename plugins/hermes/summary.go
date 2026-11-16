@@ -50,7 +50,10 @@ type SummaryState struct {
 	GatewayPlatforms map[string]string
 	ApprovalPending  bool
 	ApprovalMessage  string
-	SessionRunning   bool
+	// ActionError is the last failed action, said in the alert row when
+	// nothing more urgent is there.
+	ActionError    string
+	SessionRunning bool
 	// UsageInput, UsageOutput, UsageTotal and UsageCostUSD match the
 	// runtime Usage shape (input, output, total, cost_usd) without
 	// declaring a second type Usage.
@@ -291,7 +294,8 @@ func cronList(jobs []CronJob, inner, height int) *v1.Node {
 }
 
 // summaryBanner is noctalia's alert strip: a pending approval wins over a
-// bridge error, and neither shows nothing.
+// bridge error, that wins over the last failed action, and with none of them
+// there is no strip.
 func summaryBanner(s SummaryState, inner int) *v1.Node {
 	var icon, text, fill string
 	tone := v1.ToneNormal
@@ -305,6 +309,9 @@ func summaryBanner(s SummaryState, inner int) *v1.Node {
 	case strings.TrimSpace(s.BridgeError) != "":
 		icon, fill, tone = bannerIconError, "error-container", v1.ToneError
 		text = strings.TrimSpace(s.BridgeError)
+	case strings.TrimSpace(s.ActionError) != "":
+		icon, fill, tone = bannerIconError, "error-container", v1.ToneError
+		text = strings.TrimSpace(s.ActionError)
 	default:
 		return nil
 	}

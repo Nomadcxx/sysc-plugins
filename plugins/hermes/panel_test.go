@@ -718,3 +718,68 @@ func TestApprovalCardCarriesTheRuntimeChoices(t *testing.T) {
 		}
 	}
 }
+
+// panelChildKeys lists the root column's direct children in paint order.
+func panelChildKeys(root *v1.Node) []string {
+	out := make([]string, 0, len(root.Children))
+	for _, c := range root.Children {
+		out = append(out, c.Key)
+	}
+	return out
+}
+
+func indexOfKey(keys []string, want string) int {
+	for i, k := range keys {
+		if k == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestPanelShowsTheLastActionError pins D4: View.ActionError was set on every
+// failed action but nothing rendered it. It is one error-toned line under the
+// approval card while one is pending, otherwise just above the composer.
+func TestPanelShowsTheLastActionError(t *testing.T) {
+	const msg = "The approval changed; check the card again"
+	for _, approval := range []bool{false, true} {
+		for _, size := range panelSizes {
+			name := fmt.Sprintf("approval=%v %dx%d", approval, size[0], size[1])
+			p := basePanel(StatusAttention)
+			p.ActionError = msg
+			if approval {
+				p.Summary.ApprovalPending = true
+				p.Summary.ApprovalMessage = "Run go test ./... in the repository"
+				p.ApprovalTool = "terminal"
+			}
+			tree := PanelTree(p, size[0], size[1])
+			lintView(t, name, tree, v1.ViewPanel, size[0], size[1])
+			line := findKey(tree, "action-error")
+			if line == nil {
+				t.Fatalf("%s: no action-error line", name)
+			}
+			if got := strings.Join(texts(line), "|"); !strings.Contains(got, msg) {
+				t.Fatalf("%s: line = %q, want it to carry %q", name, got, msg)
+			}
+			keys := panelChildKeys(tree)
+			if approval {
+				at := indexOfKey(keys, "action-error")
+				if at < 1 || keys[at-1] != "approval" {
+					t.Fatalf("%s: children %v, want action-error directly under approval", name, keys)
+				}
+			} else if n := len(keys); n < 2 || keys[n-1] != "composer-row" || keys[n-2] != "action-error" {
+				t.Fatalf("%s: children %v, want action-error above the composer", name, keys)
+			}
+		}
+	}
+}
+
+// TestPanelEmptyActionErrorAddsNothing keeps a clean panel free of the line.
+func TestPanelEmptyActionErrorAddsNothing(t *testing.T) {
+	for _, size := range panelSizes {
+		tree := PanelTree(basePanel(StatusIdle), size[0], size[1])
+		if line := findKey(tree, "action-error"); line != nil {
+			t.Fatalf("%dx%d: unexpected action-error line %+v", size[0], size[1], line)
+		}
+	}
+}

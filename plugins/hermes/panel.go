@@ -125,6 +125,9 @@ type PanelState struct {
 	Section          Section
 	Avatar           string
 	Now              time.Time
+	// ActionError is the last failed action; it is said once, under the
+	// approval card while one is pending, otherwise above the composer.
+	ActionError string
 }
 
 // BridgeCall is one POST the panel asks the runtime to make.
@@ -237,15 +240,16 @@ func PanelTree(p PanelState, width, height int) *v1.Node {
 	header := panelHeader(p, status, inner)
 	actions := panelActions(p, running, inner)
 	composer := panelComposer(p, running, inner)
-	var approval, activity *v1.Node
+	var approval, activity, actionErr *v1.Node
 	if p.Summary.ApprovalPending {
 		approval = approvalCard(p, inner)
 	}
 	if showActivity(p) {
 		activity = activityRow(p, inner)
 	}
+	actionErr = actionErrorRow(p, inner)
 
-	fixed := []*v1.Node{header, actions, approval, activity, composer}
+	fixed := []*v1.Node{header, actions, approval, actionErr, activity, composer}
 	used, count := 2*panelPad, 1 // the transcript
 	for _, n := range fixed {
 		if n != nil {
@@ -267,12 +271,20 @@ func PanelTree(p PanelState, width, height int) *v1.Node {
 	if sections != nil {
 		children = append(children, sections)
 	}
-	for _, n := range []*v1.Node{approval, activity} {
-		if n != nil {
-			children = append(children, n)
-		}
+	if approval != nil {
+		children = append(children, approval)
 	}
-	children = append(children, transcript(p, inner, transcriptH), composer)
+	if actionErr != nil && approval != nil {
+		children = append(children, actionErr)
+	}
+	if activity != nil {
+		children = append(children, activity)
+	}
+	children = append(children, transcript(p, inner, transcriptH))
+	if actionErr != nil && approval == nil {
+		children = append(children, actionErr)
+	}
+	children = append(children, composer)
 	return &v1.Node{
 		Kind: v1.KindColumn, Width: width, Height: height,
 		Padding: panelPad, Gap: panelGap, Children: children,
@@ -545,6 +557,24 @@ func activityRow(p PanelState, inner int) *v1.Node {
 		Children: []*v1.Node{
 			{Kind: v1.KindIcon, Icon: iconEvent, IconSize: 16, Tone: v1.ToneSubtle},
 			{Kind: v1.KindText, Text: clip(activityLine(p), (inner-12-24)/8), Size: "caption"},
+		},
+	}
+}
+
+// actionErrorRow is the last failed action in one error-toned line, as
+// noctalia says it: under the approval card while one is pending, otherwise
+// just above the composer.
+func actionErrorRow(p PanelState, inner int) *v1.Node {
+	text := strings.TrimSpace(p.ActionError)
+	if text == "" {
+		return nil
+	}
+	return &v1.Node{
+		Kind: v1.KindRow, Key: "action-error", Fill: "error-container", Radius: 8,
+		Width: inner, Height: panelActivityH, Padding: 6, Gap: 8,
+		Children: []*v1.Node{
+			{Kind: v1.KindIcon, Icon: bannerIconError, IconSize: 16, Tone: v1.ToneError},
+			{Kind: v1.KindText, Text: clip(text, (inner-12-24)/8), Size: "caption", Tone: v1.ToneError},
 		},
 	}
 }

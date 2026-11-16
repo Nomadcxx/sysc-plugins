@@ -486,3 +486,46 @@ func TestSummaryNeverOffersGatewayControl(t *testing.T) {
 		}
 	}
 }
+
+// TestSummaryBannerCarriesTheLastActionError pins D4's summary half: with no
+// pending approval and no bridge error the alert row says the failed action.
+func TestSummaryBannerCarriesTheLastActionError(t *testing.T) {
+	s := richSummary(StatusAttention)
+	s.ApprovalPending = false
+	s.ActionError = MsgApprovalChanged
+	tree := SummaryTree(s, "", 380, 480)
+	banner := findKey(tree, "banner")
+	if banner == nil {
+		t.Fatal("no banner for the failed action")
+	}
+	if got := strings.Join(texts(banner), "|"); !strings.Contains(got, "The approval changed") {
+		t.Fatalf("banner = %q, want it to carry the failed action", got)
+	}
+	if banner.Fill != "error-container" {
+		t.Fatalf("banner fill = %q, want the error container", banner.Fill)
+	}
+}
+
+// TestSummaryBannerPriority keeps noctalia's order: a pending approval wins,
+// then a bridge error, then the last failed action.
+func TestSummaryBannerPriority(t *testing.T) {
+	s := richSummary(StatusAttention) // approval pending
+	s.ActionError = "last failed action"
+	tree := SummaryTree(s, "", 380, 480)
+	banner := findKey(tree, "banner")
+	if banner == nil || !strings.Contains(strings.Join(texts(banner), "|"), "Run go test ./...") {
+		t.Fatalf("banner = %+v, want the approval message", banner)
+	}
+
+	s.ApprovalPending = false
+	s.BridgeError = "Bridge request failed: 500"
+	tree = SummaryTree(s, "", 380, 480)
+	banner = findKey(tree, "banner")
+	if banner == nil {
+		t.Fatal("no banner for the bridge error")
+	}
+	got := strings.Join(texts(banner), "|")
+	if !strings.Contains(got, s.BridgeError) || strings.Contains(got, s.ActionError) {
+		t.Fatalf("banner = %q, want the bridge error to win", got)
+	}
+}
