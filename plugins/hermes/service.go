@@ -315,6 +315,9 @@ type job struct {
 	path    string
 	body    any
 	refetch bool
+	// approval is set for an approval:<sig>:<action> click, which checks the
+	// card and the live state before it posts.
+	approval *approvalClick
 }
 
 type owned struct {
@@ -1151,6 +1154,10 @@ func (s *Service) worker() {
 }
 
 func (s *Service) runJob(j job) {
+	if j.approval != nil {
+		s.runApproval(*j.approval)
+		return
+	}
 	b := s.currentBridge()
 	if b == nil {
 		s.publish(func(v *View) { v.ActionError = MsgOffline })

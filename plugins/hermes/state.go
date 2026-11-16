@@ -85,13 +85,15 @@ type Event struct {
 	TS   float64 `json:"ts"`
 }
 
-// Approval is approval{pending,message,tool_name,request}. Request is kept
-// as sent; the approval mapping reads its identity.
+// Approval is approval{pending,message,tool_name,request} plus the bundled
+// bridge's request_id (Task 3a). Request is kept as sent; the approval
+// mapping reads its identity. RequestID is empty against a stock bridge.
 type Approval struct {
-	Pending  bool            `json:"pending"`
-	Message  string          `json:"message"`
-	ToolName string          `json:"tool_name"`
-	Request  json.RawMessage `json:"request"`
+	Pending   bool            `json:"pending"`
+	Message   string          `json:"message"`
+	ToolName  string          `json:"tool_name"`
+	Request   json.RawMessage `json:"request"`
+	RequestID string          `json:"request_id"`
 }
 
 // Usage is usage{input,output,total,cost_usd}; CostUSD is nil when unknown.

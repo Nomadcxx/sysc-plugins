@@ -319,6 +319,9 @@ func handle(msg v1.Message, svc *hermes.Service, views *viewSet, configured *boo
 		if m.Node == "refresh" && m.Event == v1.EventActivate {
 			svc.Refresh()
 		}
+		if strings.HasPrefix(m.Node, "approval:") && m.Event == v1.EventActivate {
+			svc.ApprovalClick(m.Node)
+		}
 	}
 	return nil
 }
