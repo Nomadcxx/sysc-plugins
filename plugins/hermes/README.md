@@ -130,8 +130,10 @@ this bridge.
 
 A pending approval shows **Deny**, **Allow** and **Allow Session**. They send
 `{"choice":"deny","all":false}`, `{"choice":"once","all":false}` and
-`{"choice":"session","all":false}`; Hermes offers no "always" choice. Each
-button also carries a signature of the request that was on screen. On a click
+`{"choice":"session","all":false}`. Hermes also accepts `always`, which
+approves the session and adds the pattern to the permanent allowlist it keeps
+in its config; Noctalia has no button for it, so the plugin does not offer it.
+Each button also carries a signature of the request that was on screen. On a click
 the plugin compares that signature with its cached approval, refetches `/state`
 and compares again before posting; a mismatch drops the click and the card says
 `The approval changed; check the card again`.
