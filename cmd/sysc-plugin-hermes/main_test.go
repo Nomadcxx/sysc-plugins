@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -841,5 +842,23 @@ func TestViewsRenderServiceState(t *testing.T) {
 	sum := h.waitSnapshot("summary-1", func(s *v1.ViewSnapshot) bool { return strings.Contains(treeText(s.Root), "Usage") })
 	if text := treeText(sum.Root); !strings.Contains(text, "10 in · 5 out") {
 		t.Fatalf("summary %q does not carry usage", text)
+	}
+}
+
+// TestPanelStateCarriesSignedApprovalButtons pins the entrypoint wiring: the
+// rendered card gets approval.go's buttons for the state it was built from,
+// so a click names the request on screen.
+func TestPanelStateCarriesSignedApprovalButtons(t *testing.T) {
+	view := hermes.View{Status: hermes.StatusFor(hermes.StatusAttention)}
+	view.State.Session.ID = "s1"
+	view.State.Approval = hermes.Approval{Pending: true, ToolName: "terminal",
+		Message: "Run go test ./...", Request: json.RawMessage(`{"cmd":"go test"}`)}
+	p := panelStateFor(&viewState{}, view, renderEnv{})
+	want := hermes.ApprovalButtons(view.State)
+	if !reflect.DeepEqual(p.Approvals, want) {
+		t.Fatalf("panel approvals = %#v, want %#v", p.Approvals, want)
+	}
+	if len(p.Approvals) != 3 || p.Approvals[0].Label != "Deny" {
+		t.Fatalf("panel approvals = %#v", p.Approvals)
 	}
 }

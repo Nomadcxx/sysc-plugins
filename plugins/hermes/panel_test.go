@@ -1,6 +1,7 @@
 package hermes
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -606,6 +607,52 @@ func TestWrapLinesSplitsAndCaps(t *testing.T) {
 	for _, l := range capped {
 		if len(l) > 20 {
 			t.Errorf("line %q past 20 bytes", l)
+		}
+	}
+}
+
+// TestApprovalCardCarriesTheRuntimeChoices pins Task 6 on both surfaces: the
+// card's buttons are approval.go's signature-carrying ids, in Deny, Allow,
+// Allow Session order, not the old preview placeholders.
+func TestApprovalCardCarriesTheRuntimeChoices(t *testing.T) {
+	st := State{
+		Session: SessionInfo{ID: "s1"},
+		Approval: Approval{Pending: true, ToolName: "terminal",
+			Message: "Run go test ./...", Request: json.RawMessage(`{"cmd":"go test"}`)},
+	}
+	buttons := ApprovalButtons(st)
+	if len(buttons) != 3 {
+		t.Fatalf("ApprovalButtons returned %d buttons", len(buttons))
+	}
+	wantLabels := []string{"Deny", "Allow", "Allow Session"}
+	p := heavyPanel(StatusAttention, SectionNone, true)
+	p.Approvals = buttons
+	p.Summary.ApprovalMessage = st.Approval.Message
+	p.ApprovalTool = st.Approval.ToolName
+	for name, tree := range map[string]*v1.Node{
+		"panel":  PanelTree(p, 780, 720),
+		"pinned": PinnedTree(p, 640, 720),
+	} {
+		byID := map[string]*v1.Node{}
+		walk(tree, func(n *v1.Node) {
+			if n.ID != "" {
+				byID[n.ID] = n
+			}
+			if strings.HasPrefix(n.ID, "approval-preview:") {
+				t.Errorf("%s: card still carries preview id %q", name, n.ID)
+			}
+		})
+		for i, b := range buttons {
+			node := byID[b.ID]
+			if node == nil {
+				t.Fatalf("%s: card has no %q button", name, b.ID)
+			}
+			if node.Text != b.Label || node.Name != b.Label {
+				t.Errorf("%s: %s text %q name %q, want %q", name, b.ID, node.Text, node.Name, b.Label)
+			}
+			if want := wantLabels[i]; b.Label != want {
+				t.Errorf("%s: button %d label %q, want %q", name, i, b.Label, want)
+			}
 		}
 	}
 }

@@ -833,6 +833,7 @@ func panelStateFor(v *viewState, view hermes.View, env renderEnv) hermes.PanelSt
 	}
 	return hermes.PanelState{
 		Summary:          summaryStateFor(view, env),
+		Approvals:        hermes.ApprovalButtons(state),
 		ApprovalTool:     state.Approval.ToolName,
 		SessionID:        state.Session.ID,
 		Messages:         state.Messages,

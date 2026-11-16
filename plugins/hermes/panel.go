@@ -107,6 +107,7 @@ func AfterSend(c ComposerState) ComposerState {
 // runtime snapshot until that lands.
 type PanelState struct {
 	Summary          SummaryState
+	Approvals        []ApprovalButton
 	ApprovalTool     string
 	SessionID        string
 	Messages         []Message
@@ -489,9 +490,9 @@ func summaryRowsFit(s SummaryState, inner, height int) *v1.Node {
 	return grid
 }
 
-// approvalCard is the design's approval fixture: the shield, the tool,
-// the message, and Deny, Allow, Allow Session. The buttons carry preview
-// ids; posting a choice is Task 6.
+// approvalCard is the design's approval card: the shield, the tool, the
+// message, and Deny, Allow, Allow Session. The buttons are approval.go's
+// signature-carrying ids, so a click resolves the request on screen.
 func approvalCard(p PanelState, inner int) *v1.Node {
 	title := strings.TrimSpace(p.ApprovalTool)
 	if title == "" {
@@ -499,13 +500,27 @@ func approvalCard(p PanelState, inner int) *v1.Node {
 	}
 	msg := strings.TrimSpace(p.Summary.ApprovalMessage)
 	content := inner - 2*10
-	buttons := &v1.Node{Kind: v1.KindRow, Width: content, Height: sectionButtonH, Gap: 8, Children: []*v1.Node{
-		autoButton("approval-preview:deny", "Deny", "Deny", "", sectionButtonH),
-		autoButton("approval-preview:allow", "Allow", "Allow", "", sectionButtonH),
-		autoButton("approval-preview:allow-session", "Allow Session", "Allow Session", "", sectionButtonH),
-	}}
-	buttons.Children[0].Fill = "error-container"
-	buttons.Children[1].Fill = "accent"
+	choices := p.Approvals
+	if len(choices) == 0 {
+		// A fixture that asked for an approval without runtime state: keep
+		// the card usable, but the real card always carries signed ids.
+		choices = []ApprovalButton{
+			{ID: "approval-preview:deny", Label: "Deny"},
+			{ID: "approval-preview:allow", Label: "Allow"},
+			{ID: "approval-preview:allow-session", Label: "Allow Session"},
+		}
+	}
+	buttons := &v1.Node{Kind: v1.KindRow, Width: content, Height: sectionButtonH, Gap: 8}
+	for _, choice := range choices {
+		b := autoButton(choice.ID, choice.Label, choice.Label, "", sectionButtonH)
+		switch {
+		case strings.HasSuffix(choice.ID, ":deny"):
+			b.Fill = "error-container"
+		case strings.HasSuffix(choice.ID, ":allow"):
+			b.Fill = "accent"
+		}
+		buttons.Children = append(buttons.Children, b)
+	}
 	card := &v1.Node{
 		Kind: v1.KindColumn, Key: "approval", Fill: "container", Radius: 10,
 		Width: inner, Height: panelApprovalH, Padding: 10, Gap: 6,
