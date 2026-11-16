@@ -304,3 +304,47 @@ func TestPinReportsARefusedHostCall(t *testing.T) {
 		t.Error("a refused surface.open must not leave the surface pinned")
 	}
 }
+
+// TestPinRollbackClosesTheOpenedSurface covers qa-9 defect 3: when the pin
+// state cannot be saved the surface opened by Pin must not be left behind.
+func TestPinRollbackClosesTheOpenedSurface(t *testing.T) {
+	c, calls, stop := fakeHost(t, func(call *v1.HostCall) *v1.HostReply {
+		reply := &v1.HostReply{ID: call.ID, OK: true}
+		switch call.Call {
+		case v1.CallSurfaceOpen:
+			result, _ := json.Marshal(v1.SurfaceResult{ViewID: "view-pinned"})
+			reply.Result = result
+		case v1.CallSurfaceClose:
+			// The rollback close must succeed; the pin still fails.
+		case v1.CallStateSet:
+			reply.OK, reply.Error = false, "state store unavailable"
+		}
+		return reply
+	})
+	defer stop()
+	p := NewPinnedSurface(c)
+	if err := p.Pin(context.Background()); err == nil {
+		t.Fatal("Pin succeeded although state.set failed")
+	}
+	var closed string
+	for i := 0; i < 4; i++ {
+		select {
+		case call := <-calls:
+			if call.Call == v1.CallSurfaceClose {
+				var params v1.SurfaceCloseParams
+				if err := json.Unmarshal(call.Params, &params); err != nil {
+					t.Fatalf("surface.close params: %v", err)
+				}
+				closed = params.View
+			}
+		case <-time.After(time.Second):
+			i = 4
+		}
+	}
+	if closed != "view-pinned" {
+		t.Fatalf("Pin rollback did not close the opened surface (closed %q)", closed)
+	}
+	if p.Pinned() || p.ViewID() != "" {
+		t.Fatalf("Pin rollback left pinned=%v view=%q", p.Pinned(), p.ViewID())
+	}
+}

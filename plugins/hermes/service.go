@@ -1134,6 +1134,74 @@ func (s *Service) autoConfigure(ctx context.Context, set Settings, clientOnly bo
 	}
 }
 
+// SessionList fetches the bridge's recent sessions for the chat panel. The
+// caller owns the goroutine; the event loop stays free.
+func (s *Service) SessionList(ctx context.Context) ([]Session, error) {
+	b := s.currentBridge()
+	if b == nil {
+		return nil, ErrUnreachable
+	}
+	list, err := b.Sessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Session, 0, len(list))
+	for _, item := range list {
+		out = append(out, Session{ID: item.ID, Title: item.Title, Preview: item.Preview,
+			StartedAt: secondsOf(item.StartedAt)})
+	}
+	return out, nil
+}
+
+// TestConnection is the settings panel's Test connection: /health, then the
+// token-bearing /state, reported with Noctalia's result strings.
+func (s *Service) TestConnection(ctx context.Context) string {
+	b := s.currentBridge()
+	if b == nil {
+		return ResultUnreachable
+	}
+	if _, err := b.Health(ctx); err != nil {
+		return connectionResult(err)
+	}
+	if _, err := b.State(ctx); err != nil {
+		return connectionResult(err)
+	}
+	return ResultConnected
+}
+
+func connectionResult(err error) string {
+	var bad *ErrBridge
+	switch {
+	case errors.As(err, &bad):
+		return FailedResult(bad.Status)
+	case errors.Is(err, ErrAuth):
+		return ResultWrongToken
+	case errors.Is(err, ErrUnreachable):
+		return ResultUnreachable
+	default:
+		return ResultUnreachable
+	}
+}
+
+// secondsOf decodes started_at, which the bridge may send as a number or a
+// numeric string.
+func secondsOf(raw json.RawMessage) float64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	var n float64
+	if json.Unmarshal(raw, &n) == nil {
+		return n
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		if n, err := strconv.ParseFloat(text, 64); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
 // --- action worker ---------------------------------------------------------
 
 func (s *Service) worker() {

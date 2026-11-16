@@ -10,11 +10,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Nomadcxx/sysc-plugins/internal/barwidth"
@@ -57,10 +59,14 @@ type viewState struct {
 	digest     [32]byte
 	published  bool
 
-	// Per-view UI state, owned by the later view tasks.
-	section  string
-	picker   string
-	composer string
+	// Per-view UI state.
+	section    hermes.Section
+	picker     hermes.ModelPicker
+	composer   hermes.ComposerState
+	sessions   hermes.SessionsSnapshot
+	draft      string
+	testResult string
+	testing    bool
 }
 
 // next records root as the view's next revision. It returns false when the
@@ -223,52 +229,47 @@ func runWith(in io.Reader, out io.Writer, stderr io.Writer, opts hermes.Options)
 		}
 	}()
 
-	views := newViewSet()
-	configured := false
-	var lastStatus v1.ServiceStatus
-	statusRev := uint64(1)
-
-	publish := func(id string, v *viewState) error {
-		root := viewTree(v, svc.Snapshot(), configured)
-		rev, send := v.next(root)
-		if !send {
-			return nil
-		}
-		return client.Snapshot(id, rev, root)
+	a := &app{
+		ctx: ctx, client: client, svc: svc, views: newViewSet(),
+		pinned: hermes.NewPinnedSurface(client), set: hermes.DefaultSettings(),
+		avatar: hermes.AvatarPath(""), ui: make(chan func(), inboundBuffer),
+		logf: logf, statusRev: 1,
 	}
-	publishAll := func() error {
-		for id, v := range views.m {
-			if err := publish(id, v); err != nil {
-				return err
+	// Restore the saved pin at start, like Noctalia's panelPinned.
+	go func() {
+		a.surfaceMu.Lock()
+		err := a.pinned.Restore(ctx)
+		pinned := a.pinned.Pinned()
+		a.surfaceMu.Unlock()
+		if err != nil {
+			a.post(func() { logf("hermes: restore pinned surface: %v", err) })
+		}
+		if pinned {
+			a.post(func() { a.pinnedOpen = true })
+		}
+		a.post(func() {
+			if err := a.publishAll(); err != nil {
+				logf("hermes: publish after restore: %v", err)
 			}
-		}
-		if !configured {
-			return nil
-		}
-		st := serviceStatus(svc.Snapshot())
-		if st.State != lastStatus.State || st.Busy != lastStatus.Busy || st.Message != lastStatus.Message {
-			statusRev++
-			st.Revision = statusRev
-			lastStatus = st
-			return client.Send(&st)
-		}
-		return nil
-	}
+		})
+	}()
 
 	for {
 		select {
 		case <-svc.Updates():
-			if err := publishAll(); err != nil {
+			if err := a.publishAll(); err != nil {
 				stop()
 				return err
 			}
+		case f := <-a.ui:
+			f()
 		case msg, ok := <-inbound:
 			if !ok {
 				// The host closed the pipe: nothing is left to serve.
 				stop()
 				return nil
 			}
-			if err := handle(msg, svc, views, &configured, publish, publishAll, logf); err != nil {
+			if err := a.handle(msg); err != nil {
 				stop()
 				if err == errShutdown {
 					return nil
@@ -281,9 +282,83 @@ func runWith(in io.Reader, out io.Writer, stderr io.Writer, opts hermes.Options)
 
 var errShutdown = fmt.Errorf("host shutdown")
 
-// handle does only cheap state work: HTTP and host calls run in the service.
-func handle(msg v1.Message, svc *hermes.Service, views *viewSet, configured *bool,
-	publish func(string, *viewState) error, publishAll func() error, logf func(string, ...any)) error {
+// app is the plugin's event-loop state: the service, the open views and the
+// per-view UI state. Everything here runs on the loop except the goroutines
+// that make one blocking host call and post their result back.
+type app struct {
+	ctx    context.Context
+	client *v1.Client
+	svc    *hermes.Service
+	views  *viewSet
+	pinned *hermes.PinnedSurface
+
+	set        hermes.Settings
+	configured bool
+	avatar     string
+	pinnedOpen bool
+	pinBusy    bool
+
+	ui        chan func()
+	logf      func(string, ...any)
+	statusRev uint64
+	lastStat  v1.ServiceStatus
+
+	// surfaceMu serialises the pinned surface's blocking host calls.
+	surfaceMu sync.Mutex
+}
+
+func (a *app) post(f func()) {
+	select {
+	case a.ui <- f:
+	case <-a.ctx.Done():
+	}
+}
+
+func (a *app) env() renderEnv {
+	return renderEnv{set: a.set, avatar: a.avatar, pinned: a.pinnedOpen, now: time.Now()}
+}
+
+func (a *app) publish(id string) error {
+	v := a.views.get(id)
+	if v == nil {
+		return nil
+	}
+	root := viewTree(v, a.svc.Snapshot(), a.configured, a.env())
+	rev, send := v.next(root)
+	if !send {
+		return nil
+	}
+	return a.client.Snapshot(id, rev, root)
+}
+
+func (a *app) republish(id string) {
+	if err := a.publish(id); err != nil {
+		a.logf("hermes: publish %s: %v", id, err)
+	}
+}
+
+func (a *app) publishAll() error {
+	for id := range a.views.m {
+		if err := a.publish(id); err != nil {
+			return err
+		}
+	}
+	if !a.configured {
+		return nil
+	}
+	st := serviceStatus(a.svc.Snapshot())
+	if st.State != a.lastStat.State || st.Busy != a.lastStat.Busy || st.Message != a.lastStat.Message {
+		a.statusRev++
+		st.Revision = a.statusRev
+		a.lastStat = st
+		return a.client.Send(&st)
+	}
+	return nil
+}
+
+// handle does only cheap state work: HTTP and host calls run in the service
+// or in one goroutine that posts its result back.
+func (a *app) handle(msg v1.Message) error {
 	switch m := msg.(type) {
 	case *v1.HostShutdown:
 		return errShutdown
@@ -291,39 +366,361 @@ func handle(msg v1.Message, svc *hermes.Service, views *viewSet, configured *boo
 		if m.Scope != v1.ScopePlugin && m.Scope != "" {
 			return nil
 		}
-		svc.Configure(hermes.SettingsFromValues(m.Values))
-		*configured = true
-		return publishAll()
-	case *v1.ViewOpen:
-		return publish(m.ViewID, views.open(m))
-	case *v1.ViewResize:
-		if v := views.get(m.ViewID); v != nil {
-			v.width, v.height = m.Width, m.Height
-			return publish(m.ViewID, v)
-		}
-	case *v1.ViewResync:
-		if v := views.get(m.ViewID); v != nil {
-			v.resync()
-			return publish(m.ViewID, v)
-		}
-	case *v1.ViewClose:
-		views.close(m.ViewID)
-	case *v1.ViewError:
-		logf("view %s refused revision %d: %s", m.ViewID, m.Revision, m.Reason)
-		svc.SetViewError(m.Reason)
-	case *v1.InputEvent:
-		v := views.get(m.ViewID)
-		if v == nil || !v.accepts(m) {
+		a.set = hermes.SettingsFromValues(m.Values)
+		a.svc.Configure(a.set)
+		a.configured = true
+		return a.publishAll()
+	case *v1.ServiceAction:
+		if m.ServiceID != serviceID {
 			return nil
 		}
-		if m.Node == "refresh" && m.Event == v1.EventActivate {
-			svc.Refresh()
+		a.serviceAction(m.ActionID)
+		return nil
+	case *v1.ViewOpen:
+		a.views.open(m)
+		return a.publish(m.ViewID)
+	case *v1.ViewResize:
+		if v := a.views.get(m.ViewID); v != nil {
+			v.width, v.height = m.Width, m.Height
+			return a.publish(m.ViewID)
 		}
-		if strings.HasPrefix(m.Node, "approval:") && m.Event == v1.EventActivate {
-			svc.ApprovalClick(m.Node)
+	case *v1.ViewResync:
+		if v := a.views.get(m.ViewID); v != nil {
+			v.resync()
+			return a.publish(m.ViewID)
 		}
+	case *v1.ViewClose:
+		if v := a.views.get(m.ViewID); v != nil && v.kind == v1.ViewFloating && a.pinnedOpen {
+			// The user closed the floating surface through the shell.
+			go func() {
+				a.surfaceMu.Lock()
+				_ = a.pinned.Unpin(a.ctx)
+				a.surfaceMu.Unlock()
+				a.post(func() { a.pinnedOpen = false })
+			}()
+		}
+		a.views.close(m.ViewID)
+	case *v1.ViewError:
+		a.logf("view %s refused revision %d: %s", m.ViewID, m.Revision, m.Reason)
+		a.svc.SetViewError(m.Reason)
+	case *v1.InputEvent:
+		a.input(m)
 	}
 	return nil
+}
+
+func (a *app) serviceAction(action string) {
+	switch action {
+	case "open":
+		a.openChat()
+	case "new-session":
+		a.svc.Submit("/session/create", nil)
+		a.openChat()
+	case "interrupt":
+		a.interrupt()
+	case "refresh":
+		a.svc.Refresh()
+	case "resume-latest":
+		if id := a.svc.Snapshot().State.Session.StoredID; id != "" {
+			a.svc.Submit("/session/resume", hermes.ResumeRequest{SessionID: id})
+			a.openChat()
+		}
+	case "start-gateway":
+		if !a.set.ClientOnly {
+			a.svc.Submit("/gateway/start", map[string]any{})
+		}
+	case "settings":
+		a.openPanelFrom(nil, "settings")
+	case "launcher-ask":
+		// The launcher hand-off is Task 10; nothing to do here yet.
+	}
+}
+
+// openChat raises the pinned surface when one is pinned, else opens the
+// chat panel, as the bar, service action and launcher all do.
+func (a *app) openChat() {
+	go func() {
+		a.surfaceMu.Lock()
+		err := a.pinned.Open(a.ctx)
+		a.surfaceMu.Unlock()
+		if err != nil {
+			a.post(func() { a.logf("hermes: open: %v", err) })
+		}
+	}()
+}
+
+func (a *app) openPanelFrom(v *viewState, entry string) {
+	params := v1.PanelParams{Entry: entry}
+	if v != nil {
+		params.Output, params.Generation, params.Instance = v.output, v.generation, v.instance
+	}
+	go func() {
+		if err := a.callPanel(v1.CallPanelOpen, params); err != nil {
+			a.post(func() { a.logf("hermes: panel.open %s: %v", entry, err) })
+		}
+		a.post(func() { _ = a.publishAll() })
+	}()
+}
+
+func (a *app) closePanel(v *viewState) {
+	if v.kind == v1.ViewFloating {
+		// Clear the flag now so the host's ViewClose for this surface does
+		// not start a second Unpin.
+		a.pinnedOpen = false
+		go func() {
+			a.surfaceMu.Lock()
+			err := a.pinned.Unpin(a.ctx)
+			a.surfaceMu.Unlock()
+			if err != nil {
+				a.post(func() { a.logf("hermes: unpin: %v", err) })
+			}
+		}()
+		return
+	}
+	params := v1.PanelParams{Entry: v.entry, Output: v.output, Generation: v.generation, Instance: v.instance}
+	go func() {
+		if err := a.callPanel(v1.CallPanelClose, params); err != nil {
+			a.post(func() { a.logf("hermes: panel.close: %v", err) })
+		}
+	}()
+}
+
+func (a *app) callPanel(kind v1.CallKind, params v1.PanelParams) error {
+	reply, err := a.client.Call(a.ctx, kind, params)
+	if err != nil {
+		return err
+	}
+	if !reply.OK {
+		if reply.Error == "" {
+			return fmt.Errorf("%s refused", kind)
+		}
+		return fmt.Errorf("%s: %s", kind, reply.Error)
+	}
+	return nil
+}
+
+// togglePin opens or closes the pinned side panel and saves the state.
+func (a *app) togglePin() {
+	if a.pinBusy {
+		return
+	}
+	a.pinBusy = true
+	want := !a.pinnedOpen
+	if !want {
+		// Clear it now so the surface's ViewClose does not start a second
+		// Unpin; the flag is restored if the host call fails.
+		a.pinnedOpen = false
+	}
+	go func() {
+		a.surfaceMu.Lock()
+		var err error
+		if want {
+			err = a.pinned.Pin(a.ctx)
+		} else {
+			err = a.pinned.Unpin(a.ctx)
+		}
+		a.surfaceMu.Unlock()
+		a.post(func() {
+			a.pinBusy = false
+			if err != nil {
+				a.logf("hermes: pin: %v", err)
+				a.pinnedOpen = !want
+			} else {
+				a.pinnedOpen = want
+			}
+			_ = a.publishAll()
+		})
+	}()
+}
+
+func (a *app) interrupt() {
+	a.svc.CancelOneShot()
+	a.svc.Submit("/interrupt", map[string]any{})
+}
+
+func (a *app) send(id, text string) {
+	v := a.views.get(id)
+	if v == nil {
+		return
+	}
+	if strings.TrimSpace(text) == "" {
+		text = v.draft
+	}
+	calls, err := hermes.SendPlan(a.svc.Snapshot().State.Session.ID, text, v.composer.OneShot)
+	if err != nil {
+		return
+	}
+	for _, call := range calls {
+		a.svc.Submit(call.Path, call.Body)
+	}
+	v.composer = hermes.AfterSend(v.composer)
+	v.draft = ""
+	a.republish(id)
+}
+
+func (a *app) loadSessions(id string) {
+	go func() {
+		list, err := a.svc.SessionList(a.ctx)
+		a.post(func() {
+			v := a.views.get(id)
+			if v == nil {
+				return
+			}
+			snap := hermes.SessionsSnapshot{Loaded: true}
+			switch {
+			case errors.Is(err, hermes.ErrNotFound):
+				snap.Unsupported = true
+			case err != nil:
+				snap.Err = err.Error()
+			default:
+				snap.Sessions = list
+			}
+			v.sessions = snap
+			a.republish(id)
+		})
+	}()
+}
+
+func (a *app) testConnection(id string) {
+	v := a.views.get(id)
+	if v == nil {
+		return
+	}
+	v.testing = true
+	a.republish(id)
+	go func() {
+		result := a.svc.TestConnection(a.ctx)
+		a.post(func() {
+			v := a.views.get(id)
+			if v == nil {
+				return
+			}
+			v.testing, v.testResult = false, result
+			a.republish(id)
+		})
+	}()
+}
+
+func (a *app) input(m *v1.InputEvent) {
+	v := a.views.get(m.ViewID)
+	if v == nil || !v.accepts(m) {
+		return
+	}
+	switch m.Event {
+	case v1.EventChange:
+		switch m.Node {
+		case "composer":
+			v.draft = m.Text
+		case "model-filter":
+			v.picker.Filter = m.Text
+			v.picker.Dirty = true
+			a.republish(m.ViewID)
+		}
+		return
+	case v1.EventSubmit:
+		if m.Node == "composer" {
+			a.send(m.ViewID, m.Text)
+		}
+		return
+	case v1.EventActivate:
+	default:
+		return
+	}
+
+	snap := a.svc.Snapshot()
+	state := snap.State
+	switch {
+	case m.Node == "open":
+		if v.kind == v1.ViewBar {
+			a.openChat()
+		} else {
+			a.openPanelFrom(v, "panel")
+		}
+	case m.Node == "refresh":
+		a.svc.Refresh()
+	case m.Node == "pin" || m.Node == "pin-side-panel":
+		a.togglePin()
+	case m.Node == "close":
+		a.closePanel(v)
+	case m.Node == "new-session":
+		a.svc.Submit("/session/create", nil)
+		a.openPanelFrom(v, "panel")
+	case m.Node == "interrupt":
+		a.interrupt()
+	case m.Node == "start-gateway":
+		if !a.set.ClientOnly {
+			a.svc.Submit("/gateway/start", map[string]any{})
+		}
+	case m.Node == "stop-gateway":
+		if !a.set.ClientOnly {
+			a.svc.Submit("/gateway/stop", map[string]any{})
+		}
+	case m.Node == "settings":
+		a.openPanelFrom(v, "settings")
+	case strings.HasPrefix(m.Node, "section:"):
+		section, ok := hermes.SectionForNode(m.Node)
+		if !ok {
+			return
+		}
+		v.section = hermes.ToggleSection(v.section, section)
+		if v.section == hermes.SectionSessions && !v.sessions.Loaded {
+			a.loadSessions(m.ViewID)
+		}
+		a.republish(m.ViewID)
+	case m.Node == "sessions-refresh":
+		a.loadSessions(m.ViewID)
+	case strings.HasPrefix(m.Node, "session:"):
+		if req, ok := hermes.ResumeFor(m.Node, v.sessions); ok {
+			a.svc.Submit("/session/resume", req)
+			a.openPanelFrom(v, "panel")
+		}
+	case strings.HasPrefix(m.Node, "provider:"):
+		if provider, ok := hermes.ProviderForNode(m.Node, state.Summary.Models); ok {
+			v.picker.Provider = provider
+			v.picker.Dirty = true
+			a.republish(m.ViewID)
+		}
+	case strings.HasPrefix(m.Node, "model:"):
+		if option, ok := hermes.ModelForNode(m.Node, state.Summary.Models, a.set.DefaultProvider, a.set.DefaultModel); ok {
+			v.picker.Provider, v.picker.Model = option.Provider, option.Model
+			v.picker.Dirty = true
+			a.republish(m.ViewID)
+		}
+	case m.Node == "model-persist":
+		v.picker.Persist = !v.picker.Persist
+		v.picker.Dirty = true
+		a.republish(m.ViewID)
+	case m.Node == "model-apply":
+		v.picker.Dirty = true
+		liveProvider, _ := liveModel(snap)
+		if req, err := hermes.ApplyModel(v.picker, liveProvider); err == nil {
+			a.svc.Submit("/model", req)
+		}
+		a.republish(m.ViewID)
+	case m.Node == "one-shot":
+		v.composer.OneShot = !v.composer.OneShot
+		a.republish(m.ViewID)
+	case m.Node == "send":
+		a.send(m.ViewID, "")
+	case m.Node == "composer-interrupt":
+		a.interrupt()
+	case m.Node == "composer-new-session":
+		a.svc.Submit("/session/create", nil)
+	case m.Node == "composer-reset":
+		for _, call := range hermes.ResetPlan() {
+			a.svc.Submit(call.Path, call.Body)
+		}
+	case m.Node == "test-connection":
+		a.testConnection(m.ViewID)
+	case m.Node == "copy-ssh":
+		go func() {
+			if err := hermes.CopySSHCommand(a.ctx, a.client, a.set.SSHTarget, a.set.Port); err != nil {
+				a.post(func() { a.logf("hermes: copy ssh: %v", err) })
+			}
+		}()
+	case strings.HasPrefix(m.Node, "approval:"):
+		a.svc.ApprovalClick(m.Node)
+	}
 }
 
 // serviceStatus maps the derived status onto the host's service states.
@@ -343,79 +740,152 @@ func serviceStatus(view hermes.View) v1.ServiceStatus {
 	return st
 }
 
+// renderEnv is the plugin-wide input every view builder needs.
+type renderEnv struct {
+	set    hermes.Settings
+	avatar string
+	pinned bool
+	now    time.Time
+}
+
 // viewTree renders one view from the cached service state. Before settings
 // arrive every view is the Connecting… placeholder.
-func viewTree(v *viewState, view hermes.View, configured bool) *v1.Node {
+func viewTree(v *viewState, view hermes.View, configured bool, env renderEnv) *v1.Node {
 	if !configured {
 		return connectingTree(v.kind, v.entry, v.width, v.height)
 	}
-	return statusTree(v.kind, v.entry, v.width, v.height, view)
+	width, height := v.width, v.height
+	if width <= 0 || height <= 0 {
+		width, height = declaredSize(v.entry)
+	}
+	switch {
+	case v.kind == v1.ViewBar:
+		return hermes.BarTreeAtWidth(barStateFor(view, env), env.set.HideWhenIdle, env.avatar, width)
+	case v.kind == v1.ViewTooltip:
+		return hermes.TooltipTree(barStateFor(view, env))
+	case v.kind == v1.ViewFloating || v.entry == "pinned":
+		return hermes.PinnedTree(panelStateFor(v, view, env), width, height)
+	case v.kind == v1.ViewPanel && v.entry == "summary":
+		return hermes.SummaryTree(summaryStateFor(view, env), env.avatar, width, height)
+	case v.kind == v1.ViewPanel && v.entry == "menu":
+		return hermes.MenuTree(view.Status, env.set.ClientOnly, width, height)
+	case v.kind == v1.ViewPanel && v.entry == "settings":
+		return hermes.SettingsTree(settingsStateFor(v, view, env), hermes.SettingsInnerWidth(width))
+	case v.kind == v1.ViewPanel:
+		return hermes.PanelTree(panelStateFor(v, view, env), width, height)
+	}
+	return connectingTree(v.kind, v.entry, width, height)
 }
 
-// statusTree is the interim view until the UI tasks land: the derived
-// status, the connection line and a Refresh button.
-func statusTree(kind v1.ViewKind, entry string, width, height int, view hermes.View) *v1.Node {
-	status := view.Status
-	switch kind {
-	case v1.ViewBar:
-		if barwidth.Compact(width) {
-			return &v1.Node{Kind: v1.KindRow, Children: []*v1.Node{
-				{Kind: v1.KindIcon, Icon: status.Icon, Tone: status.Tone, Name: "Hermes: " + status.Text, Tooltip: status.Text},
-			}}
-		}
-		return &v1.Node{Kind: v1.KindRow, Gap: 6, Children: []*v1.Node{
-			{Kind: v1.KindIcon, Icon: status.Icon, Tone: status.Tone, Name: "Hermes"},
-			{Kind: v1.KindText, Text: status.Text, Tone: v1.ToneSubtle},
-		}}
-	case v1.ViewTooltip:
-		col := &v1.Node{Kind: v1.KindColumn, Gap: 4, Padding: 8, Children: []*v1.Node{
-			{Kind: v1.KindText, Text: pluginName, Bold: true},
-			{Kind: v1.KindText, Text: status.Text, Tone: status.Tone},
-		}}
-		for _, line := range []string{view.Message, view.Warning} {
-			if line != "" {
-				col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: line, Tone: v1.ToneSubtle})
-			}
-		}
-		return col
+// liveModel is the bridge's current provider and model, falling back to the
+// Hermes section when the summary does not carry them.
+func liveModel(view hermes.View) (provider, model string) {
+	m := view.State.Summary.Model
+	if m.Name != "" || m.Provider != "" {
+		return m.Provider, m.Name
 	}
-	if width <= 0 || height <= 0 {
-		width, height = declaredSize(entry)
+	return view.State.Hermes.Provider, view.State.Hermes.Model
+}
+
+func barStateFor(view hermes.View, env renderEnv) hermes.BarState {
+	_, model := liveModel(view)
+	return hermes.BarState{
+		Status:        view.Status,
+		BridgeError:   view.State.Bridge.Error,
+		GatewayStatus: view.State.Summary.Gateway.Status,
+		Model:         model,
+		ClientOnly:    env.set.ClientOnly,
+		Host:          env.set.Host,
 	}
-	col := &v1.Node{
-		Kind: v1.KindColumn, Width: width, Height: height, Padding: 12, Gap: 10,
-		Children: []*v1.Node{
-			{Kind: v1.KindRow, Height: 32, Gap: 8, Children: []*v1.Node{
-				{Kind: v1.KindIcon, Icon: status.Icon, IconSize: 24, Tone: status.Tone, Name: "Hermes"},
-				{Kind: v1.KindText, Text: pluginName, Size: "title", Bold: true},
-			}},
-			{Kind: v1.KindText, Text: status.Text, Tone: status.Tone},
+}
+
+func summaryStateFor(view hermes.View, env renderEnv) hermes.SummaryState {
+	state := view.State
+	provider, model := liveModel(view)
+	return hermes.SummaryState{
+		BarState:         barStateFor(view, env),
+		Provider:         provider,
+		ModelName:        model,
+		CronActive:       state.Summary.Cron.Active,
+		CronTotal:        state.Summary.Cron.Total,
+		CronJobs:         state.Summary.Cron.Jobs,
+		MCPEnabled:       state.Summary.MCP.Enabled,
+		MCPTotal:         state.Summary.MCP.Total,
+		ToolEvents:       state.Summary.Activity.ToolEvents,
+		RunningTools:     state.Summary.Activity.RunningTools,
+		GatewayPlatforms: state.Summary.Gateway.Platforms,
+		ApprovalPending:  state.Approval.Pending,
+		ApprovalMessage:  state.Approval.Message,
+		SessionRunning:   state.Session.Running,
+		UsageInput:       state.Usage.Input,
+		UsageOutput:      state.Usage.Output,
+		UsageTotal:       state.Usage.Total,
+		UsageCostUSD:     state.Usage.CostUSD,
+	}
+}
+
+func panelStateFor(v *viewState, view hermes.View, env renderEnv) hermes.PanelState {
+	state := view.State
+	provider, model := liveModel(view)
+	events := make([]hermes.ToolEvent, 0, len(state.Events))
+	for _, e := range state.Events {
+		events = append(events, hermes.ToolEvent{ID: e.ID, Type: e.Type, Name: e.Name, Text: e.Text})
+	}
+	return hermes.PanelState{
+		Summary:          summaryStateFor(view, env),
+		ApprovalTool:     state.Approval.ToolName,
+		SessionID:        state.Session.ID,
+		Messages:         state.Messages,
+		Events:           events,
+		LastTool:         state.Summary.Activity.LastTool,
+		ClientOnly:       env.set.ClientOnly,
+		Pinned:           env.pinned || v.entry == "pinned",
+		ShowToolActivity: env.set.ShowToolActivity,
+		DefaultProvider:  env.set.DefaultProvider,
+		DefaultModel:     env.set.DefaultModel,
+		Sessions:         v.sessions,
+		Models:           state.Summary.Models,
+		Picker:           hermes.SeedPicker(v.picker, provider, model),
+		Composer:         v.composer,
+		Section:          v.section,
+		Avatar:           env.avatar,
+		Now:              env.now,
+	}
+}
+
+func settingsStateFor(v *viewState, view hermes.View, env renderEnv) hermes.SettingsState {
+	state := view.State
+	provider, model := liveModel(view)
+	connection := hermes.ConnectionFor(env.set.ClientOnly, env.set.Host, env.set.Port,
+		hermes.TokenCandidates{Pasted: env.set.TokenManual, File: env.set.TokenFile},
+		view.Message, view.ViewError)
+	switch view.Token {
+	case hermes.TokenPasted:
+		connection.TokenSource = hermes.SourcePasted
+	case hermes.TokenFile:
+		connection.TokenSource = hermes.SourceFile
+	case hermes.TokenLocal:
+		connection.TokenSource = hermes.SourceLocal
+	case hermes.TokenNone:
+		connection.TokenSource = hermes.SourceNone
+	}
+	return hermes.SettingsState{
+		Connection:      connection,
+		Models:          state.Summary.Models,
+		Picker:          hermes.SeedPicker(v.picker, provider, model),
+		DefaultProvider: env.set.DefaultProvider,
+		DefaultModel:    env.set.DefaultModel,
+		Pinned:          env.pinned,
+		TestResult:      v.testResult,
+		Testing:         v.testing,
+		Detected: hermes.SettingsDetected{
+			HermesHome:    view.Detected.HermesHome,
+			HermesCommand: view.Detected.HermesCommand,
+			Provider:      view.Detected.DefaultProvider,
+			Model:         view.Detected.DefaultModel,
 		},
+		SSHTarget: env.set.SSHTarget,
 	}
-	lines := []struct {
-		text string
-		tone v1.Tone
-	}{
-		{view.Message, v1.ToneSubtle},
-		{view.Warning, v1.ToneWarning},
-		{view.ActionError, v1.ToneError},
-	}
-	if view.ViewError != "" {
-		lines = append(lines, struct {
-			text string
-			tone v1.Tone
-		}{"View error: " + view.ViewError, v1.ToneError})
-	}
-	for _, line := range lines {
-		if line.text != "" {
-			col.Children = append(col.Children, &v1.Node{Kind: v1.KindText, Text: line.text, Tone: line.tone})
-		}
-	}
-	col.Children = append(col.Children, &v1.Node{
-		Kind: v1.KindButton, ID: "refresh", Text: "Refresh", Name: "Refresh", Role: "button",
-		Disabled: view.Pending, Events: []v1.EventKind{v1.EventActivate},
-	})
-	return col
 }
 
 // connectingTree is the placeholder each view shows until the bridge client

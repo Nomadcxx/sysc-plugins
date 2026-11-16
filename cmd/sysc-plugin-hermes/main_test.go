@@ -98,6 +98,12 @@ type testHost struct {
 	silent atomic.Bool
 	calls  atomic.Int64
 	stderr *lockedBuffer
+
+	// reply customizes host replies; nil means OK with no result.
+	reply func(*v1.HostCall) *v1.HostReply
+	// callMu guards callLog, the host calls this test observed.
+	callMu  sync.Mutex
+	callLog []*v1.HostCall
 }
 
 type lockedBuffer struct {
@@ -178,8 +184,18 @@ func (h *testHost) read() {
 		}
 		if call, ok := msg.(*v1.HostCall); ok {
 			h.calls.Add(1)
+			h.callMu.Lock()
+			h.callLog = append(h.callLog, call)
+			reply := h.reply
+			h.callMu.Unlock()
 			if !h.silent.Load() {
-				_ = h.send(&v1.HostReply{ID: call.ID, OK: true})
+				r := &v1.HostReply{ID: call.ID, OK: true}
+				if reply != nil {
+					if custom := reply(call); custom != nil {
+						r = custom
+					}
+				}
+				_ = h.send(r)
 			}
 		}
 		select {
@@ -202,6 +218,75 @@ func (h *testHost) wait(accept func(v1.Message) bool) v1.Message {
 			h.t.Fatal("timed out waiting for plugin message")
 		}
 	}
+}
+
+// waitCall waits until the plugin makes a host call of kind.
+func (h *testHost) waitCall(kind v1.CallKind) *v1.HostCall {
+	h.t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		h.callMu.Lock()
+		for _, call := range h.callLog {
+			if call.Call == kind {
+				h.callMu.Unlock()
+				return call
+			}
+		}
+		h.callMu.Unlock()
+		if time.Now().After(deadline) {
+			h.t.Fatalf("timed out waiting for host call %s", kind)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitCallParams waits for a host call of kind whose params satisfy accept.
+func (h *testHost) waitCallParams(kind v1.CallKind, accept func(json.RawMessage) bool) *v1.HostCall {
+	h.t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		h.callMu.Lock()
+		for _, call := range h.callLog {
+			if call.Call == kind && accept(call.Params) {
+				h.callMu.Unlock()
+				return call
+			}
+		}
+		h.callMu.Unlock()
+		if time.Now().After(deadline) {
+			h.t.Fatalf("timed out waiting for host call %s", kind)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// countCalls counts the observed host calls of kind.
+func (h *testHost) countCalls(kind v1.CallKind) int {
+	h.callMu.Lock()
+	defer h.callMu.Unlock()
+	n := 0
+	for _, call := range h.callLog {
+		if call.Call == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// treeHasName reports whether any node's accessible name carries want.
+func treeHasName(n *v1.Node, want string) bool {
+	if n == nil {
+		return false
+	}
+	if strings.Contains(n.Name, want) {
+		return true
+	}
+	for _, c := range n.Children {
+		if treeHasName(c, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func treeText(n *v1.Node) string {
@@ -367,7 +452,7 @@ func TestSettingsChangedConnectsAndRepublishes(t *testing.T) {
 	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(host, port)}); err != nil {
 		t.Fatal(err)
 	}
-	snap := h.waitSnapshot("bar-1", func(s *v1.ViewSnapshot) bool { return strings.Contains(treeText(s.Root), "Online") })
+	snap := h.waitSnapshot("bar-1", func(s *v1.ViewSnapshot) bool { return treeHasName(s.Root, "Online") })
 	if err := v1.Validate(snap.Root, v1.ViewBar); err != nil {
 		t.Fatal(err)
 	}
@@ -469,16 +554,16 @@ func TestViewOpenRecordsItsPlacement(t *testing.T) {
 		v.generation != 7 || v.width != 380 || v.height != 480 || v.rev != 0 {
 		t.Fatalf("open recorded %+v", v)
 	}
-	v.section, v.composer = "chat", "draft"
+	v.section, v.composer = hermes.SectionSessions, hermes.ComposerState{Reseed: 3}
 	other := vs.open(&v1.ViewOpen{ViewID: "q", View: v1.ViewPanel, Entry: "panel"})
-	if other.section != "" || other.composer != "" {
+	if other.section != "" || other.composer != (hermes.ComposerState{}) {
 		t.Fatal("per-view state leaked between views")
 	}
 	vs.close("p")
 	if vs.get("p") != nil {
 		t.Fatal("close kept the view")
 	}
-	if again := vs.open(&v1.ViewOpen{ViewID: "p", View: v1.ViewPanel, Entry: "summary"}); again.section != "" || again.composer != "" {
+	if again := vs.open(&v1.ViewOpen{ViewID: "p", View: v1.ViewPanel, Entry: "summary"}); again.section != "" || again.composer != (hermes.ComposerState{}) {
 		t.Fatal("reopened view kept the closed view's state")
 	}
 }
@@ -488,18 +573,18 @@ func TestStaleRevisionDroppedStatusOnlyRepublishAccepted(t *testing.T) {
 	v := vs.open(&v1.ViewOpen{ViewID: "p", View: v1.ViewPanel, Entry: "panel", Width: 780, Height: 720})
 	state := hermes.View{Mode: hermes.ModeClientOnly, Status: hermes.StatusFor(hermes.StatusIdle)}
 
-	rev1, ok := v.next(viewTree(v, state, true))
+	rev1, ok := v.next(viewTree(v, state, true, renderEnv{}))
 	if !ok || rev1 != 1 {
 		t.Fatalf("first publish rev %d sent=%v", rev1, ok)
 	}
 	// Same tree again: nothing to send.
-	if _, ok := v.next(viewTree(v, state, true)); ok {
+	if _, ok := v.next(viewTree(v, state, true, renderEnv{})); ok {
 		t.Fatal("an unchanged tree was republished")
 	}
 	// Status-only change: the text moves, the addressable nodes do not.
 	state.Status = hermes.StatusFor(hermes.StatusOffline)
 	state.Message = hermes.MsgOffline
-	rev2, ok := v.next(viewTree(v, state, true))
+	rev2, ok := v.next(viewTree(v, state, true, renderEnv{}))
 	if !ok || rev2 != 2 {
 		t.Fatalf("status republish rev %d sent=%v", rev2, ok)
 	}
@@ -509,9 +594,9 @@ func TestStaleRevisionDroppedStatusOnlyRepublishAccepted(t *testing.T) {
 	if !click(rev1) || !click(rev2) {
 		t.Fatal("a click on the unchanged Refresh button was dropped after a status-only republish")
 	}
-	// Content change: Refresh is disabled while an action is pending.
-	state.Pending = true
-	rev3, ok := v.next(viewTree(v, state, true))
+	// Content change: a running session adds the Interrupt button.
+	state.State.Session.Running = true
+	rev3, ok := v.next(viewTree(v, state, true, renderEnv{}))
 	if !ok {
 		t.Fatal("content change not sent")
 	}
@@ -526,7 +611,7 @@ func TestStaleRevisionDroppedStatusOnlyRepublishAccepted(t *testing.T) {
 	}
 	// Resync restarts the revision count.
 	v.resync()
-	if rev, ok := v.next(viewTree(v, state, true)); !ok || rev != 1 {
+	if rev, ok := v.next(viewTree(v, state, true, renderEnv{})); !ok || rev != 1 {
 		t.Fatalf("after resync rev %d sent=%v", rev, ok)
 	}
 }
@@ -578,7 +663,7 @@ func TestStatusTreesLayOut(t *testing.T) {
 			{v1.ViewFloating, "pinned", 400, 480},
 		} {
 			v := vs.open(&v1.ViewOpen{ViewID: "x", View: tc.view, Entry: tc.entry, Width: tc.w, Height: tc.h})
-			tree := viewTree(v, st, true)
+			tree := viewTree(v, st, true, renderEnv{})
 			if err := v1.Validate(tree, tc.view); err != nil {
 				t.Errorf("%s %s %dx%d: %v", tc.view, tc.entry, tc.w, tc.h, err)
 			}
@@ -593,5 +678,168 @@ func TestBundledScriptPath(t *testing.T) {
 	got := bundledScript("/usr/lib/sysc-shell/plugins/hermes/bin/sysc-plugin-hermes")
 	if want := "/usr/lib/sysc-shell/plugins/hermes/scripts/hermes_bridge.py"; got != want {
 		t.Fatalf("bundled script = %q, want %q", got, want)
+	}
+}
+
+// fakeRemoteState is a client-only bridge that answers /health, /detect,
+// /state and /sessions; state is returned by /state.
+func fakeRemoteState(t *testing.T, state map[string]any) (host string, port int) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/detect":
+			_, _ = io.WriteString(w, `{}`)
+			return
+		case "/health":
+			_, _ = io.WriteString(w, `{"bridge":{"status":"online"}}`)
+			return
+		}
+		if r.Header.Get("X-Bridge-Token") != "fake-token" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		switch r.URL.Path {
+		case "/sessions":
+			_, _ = io.WriteString(w, `{"sessions":[]}`)
+		case "/state":
+			_ = json.NewEncoder(w).Encode(state)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	h, p, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	port, _ = strconv.Atoi(p)
+	return h, port
+}
+
+func idleState(model string) map[string]any {
+	return map[string]any{
+		"bridge":  map[string]any{"status": "online"},
+		"hermes":  map[string]any{"status": "idle", "model": model, "provider": "openrouter"},
+		"summary": map[string]any{"model": map[string]any{"name": model, "provider": "openrouter"}, "gateway": map[string]any{"status": "running"}},
+	}
+}
+
+// surfaceReply answers a pinned surface open with a view id and a state.get
+// with found/value, so the pinned and settings paths can run.
+func surfaceReply(found bool, value string) func(*v1.HostCall) *v1.HostReply {
+	return func(call *v1.HostCall) *v1.HostReply {
+		reply := &v1.HostReply{ID: call.ID, OK: true}
+		switch call.Call {
+		case v1.CallSurfaceOpen:
+			result, _ := json.Marshal(v1.SurfaceResult{ViewID: "view-pinned"})
+			reply.Result = result
+		case v1.CallStateGet:
+			result, _ := json.Marshal(v1.StateGetResult{Found: found, Value: json.RawMessage(value)})
+			reply.Result = result
+		}
+		return reply
+	}
+}
+
+func TestServiceActionOpenOpensTheChatPanel(t *testing.T) {
+	remoteHost, remotePort := fakeRemoteState(t, idleState("example-model"))
+	h, _ := startPlugin(t)
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(remoteHost, remotePort)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.send(&v1.ServiceAction{ServiceID: serviceID, ActionID: "open"}); err != nil {
+		t.Fatal(err)
+	}
+	call := h.waitCall(v1.CallPanelOpen)
+	var params v1.PanelParams
+	if err := json.Unmarshal(call.Params, &params); err != nil {
+		t.Fatalf("panel.open params: %v", err)
+	}
+	if params.Entry != "panel" {
+		t.Fatalf("open action asked for panel %q, want the chat panel", params.Entry)
+	}
+}
+
+func TestServiceActionSettingsOpensTheSettingsPanel(t *testing.T) {
+	remoteHost, remotePort := fakeRemoteState(t, idleState("example-model"))
+	h, _ := startPlugin(t)
+	_ = h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(remoteHost, remotePort)})
+	_ = h.send(&v1.ServiceAction{ServiceID: serviceID, ActionID: "settings"})
+	call := h.waitCall(v1.CallPanelOpen)
+	var params v1.PanelParams
+	_ = json.Unmarshal(call.Params, &params)
+	if params.Entry != "settings" {
+		t.Fatalf("settings action asked for panel %q", params.Entry)
+	}
+}
+
+func TestPinSidePanelOpensTheSurfaceAndOpenRaisesIt(t *testing.T) {
+	remoteHost, remotePort := fakeRemoteState(t, idleState("example-model"))
+	h, _ := startPluginWith(t, func(h *testHost) { h.reply = surfaceReply(false, "") })
+	_ = h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(remoteHost, remotePort)})
+	if err := h.send(&v1.ViewOpen{ViewID: "settings-1", View: v1.ViewPanel, Entry: "settings", Width: 640, Height: 720}); err != nil {
+		t.Fatal(err)
+	}
+	snap := h.waitSnapshot("settings-1", func(*v1.ViewSnapshot) bool { return true })
+	if err := h.send(&v1.InputEvent{ViewID: "settings-1", Revision: snap.Revision, Node: "pin-side-panel", Event: v1.EventActivate}); err != nil {
+		t.Fatal(err)
+	}
+	open := h.waitCall(v1.CallSurfaceOpen)
+	var geometry v1.SurfaceOpenParams
+	if err := json.Unmarshal(open.Params, &geometry); err != nil {
+		t.Fatalf("surface.open params: %v", err)
+	}
+	if geometry.Width != 640 || geometry.Height != 720 || geometry.X != 32 || geometry.Y != 32 {
+		t.Fatalf("surface.open geometry = %dx%d at %d,%d", geometry.Width, geometry.Height, geometry.X, geometry.Y)
+	}
+	setCall := h.waitCallParams(v1.CallStateSet, func(raw json.RawMessage) bool {
+		var p v1.StateSetParams
+		return json.Unmarshal(raw, &p) == nil && p.Key == "pinned"
+	})
+	var saved v1.StateSetParams
+	_ = json.Unmarshal(setCall.Params, &saved)
+	if saved.Key != "pinned" || string(saved.Value) != "true" {
+		t.Fatalf("state.set saved %q=%s, want pinned=true", saved.Key, saved.Value)
+	}
+
+	// With the surface pinned, open raises it instead of asking for the
+	// chat panel again.
+	beforePanel := h.countCalls(v1.CallPanelOpen)
+	beforeSurface := h.countCalls(v1.CallSurfaceOpen)
+	if err := h.send(&v1.ServiceAction{ServiceID: serviceID, ActionID: "open"}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for h.countCalls(v1.CallSurfaceOpen) <= beforeSurface {
+		if time.Now().After(deadline) {
+			t.Fatal("open action did not raise the pinned surface")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if h.countCalls(v1.CallPanelOpen) != beforePanel {
+		t.Fatal("open action asked for the chat panel while pinned")
+	}
+}
+
+func TestPinnedSurfaceRestoresAtStartup(t *testing.T) {
+	h, _ := startPluginWith(t, func(h *testHost) { h.reply = surfaceReply(true, "true") })
+	h.waitCall(v1.CallSurfaceOpen)
+}
+
+func TestViewsRenderServiceState(t *testing.T) {
+	state := idleState("example-model")
+	state["usage"] = map[string]any{"input": 10, "output": 5, "total": 15, "cost_usd": 0.5}
+	remoteHost, remotePort := fakeRemoteState(t, state)
+	h, _ := startPlugin(t)
+	_ = h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(remoteHost, remotePort)})
+
+	_ = h.send(&v1.ViewOpen{ViewID: "tip-1", View: v1.ViewTooltip, Entry: "bar", Width: 280, Height: 200})
+	tip := h.waitSnapshot("tip-1", func(s *v1.ViewSnapshot) bool { return strings.Contains(treeText(s.Root), "Online") })
+	if text := treeText(tip.Root); !strings.Contains(text, "Hermes: Online · example-model") || strings.Contains(text, "wrong") {
+		t.Fatalf("tooltip %q does not carry the model", text)
+	}
+
+	_ = h.send(&v1.ViewOpen{ViewID: "summary-1", View: v1.ViewPanel, Entry: "summary", Width: 380, Height: 480})
+	sum := h.waitSnapshot("summary-1", func(s *v1.ViewSnapshot) bool { return strings.Contains(treeText(s.Root), "Usage") })
+	if text := treeText(sum.Root); !strings.Contains(text, "10 in · 5 out") {
+		t.Fatalf("summary %q does not carry usage", text)
 	}
 }

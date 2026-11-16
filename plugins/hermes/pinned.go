@@ -90,6 +90,10 @@ func (s *PinnedSurface) Pin(ctx context.Context) error {
 	s.viewID = view
 	s.pinned = true
 	if err := s.save(ctx, true); err != nil {
+		// The save failed, so this Pin is rolled back. Close the surface the
+		// open succeeded in creating; otherwise it lingers with no state
+		// behind it and the next unpinned Open() would leave it orphaned.
+		_, _ = s.host.Call(ctx, v1.CallSurfaceClose, v1.SurfaceCloseParams{View: view})
 		s.viewID = ""
 		s.pinned = false
 		return err
