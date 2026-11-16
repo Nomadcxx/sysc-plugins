@@ -427,6 +427,7 @@ func TestCleartextWarningOnlyForANonLoopbackClientOnlyHost(t *testing.T) {
 		{true, "192.168.0.10", true}, {true, "hermes.example.org", true}, {true, "10.0.0.5", true},
 		{true, "127.0.0.1", false}, {true, "127.1.2.3", false}, {true, "localhost", false}, {true, "LOCALHOST", false},
 		{true, "::1", false}, {true, "[::1]", false},
+		{true, "127.0.0.1:19778", true}, {true, "localhost:19777", true},
 		{false, "192.168.0.10", false}, {false, "127.0.0.1", false},
 	} {
 		got := CleartextWarning(c.clientOnly, c.host)
