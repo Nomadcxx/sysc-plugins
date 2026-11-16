@@ -259,6 +259,15 @@ func PanelTree(p PanelState, width, height int) *v1.Node {
 		}
 	}
 	gaps := func(n int) int { return (n - 1) * panelGap }
+	// The transcript keeps its 160. When the fixed rows would squeeze it
+	// under that, the activity line is the one to drop: the approval card and
+	// the action-error row are what the click on either needs, and a stale
+	// approval click is exactly when the error matters.
+	if activity != nil && height-used-gaps(count) < minTranscriptH {
+		activity = nil
+		used -= panelActivityH
+		count--
+	}
 
 	var sections *v1.Node
 	if room := height - used - gaps(count+1) - minTranscriptH; room >= stripH {

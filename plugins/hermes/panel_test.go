@@ -406,6 +406,50 @@ func TestInteractiveNodesHaveUniqueIDsNamesAndRoles(t *testing.T) {
 	}
 }
 
+// TestActionErrorKeepsTheTranscriptMinimum is QA-3: at the smallest declared
+// panel size a pending approval, the activity line and the action-error row
+// together used to squeeze the transcript below its 160. The activity line is
+// the one that goes: the approval card and the error are what the click needs,
+// and a stale approval click is exactly when the error matters.
+func TestActionErrorKeepsTheTranscriptMinimum(t *testing.T) {
+	p := basePanel(StatusIdle)
+	p.Summary.ApprovalPending = true
+	p.Summary.ApprovalMessage = "Run go test ./... in the repository"
+	p.ApprovalTool = "terminal"
+	p.Summary.ToolEvents, p.Summary.RunningTools = 1, 1
+	p.ShowToolActivity = true
+	p.ActionError = "session/create: connection refused"
+
+	small := PanelTree(p, 640, 520)
+	lintView(t, "worst case 640x520", small, v1.ViewPanel, 640, 520)
+	checkBudget(t, "worst case 640x520", small, 640, 520)
+	tr := findKey(small, "transcript")
+	if tr == nil || tr.Height < 160 {
+		t.Fatalf("transcript at 640x520 = %+v, want at least 160 tall", tr)
+	}
+	if findKey(small, "approval") == nil {
+		t.Error("approval card dropped with the activity line")
+	}
+	if findKey(small, "action-error") == nil {
+		t.Error("action-error row dropped with the activity line")
+	}
+	if findKey(small, "activity") != nil {
+		t.Error("activity line kept at 640x520, squeezing the transcript under 160")
+	}
+
+	big := PanelTree(p, 780, 720)
+	lintView(t, "worst case 780x720", big, v1.ViewPanel, 780, 720)
+	checkBudget(t, "worst case 780x720", big, 780, 720)
+	if tr := findKey(big, "transcript"); tr == nil || tr.Height < 160 {
+		t.Fatalf("transcript at 780x720 = %+v, want at least 160 tall", tr)
+	}
+	for _, key := range []string{"approval", "action-error", "activity"} {
+		if findKey(big, key) == nil {
+			t.Errorf("%s missing at 780x720, where the height is there for it", key)
+		}
+	}
+}
+
 func TestActivityLineWordingAndVisibility(t *testing.T) {
 	p := basePanel(StatusIdle)
 	p.Summary.ToolEvents, p.Summary.RunningTools = 1, 1
