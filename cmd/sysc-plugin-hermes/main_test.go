@@ -987,3 +987,184 @@ func TestApprovalRequestReachesTheSummaryAlert(t *testing.T) {
 		t.Fatalf("summary tree %q does not say the reason", text)
 	}
 }
+
+// panelEntry matches panel.open or panel.close params for one entry.
+func panelEntry(entry string) func(json.RawMessage) bool {
+	return func(raw json.RawMessage) bool {
+		var params v1.PanelParams
+		return json.Unmarshal(raw, &params) == nil && params.Entry == entry
+	}
+}
+
+// openTestView opens a view and returns the first snapshot the plugin sends.
+func openTestView(t *testing.T, h *testHost, open *v1.ViewOpen) *v1.ViewSnapshot {
+	t.Helper()
+	if err := h.send(open); err != nil {
+		t.Fatalf("view.open %s: %v", open.ViewID, err)
+	}
+	return h.waitSnapshot(open.ViewID, func(*v1.ViewSnapshot) bool { return true })
+}
+
+// clickNode activates one node of the tree the host last saw.
+func clickNode(t *testing.T, h *testHost, viewID string, revision uint64, node string) {
+	t.Helper()
+	if err := h.send(&v1.InputEvent{ViewID: viewID, Revision: revision, Node: node, Event: v1.EventActivate}); err != nil {
+		t.Fatalf("input %s on %s: %v", node, viewID, err)
+	}
+}
+
+func clientOnlyHost(t *testing.T) *testHost {
+	t.Helper()
+	remoteHost, remotePort := fakeRemoteState(t, idleState("example-model"))
+	h, _ := startPlugin(t)
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(remoteHost, remotePort)}); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func summaryView() *v1.ViewOpen {
+	return &v1.ViewOpen{ViewID: "summary-1", View: v1.ViewPanel, Entry: "summary", Instance: "bar-inst",
+		Output: "DP-1", Generation: 7, Width: 380, Height: 480}
+}
+
+func menuView() *v1.ViewOpen {
+	return &v1.ViewOpen{ViewID: "menu-1", View: v1.ViewPanel, Entry: "menu", Instance: "bar-inst",
+		Output: "DP-1", Generation: 7, Width: 260, Height: 300}
+}
+
+func barView() *v1.ViewOpen {
+	return &v1.ViewOpen{ViewID: "bar-1", View: v1.ViewBar, Entry: "bar", Instance: "bar-inst",
+		Output: "DP-1", Generation: 7, Width: 240, Height: 32}
+}
+
+// TestBarPrimaryTogglesTheSummary is Task 4: a primary click opens the
+// summary, and a second one closes it instead of opening anything.
+func TestBarPrimaryTogglesTheSummary(t *testing.T) {
+	h := clientOnlyHost(t)
+	bar := openTestView(t, h, barView())
+	clickNode(t, h, "bar-1", bar.Revision, "open")
+
+	call := h.waitCallParams(v1.CallPanelOpen, panelEntry("summary"))
+	var params v1.PanelParams
+	if err := json.Unmarshal(call.Params, &params); err != nil {
+		t.Fatalf("panel.open params: %v", err)
+	}
+	if params.Output != "DP-1" || params.Generation != 7 || params.Instance != "bar-inst" {
+		t.Fatalf("summary opened away from the bar placement: %+v", params)
+	}
+	openTestView(t, h, summaryView())
+
+	opens := h.countCalls(v1.CallPanelOpen)
+	clickNode(t, h, "bar-1", bar.Revision, "open")
+	h.waitCallParams(v1.CallPanelClose, panelEntry("summary"))
+	if got := h.countCalls(v1.CallPanelOpen); got != opens {
+		t.Fatalf("the second primary opened %d panels, want none", got-opens)
+	}
+}
+
+// TestBarSecondaryOpensTheMenu is Task 4: secondary opens the menu, and the
+// primary press that arrives as a pointer event does nothing.
+func TestBarSecondaryOpensTheMenu(t *testing.T) {
+	h := clientOnlyHost(t)
+	bar := openTestView(t, h, barView())
+	if err := h.send(&v1.InputEvent{ViewID: "bar-1", Revision: bar.Revision, Node: "open",
+		Event: v1.EventPointer, Button: v1.ButtonPrimary}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.send(&v1.InputEvent{ViewID: "bar-1", Revision: bar.Revision, Node: "open",
+		Event: v1.EventPointer, Button: v1.ButtonSecondary}); err != nil {
+		t.Fatal(err)
+	}
+	call := h.waitCallParams(v1.CallPanelOpen, panelEntry("menu"))
+	var params v1.PanelParams
+	if err := json.Unmarshal(call.Params, &params); err != nil {
+		t.Fatalf("panel.open params: %v", err)
+	}
+	if params.Output != "DP-1" || params.Generation != 7 || params.Instance != "bar-inst" {
+		t.Fatalf("menu opened away from the bar placement: %+v", params)
+	}
+	if got := h.countCalls(v1.CallPanelOpen); got != 1 {
+		t.Fatalf("%d panels opened, want only the menu", got)
+	}
+}
+
+// TestEveryMenuItemClosesTheMenu is Task 5: each item acts and the menu is
+// gone afterwards.
+func TestEveryMenuItemClosesTheMenu(t *testing.T) {
+	cases := []struct {
+		node  string
+		entry string
+		opens bool
+	}{
+		{"open", "panel", true},
+		{"new-session", "panel", true},
+		{"settings", "settings", true},
+		{"interrupt", "", false},
+		{"refresh", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.node, func(t *testing.T) {
+			h := clientOnlyHost(t)
+			menu := openTestView(t, h, menuView())
+			opens := h.countCalls(v1.CallPanelOpen)
+			clickNode(t, h, "menu-1", menu.Revision, tc.node)
+			h.waitCallParams(v1.CallPanelClose, panelEntry("menu"))
+			if tc.opens {
+				h.waitCallParams(v1.CallPanelOpen, panelEntry(tc.entry))
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+			if got := h.countCalls(v1.CallPanelOpen); got != opens {
+				t.Fatalf("%s opened %d panels, want none", tc.node, got-opens)
+			}
+		})
+	}
+}
+
+// TestMenuOmitsStartGatewayInClientOnly is Task 5: no Start gateway button
+// client-only, and the node cannot start anything.
+func TestMenuOmitsStartGatewayInClientOnly(t *testing.T) {
+	h := clientOnlyHost(t)
+	menu := openTestView(t, h, menuView())
+	if id := treeButtonID(menu.Root, "start-gateway"); id != "" {
+		t.Fatalf("client-only menu offers start-gateway as %q", id)
+	}
+	opens := h.countCalls(v1.CallPanelOpen)
+	clickNode(t, h, "menu-1", menu.Revision, "start-gateway")
+	time.Sleep(200 * time.Millisecond)
+	if got := h.countCalls(v1.CallPanelOpen); got != opens {
+		t.Fatalf("start-gateway opened %d panels, want none", got-opens)
+	}
+}
+
+// TestSummaryClosesOnlyWhenNavigating is Task 5: Open Hermes, New session
+// and Settings close the summary first; nothing else does.
+func TestSummaryClosesOnlyWhenNavigating(t *testing.T) {
+	cases := []struct{ node, entry string }{
+		{"open", "panel"},
+		{"new-session", "panel"},
+		{"settings", "settings"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.node, func(t *testing.T) {
+			h := clientOnlyHost(t)
+			sum := openTestView(t, h, summaryView())
+			clickNode(t, h, "summary-1", sum.Revision, tc.node)
+			h.waitCallParams(v1.CallPanelClose, panelEntry("summary"))
+			h.waitCallParams(v1.CallPanelOpen, panelEntry(tc.entry))
+		})
+	}
+	for _, node := range []string{"interrupt", "refresh"} {
+		t.Run(node+"KeepsItOpen", func(t *testing.T) {
+			h := clientOnlyHost(t)
+			sum := openTestView(t, h, summaryView())
+			closes := h.countCalls(v1.CallPanelClose)
+			clickNode(t, h, "summary-1", sum.Revision, node)
+			time.Sleep(200 * time.Millisecond)
+			if got := h.countCalls(v1.CallPanelClose); got != closes {
+				t.Fatalf("%s closed the summary", node)
+			}
+		})
+	}
+}

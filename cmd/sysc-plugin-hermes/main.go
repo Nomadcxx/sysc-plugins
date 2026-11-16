@@ -113,6 +113,18 @@ func (vs *viewSet) open(m *v1.ViewOpen) *viewState {
 func (vs *viewSet) get(id string) *viewState { return vs.m[id] }
 func (vs *viewSet) close(id string)          { delete(vs.m, id) }
 
+// panel is the open panel view with this entry, or nil. The bar uses it to
+// see whether the summary is already up, so a second primary click closes
+// it the way noctalia's toggle does.
+func (vs *viewSet) panel(entry string) *viewState {
+	for _, v := range vs.m {
+		if v.kind == v1.ViewPanel && v.entry == entry {
+			return v
+		}
+	}
+	return nil
+}
+
 // actionSignature describes what an input event can address in a view: the
 // id, kind, label, disabled state and event declarations of every node that
 // carries an id, in tree order. Copied from mini-docker (a6737ab, PR #233).
@@ -648,6 +660,14 @@ func (a *app) input(m *v1.InputEvent) {
 			a.send(m.ViewID, m.Text)
 		}
 		return
+	case v1.EventPointer:
+		// A primary click arrives twice: EventPointer on press, then
+		// EventActivate on release, so only the secondary button is acted on
+		// here. Primary and middle presses are left to the release.
+		if v.kind == v1.ViewBar && m.Node == "open" && m.Button == v1.ButtonSecondary {
+			a.openPanelFrom(v, "menu")
+		}
+		return
 	case v1.EventActivate:
 	default:
 		return
@@ -655,11 +675,30 @@ func (a *app) input(m *v1.InputEvent) {
 
 	snap := a.svc.Snapshot()
 	state := snap.State
+	// Every menu item closes the menu, as noctalia's does. The panel is not a
+	// native menu, so it replaces whatever plugin panel was open.
+	if v.kind == v1.ViewPanel && v.entry == "menu" {
+		a.closePanel(v)
+	}
 	switch {
 	case m.Node == "open":
-		if v.kind == v1.ViewBar {
+		switch {
+		case v.kind == v1.ViewBar:
+			if summary := a.views.panel("summary"); summary != nil {
+				a.closePanel(summary)
+			} else {
+				a.openPanelFrom(v, "summary")
+			}
+		case v.kind == v1.ViewPanel && v.entry == "summary":
+			// Every navigating button closes the summary first; Interrupt
+			// and Refresh leave it up, as noctalia's do.
+			a.closePanel(v)
 			a.openChat()
-		} else {
+		case v.kind == v1.ViewPanel && v.entry == "menu":
+			// Open Hermes goes through the same preferred surface as the
+			// service action, so a pinned panel is raised instead.
+			a.openChat()
+		default:
 			a.openPanelFrom(v, "panel")
 		}
 	case m.Node == "refresh":
@@ -670,7 +709,15 @@ func (a *app) input(m *v1.InputEvent) {
 		a.closePanel(v)
 	case m.Node == "new-session":
 		a.svc.Submit("/session/create", nil)
-		a.openPanelFrom(v, "panel")
+		switch {
+		case v.kind == v1.ViewPanel && v.entry == "summary":
+			a.closePanel(v)
+			a.openChat()
+		case v.kind == v1.ViewPanel && v.entry == "menu":
+			a.openChat()
+		default:
+			a.openPanelFrom(v, "panel")
+		}
 	case m.Node == "interrupt":
 		a.interrupt()
 	case m.Node == "start-gateway":
@@ -682,6 +729,9 @@ func (a *app) input(m *v1.InputEvent) {
 			a.svc.Submit("/gateway/stop", map[string]any{})
 		}
 	case m.Node == "settings":
+		if v.kind == v1.ViewPanel && v.entry == "summary" {
+			a.closePanel(v)
+		}
 		a.openPanelFrom(v, "settings")
 	case strings.HasPrefix(m.Node, "section:"):
 		section, ok := hermes.SectionForNode(m.Node)
