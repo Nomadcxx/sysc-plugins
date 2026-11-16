@@ -576,3 +576,69 @@ func TestReadmeShipsTheHermesLauncherProvider(t *testing.T) {
 		t.Error("the executable must not be a template")
 	}
 }
+
+// TestRunArgvHelperProcess is the child side of
+// TestRunArgvExecutesArgvWithoutAShell. It records the arguments it was
+// executed with so the parent can prove they arrived unchanged.
+func TestRunArgvHelperProcess(t *testing.T) {
+	if os.Getenv("SYSC_HERMES_RUNARGV_HELPER") != "1" {
+		return
+	}
+	var args []string
+	for i, arg := range os.Args {
+		if arg == "--" {
+			args = append([]string(nil), os.Args[i+1:]...)
+			break
+		}
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(os.Getenv("SYSC_HERMES_RUNARGV_OUT"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRunArgvExecutesArgvWithoutAShell pins production runArgv to argv-only
+// execution. The fake `run` used elsewhere cannot catch a change to
+// exec.Command("sh", "-c", ...): the shell would expand the command
+// substitution and split the spaced argument before the child saw them.
+func TestRunArgvExecutesArgvWithoutAShell(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	out := filepath.Join(dir, "argv.json")
+	marker := filepath.Join(dir, "injected")
+	t.Setenv("SYSC_HERMES_RUNARGV_HELPER", "1")
+	t.Setenv("SYSC_HERMES_RUNARGV_OUT", out)
+	argv := []string{
+		exe,
+		"-test.run=^TestRunArgvHelperProcess$",
+		"--",
+		"plain",
+		"two words",
+		"$(touch " + marker + ")",
+		"a; touch " + marker,
+	}
+	if err := runArgv(argv); err != nil {
+		t.Fatalf("runArgv(%q) = %v", argv, err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("runArgv executed a shell: marker %s exists (stat err %v)", marker, err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("child argv is not valid JSON: %v (%s)", err, data)
+	}
+	want := argv[3:]
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("child argv = %q, want %q", got, want)
+	}
+}
