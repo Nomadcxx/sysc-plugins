@@ -3,7 +3,6 @@ package hermes
 import (
 	"errors"
 	"strings"
-	"unicode"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -39,20 +38,6 @@ type ModelRequest struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	Persist  bool   `json:"persist"`
-}
-
-// validModelNameUI refuses what the bridge would: empty names, any
-// whitespace, and a leading dash that would read as a flag.
-func validModelNameUI(s string) bool {
-	if s == "" || strings.HasPrefix(s, "-") {
-		return false
-	}
-	for _, r := range s {
-		if unicode.IsSpace(r) || unicode.IsControl(r) {
-			return false
-		}
-	}
-	return true
 }
 
 // ModelSig hashes provider and model together; the separator keeps
@@ -142,7 +127,7 @@ func ApplyModel(p ModelPicker, liveProvider string) (ModelRequest, error) {
 	if provider == "" {
 		provider = liveProvider
 	}
-	if !validModelNameUI(provider) || !validModelNameUI(p.Model) {
+	if !ValidModelName(provider) || !ValidModelName(p.Model) {
 		return ModelRequest{}, errInvalidModel
 	}
 	return ModelRequest{Provider: provider, Model: p.Model, Persist: p.Persist}, nil

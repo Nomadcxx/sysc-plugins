@@ -14,7 +14,7 @@ import (
 // scaffold's connecting tree is also checked at.
 var summarySizes = [][2]int{{380, 480}, {320, 400}}
 
-func richSummary(s Status) SummaryState {
+func richSummary(s BarStatus) SummaryState {
 	return SummaryState{
 		BarState:   stateFor(s),
 		Provider:   "openrouter",
@@ -35,7 +35,7 @@ func richSummary(s Status) SummaryState {
 	}
 }
 
-func summaryStates(s Status) map[string]SummaryState {
+func summaryStates(s BarStatus) map[string]SummaryState {
 	noisy := richSummary(s)
 	noisy.ModelName = strings.Repeat("a-very-long-model-name-", 4)
 	noisy.ApprovalPending = false
@@ -134,10 +134,10 @@ func manifestActions(t *testing.T) map[string]bool {
 
 func TestSummaryLaysOutInEveryStatus(t *testing.T) {
 	avatar := repoAvatar(t)
-	if len(Statuses) != 7 {
-		t.Fatalf("Statuses has %d entries, want seven", len(Statuses))
+	if len(BarStatuses) != 7 {
+		t.Fatalf("BarStatuses has %d entries, want seven", len(BarStatuses))
 	}
-	for _, s := range Statuses {
+	for _, s := range BarStatuses {
 		for name, state := range summaryStates(s) {
 			for _, av := range []string{avatar, ""} {
 				for _, size := range summarySizes {
@@ -161,14 +161,14 @@ func TestSummaryRowsMatchNoctalia(t *testing.T) {
 		state SummaryState
 		want  []summaryRow
 	}{
-		{"empty", SummaryState{BarState: stateFor(StatusUnknown)}, []summaryRow{
+		{"empty", SummaryState{BarState: stateFor(BarStatusUnknown)}, []summaryRow{
 			{"Model", "Not set"},
 			{"Cron", "0 active / 0 total"},
 			{"MCP", "No MCP servers"},
 			{"Gateway", "stopped"},
 			{"Activity", "No background actions"},
 		}},
-		{"rich", richSummary(StatusBusy), []summaryRow{
+		{"rich", richSummary(BarStatusBusy), []summaryRow{
 			{"Model", "openrouter / example-model"},
 			{"Cron", "2 active / 3 total"},
 			{"MCP", "2 enabled / 4 total"},
@@ -184,7 +184,7 @@ func TestSummaryRowsMatchNoctalia(t *testing.T) {
 			{"Gateway", "Unknown"},
 			{"Activity", "3 background actions"},
 		}},
-		{"provider plus hermes model", SummaryState{BarState: stateFor(StatusIdle), Provider: "anthropic"}, []summaryRow{
+		{"provider plus hermes model", SummaryState{BarState: stateFor(BarStatusIdle), Provider: "anthropic"}, []summaryRow{
 			{"Model", "anthropic / example-model"},
 			{"Cron", "0 active / 0 total"},
 			{"MCP", "No MCP servers"},
@@ -219,7 +219,7 @@ func TestSummaryRowsMatchNoctalia(t *testing.T) {
 
 func TestSummaryHeaderShowsAvatarStatusAndOpen(t *testing.T) {
 	avatar := repoAvatar(t)
-	for _, s := range Statuses {
+	for _, s := range BarStatuses {
 		tree := SummaryTree(SummaryState{BarState: stateFor(s)}, avatar, 380, 480)
 		var img *v1.Node
 		walk(tree, func(n *v1.Node) {
@@ -250,21 +250,21 @@ func TestSummaryHeaderShowsAvatarStatusAndOpen(t *testing.T) {
 			t.Errorf("%s: open button = %+v", s, open)
 		}
 	}
-	noAvatar := SummaryTree(SummaryState{BarState: stateFor(StatusBusy)}, "", 380, 480)
+	noAvatar := SummaryTree(SummaryState{BarState: stateFor(BarStatusBusy)}, "", 380, 480)
 	var glyph *v1.Node
 	walk(noAvatar, func(n *v1.Node) {
 		if n.Kind == v1.KindIcon && glyph == nil {
 			glyph = n
 		}
 	})
-	if glyph == nil || glyph.Icon != StatusBusy.Glyph() {
+	if glyph == nil || glyph.Icon != BarStatusBusy.Glyph() {
 		t.Errorf("busy summary without avatar should fall back to the busy glyph, got %+v", glyph)
 	}
 }
 
 func TestSummaryActionsFollowNoctalia(t *testing.T) {
 	actions := manifestActions(t)
-	for _, s := range Statuses {
+	for _, s := range BarStatuses {
 		for _, running := range []bool{false, true} {
 			state := SummaryState{BarState: stateFor(s), SessionRunning: running}
 			tree := SummaryTree(state, "", 380, 480)
@@ -285,7 +285,7 @@ func TestSummaryActionsFollowNoctalia(t *testing.T) {
 				}
 			}
 			interrupt := findID(tree, "interrupt")
-			wantDisabled := !(running || s == StatusBusy)
+			wantDisabled := !(running || s == BarStatusBusy)
 			if interrupt != nil && interrupt.Disabled != wantDisabled {
 				t.Errorf("%s running=%v: interrupt disabled = %v, want %v", s, running, interrupt.Disabled, wantDisabled)
 			}
@@ -294,7 +294,7 @@ func TestSummaryActionsFollowNoctalia(t *testing.T) {
 }
 
 func TestSummaryCronJobs(t *testing.T) {
-	tree := SummaryTree(richSummary(StatusIdle), "", 380, 480)
+	tree := SummaryTree(richSummary(BarStatusIdle), "", 380, 480)
 	joined := strings.Join(texts(tree), "|")
 	for _, want := range []string{"Cron jobs", "Morning digest", "2026-11-12 09:00:00", "every 30m", "Unnamed job", "paused", "Weekly report", "0 8 * * 1", "ok", "error"} {
 		if !strings.Contains(joined, want) {
@@ -310,7 +310,7 @@ func TestSummaryCronJobs(t *testing.T) {
 	if list == nil || len(list.Children) != 5 {
 		t.Fatalf("cron jobs should be a scrolling list of five rows, got %+v", list)
 	}
-	for i, job := range richSummary(StatusIdle).CronJobs {
+	for i, job := range richSummary(BarStatusIdle).CronJobs {
 		row := list.Children[i]
 		var icon *v1.Node
 		walk(row, func(n *v1.Node) {
@@ -326,12 +326,12 @@ func TestSummaryCronJobs(t *testing.T) {
 			t.Errorf("job %d icon = %+v, want %q %q", i, icon, wantIcon, wantTone)
 		}
 	}
-	empty := SummaryTree(SummaryState{BarState: stateFor(StatusIdle)}, "", 380, 480)
+	empty := SummaryTree(SummaryState{BarState: stateFor(BarStatusIdle)}, "", 380, 480)
 	if strings.Contains(strings.Join(texts(empty), "|"), "Cron jobs") {
 		t.Error("summary without cron jobs should not show the Cron jobs section")
 	}
 	for _, size := range summarySizes {
-		tree := SummaryTree(richSummary(StatusIdle), "", size[0], size[1])
+		tree := SummaryTree(richSummary(BarStatusIdle), "", size[0], size[1])
 		var l *v1.Node
 		walk(tree, func(n *v1.Node) {
 			if n.Kind == v1.KindList && l == nil {
@@ -349,10 +349,10 @@ func TestSummaryBanner(t *testing.T) {
 		text, icon string
 		fill       string
 	}
-	approval := richSummary(StatusAttention)
+	approval := richSummary(BarStatusAttention)
 	bare := approval
 	bare.ApprovalMessage = ""
-	errState := SummaryState{BarState: stateFor(StatusOffline)}
+	errState := SummaryState{BarState: stateFor(BarStatusOffline)}
 	both := approval
 	both.BridgeError = "Bridge request failed: 500"
 	cases := map[string]struct {
@@ -363,7 +363,7 @@ func TestSummaryBanner(t *testing.T) {
 		"approval bare":         {bare, &want{"Approval required", bannerIconApproval, "container"}},
 		"error":                 {errState, &want{"Connection failed: 127.0.0.1:19777", bannerIconError, "error-container"}},
 		"approval wins":         {both, &want{"Run go test ./... in the repository", bannerIconApproval, "container"}},
-		"none":                  {SummaryState{BarState: stateFor(StatusIdle)}, nil},
+		"none":                  {SummaryState{BarState: stateFor(BarStatusIdle)}, nil},
 	}
 	for name, c := range cases {
 		tree := SummaryTree(c.state, "", 380, 480)
@@ -404,7 +404,7 @@ func TestSummaryBanner(t *testing.T) {
 
 func TestSummaryUsageRow(t *testing.T) {
 	cost := func(v float64) *float64 { return &v }
-	base := SummaryState{BarState: stateFor(StatusIdle)}
+	base := SummaryState{BarState: stateFor(BarStatusIdle)}
 	cases := []struct {
 		name  string
 		state SummaryState
@@ -472,7 +472,7 @@ func withUsage(state SummaryState, input, output, total int64, cost *float64) Su
 }
 
 func TestSummaryNeverOffersGatewayControl(t *testing.T) {
-	for _, s := range Statuses {
+	for _, s := range BarStatuses {
 		for _, state := range summaryStates(s) {
 			ids := controlIDs(SummaryTree(state, "", 380, 480))
 			if len(ids) == 0 {

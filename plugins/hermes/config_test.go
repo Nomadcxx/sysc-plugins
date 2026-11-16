@@ -37,12 +37,15 @@ func TestIsLoopbackOnlyForLocalHosts(t *testing.T) {
 }
 
 func TestValidModelName(t *testing.T) {
-	for _, bad := range []string{"gpt 4", "-x", "a\tb", "", "--provider", "a\nb", "a\rb"} {
+	for _, bad := range []string{
+		"gpt 4", "-x", "a\tb", "", "--provider", "a\nb", "a\rb",
+		" ", "a b", "-rm", "--global", "tab\tname", "new\nline",
+	} {
 		if ValidModelName(bad) {
 			t.Errorf("ValidModelName(%q) = true, want false", bad)
 		}
 	}
-	for _, good := range []string{"openai/gpt-5.1", "claude-sonnet-4", "x"} {
+	for _, good := range []string{"openai/gpt-5.1", "claude-sonnet-4", "x", "gpt-x", "anthropic/claude-x", "ok-"} {
 		if !ValidModelName(good) {
 			t.Errorf("ValidModelName(%q) = false, want true", good)
 		}

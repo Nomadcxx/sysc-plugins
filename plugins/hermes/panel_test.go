@@ -19,7 +19,7 @@ func longText(i int) string {
 	return fmt.Sprintf("Message %d: ", i) + strings.Repeat("a fairly long sentence about the release notes and the test suite. ", 12)
 }
 
-func basePanel(s Status) PanelState {
+func basePanel(s BarStatus) PanelState {
 	sum := richSummary(s)
 	sum.ApprovalPending = false
 	p := PanelState{
@@ -37,7 +37,7 @@ func basePanel(s Status) PanelState {
 	return p
 }
 
-func heavyPanel(s Status, section Section, approval bool) PanelState {
+func heavyPanel(s BarStatus, section Section, approval bool) PanelState {
 	p := basePanel(s)
 	p.Messages = nil
 	for i := 0; i < 30; i++ {
@@ -80,10 +80,10 @@ func findKey(root *v1.Node, key string) *v1.Node {
 
 func TestPanelLaysOutEverySectionAndApproval(t *testing.T) {
 	avatar := repoAvatar(t)
-	if len(Statuses) != 7 {
-		t.Fatalf("Statuses has %d entries", len(Statuses))
+	if len(BarStatuses) != 7 {
+		t.Fatalf("BarStatuses has %d entries", len(BarStatuses))
 	}
-	for _, s := range Statuses {
+	for _, s := range BarStatuses {
 		for _, sec := range allSections {
 			for _, approval := range []bool{false, true} {
 				for _, size := range panelSizes {
@@ -107,7 +107,7 @@ func TestPanelLaysOutEverySectionAndApproval(t *testing.T) {
 
 func TestPanelNodeBudgetWithEveryCap(t *testing.T) {
 	for _, sec := range allSections {
-		p := heavyPanel(StatusBusy, sec, true)
+		p := heavyPanel(BarStatusBusy, sec, true)
 		p.Summary.ApprovalPending = sec == SectionNone
 		tree := PanelTree(p, 780, 720)
 		if n := countNodes(tree); n >= v1.MaxNodes {
@@ -146,7 +146,7 @@ func TestOneSectionOpenAtATime(t *testing.T) {
 	}
 	for _, sec := range allSections {
 		for _, approval := range []bool{false, true} {
-			p := heavyPanel(StatusIdle, sec, approval)
+			p := heavyPanel(BarStatusIdle, sec, approval)
 			tree := PanelTree(p, 780, 720)
 			open := 0
 			for _, other := range allSections[1:] {
@@ -180,7 +180,7 @@ func TestOneSectionOpenAtATime(t *testing.T) {
 func TestGatewayButtonsOnlyInLocalMode(t *testing.T) {
 	for _, gw := range []string{"running", "stopped", ""} {
 		for _, clientOnly := range []bool{false, true} {
-			p := basePanel(StatusIdle)
+			p := basePanel(BarStatusIdle)
 			p.Summary.GatewayStatus = gw
 			p.ClientOnly = clientOnly
 			tree := PanelTree(p, 780, 720)
@@ -205,7 +205,7 @@ func TestGatewayButtonsOnlyInLocalMode(t *testing.T) {
 
 func TestInterruptOnlyWhileRunning(t *testing.T) {
 	for _, running := range []bool{false, true} {
-		p := basePanel(StatusIdle)
+		p := basePanel(BarStatusIdle)
 		p.Summary.SessionRunning = running
 		tree := PanelTree(p, 780, 720)
 		if got := findID(tree, "interrupt") != nil; got != running {
@@ -220,7 +220,7 @@ func TestInterruptOnlyWhileRunning(t *testing.T) {
 		}
 	}
 	want := []string{"new-session", "refresh", "start-gateway", "settings"}
-	p := basePanel(StatusOffline)
+	p := basePanel(BarStatusOffline)
 	p.Summary.GatewayStatus = "stopped"
 	var row []string
 	tree := PanelTree(p, 780, 720)
@@ -235,12 +235,12 @@ func TestInterruptOnlyWhileRunning(t *testing.T) {
 }
 
 func TestPanelStatusIconsFollowDesign(t *testing.T) {
-	want := map[Status]string{
-		StatusOffline: "power_settings_new", StatusIdle: "check", StatusBusy: "refresh",
-		StatusAttention: "notifications-active", StatusDegraded: "gpp_maybe",
-		StatusError: "cancel", StatusUnknown: "ai-usage",
+	want := map[BarStatus]string{
+		BarStatusOffline: "power_settings_new", BarStatusIdle: "check", BarStatusBusy: "refresh",
+		BarStatusAttention: "notifications-active", BarStatusDegraded: "gpp_maybe",
+		BarStatusError: "cancel", BarStatusUnknown: "ai-usage",
 	}
-	for _, s := range Statuses {
+	for _, s := range BarStatuses {
 		if got := panelStatusIcon(s); got != want[s] {
 			t.Errorf("panelStatusIcon(%s) = %q, want %q", s, got, want[s])
 		}
@@ -254,7 +254,7 @@ func TestPanelStatusIconsFollowDesign(t *testing.T) {
 
 func TestHeaderMatchesDesign(t *testing.T) {
 	avatar := repoAvatar(t)
-	p := basePanel(StatusIdle)
+	p := basePanel(BarStatusIdle)
 	p.Avatar = avatar
 	tree := PanelTree(p, 780, 720)
 	header := findKey(tree, "header")
@@ -297,7 +297,7 @@ func TestHeaderMatchesDesign(t *testing.T) {
 		}, "nous / default-model"},
 		{func(p *PanelState) { p.Summary.Provider, p.Summary.ModelName = "", "solo-model" }, "solo-model"},
 	} {
-		q := basePanel(StatusIdle)
+		q := basePanel(BarStatusIdle)
 		c.mutate(&q)
 		if got := panelModelLabel(q); got != c.want {
 			t.Errorf("panelModelLabel = %q, want %q", got, c.want)
@@ -306,7 +306,7 @@ func TestHeaderMatchesDesign(t *testing.T) {
 }
 
 func TestComposerKeySurvivesRepublishAndReseedOnlyOnSend(t *testing.T) {
-	p := basePanel(StatusIdle)
+	p := basePanel(BarStatusIdle)
 	first := findID(PanelTree(p, 780, 720), "composer")
 	p.Messages = append(p.Messages, Message{ID: "m3", Role: "assistant", Text: "More"})
 	second := findID(PanelTree(p, 780, 720), "composer")
@@ -360,13 +360,13 @@ func TestSendPlanCreatesASessionFirst(t *testing.T) {
 }
 
 func TestEmptyStatesNameTheProblem(t *testing.T) {
-	off := basePanel(StatusOffline)
+	off := basePanel(BarStatusOffline)
 	off.Messages = nil
 	joined := strings.Join(texts(findKey(PanelTree(off, 780, 720), "transcript")), "|")
 	if !strings.Contains(joined, "Bridge offline") || !strings.Contains(joined, "Connection failed") {
 		t.Errorf("offline transcript = %q", joined)
 	}
-	none := basePanel(StatusIdle)
+	none := basePanel(BarStatusIdle)
 	none.Messages, none.SessionID = nil, ""
 	joined = strings.Join(texts(findKey(PanelTree(none, 780, 720), "transcript")), "|")
 	if !strings.Contains(joined, "No active session") {
@@ -377,7 +377,7 @@ func TestEmptyStatesNameTheProblem(t *testing.T) {
 func TestInteractiveNodesHaveUniqueIDsNamesAndRoles(t *testing.T) {
 	for _, sec := range allSections {
 		for _, approval := range []bool{false, true} {
-			p := heavyPanel(StatusBusy, sec, approval)
+			p := heavyPanel(BarStatusBusy, sec, approval)
 			p.Models = modelOptions(45)
 			tree := PanelTree(p, 780, 720)
 			seen := map[string]bool{}
@@ -405,7 +405,7 @@ func TestInteractiveNodesHaveUniqueIDsNamesAndRoles(t *testing.T) {
 }
 
 func TestActivityLineWordingAndVisibility(t *testing.T) {
-	p := basePanel(StatusIdle)
+	p := basePanel(BarStatusIdle)
 	p.Summary.ToolEvents, p.Summary.RunningTools = 1, 1
 	p.ShowToolActivity = true
 	if got := activityLine(p); got != "1 background action running" {
@@ -434,7 +434,7 @@ func TestActivityLineWordingAndVisibility(t *testing.T) {
 }
 
 func TestTranscriptBubblesAndEvents(t *testing.T) {
-	p := basePanel(StatusIdle)
+	p := basePanel(BarStatusIdle)
 	p.Messages = append(p.Messages, Message{ID: "m3", Role: "tool-ish", Text: "unknown role"})
 	tree := PanelTree(p, 780, 720)
 	tr := findKey(tree, "transcript")
@@ -467,7 +467,7 @@ func TestTranscriptBubblesAndEvents(t *testing.T) {
 	if got := strings.Join(texts(tr.Children[1]), "|"); got != "Hermes|The notes are tidied.|The tests need a shell command." {
 		t.Errorf("newlines should split lines: %q", got)
 	}
-	heavy := heavyPanel(StatusIdle, SectionNone, false)
+	heavy := heavyPanel(BarStatusIdle, SectionNone, false)
 	htree := PanelTree(heavy, 640, 520)
 	htr := findKey(htree, "transcript")
 	bubbles, events := 0, 0
@@ -512,7 +512,7 @@ func TestTranscriptBubblesAndEvents(t *testing.T) {
 }
 
 func TestApprovalFixtureMatchesDesign(t *testing.T) {
-	p := heavyPanel(StatusAttention, SectionNone, true)
+	p := heavyPanel(BarStatusAttention, SectionNone, true)
 	card := findKey(PanelTree(p, 780, 720), "approval")
 	if card == nil {
 		t.Fatal("no approval card")
@@ -547,13 +547,13 @@ func TestApprovalFixtureMatchesDesign(t *testing.T) {
 
 func TestPanelGlyphsAreInTheCatalogue(t *testing.T) {
 	avatar := repoAvatar(t)
-	for _, s := range Statuses {
+	for _, s := range BarStatuses {
 		for _, sec := range allSections {
 			for _, clientOnly := range []bool{false, true} {
 				p := heavyPanel(s, sec, true)
 				p.Avatar = avatar
 				p.ClientOnly = clientOnly
-				p.Summary.SessionRunning = s == StatusBusy
+				p.Summary.SessionRunning = s == BarStatusBusy
 				for _, av := range []string{avatar, ""} {
 					p.Avatar = av
 					walk(PanelTree(p, 780, 720), func(n *v1.Node) {
@@ -576,7 +576,7 @@ func TestPanelGlyphsAreInTheCatalogue(t *testing.T) {
 	_ = time.Second
 	seen := map[string]bool{}
 	// A busy panel shows Interrupt and an idle one Send, so take both.
-	for _, s := range []Status{StatusBusy, StatusIdle} {
+	for _, s := range []BarStatus{BarStatusBusy, BarStatusIdle} {
 		p := heavyPanel(s, SectionModel, true)
 		walk(PanelTree(p, 780, 720), func(n *v1.Node) {
 			if n.Icon != "" {

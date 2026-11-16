@@ -39,7 +39,7 @@ func lanState() SettingsState {
 		DefaultProvider: "nous", DefaultModel: "model-02",
 		Pinned:     true,
 		TestResult: ResultConnected,
-		Detected:   Detected{Provider: "nous", Model: "model-02"},
+		Detected:   SettingsDetected{Provider: "nous", Model: "model-02"},
 		SSHTarget:  "rama@hermes-vps",
 	}
 }
@@ -48,7 +48,7 @@ func settingsStates() map[string]SettingsState {
 	local := SettingsState{
 		Connection: ConnectionFor(false, "127.0.0.1", 19777, TokenCandidates{Local: localToken}, "", ""),
 		Models:     modelOptions(3),
-		Detected:   Detected{HermesHome: "~/.hermes", HermesCommand: "hermes", Provider: "openrouter", Model: "model-00"},
+		Detected:   SettingsDetected{HermesHome: "~/.hermes", HermesCommand: "hermes", Provider: "openrouter", Model: "model-00"},
 	}
 	noisy := lanState()
 	noisy.Connection = ConnectionFor(true, "a-very-long-hostname.internal.example.org", 65535,
@@ -151,9 +151,9 @@ func TestSettingsOrderFollowsDesign(t *testing.T) {
 	}
 }
 
-// fakeBridge answers /health and /state the way the bundled bridge does,
+// settingsFakeBridge answers /health and /state the way the bundled bridge does,
 // with knobs for each failure.
-type fakeBridge struct {
+type settingsFakeBridge struct {
 	mu          sync.Mutex
 	token       string
 	healthCode  int
@@ -163,7 +163,7 @@ type fakeBridge struct {
 	stateNeedsT bool
 }
 
-func (f *fakeBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (f *settingsFakeBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.paths = append(f.paths, r.URL.Path)
 	f.sentTokens = append(f.sentTokens, r.Header.Get("X-Bridge-Token"))
@@ -219,7 +219,7 @@ func TestTestConnectionReportsEachResultAgainstAFakeBridge(t *testing.T) {
 		{"health fails", 503, 200, "right", "Failed: 503", "/health"},
 		{"state fails", 200, 500, "right", "Failed: 500", "/health,/state"},
 	} {
-		bridge := &fakeBridge{token: "right", healthCode: c.health, stateCode: c.state}
+		bridge := &settingsFakeBridge{token: "right", healthCode: c.health, stateCode: c.state}
 		srv := httptest.NewServer(bridge)
 		got := CheckConnection(context.Background(), httpProber{base: srv.URL, token: c.token})
 		srv.Close()
@@ -235,7 +235,7 @@ func TestTestConnectionReportsEachResultAgainstAFakeBridge(t *testing.T) {
 			}
 		}
 	}
-	srv := httptest.NewServer(&fakeBridge{})
+	srv := httptest.NewServer(&settingsFakeBridge{})
 	url := srv.URL
 	srv.Close()
 	if got := CheckConnection(context.Background(), httpProber{base: url, token: "right"}); got != "Unreachable: wrong host/port or bridge not running" {
@@ -274,15 +274,15 @@ func TestConnectionLineNamesTheTokenSourceAndNeverTheToken(t *testing.T) {
 	for _, c := range []struct {
 		clientOnly bool
 		tokens     TokenCandidates
-		want       TokenSource
+		want       ConnectionTokenSource
 		mode       string
 	}{
-		{true, TokenCandidates{Pasted: pastedToken, File: fileToken}, TokenPasted, "Client-only"},
-		{true, TokenCandidates{Pasted: "   ", File: fileToken}, TokenFile, "Client-only"},
-		{true, TokenCandidates{}, TokenNone, "Client-only"},
-		{true, TokenCandidates{Local: localToken}, TokenNone, "Client-only"},
-		{false, TokenCandidates{Local: localToken, Pasted: pastedToken}, TokenLocal, "Local"},
-		{false, TokenCandidates{Pasted: pastedToken}, TokenNone, "Local"},
+		{true, TokenCandidates{Pasted: pastedToken, File: fileToken}, SourcePasted, "Client-only"},
+		{true, TokenCandidates{Pasted: "   ", File: fileToken}, SourceFile, "Client-only"},
+		{true, TokenCandidates{}, SourceNone, "Client-only"},
+		{true, TokenCandidates{Local: localToken}, SourceNone, "Client-only"},
+		{false, TokenCandidates{Local: localToken, Pasted: pastedToken}, SourceLocal, "Local"},
+		{false, TokenCandidates{Pasted: pastedToken}, SourceNone, "Local"},
 	} {
 		// Errors that quote every token the runtime holds; each must be
 		// redacted, whichever one is the active source.
@@ -306,8 +306,8 @@ func TestConnectionLineNamesTheTokenSourceAndNeverTheToken(t *testing.T) {
 			}
 		}
 	}
-	for _, src := range []TokenSource{TokenPasted, TokenFile, TokenLocal, TokenNone} {
-		if !map[TokenSource]bool{"pasted": true, "file": true, "local bridge.token": true, "none": true}[src] {
+	for _, src := range []ConnectionTokenSource{SourcePasted, SourceFile, SourceLocal, SourceNone} {
+		if !map[ConnectionTokenSource]bool{"pasted": true, "file": true, "local bridge.token": true, "none": true}[src] {
 			t.Errorf("token source %q is not one of the design's names", src)
 		}
 	}
@@ -472,7 +472,7 @@ func TestDetectedCaptionsAndPinToggle(t *testing.T) {
 			t.Errorf("detected captions %q are missing %q", joined, want)
 		}
 	}
-	s.Detected = Detected{}
+	s.Detected = SettingsDetected{}
 	if findKey(SettingsTree(s, SettingsInnerWidth(640)), "detected") != nil {
 		t.Error("no detected values should mean no captions")
 	}

@@ -30,17 +30,6 @@ func modelRowIDs(root *v1.Node) []string {
 	return ids
 }
 
-func TestValidModelName(t *testing.T) {
-	for s, want := range map[string]bool{
-		"gpt-x": true, "anthropic/claude-x": true, "": false, " ": false, "a b": false,
-		"-rm": false, "--global": false, "tab\tname": false, "new\nline": false, "ok-": true,
-	} {
-		if got := ValidModelName(s); got != want {
-			t.Errorf("ValidModelName(%q) = %v, want %v", s, got, want)
-		}
-	}
-}
-
 func TestModelNodeIDsHashProviderAndModel(t *testing.T) {
 	re := regexp.MustCompile(`^model:[0-9a-f]{12}$`)
 	a := ModelNodeID(ModelOption{Provider: "openrouter", Model: "m"})

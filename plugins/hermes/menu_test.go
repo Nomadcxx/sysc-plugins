@@ -21,10 +21,10 @@ func TestMenuItemsFollowNoctaliaOrder(t *testing.T) {
 		{"settings", "Hermes Settings", menuIconSettings},
 	}
 	withoutGateway := []MenuItem{full[0], full[1], full[2], full[3], full[5]}
-	if len(Statuses) != 7 {
-		t.Fatalf("Statuses has %d entries, want seven", len(Statuses))
+	if len(BarStatuses) != 7 {
+		t.Fatalf("BarStatuses has %d entries, want seven", len(BarStatuses))
 	}
-	for _, s := range Statuses {
+	for _, s := range BarStatuses {
 		for _, clientOnly := range []bool{false, true} {
 			want := withoutGateway
 			if CanStartGateway(s, clientOnly) {
@@ -42,16 +42,16 @@ func TestMenuItemsFollowNoctaliaOrder(t *testing.T) {
 			}
 		}
 	}
-	if len(MenuItems(StatusOffline, false)) != 6 {
+	if len(MenuItems(BarStatusOffline, false)) != 6 {
 		t.Error("local offline menu should offer Start gateway")
 	}
-	if len(MenuItems(StatusOffline, true)) != 5 {
+	if len(MenuItems(BarStatusOffline, true)) != 5 {
 		t.Error("client-only menu must not offer Start gateway")
 	}
 }
 
 func TestMenuNeverOffersStop(t *testing.T) {
-	for _, s := range Statuses {
+	for _, s := range BarStatuses {
 		for _, clientOnly := range []bool{false, true} {
 			items := MenuItems(s, clientOnly)
 			if len(items) == 0 {
@@ -68,7 +68,7 @@ func TestMenuNeverOffersStop(t *testing.T) {
 
 func TestMenuLaysOutAndMatchesItems(t *testing.T) {
 	actions := manifestActions(t)
-	for _, s := range Statuses {
+	for _, s := range BarStatuses {
 		for _, clientOnly := range []bool{false, true} {
 			name := string(s)
 			if clientOnly {

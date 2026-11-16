@@ -16,7 +16,7 @@ func pinnedSizes() [][2]int {
 }
 
 func pinnedState(approval bool) PanelState {
-	p := heavyPanel(StatusIdle, SectionNone, approval)
+	p := heavyPanel(BarStatusIdle, SectionNone, approval)
 	p.Pinned = true
 	return p
 }
