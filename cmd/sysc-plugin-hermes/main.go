@@ -536,8 +536,13 @@ func readCachedSettings(ctx context.Context, c *v1.Client) (map[string]any, stri
 		return nil, "hermes: no saved settings to restore"
 	}
 	var values map[string]any
-	if err := json.Unmarshal(res.Value, &values); err != nil || values == nil {
+	if err := json.Unmarshal(res.Value, &values); err != nil {
 		return nil, "hermes: saved settings are unreadable"
+	}
+	if values == nil {
+		// A JSON null is this plugin's own all-defaults copy from before the
+		// empty object; apply the defaults instead of failing.
+		values = map[string]any{}
 	}
 	return values, ""
 }
@@ -581,13 +586,19 @@ func (a *app) handle(msg v1.Message) error {
 			a.graceTimer = nil
 		}
 		// Save the whole map, including a pasted bridge token, so a respawn
-		// can reconnect; state.json is mode 0600 like config.json.
-		if raw, err := json.Marshal(m.Values); err != nil {
+		// can reconnect; state.json is mode 0600 like config.json. An
+		// all-defaults message has nil values; save it as an empty object so
+		// the copy stays decodable.
+		values := m.Values
+		if values == nil {
+			values = map[string]any{}
+		}
+		if raw, err := json.Marshal(values); err != nil {
 			a.logf("hermes: cannot cache settings: %v", err)
 		} else if a.save != nil {
 			a.save(settingsCacheKey, raw)
 		}
-		return a.applySettings(m.Values)
+		return a.applySettings(values)
 	case *v1.ServiceAction:
 		if m.ServiceID != serviceID {
 			return nil

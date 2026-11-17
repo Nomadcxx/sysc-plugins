@@ -133,13 +133,20 @@ func startPlugin(t *testing.T) (*testHost, *v1.PluginHello) {
 
 func startPluginWith(t *testing.T, setup func(*testHost)) (*testHost, *v1.PluginHello) {
 	t.Helper()
+	return startPluginOptions(t, hermes.Options{}, setup)
+}
+
+// startPluginOptions is startPluginWith with explicit service options, for
+// tests that must keep local mode away from a real bridge.
+func startPluginOptions(t *testing.T, opts hermes.Options, setup func(*testHost)) (*testHost, *v1.PluginHello) {
+	t.Helper()
 	pluginIn, hostOut := io.Pipe()
 	hostIn, pluginOut := io.Pipe()
 	h := &testHost{t: t, enc: v1.NewEncoder(hostOut), msgs: make(chan v1.Message, 128), done: make(chan error, 1),
 		fromPlug: hostIn, stderr: &lockedBuffer{}}
 	setup(h)
 	go func() {
-		h.done <- runWith(pluginIn, pluginOut, h.stderr, hermes.Options{})
+		h.done <- runWith(pluginIn, pluginOut, h.stderr, opts)
 		_ = pluginOut.Close()
 	}()
 	go h.read()
@@ -1518,8 +1525,54 @@ func TestRespawnAppliesCachedSettingsAfterGrace(t *testing.T) {
 	}
 }
 
+func TestRespawnWithDefaultSettingsCacheApplies(t *testing.T) {
+	// The host sends nil values when the user never edited a setting, so the
+	// saved copy must be an empty object, not JSON null.
+	t.Run("saves an empty object for nil values", func(t *testing.T) {
+		h, _ := startPlugin(t)
+		if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin}); err != nil {
+			t.Fatal(err)
+		}
+		h.waitCallParams(v1.CallStateSet, func(raw json.RawMessage) bool {
+			var p v1.StateSetParams
+			if err := json.Unmarshal(raw, &p); err != nil || p.Key != settingsCacheKey {
+				return false
+			}
+			return string(p.Value) == "{}"
+		})
+	})
+
+	// An all-defaults copy applies the manifest defaults, so the bar leaves
+	// the Connecting… placeholder. A stored null is this plugin's own old
+	// copy. An unreachable local port keeps local mode away from a real
+	// bridge and lets the spawn fail before it starts anything.
+	for _, tc := range []struct{ name, value string }{
+		{"null", "null"},
+		{"empty object", "{}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shortGrace(t)
+			h, _ := startPluginOptions(t, hermes.Options{LocalPort: 1}, func(h *testHost) {
+				h.reply = settingsCacheReply(settingsCacheKey, true, tc.value, false)
+			})
+			if err := h.send(barView()); err != nil {
+				t.Fatal(err)
+			}
+			h.waitSnapshot("bar-1", func(s *v1.ViewSnapshot) bool { return strings.Contains(treeText(s.Root), "Connecting…") })
+			h.waitSnapshot("bar-1", func(s *v1.ViewSnapshot) bool { return !strings.Contains(treeText(s.Root), "Connecting…") })
+			if s := h.stderr.String(); !strings.Contains(s, "using the settings saved at the last start") {
+				t.Fatalf("stderr does not carry the restore note: %s", s)
+			}
+		})
+	}
+}
+
 func TestHostSettingsBeatCache(t *testing.T) {
-	shortGrace(t)
+	// Host settings must win the race against the cache. Model production
+	// ordering with a grace wide enough for them to arrive under -race.
+	old := settingsGrace
+	settingsGrace = 500 * time.Millisecond
+	t.Cleanup(func() { settingsGrace = old })
 	var cachedHits atomic.Int64
 	cachedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cachedHits.Add(1)
