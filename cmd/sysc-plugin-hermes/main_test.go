@@ -1693,3 +1693,51 @@ func TestNoCacheStaysConnecting(t *testing.T) {
 		})
 	}
 }
+
+// TestCachedSettingsWaitForTheGrace pins the ~2 s wait (qa-d2c m3): the
+// saved copy is not applied before the grace has passed, even when the
+// state.get reply is already in. The default grace is pinned separately.
+func TestCachedSettingsWaitForTheGrace(t *testing.T) {
+	old := settingsGrace
+	settingsGrace = 400 * time.Millisecond
+	t.Cleanup(func() { settingsGrace = old })
+	var firstHit atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstHit.CompareAndSwap(0, time.Now().UnixNano())
+		if r.Header.Get("X-Bridge-Token") != "fake-token" && r.URL.Path != "/detect" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"bridge": map[string]any{"status": "online"},
+			"hermes": map[string]any{"status": "idle"},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	host, portText, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	cached, _ := json.Marshal(clientOnlyValues(host, port))
+
+	start := time.Now()
+	h, _ := startPluginWith(t, func(h *testHost) {
+		h.reply = settingsCacheReply(settingsCacheKey, true, string(cached), false)
+	})
+	h.wait(func(m v1.Message) bool {
+		s, ok := m.(*v1.ServiceStatus)
+		return ok && s.State == v1.ServiceStateActive
+	})
+	hit := firstHit.Load()
+	if hit == 0 {
+		t.Fatal("the cached bridge was never contacted")
+	}
+	if waited := time.Unix(0, hit).Sub(start); waited < settingsGrace {
+		t.Fatalf("the saved settings were applied after %s, before the %s grace", waited, settingsGrace)
+	}
+}
+
+func TestSettingsGraceDefault(t *testing.T) {
+	if settingsGrace != 2*time.Second {
+		t.Fatalf("settings grace = %s, want 2s", settingsGrace)
+	}
+}
