@@ -103,7 +103,14 @@ func TestPinnedTreeReusesTheChatPanelBuilders(t *testing.T) {
 				t.Errorf("%dx%d: no %s", w, h, key)
 			}
 		}
-		for _, id := range []string{"approval-preview:deny", "approval-preview:allow", "approval-preview:allow-session", "composer", "send"} {
+		ids := []string{"composer", "send"}
+		for _, b := range p.Approvals {
+			ids = append(ids, b.ID)
+		}
+		if len(ids) != 5 {
+			t.Fatalf("%dx%d: fixture carries %d approval choices, want 3", w, h, len(ids)-2)
+		}
+		for _, id := range ids {
 			if findID(tree, id) == nil {
 				t.Errorf("%dx%d: no %s", w, h, id)
 			}
@@ -152,7 +159,11 @@ func TestPinnedSurfaceUsesTheHeaderAndComposerRoutes(t *testing.T) {
 	if len(plan) != 1 || plan[0].Path != "/prompt" {
 		t.Errorf("send plan = %+v", plan)
 	}
-	for _, id := range []string{"approval-preview:deny", "approval-preview:allow", "approval-preview:allow-session"} {
+	if len(p.Approvals) != 3 {
+		t.Fatalf("fixture carries %d approval choices, want 3", len(p.Approvals))
+	}
+	for _, b := range p.Approvals {
+		id := b.ID
 		if findID(tree, id) == nil {
 			t.Errorf("no %s on the pinned surface", id)
 		}

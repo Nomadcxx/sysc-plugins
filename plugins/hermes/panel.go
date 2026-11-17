@@ -528,18 +528,10 @@ func approvalCard(p PanelState, inner int) *v1.Node {
 	}
 	title, msg, command := display.Title, display.Message, display.Command
 	content := inner - 2*10
-	choices := p.Approvals
-	if len(choices) == 0 {
-		// A fixture that asked for an approval without runtime state: keep
-		// the card usable, but the real card always carries signed ids.
-		choices = []ApprovalButton{
-			{ID: "approval-preview:deny", Label: "Deny"},
-			{ID: "approval-preview:allow", Label: "Allow"},
-			{ID: "approval-preview:allow-session", Label: "Allow Session"},
-		}
-	}
+	// Only the runtime's signed choices are offered: an unsigned id would
+	// reach no click handler, so a card without them has no buttons.
 	buttons := &v1.Node{Kind: v1.KindRow, Width: content, Height: sectionButtonH, Gap: 8}
-	for _, choice := range choices {
+	for _, choice := range p.Approvals {
 		b := autoButton(choice.ID, choice.Label, choice.Label, "", sectionButtonH)
 		switch {
 		case strings.HasSuffix(choice.ID, ":deny"):

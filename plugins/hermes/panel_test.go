@@ -39,6 +39,14 @@ func basePanel(s StatusKey) PanelState {
 	return p
 }
 
+// fixtureApprovals are the signed choices for a fixture's pending approval,
+// as the entrypoint passes them.
+func fixtureApprovals() []ApprovalButton {
+	return ApprovalButtons(State{Session: SessionInfo{ID: "s1"}, Approval: Approval{Pending: true,
+		ToolName: "terminal", Message: "Run go test ./... in the repository",
+		Request: json.RawMessage(`{"command":"go test ./..."}`)}})
+}
+
 func heavyPanel(s StatusKey, section Section, approval bool) PanelState {
 	p := basePanel(s)
 	p.Messages = nil
@@ -60,6 +68,7 @@ func heavyPanel(s StatusKey, section Section, approval bool) PanelState {
 		p.Summary.ApprovalPending = true
 		p.Summary.ApprovalMessage = "Run go test ./... in the repository"
 		p.ApprovalTool = "terminal"
+		p.Approvals = fixtureApprovals()
 	}
 	return p
 }
@@ -416,6 +425,7 @@ func TestActionErrorKeepsTheTranscriptMinimum(t *testing.T) {
 	p.Summary.ApprovalPending = true
 	p.Summary.ApprovalMessage = "Run go test ./... in the repository"
 	p.ApprovalTool = "terminal"
+	p.Approvals = fixtureApprovals()
 	p.Summary.ToolEvents, p.Summary.RunningTools = 1, 1
 	p.ShowToolActivity = true
 	p.ActionError = "session/create: connection refused"
@@ -795,6 +805,7 @@ func TestPanelShowsTheLastActionError(t *testing.T) {
 				p.Summary.ApprovalPending = true
 				p.Summary.ApprovalMessage = "Run go test ./... in the repository"
 				p.ApprovalTool = "terminal"
+				p.Approvals = fixtureApprovals()
 			}
 			tree := PanelTree(p, size[0], size[1])
 			lintView(t, name, tree, v1.ViewPanel, size[0], size[1])
@@ -866,5 +877,30 @@ func TestApprovalCardFallsBackToTheOldText(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("card %q does not say %q", joined, want)
 		}
+	}
+}
+
+// TestApprovalCardWithoutSignedChoicesOffersNoInertButtons: a card drawn
+// without the runtime's signed choices used to carry approval-preview:* ids,
+// which the entrypoint never routes, so a click did nothing at all. With no
+// signed choices there is nothing to resolve, so the card offers no buttons.
+func TestApprovalCardWithoutSignedChoicesOffersNoInertButtons(t *testing.T) {
+	p := basePanel(StatusAttention)
+	p.Summary.ApprovalPending = true
+	p.Summary.ApprovalMessage = "Run go test ./... in the repository"
+	p.ApprovalTool = "terminal"
+	for name, tree := range map[string]*v1.Node{
+		"panel":  PanelTree(p, 780, 720),
+		"pinned": PinnedTree(p, pinnedWidth, pinnedHeight),
+	} {
+		card := findKey(tree, "approval")
+		if card == nil {
+			t.Fatalf("%s: no approval card", name)
+		}
+		walk(card, func(n *v1.Node) {
+			if n.ID != "" && !strings.HasPrefix(n.ID, "approval:") {
+				t.Errorf("%s: card offers %q, which no click handler resolves", name, n.ID)
+			}
+		})
 	}
 }
