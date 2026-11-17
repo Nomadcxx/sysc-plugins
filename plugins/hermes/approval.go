@@ -52,9 +52,40 @@ func ApprovalButtons(st State) []ApprovalButton {
 		return nil
 	}
 	card := ApprovalCardID(st)
+	offered := offeredChoices(st.Approval)
 	out := make([]ApprovalButton, 0, len(approvalChoices))
 	for _, c := range approvalChoices {
+		if !offered[c.Choice] {
+			continue
+		}
 		out = append(out, ApprovalButton{ID: approvalActionPrefix + card + ":" + c.Action, Label: c.Label})
+	}
+	return out
+}
+
+// offeredChoices is the set of choice values Hermes offers for a, read
+// from the payload it sent. Hermes's tui_gateway puts "choices" on every
+// approval it sends (server.py _approval_request_payload). Without it the
+// same derivation applies: smart_denied offers once and deny; otherwise
+// once, session unless allow_session is false, and deny. "always" has no
+// button on this card.
+func offeredChoices(a Approval) map[string]bool {
+	var req struct {
+		Choices      []string `json:"choices"`
+		AllowSession *bool    `json:"allow_session"`
+		SmartDenied  bool     `json:"smart_denied"`
+	}
+	_ = json.Unmarshal(a.Request, &req)
+	out := map[string]bool{}
+	if len(req.Choices) > 0 {
+		for _, c := range req.Choices {
+			out[c] = true
+		}
+		return out
+	}
+	out["once"], out["deny"] = true, true
+	if !req.SmartDenied && (req.AllowSession == nil || *req.AllowSession) {
+		out["session"] = true
 	}
 	return out
 }
@@ -130,6 +161,16 @@ func approvalChoice(action string) (string, bool) {
 	return "", false
 }
 
+// choiceOffered reports whether the choice a button action sends, deny for
+// an unmapped one as in approvalBody, is offered for a.
+func choiceOffered(a Approval, action string) bool {
+	choice, ok := approvalChoice(action)
+	if !ok {
+		choice, _ = approvalChoice(ApprovalDeny)
+	}
+	return offeredChoices(a)[choice]
+}
+
 // approvalBody is the POST /approval body for one button choice. all is
 // always false and an unmapped action becomes deny, so "denied", "approved",
 // "approve" and an empty choice can never leave the plugin.
@@ -197,7 +238,9 @@ func (s *Service) runApproval(cl approvalClick) {
 	s.mu.Lock()
 	s.stampCardLocked(&fresh)
 	s.mu.Unlock()
-	if !approvalStillShown(fresh, cl.card) {
+	if !approvalStillShown(fresh, cl.card) || !choiceOffered(fresh.Approval, cl.action) {
+		// A choice the request does not offer has no button: the click
+		// came from a card drawn for something else (R4).
 		s.publish(func(v *View) { v.ActionError = MsgApprovalChanged })
 		return
 	}
