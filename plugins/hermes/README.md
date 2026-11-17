@@ -106,7 +106,8 @@ this bridge.
   Settings buttons.
 - **Menu:** Open Hermes, New session, Interrupt, Refresh, Start gateway (Local
   mode only, while it is not running) and Settings. Each item closes the menu.
-- **Chat panel:** transcript, tool activity, inline approval card, sessions
+- **Chat panel:** transcript (the last 200 messages, paged with Older, Newer
+  and Latest; see *Host gaps*), tool activity, inline approval card, sessions
   accordion with Resume, model picker with Apply and Persist, New Session,
   Reset, One-shot, Send and Interrupt, Pin and Close.
 - **Settings panel:** mode and connection line (host:port and token source),
@@ -239,9 +240,12 @@ These are host limitations, not plugin bugs:
    names.
 4. There is no select node. Dropdown-like choices become provider buttons and a
    model list, with a filter when the list is long.
-5. There is no plugin scroll control. The transcript is a list that starts at
-   its top; the scroll spike that would choose a strategy has **not** been run
-   (see ACCEPTANCE.md).
+5. There is no plugin scroll control: the host keeps no scroll position for a
+   plugin list across an update and sends the plugin no wheel events. The
+   transcript therefore pages instead of scrolling. It follows the newest line,
+   **Older** and **Newer** move it a screen at a time, and **Latest** (or
+   sending a prompt) brings it back to the tail. A paged-back transcript stays
+   where it is while a reply streams in. The mouse wheel does not move it.
 6. There is no settings write. Detected values and pin state live in plugin
    state, and host-rendered settings fields do not show the detected captions.
 7. There is no overlay badge on a bar icon. The status dot is a status icon.

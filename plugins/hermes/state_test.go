@@ -99,8 +99,10 @@ func TestNormalizeFillsMissingAndKeepsNewest(t *testing.T) {
 	}
 
 	s = State{}
-	for i := 0; i < 30; i++ {
-		s.Messages = append(s.Messages, Message{ID: fmt.Sprintf("m%02d", i), Role: "user", Text: fmt.Sprint(i)})
+	// The transcript pages through every kept message, so the cap is the
+	// history Older can reach, not a node budget.
+	for i := 0; i < 206; i++ {
+		s.Messages = append(s.Messages, Message{ID: fmt.Sprintf("m%03d", i), Role: "user", Text: fmt.Sprint(i)})
 	}
 	for i := 0; i < 12; i++ {
 		s.Events = append(s.Events, Event{ID: fmt.Sprintf("e%02d", i)})
@@ -109,8 +111,8 @@ func TestNormalizeFillsMissingAndKeepsNewest(t *testing.T) {
 		s.Sessions = append(s.Sessions, SessionSummary{ID: fmt.Sprintf("s%02d", i)})
 	}
 	s.Normalize()
-	if len(s.Messages) != 24 || s.MessageCount != 30 || s.Messages[0].ID != "m06" || s.Messages[23].ID != "m29" {
-		t.Fatalf("messages: kept %d (%s..%s), count %d; want the newest 24 and 30", len(s.Messages), s.Messages[0].ID, s.Messages[len(s.Messages)-1].ID, s.MessageCount)
+	if len(s.Messages) != 200 || s.MessageCount != 206 || s.Messages[0].ID != "m006" || s.Messages[199].ID != "m205" {
+		t.Fatalf("messages: kept %d (%s..%s), count %d; want the newest 200 and 206", len(s.Messages), s.Messages[0].ID, s.Messages[len(s.Messages)-1].ID, s.MessageCount)
 	}
 	if len(s.Events) != 8 || s.Events[0].ID != "e04" || s.Events[7].ID != "e11" {
 		t.Fatalf("events: kept %d starting %s; want the newest 8", len(s.Events), s.Events[0].ID)

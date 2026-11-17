@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -1944,4 +1945,69 @@ func TestModelApplyKeepsTheLiveModel(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Apply never posted /model")
 	}
+}
+
+// treeIDWithPrefix is the first node ID in the tree that starts with prefix.
+func treeIDWithPrefix(n *v1.Node, prefix string) string {
+	if n == nil {
+		return ""
+	}
+	if strings.HasPrefix(n.ID, prefix) {
+		return n.ID
+	}
+	for _, c := range n.Children {
+		if id := treeIDWithPrefix(c, prefix); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+// TestTranscriptPagesBackAndReturnsToTheTail: Older moves the chat panel's
+// transcript back, Latest returns it, and a sent prompt brings a paged-back
+// transcript back to the newest line.
+func TestTranscriptPagesBackAndReturnsToTheTail(t *testing.T) {
+	var reply strings.Builder
+	for i := 1; i <= 60; i++ {
+		fmt.Fprintf(&reply, "Line %02d of the reply.\n", i)
+	}
+	state := idleState("example-model")
+	state["session"] = map[string]any{"id": "s1"}
+	state["messages"] = []map[string]any{
+		{"id": "m1", "role": "user", "text": "Stream a long reply."},
+		{"id": "m2", "role": "assistant", "text": reply.String()},
+	}
+	host, port := fakeRemoteState(t, state)
+	h, _ := startPlugin(t)
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(host, port)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Width: 780, Height: 720}); err != nil {
+		t.Fatal(err)
+	}
+	snap := h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool {
+		return strings.Contains(treeText(s.Root), "Line 60 of")
+	})
+	older := treeIDWithPrefix(snap.Root, "transcript-older:")
+	if older == "" {
+		t.Fatal("no Older control on a long transcript")
+	}
+	clickNode(t, h, "panel-1", snap.Revision, older)
+	snap = h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool {
+		return !strings.Contains(treeText(s.Root), "Line 60 of") && treeHasID(s.Root, "transcript-latest")
+	})
+	clickNode(t, h, "panel-1", snap.Revision, "transcript-latest")
+	snap = h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool {
+		return strings.Contains(treeText(s.Root), "Line 60 of")
+	})
+
+	clickNode(t, h, "panel-1", snap.Revision, treeIDWithPrefix(snap.Root, "transcript-older:"))
+	snap = h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool { return treeHasID(s.Root, "transcript-latest") })
+	if err := h.send(&v1.InputEvent{ViewID: "panel-1", Revision: snap.Revision, Node: "composer",
+		Event: v1.EventSubmit, Text: "and another"}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool {
+		return strings.Contains(treeText(s.Root), "Line 60 of") && !treeHasID(s.Root, "transcript-latest")
+	})
 }

@@ -63,6 +63,7 @@ type viewState struct {
 	section    hermes.Section
 	picker     hermes.ModelPicker
 	composer   hermes.ComposerState
+	transcript hermes.TranscriptAnchor
 	sessions   hermes.SessionsSnapshot
 	draft      string
 	testResult string
@@ -849,6 +850,8 @@ func (a *app) send(id, text string) {
 	}
 	v.composer = hermes.AfterSend(v.composer)
 	v.draft = ""
+	// The reply arrives at the tail, so a paged-back transcript follows it.
+	v.transcript = hermes.TranscriptAnchor{}
 	a.republish(id)
 }
 
@@ -1031,6 +1034,11 @@ func (a *app) input(m *v1.InputEvent) {
 			a.svc.Submit("/model", req)
 		}
 		a.republish(m.ViewID)
+	case strings.HasPrefix(m.Node, "transcript-"):
+		if anchor, ok := hermes.TranscriptTarget(m.Node, state.Messages); ok {
+			v.transcript = anchor
+			a.republish(m.ViewID)
+		}
 	case m.Node == "one-shot":
 		v.composer.OneShot = !v.composer.OneShot
 		a.republish(m.ViewID)
@@ -1196,6 +1204,7 @@ func panelStateFor(v *viewState, view hermes.View, env renderEnv) hermes.PanelSt
 		Picker:           hermes.SeedPicker(v.picker, provider, model),
 		Composer:         v.composer,
 		Section:          v.section,
+		Transcript:       v.transcript,
 		Avatar:           env.avatar,
 		Now:              env.now,
 		ActionError:      strings.TrimSpace(view.ActionError),

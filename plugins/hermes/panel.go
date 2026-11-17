@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
@@ -26,12 +25,10 @@ const (
 	panelAvatarSize = 40
 	stripH          = 32
 
-	maxTranscriptMessages = 24
-	maxTranscriptEvents   = 8
-	maxBubbleLines        = 12
-	bubblePad             = 8
-	bubbleGap             = 2
-	transcriptGap         = 6
+	maxTranscriptEvents = 8
+	bubblePad           = 8
+	bubbleGap           = 2
+	transcriptGap       = 6
 
 	iconUser      = "person"
 	iconHermes    = "ai-usage"
@@ -124,8 +121,11 @@ type PanelState struct {
 	Picker           ModelPicker
 	Composer         ComposerState
 	Section          Section
-	Avatar           string
-	Now              time.Time
+	// Transcript is where a paged-back transcript ends; zero follows the
+	// newest line.
+	Transcript TranscriptAnchor
+	Avatar     string
+	Now        time.Time
 	// ActionError is the last failed action; it is said once, under the
 	// approval card while one is pending, otherwise above the composer.
 	ActionError string
@@ -597,153 +597,6 @@ func actionErrorRow(p PanelState, inner int) *v1.Node {
 			{Kind: v1.KindText, Text: clip(text, (inner-12-24)/8), Size: "caption", Tone: v1.ToneError},
 		},
 	}
-}
-
-func transcript(p PanelState, inner, height int) *v1.Node {
-	if len(p.Messages) == 0 {
-		return emptyTranscript(p, inner, height)
-	}
-	list := &v1.Node{Kind: v1.KindList, Key: "transcript", Width: inner, Height: height, Gap: transcriptGap}
-	msgs := p.Messages
-	if len(msgs) > maxTranscriptMessages {
-		msgs = msgs[len(msgs)-maxTranscriptMessages:]
-		list.Children = append(list.Children, &v1.Node{
-			Kind: v1.KindText, Key: "transcript-caption", Text: "Showing the last 24 messages",
-			Size: "caption", Tone: v1.ToneSubtle, Height: lineHeight,
-		})
-	}
-	for _, m := range msgs {
-		list.Children = append(list.Children, bubble(m, inner))
-	}
-	if p.ShowToolActivity {
-		events := p.Events
-		if len(events) > maxTranscriptEvents {
-			events = events[len(events)-maxTranscriptEvents:]
-		}
-		for _, e := range events {
-			list.Children = append(list.Children, eventRow(e, inner))
-		}
-	}
-	return list
-}
-
-func emptyTranscript(p PanelState, inner, height int) *v1.Node {
-	lines := []string{"No active session", "Send a message to start one."}
-	tone := v1.ToneSubtle
-	icon := iconChat
-	switch {
-	case p.Summary.Status.Key == StatusOffline:
-		lines = []string{"Bridge offline", strings.TrimSpace(p.Summary.BridgeError)}
-		tone, icon = v1.ToneError, iconStartGate
-	case p.SessionID != "":
-		lines = []string{"No messages yet", "Ask Hermes anything below."}
-	}
-	col := &v1.Node{Kind: v1.KindColumn, Key: "transcript", Width: inner, Height: height, Gap: 6, Children: []*v1.Node{
-		{Kind: v1.KindIcon, Icon: icon, IconSize: 28, Tone: tone},
-	}}
-	for i, l := range lines {
-		if l == "" {
-			continue
-		}
-		n := &v1.Node{Kind: v1.KindText, Text: clip(l, inner/8), Size: "caption", Tone: v1.ToneSubtle}
-		if i == 0 {
-			n.Bold, n.Size, n.Tone = true, "label", tone
-		}
-		col.Children = append(col.Children, n)
-	}
-	return col
-}
-
-// bubble is one message. Text never wraps in the host, so lines are split
-// here to the bubble's width and capped at twelve.
-func bubble(m Message, inner int) *v1.Node {
-	fill, icon, who := "card", iconHermes, "Hermes"
-	if m.Role == "user" {
-		fill, icon, who = "accent", iconUser, "You"
-	}
-	content := inner - 2*bubblePad
-	lines := wrapLines(m.Text, content/8, maxBubbleLines)
-	b := &v1.Node{
-		Kind: v1.KindColumn, Key: "msg:" + m.ID, Fill: fill, Radius: 10,
-		Width: inner, Padding: bubblePad, Gap: bubbleGap,
-		Children: []*v1.Node{{Kind: v1.KindRow, Height: lineHeight, Gap: 6, Children: []*v1.Node{
-			{Kind: v1.KindIcon, Icon: icon, IconSize: 14},
-			{Kind: v1.KindText, Text: who, Bold: true, Size: "caption"},
-		}}},
-	}
-	for _, l := range lines {
-		b.Children = append(b.Children, &v1.Node{Kind: v1.KindText, Text: l, Height: lineHeight})
-	}
-	n := len(b.Children)
-	b.Height = 2*bubblePad + n*lineHeight + (n-1)*bubbleGap
-	return b
-}
-
-func eventRow(e ToolEvent, inner int) *v1.Node {
-	text := e.Name
-	if e.Text != "" {
-		text += ": " + e.Text
-	}
-	return &v1.Node{
-		Kind: v1.KindRow, Key: "event:" + e.ID, Width: inner, Height: lineHeight, Gap: 6,
-		Children: []*v1.Node{
-			{Kind: v1.KindIcon, Icon: iconEvent, IconSize: 14, Tone: v1.ToneSubtle},
-			{Kind: v1.KindText, Text: clip(text, (inner-20)/8), Size: "caption", Tone: v1.ToneSubtle},
-		},
-	}
-}
-
-// wrapLines splits text on newlines and then on words to maxBytes a line,
-// breaking a word longer than a line, and ends with an ellipsis past
-// maxLines.
-func wrapLines(text string, maxBytes, maxLines int) []string {
-	var out []string
-	for _, para := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
-		line := ""
-		for _, w := range strings.Fields(para) {
-			for len(w) > maxBytes {
-				if line != "" {
-					out = append(out, line)
-					line = ""
-				}
-				cut := maxBytes
-				for cut > 0 && !utf8.RuneStart(w[cut]) {
-					cut--
-				}
-				out = append(out, w[:cut])
-				w = w[cut:]
-			}
-			switch {
-			case line == "":
-				line = w
-			case len(line)+1+len(w) <= maxBytes:
-				line += " " + w
-			default:
-				out = append(out, line)
-				line = w
-			}
-		}
-		if line != "" {
-			out = append(out, line)
-		}
-	}
-	if len(out) == 0 {
-		out = []string{""}
-	}
-	if len(out) > maxLines {
-		const more = " …"
-		out = out[:maxLines]
-		last := out[maxLines-1]
-		cut := len(last)
-		if cut > maxBytes-len(more) {
-			cut = maxBytes - len(more)
-		}
-		for cut > 0 && cut < len(last) && !utf8.RuneStart(last[cut]) {
-			cut--
-		}
-		out[maxLines-1] = last[:cut] + more
-	}
-	return out
 }
 
 func panelComposer(p PanelState, running bool, inner int) *v1.Node {

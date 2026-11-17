@@ -132,8 +132,8 @@ func TestPanelNodeBudgetWithEveryCap(t *testing.T) {
 				}
 			}
 		}
-		if bubbles != 24 {
-			t.Errorf("section %q: %d message bubbles counted, want the 24 the budget is for", sec, bubbles)
+		if bubbles == 0 || findKey(tree, "msg:m29") == nil {
+			t.Errorf("section %q: %d message bubbles, want the newest message shown", sec, bubbles)
 		}
 		if sec != SectionNone && findKey(tree, "section-body:"+string(sec)) == nil {
 			t.Errorf("section %q: body missing from the budgeted tree", sec)
@@ -494,16 +494,16 @@ func TestTranscriptBubblesAndEvents(t *testing.T) {
 	p.Messages = append(p.Messages, Message{ID: "m3", Role: "tool-ish", Text: "unknown role"})
 	tree := PanelTree(p, 780, 720)
 	tr := findKey(tree, "transcript")
-	if tr == nil || tr.Kind != v1.KindList {
+	if tr == nil || tr.Kind != v1.KindColumn {
 		t.Fatalf("transcript = %+v", tr)
 	}
 	wantFill := []string{"accent", "card", "card"}
 	wantIcon := []string{"person", "ai-usage", "ai-usage"}
 	wantWho := []string{"You", "Hermes", "Hermes"}
-	if len(tr.Children) != 3 {
-		t.Fatalf("transcript has %d children", len(tr.Children))
+	if len(tr.Children) != 4 || tr.Children[0].Key != "transcript-spacer" {
+		t.Fatalf("transcript has %d children, want the spacer and 3 bubbles", len(tr.Children))
 	}
-	for i, b := range tr.Children {
+	for i, b := range tr.Children[1:] {
 		if b.Fill != wantFill[i] || b.Key != "msg:"+p.Messages[i].ID {
 			t.Errorf("bubble %d fill %q key %q", i, b.Fill, b.Key)
 		}
@@ -520,7 +520,7 @@ func TestTranscriptBubblesAndEvents(t *testing.T) {
 			t.Errorf("bubble %d texts = %v", i, got)
 		}
 	}
-	if got := strings.Join(texts(tr.Children[1]), "|"); got != "Hermes|The notes are tidied.|The tests need a shell command." {
+	if got := strings.Join(texts(tr.Children[2]), "|"); got != "Hermes|The notes are tidied.|The tests need a shell command." {
 		t.Errorf("newlines should split lines: %q", got)
 	}
 	heavy := heavyPanel(StatusIdle, SectionNone, false)
@@ -544,14 +544,11 @@ func TestTranscriptBubblesAndEvents(t *testing.T) {
 			}
 		}
 	}
-	if bubbles != 24 || events != 8 {
-		t.Errorf("heavy transcript: %d bubbles %d events, want 24 and 8", bubbles, events)
+	if bubbles == 0 || events == 0 || events > 8 {
+		t.Errorf("heavy transcript: %d bubbles %d events", bubbles, events)
 	}
-	if !strings.Contains(strings.Join(texts(htr), "|"), "Showing the last 24 messages") {
-		t.Error("missing the last-24 caption")
-	}
-	if findKey(htr, "msg:m5") != nil || findKey(htr, "msg:m6") == nil {
-		t.Error("transcript should keep the newest 24 messages")
+	if findKey(htr, "msg:m29") == nil || findKey(htr, "event:e7") == nil {
+		t.Error("transcript should end with the newest message and tool event")
 	}
 	limit := (640 - 2*14) / 8
 	walk(htr, func(n *v1.Node) {
@@ -632,8 +629,8 @@ func TestPanelGlyphsAreInTheCatalogue(t *testing.T) {
 	_ = time.Second
 	seen := map[string]bool{}
 	// A busy panel shows Interrupt and an idle one Send, so take both.
-	for _, s := range []StatusKey{StatusBusy, StatusIdle} {
-		p := heavyPanel(s, SectionModel, true)
+	// The base panel's short conversation shows both bubble glyphs.
+	for _, p := range []PanelState{heavyPanel(StatusBusy, SectionModel, true), heavyPanel(StatusIdle, SectionModel, true), basePanel(StatusIdle)} {
 		walk(PanelTree(p, 780, 720), func(n *v1.Node) {
 			if n.Icon != "" {
 				seen[n.Icon] = true
@@ -683,28 +680,22 @@ func TestWrapLinesShortLastLineDoesNotPanic(t *testing.T) {
 }
 
 // TestLongReplyThroughBubbleDoesNotPanic is the live shape: a 60-line
-// streamed reply rendered in a transcript bubble at the chat panel's real
-// width.
+// streamed reply rendered in the transcript at the chat panel's real sizes.
 func TestLongReplyThroughBubbleDoesNotPanic(t *testing.T) {
 	var b strings.Builder
 	for i := 1; i <= 60; i++ {
 		fmt.Fprintf(&b, "Line %02d of the long streamed reply for the scroll spike.\n", i)
 	}
-	inner := 780 - 2*panelPad
-	bub := bubble(Message{ID: "m1", Role: "assistant", Text: b.String()}, inner)
-	lines := texts(bub)
-	if len(lines) < 2 {
-		t.Fatalf("bubble texts = %q", lines)
-	}
-	body := lines[1:]
-	if len(body) != maxBubbleLines {
-		t.Fatalf("bubble body has %d lines: %q", len(body), body)
-	}
-	if !strings.HasSuffix(body[len(body)-1], " …") {
-		t.Errorf("last bubble line = %q, want the overflow marker", body[len(body)-1])
-	}
-	if !utf8.ValidString(strings.Join(body, "\n")) {
-		t.Errorf("bubble text is not valid UTF-8: %q", body)
+	for _, size := range panelSizes {
+		p := basePanel(StatusIdle)
+		p.Messages = []Message{{ID: "m1", Role: "assistant", Text: b.String()}}
+		body := texts(findKey(PanelTree(p, size[0], size[1]), "msg:m1"))
+		if len(body) < 2 || body[len(body)-1] != "Line 60 of the long streamed reply for the scroll spike." {
+			t.Fatalf("%v: bubble texts = %q", size, body)
+		}
+		if !utf8.ValidString(strings.Join(body, "\n")) {
+			t.Errorf("%v: bubble text is not valid UTF-8: %q", size, body)
+		}
 	}
 }
 

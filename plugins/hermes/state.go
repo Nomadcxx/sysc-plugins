@@ -12,7 +12,7 @@ import (
 
 // Normalization limits, from the design's State and status section.
 const (
-	MaxMessages     = 24
+	MaxMessages     = 200
 	MaxEvents       = 8
 	MaxSessions     = 10
 	MaxMessageBytes = 16 << 10
