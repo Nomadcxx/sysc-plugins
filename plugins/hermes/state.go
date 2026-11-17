@@ -94,6 +94,11 @@ type Approval struct {
 	ToolName  string          `json:"tool_name"`
 	Request   json.RawMessage `json:"request"`
 	RequestID string          `json:"request_id"`
+	// Nonce names a request that came without a request_id. The service
+	// gives it when it first sees the card and keeps it while the card
+	// stays up, so two identical id-less requests get distinct cards. It
+	// never leaves the plugin.
+	Nonce string `json:"-"`
 }
 
 // Usage is usage{input,output,total,cost_usd}; CostUSD is nil when unknown.

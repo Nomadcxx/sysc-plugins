@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -213,10 +214,6 @@ type Options struct {
 	// DefaultScript is the bundled bridge, used when bridge_script is blank.
 	DefaultScript string
 	QueueSize     int
-	// ApprovalGuard is how long a click on an approval card that has just
-	// replaced another one is refused, because it was most likely aimed at
-	// the card it replaced.
-	ApprovalGuard time.Duration
 }
 
 // DefaultOptions are the design's numbers.
@@ -232,7 +229,6 @@ func DefaultOptions() Options {
 		WatchPoll:     DefaultWatchPoll,
 		SpawnAttempts: 3,
 		QueueSize:     32,
-		ApprovalGuard: time.Second,
 	}
 }
 
@@ -267,9 +263,6 @@ func (o Options) withDefaults() Options {
 	}
 	if o.QueueSize <= 0 {
 		o.QueueSize = d.QueueSize
-	}
-	if o.ApprovalGuard <= 0 {
-		o.ApprovalGuard = d.ApprovalGuard
 	}
 	return o
 }
@@ -369,13 +362,10 @@ type Service struct {
 	prevRunning bool
 	haveState   bool
 
-	// The approval card on screen (ApprovalSig), when it first showed, and
-	// whether it replaced another card within the guard (O1). cardGoneAt is
-	// when the last card disappeared.
-	cardSig      string
-	cardAt       time.Time
-	cardReplaced bool
-	cardGoneAt   time.Time
+	// The id-less approval card on screen (ApprovalSig) and the nonce it
+	// was given when it first showed (O1).
+	cardSig   string
+	cardNonce string
 
 	oneID     uint64
 	oneCancel context.CancelFunc
@@ -652,7 +642,7 @@ func (s *Service) reset(set Settings) {
 	s.mu.Lock()
 	s.bridge = nil
 	s.haveState, s.prevRunning, s.approvalSig = false, false, ""
-	s.cardSig, s.cardAt, s.cardReplaced, s.cardGoneAt = "", time.Time{}, false, time.Time{}
+	s.cardSig, s.cardNonce = "", ""
 	if !set.ClientOnly {
 		s.adoptedLocal = false
 	}
@@ -707,7 +697,7 @@ func (s *Service) publishState(st State) {
 	} else {
 		s.approvalSig = ""
 	}
-	s.trackCardLocked(st, time.Now())
+	s.stampCardLocked(&st)
 	if s.haveState && s.prevRunning && !st.Session.Running && set.NotifyOnComplete {
 		notes = append(notes, [2]string{"Hermes finished", ""})
 	}
@@ -734,30 +724,27 @@ func (s *Service) publishConn(bridgeStatus, msg string) {
 	})
 }
 
-// trackCardLocked records when the approval card in st first showed and
-// whether it took the place of another card within the guard. s.mu is held.
-func (s *Service) trackCardLocked(st State, now time.Time) {
-	if !st.Approval.Pending {
-		if s.cardSig != "" {
-			s.cardSig, s.cardReplaced, s.cardGoneAt = "", false, now
-		}
+// stampCardLocked gives a pending approval without a request_id the nonce
+// of its card: a fresh one when the card first shows, the same one while it
+// stays up. A request Hermes names needs none. s.mu is held.
+func (s *Service) stampCardLocked(st *State) {
+	if !st.Approval.Pending || st.Approval.RequestID != "" {
+		s.cardSig, s.cardNonce = "", ""
 		return
 	}
-	sig := ApprovalSig(st)
-	if sig == s.cardSig {
-		return
+	if sig := ApprovalSig(*st); sig != s.cardSig || s.cardNonce == "" {
+		s.cardSig, s.cardNonce = sig, newCardNonce()
 	}
-	recentlyGone := !s.cardGoneAt.IsZero() && now.Sub(s.cardGoneAt) < s.opts.ApprovalGuard
-	s.cardReplaced = s.cardSig != "" || recentlyGone
-	s.cardSig, s.cardAt = sig, now
+	st.Approval.Nonce = s.cardNonce
 }
 
-// clickTooSoon reports whether a click at at on the card sig landed within
-// the guard after that card replaced another one.
-func (s *Service) clickTooSoon(sig string, at time.Time) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.cardReplaced && s.cardSig == sig && at.Sub(s.cardAt) < s.opts.ApprovalGuard
+// newCardNonce is 64 random bits in hex.
+func newCardNonce() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err) // crypto/rand.Read does not fail on supported platforms
+	}
+	return hex.EncodeToString(b[:])
 }
 
 func approvalSignature(a Approval) string {

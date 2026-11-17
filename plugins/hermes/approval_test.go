@@ -38,17 +38,17 @@ func TestApprovalButtonsMapOnlyHonoredChoices(t *testing.T) {
 	wantChoices := []string{"deny", "once", "session"}
 	wantAll := []bool{false, false, false}
 
-	sig := ApprovalSig(st)
+	card := ApprovalCardID(st)
 	for i, b := range buttons {
 		if b.Label != wantLabels[i] {
 			t.Errorf("button %d label = %q, want %q", i, b.Label, wantLabels[i])
 		}
-		wantID := "approval:" + sig + ":" + wantActions[i]
+		wantID := "approval:" + card + ":" + wantActions[i]
 		if b.ID != wantID {
 			t.Errorf("button %d id = %q, want %q", i, b.ID, wantID)
 		}
-		actionSig, action, ok := parseApprovalAction(b.ID)
-		if !ok || actionSig != sig || action != wantActions[i] {
+		actionCard, action, ok := parseApprovalAction(b.ID)
+		if !ok || actionCard != card || action != wantActions[i] {
 			t.Errorf("button %d id %q does not parse back", i, b.ID)
 		}
 		body := approvalBody(action, st)
@@ -280,76 +280,101 @@ func TestApprovalClick409ShowsMessageAndDoesNotRetry(t *testing.T) {
 	}
 }
 
-// replaceApproval shows a second request on the bridge and waits until the
-// service publishes it.
-func replaceApproval(t *testing.T, h *harness, remote *fakeBridge, next *Approval) State {
+// showApproval puts next on the bridge and waits until the service
+// publishes the card for it (or no card when next is nil).
+func showApproval(t *testing.T, h *harness, remote *fakeBridge, next *Approval) State {
 	t.Helper()
 	remote.set(func(fb *fakeBridge) { fb.approval = next })
 	h.svc.Refresh()
-	v := h.waitFor("replaced card", func(v View) bool {
+	v := h.waitFor("card shown", func(v View) bool {
+		if next == nil {
+			return !v.State.Approval.Pending
+		}
 		return v.State.Approval.Pending && v.State.Approval.RequestID == next.RequestID
 	})
 	return v.State
 }
 
-func secondApproval() *Approval {
+// sameRequestNewID is pendingApproval's request under another request_id:
+// the same tool, message and request body, a different queue entry.
+func sameRequestNewID(id string) *Approval {
 	a := pendingApproval()
-	a.Message = "rm -rf src?"
-	a.Request = json.RawMessage(`{"command":"rm -rf src","id":"req-2"}`)
-	a.RequestID = "req-2"
+	a.Request = json.RawMessage(`{"command":"rm -rf build"}`)
+	a.RequestID = id
 	return a
 }
 
-// TestApprovalClickRightAfterAReplacementPostsNothing is O1: the card was
-// replaced while the pointer was on its way, so the click names the new
-// request. It must not resolve it; the stale message shows instead, and a
-// click once the card has settled resolves the request it was rendered for.
-func TestApprovalClickRightAfterAReplacementPostsNothing(t *testing.T) {
+// TestApprovalClickWithAStaleRequestIDPostsNothing is O1: a click names the
+// request its card was rendered for. When the bridge has moved on to
+// another request, even one that reads exactly the same, the click is stale.
+func TestApprovalClickWithAStaleRequestIDPostsNothing(t *testing.T) {
 	remote := newFakeBridge(t, "remote-tok")
-	h, _ := approvalHarness(t, remote, pendingApproval())
-	st := replaceApproval(t, h, remote, secondApproval())
+	h, st := approvalHarness(t, remote, sameRequestNewID("req-1"))
+	old := ApprovalButtons(st)[1].ID
+	showApproval(t, h, remote, sameRequestNewID("req-2"))
 
-	h.svc.ApprovalClick(ApprovalButtons(st)[1].ID)
+	h.svc.ApprovalClick(old)
 	v := h.waitFor("changed message", func(v View) bool { return v.ActionError == MsgApprovalChanged })
 	if v.ActionError != "The approval changed; check the card again" {
 		t.Fatalf("message = %q", v.ActionError)
 	}
 	time.Sleep(80 * time.Millisecond)
 	if n := remote.count("/approval"); n != 0 {
-		t.Fatalf("a click on a card replaced just before it posted %d approvals", n)
+		t.Fatalf("a click rendered for req-1 posted %d approvals for req-2", n)
 	}
+}
 
-	time.Sleep(DefaultOptions().ApprovalGuard)
+// TestApprovalClickWithTheMatchingRequestIDPosts: a click on the card for
+// the pending request resolves that request, at once, with no wait.
+func TestApprovalClickWithTheMatchingRequestIDPosts(t *testing.T) {
+	remote := newFakeBridge(t, "remote-tok")
+	h, _ := approvalHarness(t, remote, sameRequestNewID("req-1"))
+	st := showApproval(t, h, remote, sameRequestNewID("req-2"))
+
 	h.svc.ApprovalClick(ApprovalButtons(st)[1].ID)
 	waitUntil(t, "approval posted", func() bool { return remote.count("/approval") == 1 })
 	for _, r := range remote.requests() {
 		if r.Path == "/approval" && r.Body != `{"all":false,"choice":"once","request_id":"req-2"}` {
-			t.Fatalf("/approval body = %s, want the replaced card's request", r.Body)
+			t.Fatalf("/approval body = %s, want req-2", r.Body)
 		}
+	}
+	if v := h.svc.Snapshot(); v.ActionError != "" {
+		t.Fatalf("action error after a matching click: %q", v.ActionError)
 	}
 }
 
-// TestApprovalClickRightAfterAGapReplacementPostsNothing covers the live
-// order: the old card is resolved, the card disappears, and the next request
-// appears a moment later under the pointer.
-func TestApprovalClickRightAfterAGapReplacementPostsNothing(t *testing.T) {
+// TestIdenticalApprovalsWithoutRequestIDGetDistinctCards: a bridge that
+// sends no request_id can show the same request twice in a row. Each card
+// gets its own nonce when the service first sees it, so a click on the
+// first card cannot resolve the second; a card keeps its nonce while it
+// stays up.
+func TestIdenticalApprovalsWithoutRequestIDGetDistinctCards(t *testing.T) {
 	remote := newFakeBridge(t, "remote-tok")
-	h, _ := approvalHarness(t, remote, pendingApproval())
-	remote.set(func(fb *fakeBridge) { fb.approval = nil })
-	h.svc.Refresh()
-	h.waitFor("card gone", func(v View) bool { return !v.State.Approval.Pending })
-	st := replaceApproval(t, h, remote, secondApproval())
+	h, first := approvalHarness(t, remote, sameRequestNewID(""))
+	old := ApprovalButtons(first)[1].ID
 
-	h.svc.ApprovalClick(ApprovalButtons(st)[1].ID)
+	before := remote.count("/state")
+	h.svc.Refresh()
+	waitUntil(t, "another poll", func() bool { return remote.count("/state") > before })
+	time.Sleep(40 * time.Millisecond)
+	if id := ApprovalButtons(h.svc.Snapshot().State)[1].ID; id != old {
+		t.Fatalf("the same card changed id across polls: %q then %q", old, id)
+	}
+
+	showApproval(t, h, remote, nil)
+	second := showApproval(t, h, remote, sameRequestNewID(""))
+	fresh := ApprovalButtons(second)[1].ID
+	if fresh == old {
+		t.Fatalf("two identical id-less requests share the card id %q", fresh)
+	}
+
+	h.svc.ApprovalClick(old)
 	h.waitFor("changed message", func(v View) bool { return v.ActionError == MsgApprovalChanged })
 	time.Sleep(80 * time.Millisecond)
 	if n := remote.count("/approval"); n != 0 {
-		t.Fatalf("a click on a card that just replaced another posted %d approvals", n)
+		t.Fatalf("a click on the first card posted %d approvals", n)
 	}
-}
 
-func TestApprovalGuardDefault(t *testing.T) {
-	if got := DefaultOptions().ApprovalGuard; got != time.Second {
-		t.Fatalf("default approval guard = %s, want 1s", got)
-	}
+	h.svc.ApprovalClick(fresh)
+	waitUntil(t, "approval posted", func() bool { return remote.count("/approval") == 1 })
 }

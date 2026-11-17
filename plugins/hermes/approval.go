@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"time"
 )
 
 // Approval button actions, as they appear in the action ID.
@@ -38,9 +37,9 @@ var approvalChoices = []struct {
 	{ApprovalAllowSession, "Allow Session", "session"},
 }
 
-// ApprovalButton is one card button: the node ID carries the pending
-// request's signature, so a click from an older card cannot resolve a newer
-// request.
+// ApprovalButton is one card button: the node ID carries the card ID of the
+// request it was rendered for, so a click from an older card cannot resolve
+// a newer request.
 type ApprovalButton struct {
 	ID    string
 	Label string
@@ -52,12 +51,31 @@ func ApprovalButtons(st State) []ApprovalButton {
 	if !st.Approval.Pending {
 		return nil
 	}
-	sig := ApprovalSig(st)
+	card := ApprovalCardID(st)
 	out := make([]ApprovalButton, 0, len(approvalChoices))
 	for _, c := range approvalChoices {
-		out = append(out, ApprovalButton{ID: approvalActionPrefix + sig + ":" + c.Action, Label: c.Label})
+		out = append(out, ApprovalButton{ID: approvalActionPrefix + card + ":" + c.Action, Label: c.Label})
 	}
 	return out
+}
+
+// ApprovalCardID names the request a card was rendered for: a digest of
+// Hermes's request_id, or of the nonce the service gave a request that came
+// without one (O1). The digest keeps an arbitrary bridge-sent id out of the
+// node ID. Only a state that never passed through the service has neither,
+// and falls back to the content signature.
+func ApprovalCardID(st State) string {
+	var key string
+	switch a := st.Approval; {
+	case a.RequestID != "":
+		key = "request\x00" + a.RequestID
+	case a.Nonce != "":
+		key = "nonce\x00" + a.Nonce
+	default:
+		return ApprovalSig(st)
+	}
+	sum := sha256.Sum256([]byte(st.Session.ID + "\x00" + key))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // ApprovalSig is the first 12 hex digits of SHA-256 over the session ID, the
@@ -88,17 +106,17 @@ func canonicalRequest(raw json.RawMessage) string {
 	return string(canonical)
 }
 
-// parseApprovalAction splits approval:<sig>:<action>.
-func parseApprovalAction(id string) (sig, action string, ok bool) {
+// parseApprovalAction splits approval:<card>:<action>.
+func parseApprovalAction(id string) (card, action string, ok bool) {
 	rest, found := strings.CutPrefix(id, approvalActionPrefix)
 	if !found {
 		return "", "", false
 	}
-	sig, action, found = strings.Cut(rest, ":")
-	if !found || sig == "" || action == "" {
+	card, action, found = strings.Cut(rest, ":")
+	if !found || card == "" || action == "" {
 		return "", "", false
 	}
-	return sig, action, true
+	return card, action, true
 }
 
 // approvalChoice is the table's body value for one button action, and
@@ -129,28 +147,27 @@ func approvalBody(action string, st State) map[string]any {
 	return body
 }
 
-// approvalStillShown reports whether sig names the pending approval in st.
-func approvalStillShown(st State, sig string) bool {
-	return st.Approval.Pending && ApprovalSig(st) == sig
+// approvalStillShown reports whether card names the pending approval in st.
+func approvalStillShown(st State, card string) bool {
+	return st.Approval.Pending && ApprovalCardID(st) == card
 }
 
 // approvalClick is one parsed button press, handled on the action worker.
 type approvalClick struct {
-	sig    string
+	card   string
 	action string
-	at     time.Time
 }
 
-// ApprovalClick routes one approval:<sig>:<action> click to the action
-// worker. The worker checks the signature against the cached card, fetches
+// ApprovalClick routes one approval:<card>:<action> click to the action
+// worker. The worker checks the card ID against the cached card, fetches
 // /state once more, checks again and only then posts. These checks are
 // defense in depth for a bridge that is not the bundled copy.
 func (s *Service) ApprovalClick(actionID string) {
-	sig, action, ok := parseApprovalAction(actionID)
+	card, action, ok := parseApprovalAction(actionID)
 	if !ok {
 		return
 	}
-	s.enqueue(job{approval: &approvalClick{sig: sig, action: action, at: time.Now()}})
+	s.enqueue(job{approval: &approvalClick{card: card, action: action}})
 }
 
 // runApproval resolves one approval click on the action worker.
@@ -163,9 +180,8 @@ func (s *Service) runApproval(cl approvalClick) {
 	s.mu.Lock()
 	cached := s.view.State
 	s.mu.Unlock()
-	if !approvalStillShown(cached, cl.sig) || s.clickTooSoon(cl.sig, cl.at) {
-		// A card that replaced another just before the click: the pointer
-		// was most likely on its way to the old one (O1).
+	if !approvalStillShown(cached, cl.card) {
+		// The click was rendered for another request (O1).
 		s.publish(func(v *View) { v.ActionError = MsgApprovalChanged })
 		return
 	}
@@ -178,7 +194,10 @@ func (s *Service) runApproval(cl approvalClick) {
 		s.publish(func(v *View) { v.ActionError = actionMessage("/state", err) })
 		return
 	}
-	if !approvalStillShown(fresh, cl.sig) {
+	s.mu.Lock()
+	s.stampCardLocked(&fresh)
+	s.mu.Unlock()
+	if !approvalStillShown(fresh, cl.card) {
 		s.publish(func(v *View) { v.ActionError = MsgApprovalChanged })
 		return
 	}
