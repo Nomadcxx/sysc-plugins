@@ -3,10 +3,12 @@
 This record contains only results that exist. The Task 11 live matrix was run
 on 2026-11-17, first in part (a crash, D1, blocked it) and then again on
 `bc810b9` after the fixes. The local re-run is **not accepted**: a host
-restart of the plugin leaves it on `Connecting…` (D2, a sysc-shell bug whose
-fix is pending in sysc-shell). D7 and D8 are fixed and hold up live (see
-*D7 and D8 live check*). Client-only rows, including the VPS, and the b200f5b
-approval path are pending the owner. See *Task 11 local re-run*.
+restart of the plugin left it on `Connecting…` (D2). D2 has since been fixed
+plugin-side (`9d10165`, `606c0e1`, `917e6ec`) and held up in a later nested
+live check (`d2b.md`). D7 and D8 are fixed and hold up live (see
+*D7 and D8 live check*). The b200f5b approval path is fixed in `25768b4`,
+unit-tested, live check pending. Client-only rows, including the VPS, are
+pending the owner. See *Task 11 local re-run* and *Defect status*.
 The final automated gate was run on the last commit of `feat/hermes-merge`;
 its raw output is in `evidence/task12/gate.txt`.
 
@@ -14,14 +16,16 @@ its raw output is in `evidence/task12/gate.txt`.
 
 **Result: local matrix not accepted.** D1 and D3 to D8 are fixed and hold up
 live (D7 and D8 were checked on 2026-11-17, 11:50 to 11:54 AEDT). One problem
-remains: after the host restarts the plugin on its own, it stays on
-`Connecting…` (D2, a sysc-shell bug; the fix is pending in sysc-shell).
-Client-only rows and the b200f5b approval path wait on the owner.
+remained in this run: after the host restarts the plugin on its own, it
+stays on `Connecting…` (D2). D2 was later fixed plugin-side; see *Defect
+status*. Client-only rows wait on the owner.
 
-**Pending the owner:** the b200f5b approval path (Hermes `b200f5b` on archPC
-sends approvals as a server request that the bundled bridge drops; see
-*b200f5b approval path* below) and every client-only row, including the VPS
-(see *Phase B*). The bridge was not changed for either.
+**b200f5b approval path:** Hermes `b200f5b` on archPC sends approvals as a
+server request that the bundled bridge used to drop (see *b200f5b approval
+path* below). Fixed in `25768b4`, unit-tested, live check pending.
+
+**Pending the owner:** every client-only row, including the VPS (see
+*Phase B*).
 
 **Where it ran:** the same nested setup as the first run (archThink, nested
 `niri` with `dbus-run-session`, temporary `HOME`, XDG directories and
@@ -80,13 +84,27 @@ the daily session was not touched (see *Teardown*).
 | ID | Status | Commit |
 |---|---|---|
 | D1 `wrapLines` panic | fixed, holds live | `8cdecc0` |
-| D2 `Connecting…` after the host restarts the plugin | fixed plugin-side: Hermes reuses its saved settings after a respawn | `9d10165` |
+| D2 `Connecting…` after the host restarts the plugin | fixed plugin-side: Hermes reuses its saved settings after a respawn, including an all-defaults copy. Held up in the `d2b.md` nested live check (kill -9, Manager Retry, cold start, client-only) | `9d10165`, `606c0e1`, `917e6ec` |
 | D3 bar left and right click | fixed, holds live | `292d77a`, `fd7e810` |
 | D4 action errors not shown | fixed. The live stale-click message was not triggered (O1); Settings `Last error` shows live | `f6e6870`, `bc810b9` |
 | D5 approval card content | fixed, holds live | `803a844` |
 | D6 README on `always` | fixed | `0e60f4c` |
 | D7 pinned panel not restored at shell start | fixed, holds live after a shell restart | `951ffdd`, `67c9241` |
 | D8 bar does not say why it is in Error | fixed, holds live for a wrong token | `6a30c4b` |
+
+### Remediation fixes (rounds 1 and 2)
+
+Each is unit-tested; the live check is pending.
+
+| ID | Status | Commit |
+|---|---|---|
+| b200f5b approval server request dropped by the bundled bridge | fixed, unit-tested, live check pending | `25768b4` |
+| O1 click resolves a card that replaced the one aimed at | fixed: a click is bound to the request_id its card was rendered for, or a per-card nonce for an id-less request; unit-tested, live check pending. The first pass `89d4093` (1 s time guard) is superseded | `1d8ece5` |
+| Composer one-shot held the action queue | fixed: runs off the queue, so Interrupt and approvals are not stuck behind it; unit-tested, live check pending | `ea33faa` |
+| R4 Allow Session offered when Hermes does not allow it | fixed: the card draws only the choices Hermes offers and refuses any other; unit-tested, live check pending | `be033ac` |
+| R7 auto-start gateway toggle waited for a reconnect | fixed: read at every poll, as Noctalia does; unit-tested, live check pending | `c95385f` |
+| R8 refused model apply said nothing | fixed: shown in the action error row, and the picker keeps the live model; unit-tested, live check pending | `5c605b1` |
+| R11 one-shot result fields unused | fixed: the reply shows in the transcript at once, the dead fields are gone; unit-tested, live check pending | `7c1ecbc` |
 
 ### Open items
 
@@ -161,6 +179,8 @@ the daily session was not touched (`evidence/task11c/teardown.txt`,
 the pointer is moving to it. The node ID carries the new signature, so the
 click then resolves the next request. The stale-drop protection works only
 when the click carries the old ID. Whether Noctalia behaves the same was not checked.
+Since `1d8ece5` a click is bound to the request_id its card was rendered for
+(see *Remediation fixes*); unit-tested, live check pending.
 
 ### Teardown
 
@@ -320,8 +340,9 @@ Confirmed by reading the source:
   ID, for example by handling the `approval` request frame or polling
   `_pending_approval_request_payload`.
 
-This needs a bridge change, which is an owner decision. Evidence:
-`archpc-b200f5b-*.txt`.
+Evidence: `archpc-b200f5b-*.txt`. Fixed in `25768b4`: the bundled bridge
+also handles the `approval` server request (and its `request.cancel`), while
+the `approval.request` event still works. Unit-tested, live check pending.
 
 ### Phase B (VPS, client-only)
 
@@ -337,8 +358,9 @@ Phase B needs the owner to decide whether to:
   process against the lead's Hermes home;
 - use its single token, revoked by stopping the bridge and deleting the
   token file;
-- and settle the b200f5b-style approval path first, because the VPS build
-  is newer than `835a913`.
+- and confirm the b200f5b-style approval path live first, because the VPS
+  build is newer than `835a913` (fixed in `25768b4`, unit-tested, live check
+  pending).
 
 ## Automated gates
 
@@ -445,10 +467,10 @@ through the bundled bridge on Hermes `835a913`; see *Task 11 live run*. The
 Before that run, no approval had been exercised against a live Hermes gateway. The automated tests pin the plugin's request signature, the
 `request_id` payload and the 409 handling, but they use a fake bridge.
 
-The open gap is on the bridge side: on Hermes `b200f5b`, approvals arrive as
-an `approval` server request (`server_requests.send_async`) rather than an
-`approval.request` event, and the bundled bridge still handles only the event.
-That path is unverified. A live check must drive one real approval through both
+On Hermes `b200f5b`, approvals arrive as an `approval` server request
+(`server_requests.send_async`) rather than an `approval.request` event. The
+bundled bridge handles both since `25768b4` (unit-tested, live check pending).
+A live check must drive one real approval through both
 the bundled bridge and a stock bridge, confirm that Deny, Allow and Allow
 Session resolve the request on screen, and confirm that a deliberately stale
 click is refused with `The approval changed; check the card again`.
@@ -469,12 +491,14 @@ unpushed SessionDB `/sessions` and resume-history fixes.
 |---|---|---|
 | Reference v5 source | archPC `~/projects/noctalia-hermes-agent/v5/hermes-agent/scripts/hermes_bridge.py` | `892e27f75ec9f771d2a4dc7178ca5afcf19b9198beed0c558e2d25064cc15178` |
 | Bundled before Task 3a (commit `a8384bd`) | `plugins/hermes/scripts/hermes_bridge.py` | `0be2bc3cffbc01a8573fa573673642e58a0fa3934b7de685af914c5606ae8e99` |
-| Bundled now | `plugins/hermes/scripts/hermes_bridge.py` | `c658df456138eb6cfd6113c7a94ace79683177e30ebdc2c49d8447a4c5fac183` |
+| Bundled after Task 3a (`937ac1a`, unchanged through `917e6ec`) | `plugins/hermes/scripts/hermes_bridge.py` | `c658df456138eb6cfd6113c7a94ace79683177e30ebdc2c49d8447a4c5fac183` |
+| Bundled now (after `25768b4`) | `plugins/hermes/scripts/hermes_bridge.py` | `c0387bfdd1bb795ac837569c03993cc2b3ab8f358840eccaaa3ff0def25bd5cd` |
 
 The pre-Task-3a bundle differed from the reference source only by a three-line
 comment after the shebang pointing at `ATTRIBUTION.md`. Commit `937ac1a` then
 made the two authorized changes: `request_id` approval resolution (with 409
-`approval_mismatch`) and the `/model` `invalid_model` guard. Those are the only
+`approval_mismatch`) and the `/model` `invalid_model` guard. `25768b4` added
+the third: the `approval` server request and `request.cancel`. Those are the only
 local changes; the reference hash was recorded by the Task 3a audit and was not
 re-read for this record.
 
@@ -503,5 +527,6 @@ the one it shows, using the stock oldest-first call. The bridge cannot read the
 Hermes queue itself, so that fallback relies on the shown request being the
 oldest one.
 
-This is a source read, not a live test. As noted under *Approval check*, the
-`b200f5b` server-request delivery path is still open and Task 11 did not run.
+This is a source read, not a live test. The `b200f5b` server-request delivery
+path is fixed in `25768b4`, unit-tested, live check pending (see *Approval
+check*).
