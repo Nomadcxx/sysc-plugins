@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-# Bundled with the sysc-shell Hermes Agent plugin, unchanged from the local
-# Noctalia Hermes Agent v5 port (MIT). Origin, license and local changes:
-# see ATTRIBUTION.md at the repository root.
+# Bundled with the sysc-shell Hermes Agent plugin from the local Noctalia
+# Hermes Agent v5 port (MIT). Local changes are marked "sysc-shell:" and
+# listed in plugins/hermes/ACCEPTANCE.md; origin and license are in
+# ATTRIBUTION.md at the repository root.
 """Local bridge state model for the Noctalia Hermes plugin."""
 
 from __future__ import annotations
@@ -1062,7 +1063,11 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         persist = bool(payload.get("persist", False))
         # sysc-shell: config.set gets "model --provider p --global" as one
         # string, so a name with whitespace or a leading "-" could smuggle a
-        # flag. Refuse those, and an empty name, before building the value.
+        # flag. Refuse those before building the value; an empty model keeps
+        # the stock empty_model.
+        if not model:
+            self._send_json(400, {"error": "empty_model"})
+            return
         provider_given = str(payload.get("provider") or "") != ""
 
         def valid_name(name: str) -> bool:

@@ -245,8 +245,6 @@ class ModelNameTest(BridgeCase):
             {"model": "a\tb"},
             {"model": "gpt-5", "provider": "p --global"},
             {"model": "gpt-5", "provider": "-p"},
-            {"model": "   "},
-            {"model": ""},
             {"model": "gpt-5", "provider": "   "},
         ):
             with self.subTest(body=body):
@@ -255,6 +253,14 @@ class ModelNameTest(BridgeCase):
                 self.assertEqual(reply.get("error"), "invalid_model")
         self.assertEqual(self.rpc.calls_to("config.set"), [])
         self.assertEqual(self.state.snapshot()["hermes"]["model"], bridge.default_state()["hermes"]["model"])
+
+    def test_an_empty_model_keeps_the_stock_code(self) -> None:
+        for body in ({"model": ""}, {"model": "   "}, {}):
+            with self.subTest(body=body):
+                status, reply = self.post("/model", body)
+                self.assertEqual(status, 400)
+                self.assertEqual(reply.get("error"), "empty_model")
+        self.assertEqual(self.rpc.calls_to("config.set"), [])
 
     def test_valid_names_build_the_stock_value(self) -> None:
         cases = [
@@ -348,6 +354,10 @@ class DiffScopeTest(unittest.TestCase):
         touched = set()
         for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False).get_opcodes():
             if tag == "equal":
+                continue
+            # A change made only of comment lines (the provenance header)
+            # alters no behavior.
+            if all(line.lstrip().startswith("#") for line in old_lines[i1:i2] + new_lines[j1:j2]):
                 continue
             for j in range(j1, max(j2, j1 + 1)):
                 touched.add(_function_at(new_lines, min(j, len(new_lines) - 1)))
