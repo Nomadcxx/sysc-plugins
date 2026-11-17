@@ -9,8 +9,7 @@ machine (Local mode) or one running elsewhere (Client-only mode).
 > **Status:** pre-release. The automated gates pass, and the individual
 > commits were reviewed as recorded in [ACCEPTANCE.md](ACCEPTANCE.md). The
 > Task 11 local matrix was re-run on 2026-11-17 after the crash fix and is
-> not accepted yet: the pinned panel is not restored at shell start, and a
-> host restart of the plugin leaves it on `Connecting…` (a sysc-shell bug).
+> not accepted yet: the pinned panel is not restored at shell start.
 > Client-only rows are not run yet. Two known gaps are open: approval
 > delivery on the newest Hermes build (see *Approvals*), and the host gaps
 > listed at the end.
@@ -83,6 +82,9 @@ The token is the pasted **Bridge token** (a `secret` setting) when it is not
 empty, otherwise **Bridge token file** (default
 `~/.config/sysc-shell/hermes.token`, a regular file, at most 4 KiB, CR/LF
 rejected). The file is recommended because settings are stored in plain text.
+Hermes keeps a copy of its last settings, including a pasted bridge token,
+in its plugin state (`state.json`, mode 0600, the same exposure as
+`config.json`) so it can reconnect after sysc-shell restarts it.
 With no token every authenticated route answers 403 and the plugin says
 `No bridge token: paste it in Settings or set a token file`.
 

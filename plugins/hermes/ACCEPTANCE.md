@@ -80,7 +80,7 @@ the daily session was not touched (see *Teardown*).
 | ID | Status | Commit |
 |---|---|---|
 | D1 `wrapLines` panic | fixed, holds live | `8cdecc0` |
-| D2 `Connecting…` after the host restarts the plugin | open, **sysc-shell bug**, nothing changed in the plugin | |
+| D2 `Connecting…` after the host restarts the plugin | fixed plugin-side: Hermes reuses its saved settings after a respawn | `9d10165` |
 | D3 bar left and right click | fixed, holds live | `292d77a`, `fd7e810` |
 | D4 action errors not shown | fixed. The live stale-click message was not triggered (O1); Settings `Last error` shows live | `f6e6870`, `bc810b9` |
 | D5 approval card content | fixed, holds live | `803a844` |
@@ -96,14 +96,21 @@ When it relaunches the plugin on its own, the runtime calls only
 `reopenViews`. Only instance-scope settings are re-sent there, through
 `announceView` (`:1274`). Protocol v1 has no settings read call, so the
 plugin cannot ask. The plugin starts its service on the first plugin-scope
-`SettingsChanged` (`cmd/sysc-plugin-hermes/main.go:364-389`), so the new
+`SettingsChanged` (`cmd/sysc-plugin-hermes/main.go:574-590`), so the new
 process waits forever. A settings change or a fresh `ensure()` clears it,
 which is why approving in Settings fixed it in the first run. A live repro
 had `kill -9` on the plugin, an instant respawn, no bridge after 70 s and
-`Connecting…` on the bar. Suggested host fix: push plugin-scope settings in
-`SessionStarted` before `reopenViews`. The plugin could work around it by
-saving the last settings with `state.set` and using them after a restart,
-but that needs an owner decision.
+`Connecting…` on the bar.
+
+**D2 fix (plugin-side, `9d10165`).** Hermes saves the last host settings in
+its own plugin state on every plugin-scope `SettingsChanged`. The copy holds
+every value, including a pasted bridge token; `state.json` is mode 0600,
+the same exposure as `config.json`. After a respawn the plugin reads that
+copy and applies it once a ~2 s grace has passed and the host has sent
+nothing. Host settings always win, and identical settings do not reconnect.
+A missing or unreadable copy leaves the bar on `Connecting…` as before.
+sysc-shell is unchanged. The host change `e0becead` was not used because it
+changed respawn behaviour for every plugin.
 
 **D7 (P2): the pinned panel is not restored at shell start.** At start,
 `cmd/sysc-plugin-hermes/main.go:256-272` calls `PinnedSurface.Restore`
