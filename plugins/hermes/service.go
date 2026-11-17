@@ -704,7 +704,7 @@ func (s *Service) publishState(st State) {
 // publishConn shows a connection failure over the last good state.
 func (s *Service) publishConn(bridgeStatus, msg string) {
 	s.publish(func(v *View) {
-		v.State.Bridge = BridgeInfo{Status: bridgeStatus}
+		v.State.Bridge = BridgeInfo{Status: bridgeStatus, Error: clip(msg, maxBridgeError)}
 		v.Status = DeriveStatus(v.State)
 		v.Message = msg
 	})

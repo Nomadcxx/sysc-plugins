@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
 )
 
 // --- fakes -----------------------------------------------------------------
@@ -888,6 +890,69 @@ func TestClientOnly403ShowsTheTokenMessage(t *testing.T) {
 
 	h.svc.Configure(h.clientSettings(remote, "remote-tok"))
 	h.waitFor("accepted", func(v View) bool { return v.Message == "" && v.Status.Key == StatusIdle && v.Token == TokenPasted })
+}
+
+func TestConnectionErrorsReachTheBarAndSummary(t *testing.T) {
+	h := newHarness(t)
+	remote := newFakeBridge(t, "remote-tok")
+	const wrongToken = "d8-secret-tok-9c1f"
+
+	textOf := func(n *v1.Node) string {
+		var b strings.Builder
+		walk(n, func(n *v1.Node) {
+			if n.Kind == v1.KindText {
+				b.WriteString(n.Text)
+				b.WriteByte('\n')
+			}
+		})
+		return b.String()
+	}
+	render := func(v View) (tooltip, status, summary string) {
+		state := BarState{Status: v.Status, BridgeError: v.State.Bridge.Error, Model: "t11-stub"}
+		return textOf(TooltipTree(state)),
+			ServiceStatusFor(state, 1).Message,
+			textOf(SummaryTree(SummaryState{BarState: state}, "", 360, 420))
+	}
+	assertShows := func(where, text, want string) {
+		t.Helper()
+		if !strings.Contains(text, want) {
+			t.Errorf("%s = %q, want it to contain %q", where, text, want)
+		}
+	}
+
+	h.svc.Configure(h.clientSettings(remote, ""))
+	v := h.waitFor("no token", func(v View) bool {
+		return v.Message == MsgNoToken && v.Status.Key == StatusError
+	})
+	tooltip, status, summary := render(v)
+	assertShows("tooltip without a token", tooltip, "No bridge token")
+	assertShows("service status without a token", status, MsgNoToken)
+	assertShows("summary without a token", summary, "No bridge token")
+
+	h.svc.Configure(h.clientSettings(remote, wrongToken))
+	v = h.waitFor("wrong token", func(v View) bool {
+		return v.Message == MsgWrongToken && v.Status.Key == StatusError
+	})
+	tooltip, status, summary = render(v)
+	assertShows("tooltip with a wrong token", tooltip, MsgWrongToken)
+	assertShows("service status with a wrong token", status, MsgWrongToken)
+	assertShows("summary with a wrong token", summary, MsgWrongToken)
+	for where, text := range map[string]string{"tooltip": tooltip, "service status": status, "summary": summary} {
+		if strings.Contains(text, wrongToken) {
+			t.Fatalf("%s leaked the token value: %q", where, text)
+		}
+	}
+
+	h.svc.Configure(h.clientSettings(remote, "remote-tok"))
+	v = h.waitFor("accepted", func(v View) bool {
+		return v.Message == "" && v.Status.Key == StatusIdle
+	})
+	tooltip, status, summary = render(v)
+	for where, text := range map[string]string{"tooltip": tooltip, "service status": status, "summary": summary} {
+		if strings.Contains(text, MsgWrongToken) || strings.Contains(text, "No bridge token") {
+			t.Fatalf("%s kept the old connection error: %q", where, text)
+		}
+	}
 }
 
 func TestClientOnlyWarnings(t *testing.T) {
