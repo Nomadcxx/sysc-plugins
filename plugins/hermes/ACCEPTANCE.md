@@ -88,6 +88,15 @@ the daily session was not touched (see *Teardown*).
 | D7 pinned panel not restored at shell start | fixed, holds live after a shell restart | `951ffdd`, `67c9241` |
 | D8 bar does not say why it is in Error | fixed, holds live for a wrong token | `6a30c4b` |
 
+### Open items
+
+| ID | Status | Reason |
+|---|---|---|
+| R5 bridge state has no lock across threads | open | `HermesState` is shared by the `ThreadingHTTPServer` threads; it is upstream bridge code outside the allowed bridge diff |
+| R6 `/detect` is unauthenticated | open, by design | upstream design: it answers before a token exists and returns detection info only |
+| R9 check-then-read race in `takeLauncherAsk` | open, negligible | `Lstat` then `ReadFile` in a 0700 directory of the same user |
+| R10 shutdown flush can hang up to 5 s | open | a wedged host holds the flush; the code is outside the hermes paths |
+
 **D2 cause (sysc-shell `b50262d`, `internal/shell/pluginhost.go`).** The host
 sends the plugin-scope `SettingsChanged` only once, after the first
 `rt.Start` in `ensure()` (`:519-523`, `pushSettingsLocked` `:574-575`).
