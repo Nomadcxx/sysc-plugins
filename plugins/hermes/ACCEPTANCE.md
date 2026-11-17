@@ -2,20 +2,21 @@
 
 This record contains only results that exist. The Task 11 live matrix was run
 on 2026-11-17, first in part (a crash, D1, blocked it) and then again on
-`bc810b9` after the fixes. The local re-run is **not accepted**: the pinned
-panel is not restored at shell start (D7), and a host restart of the plugin
-leaves it on `Connecting…` (D2, a sysc-shell bug). Client-only rows and the
-b200f5b approval path are pending the owner. See *Task 11 local re-run*.
+`bc810b9` after the fixes. The local re-run is **not accepted**: a host
+restart of the plugin leaves it on `Connecting…` (D2, a sysc-shell bug whose
+fix is pending in sysc-shell). D7 and D8 are fixed and hold up live (see
+*D7 and D8 live check*). Client-only rows, including the VPS, and the b200f5b
+approval path are pending the owner. See *Task 11 local re-run*.
 The final automated gate was run on the last commit of `feat/hermes-merge`;
 its raw output is in `evidence/task12/gate.txt`.
 
 ## Task 11 local re-run (2026-11-17, 10:08 to 10:54 AEDT)
 
-**Result: local matrix not accepted.** D1 and D3 to D6 are fixed and hold up
-live. Two problems remain. The pinned panel is not restored when the shell
-starts (D7, a plugin bug). After the host restarts the plugin on its own, it
-stays on `Connecting…` (D2, a sysc-shell bug). Client-only rows and the
-b200f5b approval path wait on the owner.
+**Result: local matrix not accepted.** D1 and D3 to D8 are fixed and hold up
+live (D7 and D8 were checked on 2026-11-17, 11:50 to 11:54 AEDT). One problem
+remains: after the host restarts the plugin on its own, it stays on
+`Connecting…` (D2, a sysc-shell bug; the fix is pending in sysc-shell).
+Client-only rows and the b200f5b approval path wait on the owner.
 
 **Pending the owner:** the b200f5b approval path (Hermes `b200f5b` on archPC
 sends approvals as a server request that the bundled bridge drops; see
@@ -45,7 +46,7 @@ the daily session was not touched (see *Teardown*).
 | Collision | NOT RUN: needs a tunnel on 19777 (client-only), pending the owner | |
 | Client-only, tunnel down | NOT RUN: pending the owner | |
 | Client-only, LAN host | NOT RUN: pending the owner. Not exposed on the LAN from the throwaway setup | |
-| Wrong or missing token | PARTIAL: in Local mode with the token file replaced, the bridge answered 403 and Settings showed `Last error: Wrong token`. The bar tooltip said only `Hermes: Error · t11-stub` (D8). With the file missing the bar showed Error, but the Settings text was not captured. No token value appears in any log or evidence file. It recovered after the file was restored | `wrong-token.txt`, `shots/27`–`35` |
+| Wrong or missing token | PARTIAL: in Local mode with the token file replaced, the bridge answered 403 and Settings showed `Last error: Wrong token`. On `bc810b9` the bar tooltip said only `Hermes: Error · t11-stub` (D8); on `6a30c4b` the tooltip and the summary say `Wrong token` (see *D7 and D8 live check*). With the file missing the bar showed Error, but the Settings text was not captured. No token value appears in any log or evidence file. It recovered after the file was restored | `wrong-token.txt`, `shots/27`–`35` |
 | Bar | PASS: Online, Needs You with `!`, Error and hidden-when-idle all render. Tooltip `Hermes: Online · t11-stub` | `shots/02b`, `14`, `27`, `25` |
 | Left click | PASS (D3 fixed): the summary opens with Model, Gateway and Activity rows | `shots/07b-summary.png` |
 | Right click | PASS (D3 fixed): menu with Open Hermes, New session, Interrupt, Refresh and Hermes Settings. Start gateway was hidden because the gateway was running (`menu.go:26-36`) | `shots/08b-right-menu.png` |
@@ -65,7 +66,7 @@ the daily session was not touched (see *Teardown*).
 | Model Apply / Persist | PARTIAL: Persist wrote `default: t11-stub-b` to `config.yaml`, and it was reverted after. Hermes refused Apply with 5001 `Unknown provider 'custom'`, which comes from the stub provider. Whether Persist survives a bridge restart was not checked | `model.txt` |
 | Start / Stop gateway | PASS for Local: stop through the bridge, then start through the service action. The client-only half is NOT RUN | `gateway.txt` |
 | One-shot | PASS: `hermes -z` completed. Cancel was not run on its own | `gateway.txt`, `oneshot-interrupt.txt` |
-| Pinned | FAIL (D7): opens, and approvals work there, but it is not restored after a shell restart | `pinned-approval.txt`, `shots/11`, `14`–`17`, `25`, `ht11-final/logs/plugin-stderr.log` |
+| Pinned | PASS (D7 fixed): opens, and approvals work there. On `6a30c4b` it is restored after a shell restart. A plugin-only restart was not checked, because D2 leaves the plugin on `Connecting…` | `pinned-approval.txt`, `shots/11`, `14`–`17`, `evidence/task11c/d7-live.txt`, `evidence/task11c/shots/02`, `03` |
 | Settings | PASS: Test connection result, pin toggle and connection line. The model picker shows `No models reported by the bridge` (stub) | `shots/10-test-connection.png`, `35` |
 | Launcher | PARTIAL: the Ask hand-off file was 0600 in a 0700 directory, was deleted on read, and the prompt was sent. The `/hermes` provider rows were not captured | `launcher-ask.txt` |
 | Mid-turn drop | PASS: the bridge was killed mid-stream and the plugin respawned it within 5 s. The panel came back Online, with no token in any log. The in-flight turn was lost and no error was shown | `midturn-drop.txt`, `shots/37`, `38` |
@@ -84,8 +85,8 @@ the daily session was not touched (see *Teardown*).
 | D4 action errors not shown | fixed. The live stale-click message was not triggered (O1); Settings `Last error` shows live | `f6e6870`, `bc810b9` |
 | D5 approval card content | fixed, holds live | `803a844` |
 | D6 README on `always` | fixed | `0e60f4c` |
-| D7 pinned panel not restored at shell start | **new, open** | |
-| D8 bar does not say why it is in Error | **new, open** | |
+| D7 pinned panel not restored at shell start | fixed, holds live after a shell restart | `951ffdd`, `67c9241` |
+| D8 bar does not say why it is in Error | fixed, holds live for a wrong token | `6a30c4b` |
 
 **D2 cause (sysc-shell `b50262d`, `internal/shell/pluginhost.go`).** The host
 sends the plugin-scope `SettingsChanged` only once, after the first
@@ -120,6 +121,25 @@ short backoff.
 only `State.Bridge.Error` (`cmd/sysc-plugin-hermes/main.go:893`,
 `plugins/hermes/bar.go:103`, `summary.go:309`). So the reason shows only on
 the Settings page.
+
+**D7 and D8 live check (2026-11-17, 11:50 to 11:54 AEDT, plugin built from
+`6a30c4b`; `67c9241` changes only a test).** A separate nested niri and
+sysc-shell under `/tmp/ht11`, with a stub model and a throwaway Hermes home.
+The build had no debug logging. QA accepted `951ffdd`, `6a30c4b` and
+`67c9241` (`reports/qa-t11c.md`). The setup was torn down at 12:08 AEDT and
+the daily session was not touched (`evidence/task11c/teardown.txt`,
+`ps-before-daily.txt`, `ps-after-daily.txt`).
+- D7: Pin from the panel saved `"pinned":true`. After the nested shell was
+  restarted, the floating Hermes panel came back with Unpin showing. Evidence:
+  `evidence/task11c/d7-live.txt`, `evidence/task11c/shots/02-pinned.png`,
+  `03-after-shell-restart.png`.
+- D8: with the token file replaced by a random value, the bridge answered 403.
+  The bar showed Error, its tooltip read `Hermes: Error · t11-stub` and
+  `Wrong token`, and the summary showed a `Wrong token` banner. After the file
+  was restored, the bar went back to Online and the banner went away. Neither
+  token value appears in any log or evidence file. The missing-token case is
+  covered by tests only. Evidence: `evidence/task11c/d8-live.txt`,
+  `evidence/task11c/shots/04` to `08`.
 
 **O1 (observation, not a defect):** an approval card can be replaced while
 the pointer is moving to it. The node ID carries the new signature, so the
