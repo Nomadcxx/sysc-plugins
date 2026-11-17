@@ -1169,8 +1169,14 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        # sysc-shell: a client that hung up (an interrupted one-shot, a mode
+        # switch) only loses this response. Letting the error reach do_POST
+        # would record it as a Hermes failure until the next session.
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
 
 
 def create_server(

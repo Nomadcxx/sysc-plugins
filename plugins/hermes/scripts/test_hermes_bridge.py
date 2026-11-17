@@ -271,8 +271,10 @@ class ModelNameTest(BridgeCase):
                                  {"key": "model", "value": value, "session_id": "sid-1"})
 
 
-# Functions Task 3a may change in the Task 3 copy (commit a8384bd).
-ALLOWED = {"_set_approval", "_handle_approval", "_handle_model", "apply_event"}
+# Functions the local changes may touch in the Task 3 copy (commit a8384bd):
+# Task 3a's approval and model handlers, and _send_json, which keeps a client
+# hang-up from being recorded as a Hermes failure.
+ALLOWED = {"_set_approval", "_handle_approval", "_handle_model", "apply_event", "_send_json"}
 TASK3_COMMIT = "a8384bdeeff6d2f65b8ccbe475ed89fed2cd2329"
 
 
@@ -286,6 +288,45 @@ def _function_at(lines: list[str], index: int) -> str:
         if lines[i] and not lines[i][0].isspace() and not lines[i].startswith(("#", ")")):
             return ""
     return ""
+
+
+class ClientHangUpTest(BridgeCase):
+    def test_a_client_that_hangs_up_is_not_a_hermes_error(self) -> None:
+        """Interrupting a one-shot ends only the HTTP request; hermes -z runs
+        on. Writing its reply to the closed socket must not mark Hermes as
+        failed until the next session."""
+        import socket
+        import struct
+        import time
+
+        hung_up = threading.Event()
+
+        def runner(argv, **_kwargs):
+            hung_up.wait(5)
+            time.sleep(0.2)  # let the reset reach the bridge first
+            return subprocess.CompletedProcess(argv, 0, stdout="the answer\n", stderr="")
+
+        self.httpd.command_runner = runner
+        body = json.dumps({"text": "a question"}).encode()
+        client = socket.create_connection(self.httpd.server_address[:2], timeout=5)
+        client.sendall(b"POST /oneshot HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                       + f"X-Bridge-Token: {FAKE_TOKEN}\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body)
+        time.sleep(0.2)
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        client.close()
+        hung_up.set()
+
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            texts = [m.get("text") for m in self.state.snapshot()["messages"]]
+            if "the answer" in texts:
+                break
+            time.sleep(0.05)
+        time.sleep(0.3)  # the response write comes after the reply is stored
+        snap = self.state.snapshot()
+        self.assertIn("the answer", [m.get("text") for m in snap["messages"]])
+        self.assertNotEqual(snap["hermes"]["status"], "error")
+        self.assertEqual(snap["bridge"]["error"], "")
 
 
 class DiffScopeTest(unittest.TestCase):
