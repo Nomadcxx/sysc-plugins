@@ -1214,3 +1214,25 @@ func TestOneShotReplyShowsInTheTranscript(t *testing.T) {
 		return false
 	})
 }
+
+// TestGatewayAutoStartToggleAppliesWithoutReconnect: noctalia reads
+// auto_start_gateway on every poll (service.luau:174, called from
+// refreshState at :193), so turning it on starts an idle gateway at the next
+// poll. The port read it from the settings the connection started with, so
+// the toggle waited for a reconnect (R7).
+func TestGatewayAutoStartToggleAppliesWithoutReconnect(t *testing.T) {
+	h := newHarness(t)
+	h.local.online.Store(true)
+	h.writeToken(h.besideState(), "local-tok")
+	h.local.set(func(fb *fakeBridge) { fb.gateway = "stopped"; fb.detect.Gateway.Status = "stopped" })
+	s := h.localSettings()
+	h.svc.Configure(s)
+	h.waitFor("adopted", func(v View) bool { return v.Status.Key == StatusIdle })
+	time.Sleep(150 * time.Millisecond)
+	if n := h.local.count("/gateway/start"); n != 0 {
+		t.Fatalf("started the gateway %d times with auto-start off", n)
+	}
+	s.AutoStartGateway = true
+	h.svc.Configure(s)
+	waitUntil(t, "gateway start after the toggle", func() bool { return h.local.count("/gateway/start") == 1 })
+}

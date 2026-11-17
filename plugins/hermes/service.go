@@ -842,7 +842,9 @@ func (s *Service) connLocal(ctx context.Context, set Settings) {
 			}
 			if haveToken {
 				s.autoConfigure(ctx, set, false, &gatewayTried)
-				if !gatewayTried && set.AutoStartGateway && gatewayIdle(s.Snapshot().State.Summary.Gateway.Status) {
+				// Read live, as noctalia does on every poll: the toggle is
+				// not part of the connection key.
+				if !gatewayTried && s.current().AutoStartGateway && gatewayIdle(s.Snapshot().State.Summary.Gateway.Status) {
 					gatewayTried = true
 					s.enqueue(job{path: "/gateway/start", body: map[string]any{}, refetch: true})
 				}
@@ -1178,7 +1180,7 @@ func (s *Service) autoConfigure(ctx context.Context, set Settings, clientOnly bo
 		s.StopOwned()
 		s.spawn(ctx, set)
 	}
-	if !clientOnly && !*gatewayTried && set.AutoStartGateway && gatewayIdle(d.Gateway.Status) {
+	if !clientOnly && !*gatewayTried && s.current().AutoStartGateway && gatewayIdle(d.Gateway.Status) {
 		*gatewayTried = true
 		s.enqueue(job{path: "/gateway/start", body: map[string]any{}, refetch: true})
 	}
