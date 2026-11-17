@@ -819,6 +819,9 @@ func (s *Service) connLocal(ctx context.Context, set Settings) {
 	for ctx.Err() == nil {
 		s.reapOwned()
 		if _, err := health.Health(ctx); err == nil {
+			// The cap stops a bridge that never comes up; one that ran and
+			// later died gets its attempts back.
+			attempts = 0
 			s.mu.Lock()
 			isOwned := s.owned != nil
 			s.adoptedLocal = !isOwned

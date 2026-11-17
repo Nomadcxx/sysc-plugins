@@ -511,6 +511,32 @@ func TestLocalGivesUpAfterThreeFailedStarts(t *testing.T) {
 	waitUntil(t, "three more attempts", func() bool { specs, _ := h.starter.started(); return len(specs) == 6 })
 }
 
+// TestLocalKeepsRespawningABridgeThatRanHealthy: the three-attempt cap stops
+// a bridge that never comes up, not one that ran and later died. Found live:
+// after three crashes in one session the plugin stayed offline for good.
+func TestLocalKeepsRespawningABridgeThatRanHealthy(t *testing.T) {
+	h := newHarness(t)
+	h.writeToken(h.besideState(), "local-tok")
+	h.starter.onStart = func(n int, spec SpawnSpec, p *fakeProc) error {
+		h.local.online.Store(true)
+		return nil
+	}
+	h.svc.Configure(h.localSettings())
+	for crash := 1; crash <= 4; crash++ {
+		h.waitFor(fmt.Sprintf("owned bridge %d online", crash), func(v View) bool { return v.Owned && v.Status.Key == StatusIdle })
+		_, procs := h.starter.started()
+		h.local.online.Store(false)
+		procs[len(procs)-1].exit(137)
+		waitUntil(t, fmt.Sprintf("respawn after crash %d", crash), func() bool {
+			specs, _ := h.starter.started()
+			return len(specs) == crash+1
+		})
+	}
+	if v := h.svc.Snapshot(); v.Message == MsgFailedToStart {
+		t.Fatalf("gave up on a bridge that kept starting: %q", v.Message)
+	}
+}
+
 func TestLocalShowsTheBridgeExitCode(t *testing.T) {
 	h := newHarness(t)
 	h.writeToken(h.besideState(), "local-tok")
