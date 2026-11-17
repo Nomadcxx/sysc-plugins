@@ -177,6 +177,66 @@ class ApprovalIdentityTest(BridgeCase):
                          {"session_id": "sid-1", "choice": "deny", "all": False})
 
 
+class ServerRequestApprovalTest(ApprovalIdentityTest):
+    """Hermes b200f5b sends an approval as an ``approval`` server->client
+    request (server_requests.send_async), not an ``approval.request`` event.
+    The frame reaches the bridge through StateTransport.write."""
+
+    def server_request(self, request_id: str, frame_id: str = "srv-1", nested: bool = False) -> dict:
+        payload = {"command": "rm -rf build", "description": "delete build", "request_id": request_id,
+                   "choices": ["once", "session", "always", "deny"]}
+        params = {"session_id": "sid-1", "payload": payload} if nested else {"session_id": "sid-1", **payload}
+        return {"jsonrpc": "2.0", "id": frame_id, "method": "approval", "params": params}
+
+    def test_a_server_request_shows_the_card(self) -> None:
+        for nested in (False, True):
+            with self.subTest(nested=nested):
+                self.state.clear_approval()
+                bridge.StateTransport(self.state).write(self.server_request("req-9", nested=nested))
+                approval = self.state.snapshot()["approval"]
+                self.assertTrue(approval["pending"])
+                self.assertEqual(approval["request_id"], "req-9")
+                self.assertEqual(approval["request"]["command"], "rm -rf build")
+                self.assertNotIn("session_id", approval["request"])
+                self.assertEqual(self.state.snapshot()["hermes"]["status"], "attention")
+
+    def test_a_server_request_card_resolves_by_request_id(self) -> None:
+        self.state.apply_event(self.server_request("req-9"))
+        self.rpc.responses["approval.respond"] = {"result": {"resolved": 1}}
+        status, body = self.post("/approval", {"choice": "once", "request_id": "req-9"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.rpc.calls_to("approval.respond"),
+                         [{"session_id": "sid-1", "choice": "once", "all": False, "request_id": "req-9"}])
+        self.assertFalse(body["state"]["approval"]["pending"])
+
+    def test_the_event_form_still_works(self) -> None:
+        self.show_approval("req-1")
+        self.assertEqual(self.state.snapshot()["approval"]["request_id"], "req-1")
+
+    def test_request_cancel_withdraws_only_its_own_card(self) -> None:
+        self.state.apply_event(self.server_request("req-9", frame_id="srv-1"))
+        self.state.apply_event({"jsonrpc": "2.0", "method": "event", "params": {
+            "type": "request.cancel", "session_id": "sid-1",
+            "payload": {"id": "srv-other", "method": "approval", "reason": "resolved"}}})
+        self.assertTrue(self.state.snapshot()["approval"]["pending"])
+        self.state.apply_event({"jsonrpc": "2.0", "method": "event", "params": {
+            "type": "request.cancel", "session_id": "sid-1",
+            "payload": {"id": "srv-1", "method": "approval", "reason": "timeout"}}})
+        self.assertFalse(self.state.snapshot()["approval"]["pending"])
+
+    def test_request_cancel_leaves_an_event_card_alone(self) -> None:
+        self.show_approval("req-1")
+        self.state.apply_event({"jsonrpc": "2.0", "method": "event", "params": {
+            "type": "request.cancel", "session_id": "sid-1",
+            "payload": {"id": "srv-1", "method": "approval", "reason": "resolved"}}})
+        self.assertTrue(self.state.snapshot()["approval"]["pending"])
+
+    def test_other_server_requests_do_not_show_a_card(self) -> None:
+        self.state.apply_event({"jsonrpc": "2.0", "id": "srv-2", "method": "setup_beat",
+                                "params": {"session_id": "sid-1", "request_id": "x"}})
+        self.assertFalse(self.state.snapshot()["approval"]["pending"])
+
+
 class ModelNameTest(BridgeCase):
     def test_flag_like_or_spaced_names_are_refused_before_config_set(self) -> None:
         for body in (
@@ -212,7 +272,7 @@ class ModelNameTest(BridgeCase):
 
 
 # Functions Task 3a may change in the Task 3 copy (commit a8384bd).
-ALLOWED = {"_set_approval", "_handle_approval", "_handle_model"}
+ALLOWED = {"_set_approval", "_handle_approval", "_handle_model", "apply_event"}
 TASK3_COMMIT = "a8384bdeeff6d2f65b8ccbe475ed89fed2cd2329"
 
 

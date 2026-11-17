@@ -550,6 +550,20 @@ class HermesState:
 
     def apply_event(self, obj: dict[str, Any]) -> None:
         params = obj.get("params", {}) if isinstance(obj, dict) else {}
+        if not isinstance(params, dict):
+            params = {}
+        # sysc-shell: newer Hermes (b200f5b) sends an approval as an
+        # "approval" server->client request instead of an approval.request
+        # event. Show it the same way; the response still goes through
+        # approval.respond with the request_id.
+        if isinstance(obj, dict) and obj.get("method") == "approval" and "id" in obj:
+            request = params.get("payload")
+            if not isinstance(request, dict):
+                request = {k: v for k, v in params.items() if k != "session_id"}
+            self._set_approval(request)
+            self._state["approval"]["server_request_id"] = str(obj.get("id") or "")
+            self._state["updated_at"] = now_ts()
+            return
         event_type = params.get("type", "")
         payload = params.get("payload", {}) or {}
         if not isinstance(payload, dict):
@@ -565,6 +579,13 @@ class HermesState:
             self._append_tool_event(event_type, payload)
         elif event_type == "approval.request":
             self._set_approval(payload)
+        elif event_type == "request.cancel":
+            # sysc-shell: the server request behind the card was withdrawn
+            # (resolved elsewhere, timed out or interrupted).
+            shown = self._state["approval"]
+            frame_id = str(payload.get("id") or "")
+            if shown.get("pending") and frame_id and shown.get("server_request_id") == frame_id:
+                self.clear_approval()
         elif event_type == "session.info":
             self._apply_session_info(payload)
         elif event_type == "status.update":
