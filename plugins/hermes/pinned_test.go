@@ -219,8 +219,10 @@ func TestRestoreReopensOnlyAPinnedSurface(t *testing.T) {
 	c, calls, stop := pinnedHost(t, true, "true")
 	defer stop()
 	pin := NewPinnedSurface(c)
-	if err := pin.Restore(context.Background()); err != nil {
+	if want, err := pin.Restore(context.Background()); err != nil {
 		t.Fatal(err)
+	} else if !want {
+		t.Error("a true setting must report a wanted restore")
 	}
 	get := nextCall(t, calls)
 	var params v1.StateGetParams
@@ -238,8 +240,10 @@ func TestRestoreReopensOnlyAPinnedSurface(t *testing.T) {
 	c2, calls2, stop2 := pinnedHost(t, true, "false")
 	defer stop2()
 	unpinned := NewPinnedSurface(c2)
-	if err := unpinned.Restore(context.Background()); err != nil {
+	if want, err := unpinned.Restore(context.Background()); err != nil {
 		t.Fatal(err)
+	} else if want {
+		t.Error("a false setting must not report a wanted restore")
 	}
 	nextCall(t, calls2)
 	noCall(t, calls2)
@@ -250,8 +254,10 @@ func TestRestoreReopensOnlyAPinnedSurface(t *testing.T) {
 	c3, calls3, stop3 := pinnedHost(t, false, "")
 	defer stop3()
 	absent := NewPinnedSurface(c3)
-	if err := absent.Restore(context.Background()); err != nil {
+	if want, err := absent.Restore(context.Background()); err != nil {
 		t.Fatal(err)
+	} else if want {
+		t.Error("a missing setting must not report a wanted restore")
 	}
 	nextCall(t, calls3)
 	noCall(t, calls3)

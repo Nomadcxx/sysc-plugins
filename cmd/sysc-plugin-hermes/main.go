@@ -253,19 +253,26 @@ func runWith(in io.Reader, out io.Writer, stderr io.Writer, opts hermes.Options)
 		avatar: hermes.AvatarPath(""), ui: make(chan func(), inboundBuffer),
 		logf: logf, statusRev: 1,
 	}
-	// Restore the saved pin at start, like Noctalia's panelPinned.
+	// Restore the saved pin at start, like Noctalia's panelPinned. The shell
+	// refuses surface.open until the bar has an output, so a refused restore
+	// stays pending and is retried when the bar opens or the backoff fires.
 	go func() {
 		a.surfaceMu.Lock()
-		err := a.pinned.Restore(ctx)
+		want, err := a.pinned.Restore(ctx)
 		pinned := a.pinned.Pinned()
 		a.surfaceMu.Unlock()
-		if err != nil {
-			a.post(func() { logf("hermes: restore pinned surface: %v", err) })
-		}
-		if pinned {
-			a.post(func() { a.pinnedOpen = true })
-		}
 		a.post(func() {
+			switch {
+			case pinned:
+				a.pinnedOpen = true
+			case want && err != nil:
+				a.restorePending = true
+				a.restoreTries = 0
+				a.restoreErr = err
+				a.scheduleRestore()
+			case err != nil:
+				logf("hermes: restore pinned surface: %v", err)
+			}
 			if err := a.publishAll(); err != nil {
 				logf("hermes: publish after restore: %v", err)
 			}
@@ -300,6 +307,17 @@ func runWith(in io.Reader, out io.Writer, stderr io.Writer, opts hermes.Options)
 
 var errShutdown = fmt.Errorf("host shutdown")
 
+// restoreBackoff paces the retries of a pinned restore the host refused. The
+// bar opening with an output retries sooner; this is the fallback bound.
+var restoreBackoff = []time.Duration{
+	250 * time.Millisecond,
+	500 * time.Millisecond,
+	time.Second,
+	2 * time.Second,
+	4 * time.Second,
+	8 * time.Second,
+}
+
 // app is the plugin's event-loop state: the service, the open views and the
 // per-view UI state. Everything here runs on the loop except the goroutines
 // that make one blocking host call and post their result back.
@@ -316,6 +334,14 @@ type app struct {
 	pinnedOpen bool
 	pinBusy    bool
 
+	// A pinned restore the host refused at startup; retried with backoff or
+	// as soon as the bar reports an output.
+	restorePending bool
+	restoreBusy    bool
+	restoreTries   int
+	restoreErr     error
+	restoreTimer   *time.Timer
+
 	ui        chan func()
 	logf      func(string, ...any)
 	statusRev uint64
@@ -330,6 +356,74 @@ func (a *app) post(f func()) {
 	case a.ui <- f:
 	case <-a.ctx.Done():
 	}
+}
+
+// cancelRestore stops a pending pinned restore. An explicit open, pin, unpin
+// or close means the user has taken over, so the saved state no longer needs
+// restoring behind their back.
+func (a *app) cancelRestore() {
+	if a.restoreTimer != nil {
+		a.restoreTimer.Stop()
+		a.restoreTimer = nil
+	}
+	a.restorePending = false
+}
+
+// scheduleRestore arms the next backoff attempt of a refused restore.
+func (a *app) scheduleRestore() {
+	if !a.restorePending || a.restoreTimer != nil {
+		return
+	}
+	if a.restoreTries >= len(restoreBackoff) {
+		a.restorePending = false
+		a.logf("hermes: restore pinned surface: giving up: %v", a.restoreErr)
+		return
+	}
+	delay := restoreBackoff[a.restoreTries]
+	a.restoreTries++
+	a.restoreTimer = time.AfterFunc(delay, func() {
+		a.post(a.restoreOnce)
+	})
+}
+
+// restoreOnce retries a pending pinned restore. The host call blocks on the
+// reply, which the event loop delivers, so it runs off the loop.
+func (a *app) restoreOnce() {
+	if !a.restorePending || a.restoreBusy {
+		return
+	}
+	if a.restoreTimer != nil {
+		a.restoreTimer.Stop()
+		a.restoreTimer = nil
+	}
+	a.restoreBusy = true
+	go func() {
+		a.surfaceMu.Lock()
+		want, err := a.pinned.Restore(a.ctx)
+		pinned := a.pinned.Pinned()
+		a.surfaceMu.Unlock()
+		a.post(func() {
+			a.restoreBusy = false
+			if !a.restorePending {
+				return
+			}
+			switch {
+			case pinned:
+				a.restorePending = false
+				a.pinnedOpen = true
+				if err := a.publishAll(); err != nil {
+					a.logf("hermes: publish after restore: %v", err)
+				}
+			case err == nil && !want:
+				a.restorePending = false
+			case err != nil:
+				a.restoreErr = err
+				a.scheduleRestore()
+			default:
+				a.restorePending = false
+			}
+		})
+	}()
 }
 
 func (a *app) env() renderEnv {
@@ -396,7 +490,15 @@ func (a *app) handle(msg v1.Message) error {
 		return nil
 	case *v1.ViewOpen:
 		a.views.open(m)
-		return a.publish(m.ViewID)
+		if err := a.publish(m.ViewID); err != nil {
+			return err
+		}
+		// The bar gaining an output means the shell will accept surface.open
+		// now, so retry a refused pinned restore without waiting for backoff.
+		if m.View == v1.ViewBar && m.Output != "" && a.restorePending {
+			a.restoreOnce()
+		}
+		return nil
 	case *v1.ViewResize:
 		if v := a.views.get(m.ViewID); v != nil {
 			v.width, v.height = m.Width, m.Height
@@ -410,6 +512,7 @@ func (a *app) handle(msg v1.Message) error {
 	case *v1.ViewClose:
 		if v := a.views.get(m.ViewID); v != nil && v.kind == v1.ViewFloating && a.pinnedOpen {
 			// The user closed the floating surface through the shell.
+			a.cancelRestore()
 			go func() {
 				a.surfaceMu.Lock()
 				_ = a.pinned.Unpin(a.ctx)
@@ -477,6 +580,7 @@ func (a *app) launcherAsk() {
 // openChat raises the pinned surface when one is pinned, else opens the
 // chat panel, as the bar, service action and launcher all do.
 func (a *app) openChat() {
+	a.cancelRestore()
 	go func() {
 		a.surfaceMu.Lock()
 		err := a.pinned.Open(a.ctx)
@@ -494,6 +598,7 @@ func (a *app) openChat() {
 // panel and panel.open replaces the menu or summary itself; a panel.close of
 // ours would race that open and could close the panel the click just opened.
 func (a *app) openChatFrom(v *viewState) {
+	a.cancelRestore()
 	if v.kind == v1.ViewPanel && a.pinnedOpen {
 		params := v1.PanelParams{Entry: v.entry, Output: v.output, Generation: v.generation, Instance: v.instance}
 		go func() {
@@ -513,6 +618,7 @@ func (a *app) openChatFrom(v *viewState) {
 }
 
 func (a *app) openPanelFrom(v *viewState, entry string) {
+	a.cancelRestore()
 	params := v1.PanelParams{Entry: entry}
 	if v != nil {
 		params.Output, params.Generation, params.Instance = v.output, v.generation, v.instance
@@ -526,6 +632,7 @@ func (a *app) openPanelFrom(v *viewState, entry string) {
 }
 
 func (a *app) closePanel(v *viewState) {
+	a.cancelRestore()
 	if v.kind == v1.ViewFloating {
 		// Clear the flag now so the host's ViewClose for this surface does
 		// not start a second Unpin.
@@ -567,6 +674,7 @@ func (a *app) togglePin() {
 	if a.pinBusy {
 		return
 	}
+	a.cancelRestore()
 	a.pinBusy = true
 	want := !a.pinnedOpen
 	if !want {

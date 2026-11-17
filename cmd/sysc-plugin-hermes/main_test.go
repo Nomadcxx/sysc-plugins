@@ -866,6 +866,119 @@ func TestPinnedSurfaceRestoresAtStartup(t *testing.T) {
 	h.waitCall(v1.CallSurfaceOpen)
 }
 
+func (h *testHost) waitCalls(kind v1.CallKind, n int) {
+	deadline := time.Now().Add(h.deadline())
+	for time.Now().Before(deadline) {
+		if h.countCalls(kind) >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	h.t.Fatalf("timed out waiting for %d host calls %s", n, kind)
+}
+
+// refusedRestoreReply refuses the first surface.open and accepts the rest,
+// the way the shell does while the bar has no output yet.
+func refusedRestoreReply() func(*v1.HostCall) *v1.HostReply {
+	var mu sync.Mutex
+	refused := false
+	return func(call *v1.HostCall) *v1.HostReply {
+		switch call.Call {
+		case v1.CallStateGet:
+			result, _ := json.Marshal(v1.StateGetResult{Found: true, Value: json.RawMessage("true")})
+			return &v1.HostReply{ID: call.ID, OK: true, Result: result}
+		case v1.CallSurfaceOpen:
+			mu.Lock()
+			defer mu.Unlock()
+			if !refused {
+				refused = true
+				return &v1.HostReply{ID: call.ID, OK: false, Error: "no output"}
+			}
+			result, _ := json.Marshal(v1.SurfaceResult{ViewID: "view-pinned"})
+			return &v1.HostReply{ID: call.ID, OK: true, Result: result}
+		}
+		return nil
+	}
+}
+
+func TestPinnedRestoreRetriesWhenTheOutputArrives(t *testing.T) {
+	h, _ := startPluginWith(t, func(h *testHost) { h.reply = refusedRestoreReply() })
+	h.waitCalls(v1.CallSurfaceOpen, 1)
+	// The first attempt is refused; the restore must stay pending instead of
+	// giving up.
+	time.Sleep(100 * time.Millisecond)
+	before := h.countCalls(v1.CallSurfaceOpen)
+	if err := h.send(&v1.ViewOpen{ViewID: "bar-1", View: v1.ViewBar, Entry: "bar", Output: "12:00", Width: 240, Height: 32}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitCalls(v1.CallSurfaceOpen, before+1)
+	h.waitSnapshot("bar-1", func(*v1.ViewSnapshot) bool { return true })
+
+	// A later bar output must not open a second surface.
+	if err := h.send(&v1.ViewOpen{ViewID: "bar-1", View: v1.ViewBar, Entry: "bar", Output: "12:01", Width: 240, Height: 32}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got := h.countCalls(v1.CallSurfaceOpen); got != before+1 {
+		t.Fatalf("surface.open ran %d times after the restore, want %d", got, before+1)
+	}
+}
+
+func TestPinnedRestoreRetriesOnItsOwn(t *testing.T) {
+	old := restoreBackoff
+	restoreBackoff = []time.Duration{10 * time.Millisecond}
+	t.Cleanup(func() { restoreBackoff = old })
+
+	h, _ := startPluginWith(t, func(h *testHost) { h.reply = refusedRestoreReply() })
+	// No ViewOpen is sent: the backoff alone must retry the refused restore.
+	h.waitCalls(v1.CallSurfaceOpen, 2)
+}
+
+func TestPinnedRestoreGivesUpWithoutRewritingThePin(t *testing.T) {
+	old := restoreBackoff
+	restoreBackoff = []time.Duration{5 * time.Millisecond, 5 * time.Millisecond}
+	t.Cleanup(func() { restoreBackoff = old })
+
+	h, _ := startPluginWith(t, func(h *testHost) {
+		h.reply = func(call *v1.HostCall) *v1.HostReply {
+			switch call.Call {
+			case v1.CallStateGet:
+				result, _ := json.Marshal(v1.StateGetResult{Found: true, Value: json.RawMessage("true")})
+				return &v1.HostReply{ID: call.ID, OK: true, Result: result}
+			case v1.CallSurfaceOpen:
+				return &v1.HostReply{ID: call.ID, OK: false, Error: "no output"}
+			}
+			return nil
+		}
+	})
+	// One startup attempt plus the two retries in the schedule.
+	h.waitCalls(v1.CallSurfaceOpen, 3)
+	time.Sleep(150 * time.Millisecond)
+	if got := h.countCalls(v1.CallSurfaceOpen); got != 3 {
+		t.Fatalf("surface.open ran %d times, want the retries to stop after 3", got)
+	}
+
+	h.callMu.Lock()
+	defer h.callMu.Unlock()
+	for _, call := range h.callLog {
+		if call.Call == v1.CallStateSet {
+			t.Fatalf("a failed restore rewrote the saved pin: %s", call.Params)
+		}
+	}
+}
+
+func TestPinnedRestoreDoesNotReopenAfterAViewOpen(t *testing.T) {
+	h, _ := startPluginWith(t, func(h *testHost) { h.reply = surfaceReply(true, "true") })
+	h.waitCall(v1.CallSurfaceOpen)
+	if err := h.send(&v1.ViewOpen{ViewID: "bar-1", View: v1.ViewBar, Entry: "bar", Output: "12:00", Width: 240, Height: 32}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got := h.countCalls(v1.CallSurfaceOpen); got != 1 {
+		t.Fatalf("surface.open ran %d times, want no second open", got)
+	}
+}
+
 func TestViewsRenderServiceState(t *testing.T) {
 	state := idleState("example-model")
 	state["usage"] = map[string]any{"input": 10, "output": 5, "total": 15, "cost_usd": 0.5}

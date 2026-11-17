@@ -119,38 +119,40 @@ func (s *PinnedSurface) Unpin(ctx context.Context) error {
 	return s.save(ctx, false)
 }
 
-// Restore reopens the surface when the saved state says it was pinned.
-func (s *PinnedSurface) Restore(ctx context.Context) error {
+// Restore reopens the surface when the saved state says it was pinned. It
+// reports whether the saved state asked for the pin, so the caller can retry
+// when the host refuses the surface during startup.
+func (s *PinnedSurface) Restore(ctx context.Context) (bool, error) {
 	reply, err := s.host.Call(ctx, v1.CallStateGet, v1.StateGetParams{Key: pinnedStateKey})
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !reply.OK {
-		return refused(v1.CallStateGet, reply)
+		return false, refused(v1.CallStateGet, reply)
 	}
 	var result v1.StateGetResult
 	if len(reply.Result) > 0 {
 		if err := json.Unmarshal(reply.Result, &result); err != nil {
-			return fmt.Errorf("state.get: %w", err)
+			return false, fmt.Errorf("state.get: %w", err)
 		}
 	}
 	if !result.Found || len(result.Value) == 0 {
-		return nil
+		return false, nil
 	}
 	var pinned bool
 	if err := json.Unmarshal(result.Value, &pinned); err != nil {
-		return fmt.Errorf("state.get %s: %w", pinnedStateKey, err)
+		return false, fmt.Errorf("state.get %s: %w", pinnedStateKey, err)
 	}
 	if !pinned {
-		return nil
+		return false, nil
 	}
 	view, err := s.open(ctx)
 	if err != nil {
-		return err
+		return true, err
 	}
 	s.viewID = view
 	s.pinned = true
-	return nil
+	return true, nil
 }
 
 // Open is what the bar, a service action and the launcher call: a pinned
