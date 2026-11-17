@@ -1526,10 +1526,21 @@ func TestRespawnAppliesCachedSettingsAfterGrace(t *testing.T) {
 }
 
 func TestRespawnWithDefaultSettingsCacheApplies(t *testing.T) {
+	// The defaults name ~/.cache/sysc-hermes/state.json, ~/.hermes and the
+	// bridge log under the cache home, and the spawn opens the log before it
+	// starts the bridge. Point every home at a throwaway directory so a test
+	// run can never create pieces of a real environment.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	opts := hermes.Options{LocalPort: 1, DefaultScript: filepath.Join(home, "missing-bridge.py")}
+
 	// The host sends nil values when the user never edited a setting, so the
 	// saved copy must be an empty object, not JSON null.
 	t.Run("saves an empty object for nil values", func(t *testing.T) {
-		h, _ := startPlugin(t)
+		h, _ := startPluginOptions(t, opts, func(*testHost) {})
 		if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin}); err != nil {
 			t.Fatal(err)
 		}
@@ -1544,15 +1555,16 @@ func TestRespawnWithDefaultSettingsCacheApplies(t *testing.T) {
 
 	// An all-defaults copy applies the manifest defaults, so the bar leaves
 	// the Connecting… placeholder. A stored null is this plugin's own old
-	// copy. An unreachable local port keeps local mode away from a real
-	// bridge and lets the spawn fail before it starts anything.
+	// copy. An unreachable local port and a missing script keep local mode
+	// away from a real bridge and let the spawn fail before it starts
+	// anything.
 	for _, tc := range []struct{ name, value string }{
 		{"null", "null"},
 		{"empty object", "{}"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			shortGrace(t)
-			h, _ := startPluginOptions(t, hermes.Options{LocalPort: 1}, func(h *testHost) {
+			h, _ := startPluginOptions(t, opts, func(h *testHost) {
 				h.reply = settingsCacheReply(settingsCacheKey, true, tc.value, false)
 			})
 			if err := h.send(barView()); err != nil {
