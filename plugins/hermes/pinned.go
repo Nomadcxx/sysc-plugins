@@ -20,6 +20,13 @@ const (
 	pinnedY        = 32
 	pinnedStateKey = "pinned"
 	pinnedEntry    = "panel"
+
+	// floatingChromeH is the shell's sticky title bar and grip row at the
+	// default density (sysc-shell wrapTreeMeasured: CompactControl plus two
+	// insets, then half a CompactControl). The host announces the whole
+	// surface in view.open but frames the tree inside that chrome, so the
+	// tree is laid out for what is left.
+	floatingChromeH = 60
 )
 
 // PinnedTree draws the chat panel's header, approval card, transcript and
@@ -27,6 +34,7 @@ const (
 // surfaces cannot drift; the action row and sections stay panel-only.
 func PinnedTree(p PanelState, width, height int) *v1.Node {
 	p.Pinned = true
+	height -= floatingChromeH
 	inner := width - 2*panelPad
 	header := panelHeader(p, p.Summary.Status, inner)
 	composer := panelComposer(p, turnRunning(p), inner)
@@ -46,10 +54,9 @@ func PinnedTree(p PanelState, width, height int) *v1.Node {
 			count++
 		}
 	}
-	transcriptH := height - used - (count-1)*panelGap
-	if transcriptH < minTranscriptH {
-		transcriptH = minTranscriptH
-	}
+	// A small surface squeezes the transcript, never the approval card or
+	// the composer: those are what the user acts with.
+	transcriptH := max(height-used-(count-1)*panelGap, bubbleHeight(1))
 	children = append(children, transcript(p, inner, transcriptH), composer)
 	return &v1.Node{
 		Kind: v1.KindColumn, Width: width, Height: height,

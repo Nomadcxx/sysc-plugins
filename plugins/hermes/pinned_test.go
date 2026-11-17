@@ -95,8 +95,13 @@ func TestPinnedTreeReusesTheChatPanelBuilders(t *testing.T) {
 		p := pinnedState(true)
 		tree := PinnedTree(p, w, h)
 		lintView(t, "pinned", tree, v1.ViewFloating, w, h)
-		if tree.Width != w || tree.Height != h || tree.Padding != panelPad || tree.Gap != panelGap {
+		if tree.Width != w || tree.Height != h-floatingChromeH || tree.Padding != panelPad || tree.Gap != panelGap {
 			t.Errorf("%dx%d: root = %+v", w, h, tree)
+		}
+		// The host announces the whole surface but frames the tree in its
+		// title bar and grip, so the content must fit under them.
+		if used := 2*tree.Padding + childrenHeight(tree); used > h-floatingChromeH {
+			t.Errorf("%dx%d: content takes %d, past the %d under the chrome", w, h, used, h-floatingChromeH)
 		}
 		for _, key := range []string{"header", "approval", "transcript", "composer-row"} {
 			if findKey(tree, key) == nil {
