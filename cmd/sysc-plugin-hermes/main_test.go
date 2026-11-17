@@ -902,6 +902,12 @@ func refusedRestoreReply() func(*v1.HostCall) *v1.HostReply {
 }
 
 func TestPinnedRestoreRetriesWhenTheOutputArrives(t *testing.T) {
+	// Push the backoff far beyond any wait deadline: only the bar's ViewOpen
+	// with an output may retry the refused restore in this test.
+	old := restoreBackoff
+	restoreBackoff = []time.Duration{time.Hour}
+	t.Cleanup(func() { restoreBackoff = old })
+
 	h, _ := startPluginWith(t, func(h *testHost) { h.reply = refusedRestoreReply() })
 	h.waitCalls(v1.CallSurfaceOpen, 1)
 	// The first attempt is refused; the restore must stay pending instead of
