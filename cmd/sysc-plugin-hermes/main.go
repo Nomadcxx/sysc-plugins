@@ -372,7 +372,6 @@ type app struct {
 	configured bool
 	// save writes plugin state; the cached host settings land there too.
 	save         func(string, json.RawMessage)
-	hostSettings bool
 	graceDone    bool
 	cacheLoaded  bool
 	cacheChecked bool
@@ -556,10 +555,11 @@ func (a *app) applySettings(values map[string]any) error {
 }
 
 // tryCachedSettings applies the saved settings once the grace has passed and
-// the state.get reply is in, unless host settings arrived first. Identical
-// settings do not reconnect: Service.Configure compares the connection key.
+// the state.get reply is in, unless host settings arrived first (applying
+// them sets configured). Identical settings do not reconnect:
+// Service.Configure compares the connection key.
 func (a *app) tryCachedSettings() error {
-	if a.cacheChecked || a.hostSettings || a.configured || !a.cacheLoaded || !a.graceDone {
+	if a.cacheChecked || a.configured || !a.cacheLoaded || !a.graceDone {
 		return nil
 	}
 	a.cacheChecked = true
@@ -580,7 +580,6 @@ func (a *app) handle(msg v1.Message) error {
 		if m.Scope != v1.ScopePlugin && m.Scope != "" {
 			return nil
 		}
-		a.hostSettings = true
 		if a.graceTimer != nil {
 			a.graceTimer.Stop()
 			a.graceTimer = nil
