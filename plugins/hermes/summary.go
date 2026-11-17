@@ -327,24 +327,33 @@ func summaryBanner(s SummaryState, inner int) *v1.Node {
 }
 
 // summaryActions is New session, Interrupt and Refresh. Interrupt is live
-// only while a session runs or Hermes is busy, as in noctalia.
+// only while a session runs or Hermes is busy, as in noctalia. Refresh is
+// its glyph alone, and the other two share the rest by their label widths;
+// where even that is too narrow they drop their glyphs, never their words.
 func summaryActions(s SummaryState, status Status, inner int) *v1.Node {
-	w := (inner - 2*8) / 3
-	button := func(id, text, icon string) *v1.Node {
+	button := func(id, text, icon string, w int) *v1.Node {
+		if text != "" && labelBytes(w, true) < len(text) {
+			icon = "" // a narrow summary keeps the words, not the glyph
+		}
 		return &v1.Node{
 			Kind: v1.KindButton, ID: id, Key: id, Icon: icon, Text: text, Name: text,
 			Role: "button", Width: w, Height: buttonHeight, Padding: 8,
 			Events: []v1.EventKind{v1.EventActivate},
 		}
 	}
-	interrupt := button("interrupt", "Interrupt", menuIconInterrupt)
+	room := inner - 2*8 - iconButtonW
+	newW := buttonWidth("New session", menuIconNewSession)
+	newW = room * newW / (newW + buttonWidth("Interrupt", menuIconInterrupt))
+	interrupt := button("interrupt", "Interrupt", menuIconInterrupt, room-newW)
 	interrupt.Disabled = !(s.SessionRunning || status.Key == StatusBusy)
+	refresh := button("refresh", "", menuIconRefresh, iconButtonW)
+	refresh.Name = "Refresh"
 	return &v1.Node{
 		Kind: v1.KindRow, Width: inner, Height: buttonHeight, Gap: 8,
 		Children: []*v1.Node{
-			button("new-session", "New session", menuIconNewSession),
+			button("new-session", "New session", menuIconNewSession, newW),
 			interrupt,
-			button("refresh", "Refresh", menuIconRefresh),
+			refresh,
 		},
 	}
 }

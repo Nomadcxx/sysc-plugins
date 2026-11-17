@@ -278,16 +278,37 @@ func TestSummaryActionsFollowNoctalia(t *testing.T) {
 					t.Errorf("%s: control %q is not a manifest service action", s, id)
 				}
 			}
-			labels := map[string]string{"new-session": "New session", "interrupt": "Interrupt", "refresh": "Refresh", "settings": "Hermes Settings"}
+			labels := map[string]string{"new-session": "New session", "interrupt": "Interrupt", "settings": "Hermes Settings"}
 			for id, text := range labels {
 				if n := findID(tree, id); n == nil || n.Text != text {
 					t.Errorf("%s: %s button text = %+v, want %q", s, id, n, text)
 				}
 			}
+			// Refresh is the glyph alone, so the two labels beside it fit.
+			if n := findID(tree, "refresh"); n == nil || n.Name != "Refresh" || n.Icon == "" || n.Text != "" {
+				t.Errorf("%s: refresh = %+v, want the glyph named Refresh", s, n)
+			}
 			interrupt := findID(tree, "interrupt")
 			wantDisabled := !(running || s == StatusBusy)
 			if interrupt != nil && interrupt.Disabled != wantDisabled {
 				t.Errorf("%s running=%v: interrupt disabled = %v, want %v", s, running, interrupt.Disabled, wantDisabled)
+			}
+		}
+	}
+}
+
+// TestSummaryActionLabelsFit pins the live "New se…": three equal thirds
+// could not hold New session with its glyph in the real font.
+func TestSummaryActionLabelsFit(t *testing.T) {
+	for _, size := range [][2]int{{380, 480}, {320, 400}} {
+		tree := SummaryTree(SummaryState{BarState: stateFor(StatusIdle)}, "", size[0], size[1])
+		for _, id := range []string{"new-session", "interrupt"} {
+			n := findID(tree, id)
+			if n == nil {
+				t.Fatalf("%v: no %s", size, id)
+			}
+			if got := labelBytes(n.Width, n.Icon != ""); got < len(n.Text) {
+				t.Errorf("%v: %s is %d wide and holds %d bytes of %q", size, id, n.Width, got, n.Text)
 			}
 		}
 	}
