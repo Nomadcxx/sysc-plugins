@@ -1161,3 +1161,23 @@ func TestLocalReloadsTheTokenAfterA403(t *testing.T) {
 		return false
 	})
 }
+
+// TestOneShotFailureShowsTheActionError: a composer one-shot used to fail
+// through the action queue, which showed the failure in the panel. Run off
+// the queue, a failed one-shot must still say so.
+func TestOneShotFailureShowsTheActionError(t *testing.T) {
+	h := newHarness(t)
+	remote := newFakeBridge(t, "remote-tok")
+	remote.handle("/oneshot", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"oneshot_failed"}`))
+	})
+	h.svc.Configure(h.clientSettings(remote, "remote-tok"))
+	h.waitFor("idle", func(v View) bool { return v.Status.Key == StatusIdle })
+
+	h.svc.OneShot("question")
+	v := h.waitFor("one-shot failure", func(v View) bool { return !v.OneShotRunning && v.OneShotError != "" })
+	if v.ActionError != MsgOneShotFailed {
+		t.Fatalf("action error = %q, want %q", v.ActionError, MsgOneShotFailed)
+	}
+}

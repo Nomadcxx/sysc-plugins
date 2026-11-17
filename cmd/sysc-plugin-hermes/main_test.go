@@ -1758,3 +1758,93 @@ func TestRestoreBackoffDefault(t *testing.T) {
 		t.Fatalf("restoreBackoff = %v, want %v", restoreBackoff, want)
 	}
 }
+
+// treeHasID reports whether any node in the tree carries id.
+func treeHasID(n *v1.Node, id string) bool {
+	if n == nil {
+		return false
+	}
+	if n.ID == id {
+		return true
+	}
+	for _, c := range n.Children {
+		if treeHasID(c, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestComposerOneShotDoesNotHoldTheActionQueue: a one-shot sent from the
+// composer runs `hermes -z` for up to ten minutes. It used to go through the
+// serial action queue, so an interrupt, an approval click or a new session
+// waited behind it. Service.OneShot runs it off the queue, as the launcher's
+// Ask already does.
+func TestComposerOneShotDoesNotHoldTheActionQueue(t *testing.T) {
+	release := make(chan struct{})
+	oneshots := make(chan struct{}, 4)
+	interrupts := make(chan struct{}, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/detect":
+			_, _ = io.WriteString(w, `{}`)
+			return
+		case "/health":
+			_, _ = io.WriteString(w, `{"bridge":{"status":"online"}}`)
+			return
+		}
+		if r.Header.Get("X-Bridge-Token") != "fake-token" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		switch r.URL.Path {
+		case "/state":
+			_ = json.NewEncoder(w).Encode(idleState("example-model"))
+		case "/oneshot":
+			oneshots <- struct{}{}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+			_, _ = io.WriteString(w, `{"result":{"status":"completed"}}`)
+		case "/interrupt":
+			interrupts <- struct{}{}
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			_, _ = io.WriteString(w, `{}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	host, portText, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+
+	h, _ := startPlugin(t)
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(host, port)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Width: 780, Height: 720}); err != nil {
+		t.Fatal(err)
+	}
+	snap := h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool { return treeHasID(s.Root, "one-shot") })
+	clickNode(t, h, "panel-1", snap.Revision, "one-shot")
+	snap = h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool { return s.Revision > snap.Revision })
+	if err := h.send(&v1.InputEvent{ViewID: "panel-1", Revision: snap.Revision, Node: "composer",
+		Event: v1.EventSubmit, Text: "what is the time"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-oneshots:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the composer one-shot never reached the bridge")
+	}
+	if err := h.send(&v1.ServiceAction{ServiceID: serviceID, ActionID: "interrupt"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-interrupts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the interrupt waited behind the running one-shot")
+	}
+}

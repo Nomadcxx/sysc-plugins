@@ -513,6 +513,7 @@ func (s *Service) OneShot(text string) {
 				v.OneShotResult = snap.Result
 			case ctx.Err() == nil:
 				v.OneShotError = MsgOneShotFailed
+				v.ActionError = MsgOneShotFailed
 			}
 		})
 	}()

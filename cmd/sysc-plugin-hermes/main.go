@@ -838,6 +838,13 @@ func (a *app) send(id, text string) {
 		return
 	}
 	for _, call := range calls {
+		if req, ok := call.Body.(hermes.PromptRequest); ok && call.Path == "/oneshot" {
+			// hermes -z can run for minutes: keep it off the serial action
+			// queue, so an interrupt or an approval click is not stuck
+			// behind it. Interrupt cancels it like the launcher's Ask.
+			a.svc.OneShot(req.Text)
+			continue
+		}
 		a.svc.Submit(call.Path, call.Body)
 	}
 	v.composer = hermes.AfterSend(v.composer)
