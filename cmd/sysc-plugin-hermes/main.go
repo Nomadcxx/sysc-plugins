@@ -250,6 +250,7 @@ func runWith(in io.Reader, out io.Writer, stderr io.Writer, opts hermes.Options)
 	a := &app{
 		ctx: ctx, client: client, svc: svc, views: newViewSet(),
 		pinned: hermes.NewPinnedSurface(client), set: hermes.DefaultSettings(),
+		save:   saver.Save,
 		avatar: hermes.AvatarPath(""), ui: make(chan func(), inboundBuffer),
 		logf: logf, statusRev: 1,
 	}
@@ -277,6 +278,36 @@ func runWith(in io.Reader, out io.Writer, stderr io.Writer, opts hermes.Options)
 				logf("hermes: publish after restore: %v", err)
 			}
 		})
+	}()
+
+	// The host sends plugin settings only when it starts the plugin, not when
+	// it respawns it, so reuse the copy saved on the last start. The grace
+	// keeps host settings first; whichever of the reply and the timer is last
+	// runs the apply check.
+	go func() {
+		values, note := readCachedSettings(ctx, client)
+		a.post(func() {
+			a.cacheLoaded, a.cacheValues = true, values
+			if note != "" {
+				a.logf("%s", note)
+			}
+			if err := a.tryCachedSettings(); err != nil {
+				a.logf("hermes: restore saved settings: %v", err)
+			}
+		})
+	}()
+	a.graceTimer = time.AfterFunc(settingsGrace, func() {
+		a.post(func() {
+			a.graceDone = true
+			if err := a.tryCachedSettings(); err != nil {
+				a.logf("hermes: restore saved settings: %v", err)
+			}
+		})
+	})
+	defer func() {
+		if a.graceTimer != nil {
+			a.graceTimer.Stop()
+		}
 	}()
 
 	for {
@@ -318,6 +349,15 @@ var restoreBackoff = []time.Duration{
 	8 * time.Second,
 }
 
+// settingsCacheKey holds the last host settings in plugin state. The host
+// sends plugin settings only when it starts the plugin, not when it respawns
+// it, so a respawned process reconnects from this copy.
+const settingsCacheKey = "host_settings"
+
+// settingsGrace lets host settings win over the cached copy at start. Tests
+// shorten it.
+var settingsGrace = 2 * time.Second
+
 // app is the plugin's event-loop state: the service, the open views and the
 // per-view UI state. Everything here runs on the loop except the goroutines
 // that make one blocking host call and post their result back.
@@ -330,9 +370,17 @@ type app struct {
 
 	set        hermes.Settings
 	configured bool
-	avatar     string
-	pinnedOpen bool
-	pinBusy    bool
+	// save writes plugin state; the cached host settings land there too.
+	save         func(string, json.RawMessage)
+	hostSettings bool
+	graceDone    bool
+	cacheLoaded  bool
+	cacheChecked bool
+	cacheValues  map[string]any
+	graceTimer   *time.Timer
+	avatar       string
+	pinnedOpen   bool
+	pinBusy      bool
 
 	// A pinned restore the host refused at startup; retried with backoff or
 	// as soon as the bar reports an output.
@@ -468,6 +516,55 @@ func (a *app) publishAll() error {
 	return nil
 }
 
+// readCachedSettings reads the settings saved on the last start. The note is
+// a short line for the log; it never carries a value.
+func readCachedSettings(ctx context.Context, c *v1.Client) (map[string]any, string) {
+	reply, err := hostcall.Call(ctx, c, v1.CallStateGet, v1.StateGetParams{Key: settingsCacheKey})
+	if err != nil {
+		return nil, fmt.Sprintf("hermes: cannot read saved settings: %v", err)
+	}
+	if !reply.OK {
+		return nil, fmt.Sprintf("hermes: cannot read saved settings: %s", reply.Error)
+	}
+	var res v1.StateGetResult
+	if len(reply.Result) > 0 {
+		if err := json.Unmarshal(reply.Result, &res); err != nil {
+			return nil, fmt.Sprintf("hermes: cannot read saved settings: %v", err)
+		}
+	}
+	if !res.Found || len(res.Value) == 0 {
+		return nil, "hermes: no saved settings to restore"
+	}
+	var values map[string]any
+	if err := json.Unmarshal(res.Value, &values); err != nil || values == nil {
+		return nil, "hermes: saved settings are unreadable"
+	}
+	return values, ""
+}
+
+// applySettings configures the service from host values and paints the views.
+func (a *app) applySettings(values map[string]any) error {
+	a.set = hermes.SettingsFromValues(values)
+	a.svc.Configure(a.set)
+	a.configured = true
+	return a.publishAll()
+}
+
+// tryCachedSettings applies the saved settings once the grace has passed and
+// the state.get reply is in, unless host settings arrived first. Identical
+// settings do not reconnect: Service.Configure compares the connection key.
+func (a *app) tryCachedSettings() error {
+	if a.cacheChecked || a.hostSettings || a.configured || !a.cacheLoaded || !a.graceDone {
+		return nil
+	}
+	a.cacheChecked = true
+	if a.cacheValues == nil {
+		return nil
+	}
+	a.logf("hermes: using the settings saved at the last start")
+	return a.applySettings(a.cacheValues)
+}
+
 // handle does only cheap state work: HTTP and host calls run in the service
 // or in one goroutine that posts its result back.
 func (a *app) handle(msg v1.Message) error {
@@ -478,10 +575,19 @@ func (a *app) handle(msg v1.Message) error {
 		if m.Scope != v1.ScopePlugin && m.Scope != "" {
 			return nil
 		}
-		a.set = hermes.SettingsFromValues(m.Values)
-		a.svc.Configure(a.set)
-		a.configured = true
-		return a.publishAll()
+		a.hostSettings = true
+		if a.graceTimer != nil {
+			a.graceTimer.Stop()
+			a.graceTimer = nil
+		}
+		// Save the whole map, including a pasted bridge token, so a respawn
+		// can reconnect; state.json is mode 0600 like config.json.
+		if raw, err := json.Marshal(m.Values); err != nil {
+			a.logf("hermes: cannot cache settings: %v", err)
+		} else if a.save != nil {
+			a.save(settingsCacheKey, raw)
+		}
+		return a.applySettings(m.Values)
 	case *v1.ServiceAction:
 		if m.ServiceID != serviceID {
 			return nil

@@ -525,6 +525,18 @@ func TestAWedgedHostCallNeverBlocksTheEventLoop(t *testing.T) {
 	if d := time.Since(start); d > time.Second {
 		t.Fatalf("20 resizes took %s behind a wedged host call", d)
 	}
+	// A wedged host call holds the state writer, and its bound outlasts this
+	// test's 2 s shutdown wait. Answer the outstanding calls the way a live
+	// host would, before the shutdown cleanup runs (cleanups are LIFO).
+	t.Cleanup(func() {
+		h.callMu.Lock()
+		calls := append([]*v1.HostCall(nil), h.callLog...)
+		h.callMu.Unlock()
+		h.silent.Store(false)
+		for _, call := range calls {
+			_ = h.send(&v1.HostReply{ID: call.ID, OK: true})
+		}
+	})
 }
 
 func TestViewErrorIsLoggedAndShownOnTheConnectionLine(t *testing.T) {
@@ -1388,6 +1400,230 @@ func TestSummaryChoiceReplacesIt(t *testing.T) {
 			settle(t, h, "summary-1")
 			if got := h.countCalls(v1.CallPanelClose); got != 0 {
 				t.Fatalf("%s closed the summary", node)
+			}
+		})
+	}
+}
+
+// --- D2: settings cached in plugin state survive a respawn ---
+
+// shortGrace shortens the grace that lets host settings beat the cache.
+func shortGrace(t *testing.T) {
+	t.Helper()
+	old := settingsGrace
+	settingsGrace = 20 * time.Millisecond
+	t.Cleanup(func() { settingsGrace = old })
+}
+
+// settingsCacheReply answers state.get for one key; other host calls keep the
+// default reply.
+func settingsCacheReply(key string, found bool, value string, fail bool) func(*v1.HostCall) *v1.HostReply {
+	return func(call *v1.HostCall) *v1.HostReply {
+		if call.Call != v1.CallStateGet {
+			return nil
+		}
+		var p v1.StateGetParams
+		if err := json.Unmarshal(call.Params, &p); err != nil || p.Key != key {
+			return nil
+		}
+		if fail {
+			return &v1.HostReply{ID: call.ID, OK: false, Error: "state backend down"}
+		}
+		result, _ := json.Marshal(v1.StateGetResult{Found: found, Value: json.RawMessage(value)})
+		return &v1.HostReply{ID: call.ID, OK: true, Result: result}
+	}
+}
+
+// waitOnlineAndActive takes the Online bar and the active status from one
+// stream, because either can arrive first.
+func waitOnlineAndActive(t *testing.T, h *testHost) {
+	t.Helper()
+	var snap *v1.ViewSnapshot
+	var status *v1.ServiceStatus
+	deadline := time.After(h.deadline())
+	for snap == nil || status == nil {
+		select {
+		case m := <-h.msgs:
+			switch v := m.(type) {
+			case *v1.ViewSnapshot:
+				if v.ViewID == "bar-1" && treeHasName(v.Root, "Online") {
+					snap = v
+				}
+			case *v1.ServiceStatus:
+				if v.State == v1.ServiceStateActive {
+					status = v
+				}
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for the Online bar and active status (snapshot=%v status=%v)", snap != nil, status != nil)
+		}
+	}
+	if status.Message != "Online" {
+		t.Fatalf("service status = %+v", status)
+	}
+}
+
+func TestSettingsChangedSavesHostSettingsCache(t *testing.T) {
+	host, port := fakeRemote(t, "idle")
+	h, _ := startPlugin(t)
+	values := clientOnlyValues(host, port)
+	const token = "test-token-not-secret"
+	values["bridge_token_manual"] = token
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: values}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitCallParams(v1.CallStateSet, func(raw json.RawMessage) bool {
+		var p v1.StateSetParams
+		if err := json.Unmarshal(raw, &p); err != nil || p.Key != settingsCacheKey {
+			return false
+		}
+		var got map[string]any
+		if err := json.Unmarshal(p.Value, &got); err != nil {
+			return false
+		}
+		return got["client_only_mode"] == true && got["bridge_token_manual"] == token
+	})
+	time.Sleep(50 * time.Millisecond)
+	if s := h.stderr.String(); strings.Contains(s, token) {
+		t.Fatalf("stderr leaked the bridge token: %s", s)
+	}
+}
+
+func TestRespawnAppliesCachedSettingsAfterGrace(t *testing.T) {
+	shortGrace(t)
+	host, port := fakeRemote(t, "idle")
+	cached, err := json.Marshal(clientOnlyValues(host, port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, _ := startPluginWith(t, func(h *testHost) {
+		h.reply = settingsCacheReply(settingsCacheKey, true, string(cached), false)
+	})
+	if err := h.send(barView()); err != nil {
+		t.Fatal(err)
+	}
+	h.waitSnapshot("bar-1", func(s *v1.ViewSnapshot) bool { return strings.Contains(treeText(s.Root), "Connecting…") })
+	waitOnlineAndActive(t, h)
+	if h.countCalls(v1.CallStateSet) > 0 {
+		// A state.set may only be the pin; the cache must not be re-saved.
+		var p v1.StateSetParams
+		h.callMu.Lock()
+		for _, call := range h.callLog {
+			if call.Call == v1.CallStateSet && json.Unmarshal(call.Params, &p) == nil && p.Key == settingsCacheKey {
+				h.callMu.Unlock()
+				t.Fatal("the restored cache was written back to plugin state")
+			}
+		}
+		h.callMu.Unlock()
+	}
+}
+
+func TestHostSettingsBeatCache(t *testing.T) {
+	shortGrace(t)
+	var cachedHits atomic.Int64
+	cachedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cachedHits.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(cachedSrv.Close)
+	cachedHost, cachedPortText, _ := net.SplitHostPort(cachedSrv.Listener.Addr().String())
+	cachedPort, _ := strconv.Atoi(cachedPortText)
+	cached, _ := json.Marshal(clientOnlyValues(cachedHost, cachedPort))
+
+	host, port := fakeRemoteState(t, idleState("example-model"))
+	h, _ := startPluginWith(t, func(h *testHost) {
+		h.reply = settingsCacheReply(settingsCacheKey, true, string(cached), false)
+	})
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(host, port)}); err != nil {
+		t.Fatal(err)
+	}
+	h.wait(func(m v1.Message) bool {
+		s, ok := m.(*v1.ServiceStatus)
+		return ok && s.State == v1.ServiceStateActive
+	})
+	time.Sleep(3 * settingsGrace)
+	if n := cachedHits.Load(); n != 0 {
+		t.Fatalf("the cached bridge was contacted %d times, want none", n)
+	}
+}
+
+func TestCacheThenIdenticalHostSettingsDoesNotReconnect(t *testing.T) {
+	shortGrace(t)
+	var detects atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/detect" {
+			detects.Add(1)
+		}
+		if r.Header.Get("X-Bridge-Token") != "fake-token" && r.URL.Path != "/detect" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/state" {
+			_ = json.NewEncoder(w).Encode(idleState("example-model"))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"bridge": map[string]any{"status": "online"},
+			"hermes": map[string]any{"status": "idle"},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	host, portText, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	values := clientOnlyValues(host, port)
+	cached, _ := json.Marshal(values)
+
+	h, _ := startPluginWith(t, func(h *testHost) {
+		h.reply = settingsCacheReply(settingsCacheKey, true, string(cached), false)
+	})
+	if err := h.send(barView()); err != nil {
+		t.Fatal(err)
+	}
+	h.wait(func(m v1.Message) bool {
+		s, ok := m.(*v1.ServiceStatus)
+		return ok && s.State == v1.ServiceStateActive
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for detects.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := detects.Load(); n != 1 {
+		t.Fatalf("detect calls after the cached start = %d, want 1", n)
+	}
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: values}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if n := detects.Load(); n != 1 {
+		t.Fatalf("identical host settings reconnected: %d detect calls, want 1", n)
+	}
+}
+
+func TestNoCacheStaysConnecting(t *testing.T) {
+	cases := []struct {
+		name string
+		want string
+		call func(*v1.HostCall) *v1.HostReply
+	}{
+		{"missing", "no saved settings", settingsCacheReply(settingsCacheKey, false, "", false)},
+		{"error", "cannot read saved settings", settingsCacheReply(settingsCacheKey, false, "", true)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			shortGrace(t)
+			h, _ := startPluginWith(t, func(h *testHost) { h.reply = tc.call })
+			if err := h.send(barView()); err != nil {
+				t.Fatal(err)
+			}
+			h.waitSnapshot("bar-1", func(s *v1.ViewSnapshot) bool { return strings.Contains(treeText(s.Root), "Connecting…") })
+			time.Sleep(3 * settingsGrace)
+			if err := h.send(&v1.ViewResync{ViewID: "bar-1"}); err != nil {
+				t.Fatal(err)
+			}
+			h.waitSnapshot("bar-1", func(s *v1.ViewSnapshot) bool { return strings.Contains(treeText(s.Root), "Connecting…") })
+			if s := h.stderr.String(); !strings.Contains(s, tc.want) {
+				t.Fatalf("stderr does not carry %q: %s", tc.want, s)
 			}
 		})
 	}
