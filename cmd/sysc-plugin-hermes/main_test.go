@@ -1741,3 +1741,20 @@ func TestSettingsGraceDefault(t *testing.T) {
 		t.Fatalf("settings grace = %s, want 2s", settingsGrace)
 	}
 }
+
+// TestRestoreBackoffDefault pins the package default of the pinned-restore
+// retry delays. Every D7 test overrides restoreBackoff, so without this an
+// emptied or changed default went unnoticed (qa-t11c B1).
+func TestRestoreBackoffDefault(t *testing.T) {
+	want := []time.Duration{
+		250 * time.Millisecond,
+		500 * time.Millisecond,
+		time.Second,
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+	}
+	if !reflect.DeepEqual(restoreBackoff, want) {
+		t.Fatalf("restoreBackoff = %v, want %v", restoreBackoff, want)
+	}
+}
