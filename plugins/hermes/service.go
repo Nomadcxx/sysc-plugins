@@ -307,8 +307,6 @@ type View struct {
 
 	Pending        bool
 	OneShotRunning bool
-	OneShotResult  json.RawMessage
-	OneShotError   string
 
 	Owned   bool
 	Adopted bool
@@ -493,7 +491,7 @@ func (s *Service) OneShot(text string) {
 	s.oneCancel = cancel
 	b := s.bridge
 	s.mu.Unlock()
-	s.publish(func(v *View) { v.OneShotRunning, v.OneShotResult, v.OneShotError = true, nil, "" })
+	s.publish(func(v *View) { v.OneShotRunning = true })
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -512,16 +510,17 @@ func (s *Service) OneShot(text string) {
 		if !mine {
 			return
 		}
+		// As noctalia: the reply is in the state the bridge returns, said
+		// in the transcript; a failure is said where failed actions are.
 		s.publish(func(v *View) {
 			v.OneShotRunning = false
-			switch {
-			case err == nil:
-				v.OneShotResult = snap.Result
-			case ctx.Err() == nil:
-				v.OneShotError = MsgOneShotFailed
+			if err != nil && ctx.Err() == nil {
 				v.ActionError = MsgOneShotFailed
 			}
 		})
+		if err == nil && snap.HasState && ctx.Err() == nil {
+			s.publishState(snap.State)
+		}
 	}()
 }
 

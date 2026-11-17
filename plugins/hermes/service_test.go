@@ -1176,8 +1176,41 @@ func TestOneShotFailureShowsTheActionError(t *testing.T) {
 	h.waitFor("idle", func(v View) bool { return v.Status.Key == StatusIdle })
 
 	h.svc.OneShot("question")
-	v := h.waitFor("one-shot failure", func(v View) bool { return !v.OneShotRunning && v.OneShotError != "" })
+	v := h.waitFor("one-shot failure", func(v View) bool { return !v.OneShotRunning && v.ActionError != "" })
 	if v.ActionError != MsgOneShotFailed {
 		t.Fatalf("action error = %q, want %q", v.ActionError, MsgOneShotFailed)
 	}
+}
+
+// TestOneShotReplyShowsInTheTranscript: like noctalia, which publishes the
+// state /oneshot returns (service.luau:236-242), the reply the bridge
+// appended shows at once, without waiting for the next poll (R11).
+func TestOneShotReplyShowsInTheTranscript(t *testing.T) {
+	h := newHarness(t)
+	remote := newFakeBridge(t, "remote-tok")
+	remote.handle("/oneshot", func(w http.ResponseWriter, r *http.Request) {
+		remote.mu.Lock()
+		st := remote.stateJSON()
+		remote.mu.Unlock()
+		st["messages"] = []map[string]any{
+			{"id": "m1", "role": "user", "text": "question"},
+			{"id": "m2", "role": "assistant", "text": "the answer"},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"status": "completed"}, "state": st})
+	})
+	s := h.clientSettings(remote, "remote-tok")
+	s.PollInterval = time.Hour
+	h.svc.Configure(s)
+	h.waitFor("idle", func(v View) bool { return v.Status.Key == StatusIdle })
+
+	h.svc.OneShot("question")
+	h.waitFor("the reply in the transcript", func(v View) bool {
+		for _, m := range v.State.Messages {
+			if m.Role == "assistant" && m.Text == "the answer" {
+				return !v.OneShotRunning
+			}
+		}
+		return false
+	})
 }
