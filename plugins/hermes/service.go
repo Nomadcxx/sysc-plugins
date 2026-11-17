@@ -213,6 +213,10 @@ type Options struct {
 	// DefaultScript is the bundled bridge, used when bridge_script is blank.
 	DefaultScript string
 	QueueSize     int
+	// ApprovalGuard is how long a click on an approval card that has just
+	// replaced another one is refused, because it was most likely aimed at
+	// the card it replaced.
+	ApprovalGuard time.Duration
 }
 
 // DefaultOptions are the design's numbers.
@@ -228,6 +232,7 @@ func DefaultOptions() Options {
 		WatchPoll:     DefaultWatchPoll,
 		SpawnAttempts: 3,
 		QueueSize:     32,
+		ApprovalGuard: time.Second,
 	}
 }
 
@@ -262,6 +267,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.QueueSize <= 0 {
 		o.QueueSize = d.QueueSize
+	}
+	if o.ApprovalGuard <= 0 {
+		o.ApprovalGuard = d.ApprovalGuard
 	}
 	return o
 }
@@ -362,6 +370,14 @@ type Service struct {
 	approvalSig string
 	prevRunning bool
 	haveState   bool
+
+	// The approval card on screen (ApprovalSig), when it first showed, and
+	// whether it replaced another card within the guard (O1). cardGoneAt is
+	// when the last card disappeared.
+	cardSig      string
+	cardAt       time.Time
+	cardReplaced bool
+	cardGoneAt   time.Time
 
 	oneID     uint64
 	oneCancel context.CancelFunc
@@ -630,6 +646,7 @@ func (s *Service) reset(set Settings) {
 	s.mu.Lock()
 	s.bridge = nil
 	s.haveState, s.prevRunning, s.approvalSig = false, false, ""
+	s.cardSig, s.cardAt, s.cardReplaced, s.cardGoneAt = "", time.Time{}, false, time.Time{}
 	if !set.ClientOnly {
 		s.adoptedLocal = false
 	}
@@ -684,6 +701,7 @@ func (s *Service) publishState(st State) {
 	} else {
 		s.approvalSig = ""
 	}
+	s.trackCardLocked(st, time.Now())
 	if s.haveState && s.prevRunning && !st.Session.Running && set.NotifyOnComplete {
 		notes = append(notes, [2]string{"Hermes finished", ""})
 	}
@@ -708,6 +726,32 @@ func (s *Service) publishConn(bridgeStatus, msg string) {
 		v.Status = DeriveStatus(v.State)
 		v.Message = msg
 	})
+}
+
+// trackCardLocked records when the approval card in st first showed and
+// whether it took the place of another card within the guard. s.mu is held.
+func (s *Service) trackCardLocked(st State, now time.Time) {
+	if !st.Approval.Pending {
+		if s.cardSig != "" {
+			s.cardSig, s.cardReplaced, s.cardGoneAt = "", false, now
+		}
+		return
+	}
+	sig := ApprovalSig(st)
+	if sig == s.cardSig {
+		return
+	}
+	recentlyGone := !s.cardGoneAt.IsZero() && now.Sub(s.cardGoneAt) < s.opts.ApprovalGuard
+	s.cardReplaced = s.cardSig != "" || recentlyGone
+	s.cardSig, s.cardAt = sig, now
+}
+
+// clickTooSoon reports whether a click at at on the card sig landed within
+// the guard after that card replaced another one.
+func (s *Service) clickTooSoon(sig string, at time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cardReplaced && s.cardSig == sig && at.Sub(s.cardAt) < s.opts.ApprovalGuard
 }
 
 func approvalSignature(a Approval) string {

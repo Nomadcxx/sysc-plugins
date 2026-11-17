@@ -279,3 +279,77 @@ func TestApprovalClick409ShowsMessageAndDoesNotRetry(t *testing.T) {
 		t.Fatalf("a 409 was retried: %d approval posts", n)
 	}
 }
+
+// replaceApproval shows a second request on the bridge and waits until the
+// service publishes it.
+func replaceApproval(t *testing.T, h *harness, remote *fakeBridge, next *Approval) State {
+	t.Helper()
+	remote.set(func(fb *fakeBridge) { fb.approval = next })
+	h.svc.Refresh()
+	v := h.waitFor("replaced card", func(v View) bool {
+		return v.State.Approval.Pending && v.State.Approval.RequestID == next.RequestID
+	})
+	return v.State
+}
+
+func secondApproval() *Approval {
+	a := pendingApproval()
+	a.Message = "rm -rf src?"
+	a.Request = json.RawMessage(`{"command":"rm -rf src","id":"req-2"}`)
+	a.RequestID = "req-2"
+	return a
+}
+
+// TestApprovalClickRightAfterAReplacementPostsNothing is O1: the card was
+// replaced while the pointer was on its way, so the click names the new
+// request. It must not resolve it; the stale message shows instead, and a
+// click once the card has settled resolves the request it was rendered for.
+func TestApprovalClickRightAfterAReplacementPostsNothing(t *testing.T) {
+	remote := newFakeBridge(t, "remote-tok")
+	h, _ := approvalHarness(t, remote, pendingApproval())
+	st := replaceApproval(t, h, remote, secondApproval())
+
+	h.svc.ApprovalClick(ApprovalButtons(st)[1].ID)
+	v := h.waitFor("changed message", func(v View) bool { return v.ActionError == MsgApprovalChanged })
+	if v.ActionError != "The approval changed; check the card again" {
+		t.Fatalf("message = %q", v.ActionError)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if n := remote.count("/approval"); n != 0 {
+		t.Fatalf("a click on a card replaced just before it posted %d approvals", n)
+	}
+
+	time.Sleep(DefaultOptions().ApprovalGuard)
+	h.svc.ApprovalClick(ApprovalButtons(st)[1].ID)
+	waitUntil(t, "approval posted", func() bool { return remote.count("/approval") == 1 })
+	for _, r := range remote.requests() {
+		if r.Path == "/approval" && r.Body != `{"all":false,"choice":"once","request_id":"req-2"}` {
+			t.Fatalf("/approval body = %s, want the replaced card's request", r.Body)
+		}
+	}
+}
+
+// TestApprovalClickRightAfterAGapReplacementPostsNothing covers the live
+// order: the old card is resolved, the card disappears, and the next request
+// appears a moment later under the pointer.
+func TestApprovalClickRightAfterAGapReplacementPostsNothing(t *testing.T) {
+	remote := newFakeBridge(t, "remote-tok")
+	h, _ := approvalHarness(t, remote, pendingApproval())
+	remote.set(func(fb *fakeBridge) { fb.approval = nil })
+	h.svc.Refresh()
+	h.waitFor("card gone", func(v View) bool { return !v.State.Approval.Pending })
+	st := replaceApproval(t, h, remote, secondApproval())
+
+	h.svc.ApprovalClick(ApprovalButtons(st)[1].ID)
+	h.waitFor("changed message", func(v View) bool { return v.ActionError == MsgApprovalChanged })
+	time.Sleep(80 * time.Millisecond)
+	if n := remote.count("/approval"); n != 0 {
+		t.Fatalf("a click on a card that just replaced another posted %d approvals", n)
+	}
+}
+
+func TestApprovalGuardDefault(t *testing.T) {
+	if got := DefaultOptions().ApprovalGuard; got != time.Second {
+		t.Fatalf("default approval guard = %s, want 1s", got)
+	}
+}

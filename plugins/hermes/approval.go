@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 )
 
 // Approval button actions, as they appear in the action ID.
@@ -137,6 +138,7 @@ func approvalStillShown(st State, sig string) bool {
 type approvalClick struct {
 	sig    string
 	action string
+	at     time.Time
 }
 
 // ApprovalClick routes one approval:<sig>:<action> click to the action
@@ -148,7 +150,7 @@ func (s *Service) ApprovalClick(actionID string) {
 	if !ok {
 		return
 	}
-	s.enqueue(job{approval: &approvalClick{sig: sig, action: action}})
+	s.enqueue(job{approval: &approvalClick{sig: sig, action: action, at: time.Now()}})
 }
 
 // runApproval resolves one approval click on the action worker.
@@ -161,7 +163,9 @@ func (s *Service) runApproval(cl approvalClick) {
 	s.mu.Lock()
 	cached := s.view.State
 	s.mu.Unlock()
-	if !approvalStillShown(cached, cl.sig) {
+	if !approvalStillShown(cached, cl.sig) || s.clickTooSoon(cl.sig, cl.at) {
+		// A card that replaced another just before the click: the pointer
+		// was most likely on its way to the old one (O1).
 		s.publish(func(v *View) { v.ActionError = MsgApprovalChanged })
 		return
 	}
