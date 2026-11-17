@@ -439,6 +439,12 @@ func (s *Service) Configure(set Settings) {
 	}
 }
 
+// ReportActionError shows an action the plugin refused locally where a
+// failed bridge action shows.
+func (s *Service) ReportActionError(msg string) {
+	s.publish(func(v *View) { v.ActionError = msg })
+}
+
 // Refresh asks for an immediate poll.
 func (s *Service) Refresh() { signal(s.poke) }
 

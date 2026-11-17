@@ -1848,3 +1848,100 @@ func TestComposerOneShotDoesNotHoldTheActionQueue(t *testing.T) {
 		t.Fatal("the interrupt waited behind the running one-shot")
 	}
 }
+
+// modelBridge is a client-only bridge whose live model is model; it hands
+// every /model body to the returned channel.
+func modelBridge(t *testing.T, model string) (string, int, <-chan map[string]any) {
+	t.Helper()
+	bodies := make(chan map[string]any, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/detect":
+			_, _ = io.WriteString(w, `{}`)
+			return
+		case "/health":
+			_, _ = io.WriteString(w, `{"bridge":{"status":"online"}}`)
+			return
+		}
+		if r.Header.Get("X-Bridge-Token") != "fake-token" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		switch r.URL.Path {
+		case "/state":
+			_ = json.NewEncoder(w).Encode(idleState(model))
+		case "/model":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			bodies <- body
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			_, _ = io.WriteString(w, `{}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	host, portText, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	return host, port, bodies
+}
+
+// openModelSection connects to the bridge, opens the panel and its Model
+// section, and returns the snapshot that shows the Apply button.
+func openModelSection(t *testing.T, h *testHost, host string, port int, model string) *v1.ViewSnapshot {
+	t.Helper()
+	if err := h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(host, port)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.send(&v1.ViewOpen{ViewID: "panel-1", View: v1.ViewPanel, Entry: "panel", Width: 780, Height: 720}); err != nil {
+		t.Fatal(err)
+	}
+	snap := h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool {
+		return treeHasID(s.Root, "section:model") && strings.Contains(treeText(s.Root), model)
+	})
+	clickNode(t, h, "panel-1", snap.Revision, "section:model")
+	return h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool { return treeHasID(s.Root, "model-apply") })
+}
+
+// TestModelApplyShowsALocalRefusal: a model name the bridge would reject is
+// refused before it is sent, and the refusal shows where a failed action
+// does instead of the click doing nothing (R8).
+func TestModelApplyShowsALocalRefusal(t *testing.T) {
+	host, port, bodies := modelBridge(t, "bad model")
+	h, _ := startPlugin(t)
+	snap := openModelSection(t, h, host, port, "bad model")
+	clickNode(t, h, "panel-1", snap.Revision, "model-apply")
+	h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool {
+		return strings.Contains(treeText(s.Root), "Invalid model or provider name")
+	})
+	settle(t, h, "panel-1")
+	select {
+	case body := <-bodies:
+		t.Fatalf("posted /model %v for a refused name", body)
+	default:
+	}
+}
+
+// TestModelApplyKeepsTheLiveModel: toggling Persist and pressing Apply
+// applies the model the picker shows, the live one, instead of an empty
+// picker the click silently refused.
+func TestModelApplyKeepsTheLiveModel(t *testing.T) {
+	host, port, bodies := modelBridge(t, "example-model")
+	h, _ := startPlugin(t)
+	snap := openModelSection(t, h, host, port, "example-model")
+	clickNode(t, h, "panel-1", snap.Revision, "model-persist")
+	snap = h.waitSnapshot("panel-1", func(s *v1.ViewSnapshot) bool { return s.Revision > snap.Revision })
+	if !strings.Contains(treeText(snap.Root), "example-model") {
+		t.Fatal("the picker dropped the live model after Persist")
+	}
+	clickNode(t, h, "panel-1", snap.Revision, "model-apply")
+	select {
+	case body := <-bodies:
+		want := map[string]any{"provider": "openrouter", "model": "example-model", "persist": true}
+		if !reflect.DeepEqual(body, want) {
+			t.Fatalf("/model body = %v, want %v", body, want)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Apply never posted /model")
+	}
+}

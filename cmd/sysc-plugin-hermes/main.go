@@ -906,8 +906,8 @@ func (a *app) input(m *v1.InputEvent) {
 		case "composer":
 			v.draft = m.Text
 		case "model-filter":
+			touchPicker(v, a.svc.Snapshot())
 			v.picker.Filter = m.Text
-			v.picker.Dirty = true
 			a.republish(m.ViewID)
 		}
 		return
@@ -1006,24 +1006,28 @@ func (a *app) input(m *v1.InputEvent) {
 		}
 	case strings.HasPrefix(m.Node, "provider:"):
 		if provider, ok := hermes.ProviderForNode(m.Node, state.Summary.Models); ok {
+			touchPicker(v, snap)
 			v.picker.Provider = provider
-			v.picker.Dirty = true
 			a.republish(m.ViewID)
 		}
 	case strings.HasPrefix(m.Node, "model:"):
 		if option, ok := hermes.ModelForNode(m.Node, state.Summary.Models, a.set.DefaultProvider, a.set.DefaultModel); ok {
+			touchPicker(v, snap)
 			v.picker.Provider, v.picker.Model = option.Provider, option.Model
-			v.picker.Dirty = true
 			a.republish(m.ViewID)
 		}
 	case m.Node == "model-persist":
+		touchPicker(v, snap)
 		v.picker.Persist = !v.picker.Persist
-		v.picker.Dirty = true
 		a.republish(m.ViewID)
 	case m.Node == "model-apply":
-		v.picker.Dirty = true
+		touchPicker(v, snap)
 		liveProvider, _ := liveModel(snap)
-		if req, err := hermes.ApplyModel(v.picker, liveProvider); err == nil {
+		if req, err := hermes.ApplyModel(v.picker, liveProvider); err != nil {
+			// A name the bridge would reject: say so where a failed bridge
+			// action is said (R8).
+			a.svc.ReportActionError(err.Error())
+		} else {
 			a.svc.Submit("/model", req)
 		}
 		a.republish(m.ViewID)
@@ -1109,6 +1113,17 @@ func viewTree(v *viewState, view hermes.View, configured bool, env renderEnv) *v
 
 // liveModel is the bridge's current provider and model, falling back to the
 // Hermes section when the summary does not carry them.
+// touchPicker marks the picker edited. An untouched picker shows the live
+// model without holding it, so it is seeded first: a toggle, a filter or
+// Apply must not drop the model the user sees.
+func touchPicker(v *viewState, view hermes.View) {
+	if !v.picker.Dirty {
+		provider, model := liveModel(view)
+		v.picker = hermes.SeedPicker(v.picker, provider, model)
+	}
+	v.picker.Dirty = true
+}
+
 func liveModel(view hermes.View) (provider, model string) {
 	m := view.State.Summary.Model
 	if m.Name != "" || m.Provider != "" {
