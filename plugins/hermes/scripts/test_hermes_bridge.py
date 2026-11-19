@@ -15,6 +15,7 @@ import tempfile
 import threading
 import types
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -278,9 +279,12 @@ class ModelNameTest(BridgeCase):
 
 
 # Functions the local changes may touch in the Task 3 copy (commit a8384bd):
-# Task 3a's approval and model handlers, and _send_json, which keeps a client
-# hang-up from being recorded as a Hermes failure.
-ALLOWED = {"_set_approval", "_handle_approval", "_handle_model", "apply_event", "_send_json"}
+# Task 3a's approval and model handlers, _send_json, which keeps a client
+# hang-up from being recorded as a Hermes failure, and import_hermes_bootstrap
+# with its callers _load_server and main, which import hermes_bootstrap at
+# startup so newer Hermes can find its dependencies.
+ALLOWED = {"_set_approval", "_handle_approval", "_handle_model", "apply_event", "_send_json",
+           "_load_server", "import_hermes_bootstrap", "main"}
 TASK3_COMMIT = "a8384bdeeff6d2f65b8ccbe475ed89fed2cd2329"
 
 
@@ -333,6 +337,89 @@ class ClientHangUpTest(BridgeCase):
         self.assertIn("the answer", [m.get("text") for m in snap["messages"]])
         self.assertNotEqual(snap["hermes"]["status"], "error")
         self.assertEqual(snap["bridge"]["error"], "")
+
+
+class LoadServerTest(unittest.TestCase):
+    """Newer Hermes (b200f5b) keeps its dependencies where only
+    hermes_bootstrap puts them on sys.path; every Hermes entry point imports
+    it first. Older Hermes has no such module."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.home = self.tmp / "home"
+        self.agent = self.home / "hermes-agent"
+        (self.agent / "tui_gateway").mkdir(parents=True)
+        (self.agent / "tui_gateway" / "__init__.py").write_text("")
+        (self.agent / "tui_gateway" / "server.py").write_text(
+            "import fake_hermes_dep\nMARK = fake_hermes_dep.VALUE\n")
+        self.deps = self.tmp / "managed-deps"
+        self.deps.mkdir()
+        (self.deps / "fake_hermes_dep.py").write_text("VALUE = 'loaded'\n")
+        saved_path = list(sys.path)
+        saved_env = dict(bridge.os.environ)
+
+        def restore() -> None:
+            sys.path[:] = saved_path
+            bridge.os.environ.clear()
+            bridge.os.environ.update(saved_env)
+            for name in ("tui_gateway", "tui_gateway.server", "hermes_bootstrap", "fake_hermes_dep"):
+                sys.modules.pop(name, None)
+
+        restore()
+        self.addCleanup(restore)
+
+    def load(self):
+        state = bridge.HermesState(self.tmp / "s.json", self.home)
+        return bridge.HermesRpcClient(state, self.home)._load_server()
+
+    def test_hermes_bootstrap_is_imported_before_tui_gateway(self) -> None:
+        (self.agent / "hermes_bootstrap.py").write_text(
+            f"import sys\nsys.path.insert(0, {str(self.deps)!r})\n")
+        self.assertEqual(self.load().MARK, "loaded")
+
+    def test_an_older_hermes_without_hermes_bootstrap_still_loads(self) -> None:
+        sys.path.insert(0, str(self.deps))
+        self.assertEqual(self.load().MARK, "loaded")
+
+    def test_a_failing_bootstrap_is_reported_as_hermes_unavailable(self) -> None:
+        """hermes_bootstrap raises SystemExit when Hermes needs `pm repair`;
+        in a request thread that would end the thread with no reply."""
+        for body, want in (("raise SystemExit(1)\n", "hermes_unavailable"),
+                           ("import missing_pm_package\n", "missing_pm_package")):
+            with self.subTest(body=body):
+                sys.modules.pop("hermes_bootstrap", None)
+                (self.agent / "hermes_bootstrap.py").write_text(body)
+                with self.assertRaises(RuntimeError) as caught:
+                    self.load()
+                self.assertIn("hermes_unavailable", str(caught.exception))
+                self.assertIn(want, str(caught.exception))
+
+    def run_main(self) -> list[str]:
+        """main() with the re-exec and the server replaced by recorders."""
+        order: list[str] = []
+        saved = (bridge.reexec_with_hermes_python, bridge.run_server)
+        self.addCleanup(lambda: (setattr(bridge, "reexec_with_hermes_python", saved[0]),
+                                 setattr(bridge, "run_server", saved[1])))
+        bridge.reexec_with_hermes_python = lambda *_a: order.append("reexec")
+        bridge.run_server = lambda *_a: order.append(
+            "serve:" + ("bootstrapped" if "hermes_bootstrap" in sys.modules else "bare"))
+        self.assertEqual(bridge.main(["--hermes-home", str(self.home), "--port", "1"]), 0)
+        return order
+
+    def test_startup_runs_the_bootstrap_before_serving(self) -> None:
+        """hermes_bootstrap may re-exec the process into Hermes's managed
+        Python. At startup that costs nothing; on the first RPC it drops the
+        request and the bridge's state."""
+        (self.agent / "hermes_bootstrap.py").write_text("")
+        self.assertEqual(self.run_main(), ["reexec", "serve:bootstrapped"])
+
+    def test_a_failing_bootstrap_at_startup_still_serves(self) -> None:
+        (self.agent / "hermes_bootstrap.py").write_text("raise SystemExit(1)\n")
+        with unittest.mock.patch("sys.stderr"):
+            self.assertEqual(self.run_main(), ["reexec", "serve:bare"])
+        with self.assertRaises(RuntimeError):
+            self.load()
 
 
 class DiffScopeTest(unittest.TestCase):

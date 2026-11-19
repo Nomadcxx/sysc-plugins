@@ -783,10 +783,8 @@ class HermesRpcClient:
         if self._server is not None:
             return self._server
 
-        agent_dir = self.hermes_home / "hermes-agent"
-        if agent_dir.exists():
-            sys.path.insert(0, str(agent_dir))
-        os.environ.setdefault("HERMES_HOME", str(self.hermes_home))
+        # sysc-shell: main() normally ran this already; it is a no-op then.
+        import_hermes_bootstrap(self.hermes_home)
 
         try:
             from tui_gateway import server as tui_server
@@ -1235,10 +1233,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def import_hermes_bootstrap(hermes_home: str | Path) -> None:
+    """sysc-shell: put the Hermes checkout on sys.path and import
+    hermes_bootstrap, as every Hermes entry point does first. Newer Hermes
+    (b200f5b) keeps its dependencies where only the bootstrap puts them, and
+    the bootstrap may re-exec the process into Hermes's managed Python. Older
+    Hermes has no such module. A failure, including the SystemExit the
+    bootstrap raises when Hermes needs repair, becomes hermes_unavailable."""
+    hermes_home = Path(hermes_home).expanduser()
+    agent_dir = hermes_home / "hermes-agent"
+    if agent_dir.exists() and str(agent_dir) not in sys.path:
+        sys.path.insert(0, str(agent_dir))
+    os.environ.setdefault("HERMES_HOME", str(hermes_home))
+    try:
+        import hermes_bootstrap  # noqa: F401
+    except ModuleNotFoundError as exc:
+        if exc.name != "hermes_bootstrap":
+            raise RuntimeError(f"hermes_unavailable: {exc}") from exc
+    except (Exception, SystemExit) as exc:
+        raise RuntimeError(f"hermes_unavailable: hermes_bootstrap failed: {exc!r}") from exc
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(argv if argv is not None else sys.argv[1:])
     args = parse_args(argv)
     reexec_with_hermes_python(args, argv)
+    # sysc-shell: run the bootstrap before serving. Its re-exec would
+    # otherwise land on the first RPC, drop that request and reset the
+    # bridge's state. A failure is reported again on each RPC.
+    if not args.once_health:
+        try:
+            import_hermes_bootstrap(args.hermes_home)
+        except RuntimeError as exc:
+            print(f"hermes bridge: {exc}", file=sys.stderr)
     if args.once_health:
         print(json.dumps(health_payload(default_state()), ensure_ascii=False))
         return 0
