@@ -820,6 +820,38 @@ func TestServiceActionOpenOpensTheChatPanel(t *testing.T) {
 	}
 }
 
+// The host's panel.open closes a panel that is already open (the bar's
+// toggle). The Control Center tile, plugin.action and the launcher send
+// open to show the chat, so it must not close a chat that is already up.
+func TestServiceActionsKeepAnOpenPanelOpen(t *testing.T) {
+	remoteHost, remotePort := fakeRemoteState(t, idleState("example-model"))
+	h, _ := startPlugin(t)
+	_ = h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(remoteHost, remotePort)})
+	for _, entry := range []string{"panel", "settings"} {
+		if err := h.send(&v1.ViewOpen{ViewID: entry + "-1", View: v1.ViewPanel, Entry: entry, Width: 640, Height: 720}); err != nil {
+			t.Fatal(err)
+		}
+		h.waitSnapshot(entry+"-1", func(*v1.ViewSnapshot) bool { return true })
+	}
+	for _, action := range []string{"open", "settings", "new-session"} {
+		if err := h.send(&v1.ServiceAction{ServiceID: serviceID, ActionID: action}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Opening the chat once it has closed is the marker that the actions
+	// above have been handled.
+	if err := h.send(&v1.ViewClose{ViewID: "panel-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.send(&v1.ServiceAction{ServiceID: serviceID, ActionID: "open"}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitCall(v1.CallPanelOpen)
+	if n := h.countCalls(v1.CallPanelOpen); n != 1 {
+		t.Fatalf("panel.open sent %d times, want once (only for the closed chat)", n)
+	}
+}
+
 func TestServiceActionSettingsOpensTheSettingsPanel(t *testing.T) {
 	remoteHost, remotePort := fakeRemoteState(t, idleState("example-model"))
 	h, _ := startPlugin(t)

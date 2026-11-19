@@ -668,7 +668,9 @@ func (a *app) serviceAction(action string) {
 			a.svc.Submit("/gateway/start", map[string]any{})
 		}
 	case "settings":
-		a.openPanelFrom(nil, "settings")
+		if a.views.panel("settings") == nil {
+			a.openPanelFrom(nil, "settings")
+		}
 	case "launcher-ask":
 		a.launcherAsk()
 	}
@@ -695,9 +697,14 @@ func (a *app) launcherAsk() {
 }
 
 // openChat raises the pinned surface when one is pinned, else opens the
-// chat panel, as the bar, service action and launcher all do.
+// chat panel, as the bar, service action and launcher all do. The host's
+// panel.open closes a panel that is already open, so a chat that is up is
+// left alone.
 func (a *app) openChat() {
 	a.cancelRestore()
+	if a.views.panel("panel") != nil {
+		return
+	}
 	go func() {
 		a.surfaceMu.Lock()
 		err := a.pinned.Open(a.ctx)
