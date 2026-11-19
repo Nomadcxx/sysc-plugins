@@ -1129,6 +1129,40 @@ func TestActionErrorsAreMapped(t *testing.T) {
 	}
 }
 
+// Hermes refuses an RPC (an unknown provider on Apply, say) with a JSON-RPC
+// error that the bridge passes on in a 200 reply. It used to clear the
+// action error row, so a refused Apply said nothing.
+func TestAHermesRefusalInASuccessfulReplyIsShown(t *testing.T) {
+	h := newHarness(t)
+	remote := newFakeBridge(t, "remote-tok")
+	remote.handle("/model", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"result":{"jsonrpc":"2.0","id":"x","error":{"code":5001,` +
+			`"message":"Unknown provider 'nosuch' (remote-tok)"}},"state":` + mustJSON(t, remote.stateJSON()) + `}`))
+	})
+	h.svc.Configure(h.clientSettings(remote, "remote-tok"))
+	h.waitFor("idle", func(v View) bool { return v.Status.Key == StatusIdle })
+	h.svc.Submit("/model", map[string]any{"model": "x1", "provider": "nosuch"})
+	v := h.waitFor("refusal shown", func(v View) bool { return strings.Contains(v.ActionError, "Unknown provider 'nosuch'") })
+	if !strings.HasPrefix(v.ActionError, "Hermes: ") || strings.Contains(v.ActionError, "remote-tok") {
+		t.Fatalf("action error = %q, want a Hermes: prefix and no token", v.ActionError)
+	}
+	if v.Status.Key != StatusIdle {
+		t.Fatalf("a refusal changed the status to %s", v.Status.Key)
+	}
+	// A plain success still clears it.
+	h.svc.Submit("/refresh", map[string]any{})
+	h.waitFor("cleared", func(v View) bool { return v.ActionError == "" })
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 func TestNotifications(t *testing.T) {
 	h := newHarness(t)
 	remote := newFakeBridge(t, "remote-tok")

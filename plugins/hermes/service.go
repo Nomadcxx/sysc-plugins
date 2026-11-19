@@ -1304,7 +1304,12 @@ func (s *Service) runJob(j job) {
 		s.publish(func(v *View) { v.ActionError = msg })
 		return
 	}
-	s.publish(func(v *View) { v.ActionError = "" })
+	msg := ""
+	if refusal := b.HermesRefusal(snap); refusal != "" {
+		s.deps.Logf("hermes: %s: refused by Hermes", j.path)
+		msg = clip("Hermes: "+refusal, maxBridgeError)
+	}
+	s.publish(func(v *View) { v.ActionError = msg })
 	if snap.HasState {
 		s.publishState(snap.State)
 	}

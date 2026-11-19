@@ -404,6 +404,26 @@ func decodeObject(data []byte, v any) error {
 	return nil
 }
 
+// HermesRefusal is the JSON-RPC error Hermes put in a successful reply's
+// result (the bridge passes an RPC error on with a 200), with the token
+// redacted, or "" when the result carries none.
+func (b *Bridge) HermesRefusal(snap Snapshot) string {
+	var r struct {
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if len(snap.Result) == 0 || json.Unmarshal(snap.Result, &r) != nil || r.Error == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(r.Error.Message)
+	if msg == "" {
+		msg = "error " + strconv.Itoa(r.Error.Code)
+	}
+	return Redact(msg, b.token)
+}
+
 // snapshotOf normalizes a bare snapshot, a {state} envelope, a
 // {result,state} envelope and a result-only {result} reply.
 func snapshotOf(data []byte) (Snapshot, error) {
