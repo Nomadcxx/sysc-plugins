@@ -344,45 +344,26 @@ func TestTooltipMatchesNoctalia(t *testing.T) {
 	}
 }
 
-func TestTooltipWarnsOnCleartextRemoteClient(t *testing.T) {
-	warning := func(host string) string {
-		return "Cleartext HTTP to " + host + ": the token and prompts are not encrypted."
-	}
+func TestTooltipShowsTheConnectionWarning(t *testing.T) {
 	online := BarState{Status: StatusFor(StatusIdle), Model: "example-model"}
-	cases := []struct {
-		name    string
-		state   BarState
-		wantMsg string
-	}{
-		{"client-only remote", withHost(online, true, "example.com"), warning("example.com")},
-		{"client-only LAN", withHost(online, true, "192.168.0.10"), warning("192.168.0.10")},
-		{"client-only loopback", withHost(online, true, "127.0.0.1"), ""},
-		{"client-only localhost", withHost(online, true, "localhost"), ""},
-		{"client-only IPv6 loopback", withHost(online, true, "::1"), ""},
-		{"local mode remote host", withHost(online, false, "example.com"), ""},
-	}
-	for _, c := range cases {
-		tip := TooltipTree(c.state)
+	for _, warning := range []string{"", MsgCleartext("example.com"), MsgCleartext("192.168.0.10"), MsgCollision} {
+		state := online
+		state.Warning = warning
+		tip := TooltipTree(state)
 		got := strings.Join(texts(tip), " ")
 		switch {
-		case c.wantMsg == "" && strings.Contains(got, "Cleartext HTTP"):
-			t.Errorf("%s: tooltip %q should omit the cleartext warning", c.name, got)
-		case c.wantMsg != "" && !strings.Contains(got, c.wantMsg):
-			t.Errorf("%s: tooltip %q does not show %q", c.name, got, c.wantMsg)
+		case warning == "" && len(tip.Children) != 1:
+			t.Errorf("no warning: tooltip %q has extra lines", got)
+		case warning != "" && got != headline(online, "Hermes: ")+" "+warning:
+			t.Errorf("tooltip %q does not show %q", got, warning)
 		}
-		lintView(t, c.name+" tooltip", tip, v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight)
+		lintView(t, warning+" tooltip", tip, v1.ViewTooltip, shelllint.TooltipWidth, shelllint.TooltipHeight)
 		for i, line := range texts(tip) {
 			if len(line) > tooltipLineBytes {
-				t.Errorf("%s: line %d is %d bytes, past the %d-byte budget", c.name, i, len(line), tooltipLineBytes)
+				t.Errorf("%q: line %d is %d bytes, past the %d-byte budget", warning, i, len(line), tooltipLineBytes)
 			}
 		}
 	}
-}
-
-func withHost(state BarState, clientOnly bool, host string) BarState {
-	state.ClientOnly = clientOnly
-	state.Host = host
-	return state
 }
 
 func TestAvatarPathResolvesTheShippedAsset(t *testing.T) {

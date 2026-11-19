@@ -725,6 +725,29 @@ func TestStatusTreesLayOut(t *testing.T) {
 	}
 }
 
+// The service decides the connection warning: a collision with an adopted
+// local bridge, or cleartext to a remote host. The tooltip and Settings
+// re-derived only the cleartext one from the host setting, so the collision
+// warning was never shown.
+func TestConnectionWarningShowsInTooltipAndSettings(t *testing.T) {
+	vs := newViewSet()
+	env := renderEnv{set: hermes.Settings{ClientOnly: true, Host: "127.0.0.1", Port: 19777}}
+	for _, warning := range []string{hermes.MsgCollision, hermes.MsgCleartext("192.168.0.10")} {
+		view := hermes.View{Mode: hermes.ModeClientOnly, Status: hermes.StatusFor(hermes.StatusIdle), Warning: warning}
+		for _, tc := range []struct {
+			view  v1.ViewKind
+			entry string
+			w, h  int
+		}{{v1.ViewTooltip, "bar", 280, 200}, {v1.ViewPanel, "settings", 640, 720}} {
+			v := vs.open(&v1.ViewOpen{ViewID: tc.entry, View: tc.view, Entry: tc.entry, Width: tc.w, Height: tc.h})
+			raw, _ := json.Marshal(viewTree(v, view, true, env))
+			if want := warning[:20]; !strings.Contains(string(raw), want) {
+				t.Errorf("%s %s does not show %q", tc.view, tc.entry, want)
+			}
+		}
+	}
+}
+
 func TestBundledScriptPath(t *testing.T) {
 	got := bundledScript("/usr/lib/sysc-shell/plugins/hermes/bin/sysc-plugin-hermes")
 	if want := "/usr/lib/sysc-shell/plugins/hermes/scripts/hermes_bridge.py"; got != want {

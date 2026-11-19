@@ -73,6 +73,9 @@ type ConnectionInfo struct {
 	TokenSource ConnectionTokenSource
 	LastError   string
 	ViewError   string
+	// Warning is the service's connection warning (View.Warning): a
+	// collision with an adopted local bridge, or cleartext to a remote host.
+	Warning string
 }
 
 const redacted = "[redacted]"
@@ -169,16 +172,6 @@ func CopySSHCommand(ctx context.Context, c *v1.Client, target string, port int) 
 	return nil
 }
 
-// CleartextWarning is the design's warning for client-only mode to a host
-// off this machine. The plugin warns and does not block.
-func CleartextWarning(clientOnly bool, host string) string {
-	host = strings.TrimSpace(host)
-	if !clientOnly || host == "" || IsLoopback(host) {
-		return ""
-	}
-	return "Cleartext HTTP to " + host + ": the token and prompts are not encrypted."
-}
-
 // Detected holds what auto-configure recorded from /detect; client-only
 // mode records only the provider and model.
 type SettingsDetected struct {
@@ -229,7 +222,7 @@ func SettingsTree(s SettingsState, width int) *v1.Node {
 	}})
 	add(testConnectionBlock(s, width))
 	add(detectedBlock(s.Detected, width))
-	add(cleartextBlock(s.Connection, width))
+	add(warningBlock(s.Connection, width))
 	if s.Connection.ClientOnly {
 		add(copySSHBlock(s, width))
 	}
@@ -328,18 +321,18 @@ func detectedBlock(d SettingsDetected, width int) *v1.Node {
 	return captions("detected", width, v1.ToneSubtle, lines...)
 }
 
-func cleartextBlock(c ConnectionInfo, width int) *v1.Node {
-	text := CleartextWarning(c.ClientOnly, c.Host)
+func warningBlock(c ConnectionInfo, width int) *v1.Node {
+	text := strings.TrimSpace(c.Warning)
 	if text == "" {
 		return nil
 	}
 	textW := width - 2*warningPad - 16 - 8
 	lines := captions("", textW, v1.ToneNormal, text)
 	return &v1.Node{
-		Kind: v1.KindRow, Key: "cleartext", Fill: "container", Radius: 8,
+		Kind: v1.KindRow, Key: "connection-warning", Fill: "container", Radius: 8,
 		Width: width, Height: lines.Height + 2*warningPad, Padding: warningPad, Gap: 8,
 		Children: []*v1.Node{
-			{Kind: v1.KindIcon, Icon: iconApproval, IconSize: 16, Tone: v1.ToneWarning, Name: "Cleartext warning"},
+			{Kind: v1.KindIcon, Icon: iconApproval, IconSize: 16, Tone: v1.ToneWarning, Name: "Connection warning"},
 			lines,
 		},
 	}

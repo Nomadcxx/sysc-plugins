@@ -1154,8 +1154,7 @@ func barStateFor(view hermes.View, env renderEnv) hermes.BarState {
 		BridgeError:   view.State.Bridge.Error,
 		GatewayStatus: view.State.Summary.Gateway.Status,
 		Model:         model,
-		ClientOnly:    env.set.ClientOnly,
-		Host:          env.set.Host,
+		Warning:       view.Warning,
 	}
 }
 
@@ -1224,6 +1223,7 @@ func settingsStateFor(v *viewState, view hermes.View, env renderEnv) hermes.Sett
 	connection := hermes.ConnectionFor(env.set.ClientOnly, env.set.Host, env.set.Port,
 		hermes.TokenCandidates{Pasted: env.set.TokenManual, File: env.set.TokenFile},
 		view.Message, view.ViewError)
+	connection.Warning = view.Warning
 	switch view.Token {
 	case hermes.TokenPasted:
 		connection.TokenSource = hermes.SourcePasted

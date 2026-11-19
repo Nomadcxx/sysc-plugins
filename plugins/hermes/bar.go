@@ -44,9 +44,9 @@ type BarState struct {
 	BridgeError   string
 	GatewayStatus string
 	Model         string
-	// ClientOnly and Host feed the tooltip's cleartext warning.
-	ClientOnly bool
-	Host       string
+	// Warning is the service's connection warning (View.Warning): a
+	// collision with an adopted local bridge, or cleartext to a remote host.
+	Warning string
 }
 
 // BarTree renders the bar at the standard width.
@@ -93,8 +93,7 @@ func BarTreeAtWidth(state BarState, hideWhenIdle bool, avatar string, width int)
 func barText(s Status) string { return s.BarText }
 
 // TooltipTree renders noctalia's tooltip: "Hermes: <status> · <model>",
-// then the bridge error on its own line, then a cleartext warning when
-// client-only mode talks to a non-loopback host.
+// then the bridge error on its own line, then the connection warning.
 func TooltipTree(state BarState) *v1.Node {
 	root := &v1.Node{Kind: v1.KindColumn, Gap: 2}
 	root.Children = append(root.Children, &v1.Node{
@@ -105,7 +104,7 @@ func TooltipTree(state BarState) *v1.Node {
 			Kind: v1.KindText, Text: clip(e, tooltipLineBytes), Tone: v1.ToneError,
 		})
 	}
-	if w := CleartextWarning(state.ClientOnly, state.Host); w != "" {
+	if w := strings.TrimSpace(state.Warning); w != "" {
 		// len(w) bounds the line count (every line holds at least one
 		// byte), so the warning is never capped or ellipsised.
 		for _, line := range wrapLines(w, tooltipLineBytes, len(w)) {

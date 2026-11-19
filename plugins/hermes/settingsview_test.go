@@ -31,10 +31,12 @@ const (
 )
 
 func lanState() SettingsState {
+	conn := ConnectionFor(true, "192.168.0.10", 19778,
+		TokenCandidates{Pasted: pastedToken, File: fileToken},
+		"Authentication failed: wrong bridge token", "")
+	conn.Warning = MsgCleartext("192.168.0.10")
 	return SettingsState{
-		Connection: ConnectionFor(true, "192.168.0.10", 19778,
-			TokenCandidates{Pasted: pastedToken, File: fileToken},
-			"Authentication failed: wrong bridge token", ""),
+		Connection:      conn,
 		Models:          modelOptions(5),
 		DefaultProvider: "nous", DefaultModel: "model-02",
 		Pinned:     true,
@@ -53,6 +55,7 @@ func settingsStates() map[string]SettingsState {
 	noisy := lanState()
 	noisy.Connection = ConnectionFor(true, "a-very-long-hostname.internal.example.org", 65535,
 		TokenCandidates{}, strings.Repeat("the bridge said something long ", 6), strings.Repeat("root.children[3]: row refused ", 5))
+	noisy.Connection.Warning = MsgCleartext("a-very-long-hostname.internal.example.org")
 	noisy.Models = modelOptions(45)
 	noisy.TestResult = ResultUnreachable
 	noisy.SSHTarget = "not a target"
@@ -134,7 +137,7 @@ func TestSettingsLaysOutAtInnerWidths(t *testing.T) {
 
 func TestSettingsOrderFollowsDesign(t *testing.T) {
 	tree := SettingsTree(lanState(), SettingsInnerWidth(640))
-	want := []string{"title", "connection", "model-picker", "pin-side-panel", "test-connection", "detected", "cleartext", "copy-ssh"}
+	want := []string{"title", "connection", "model-picker", "pin-side-panel", "test-connection", "detected", "connection-warning", "copy-ssh"}
 	var got []string
 	walk(tree, func(n *v1.Node) {
 		for _, w := range want {
@@ -419,38 +422,35 @@ func TestCopySSHWritesTheClipboardThroughTheHost(t *testing.T) {
 	}
 }
 
-func TestCleartextWarningOnlyForANonLoopbackClientOnlyHost(t *testing.T) {
-	for _, c := range []struct {
-		clientOnly bool
-		host       string
-		warn       bool
-	}{
-		{true, "192.168.0.10", true}, {true, "hermes.example.org", true}, {true, "10.0.0.5", true},
-		{true, "127.0.0.1", false}, {true, "127.1.2.3", false}, {true, "localhost", false}, {true, "LOCALHOST", false},
-		{true, "::1", false}, {true, "[::1]", false},
-		{true, "127.0.0.1:19778", true}, {true, "localhost:19777", true},
-		{false, "192.168.0.10", false}, {false, "127.0.0.1", false},
+// IsLoopback decides the service's cleartext warning; a host with a port is
+// not a loopback name.
+func TestIsLoopback(t *testing.T) {
+	for host, want := range map[string]bool{
+		"127.0.0.1": true, "127.1.2.3": true, "localhost": true, "LOCALHOST": true, "::1": true, "[::1]": true,
+		"192.168.0.10": false, "hermes.example.org": false, "10.0.0.5": false,
+		"127.0.0.1:19778": false, "localhost:19777": false,
 	} {
-		got := CleartextWarning(c.clientOnly, c.host)
-		want := ""
-		if c.warn {
-			want = "Cleartext HTTP to " + c.host + ": the token and prompts are not encrypted."
+		if got := IsLoopback(host); got != want {
+			t.Errorf("IsLoopback(%q) = %v, want %v", host, got, want)
 		}
-		if got != want {
-			t.Errorf("CleartextWarning(%v, %q) = %q, want %q", c.clientOnly, c.host, got, want)
-		}
-		s := SettingsState{Connection: ConnectionFor(c.clientOnly, c.host, 19777, TokenCandidates{}, "", "")}
+	}
+}
+
+func TestSettingsShowsTheConnectionWarning(t *testing.T) {
+	for _, warning := range []string{"", MsgCollision, MsgCleartext("192.168.0.10")} {
+		s := SettingsState{Connection: ConnectionInfo{ClientOnly: true, Host: "127.0.0.1", Port: 19777, Warning: warning}}
 		for _, granted := range settingsGranted {
-			card := findKey(SettingsTree(s, SettingsInnerWidth(granted)), "cleartext")
-			if (card != nil) != c.warn {
-				t.Errorf("%v %q at %d: warning shown = %v", c.clientOnly, c.host, granted, card != nil)
+			tree := SettingsTree(s, SettingsInnerWidth(granted))
+			card := findKey(tree, "connection-warning")
+			if (card != nil) != (warning != "") {
+				t.Errorf("%q at %d: warning shown = %v", warning, granted, card != nil)
 				continue
 			}
 			if card == nil {
 				continue
 			}
-			if joined := strings.Join(texts(card), " "); joined != want {
-				t.Errorf("warning reads %q, want %q", joined, want)
+			if joined := strings.Join(texts(card), " "); joined != warning {
+				t.Errorf("warning reads %q, want %q", joined, warning)
 			}
 			var icon *v1.Node
 			walk(card, func(n *v1.Node) {
@@ -461,6 +461,7 @@ func TestCleartextWarningOnlyForANonLoopbackClientOnlyHost(t *testing.T) {
 			if icon == nil || icon.Icon != "gpp_maybe" || icon.Tone != v1.ToneWarning {
 				t.Errorf("warning icon = %+v", icon)
 			}
+			lintView(t, fmt.Sprintf("warning %q at %d", warning, granted), tree, v1.ViewPanel, granted, 720)
 		}
 	}
 }
