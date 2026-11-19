@@ -293,13 +293,112 @@ class ModelNameTest(BridgeCase):
                 self.assertEqual((after["model"], after["provider"]), (before["model"], before["provider"]))
 
 
+class ResumeTest(BridgeCase):
+    """The stock resume dropped Hermes's reply, so the next prompt created a
+    new session and the resumed conversation was lost."""
+
+    RESUMED = {"session_id": "live-2", "stored_session_id": "stored-1",
+               "messages": [{"role": "user", "text": "hi"}, {"role": "assistant", "text": "hello"}],
+               "info": {"cwd": "/work", "model": "m1", "provider": "p1"}}
+
+    def write_db(self, rows: list[tuple[str, str, str, int]]) -> None:
+        import sqlite3
+        conn = sqlite3.connect(str(self.tmp / "home" / "state.db"))
+        conn.execute("CREATE TABLE messages (session_id TEXT, role TEXT, content TEXT, timestamp INTEGER)")
+        conn.executemany("INSERT INTO messages VALUES (?, ?, ?, ?)", rows)
+        conn.commit()
+        conn.close()
+
+    def test_resume_binds_the_live_session_and_the_next_prompt_uses_it(self) -> None:
+        self.rpc.responses["session.resume"] = {"result": dict(self.RESUMED)}
+        status, reply = self.post("/session/resume", {"session_id": "stored-1"})
+        self.assertEqual(status, 200)
+        session = reply["state"]["session"]
+        self.assertEqual((session["id"], session["stored_id"], session["cwd"]), ("live-2", "stored-1", "/work"))
+        self.assertEqual([m["text"] for m in reply["state"]["messages"]], ["hi", "hello"])
+        status, reply = self.post("/prompt", {"text": "and then?"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.rpc.calls_to("session.create"), [])
+        self.assertEqual(self.rpc.calls_to("prompt.submit")[-1]["session_id"], "live-2")
+        self.assertEqual([m["text"] for m in reply["state"]["messages"]], ["hi", "hello", "and then?"])
+
+    def test_a_reply_with_no_messages_keeps_the_stored_transcript(self) -> None:
+        self.write_db([("stored-1", "user", "from the db", 1), ("stored-1", "assistant", "stored reply", 2)])
+        self.rpc.responses["session.resume"] = {"result": dict(self.RESUMED, messages=[])}
+        _, reply = self.post("/session/resume", {"session_id": "stored-1"})
+        self.assertEqual(reply["state"]["session"]["id"], "live-2")
+        self.assertEqual([m["text"] for m in reply["state"]["messages"]], ["from the db", "stored reply"])
+
+    def test_a_refused_resume_keeps_the_stored_transcript_and_says_why(self) -> None:
+        self.write_db([("stored-1", "user", "from the db", 1)])
+        refusal = {"jsonrpc": "2.0", "id": "x", "error": {"code": 4007, "message": "session not found"}}
+        self.rpc.responses["session.resume"] = refusal
+        status, reply = self.post("/session/resume", {"session_id": "stored-1"})
+        self.assertEqual(status, 200)
+        self.assertEqual(reply["result"]["error"]["code"], 4007)
+        self.assertEqual(reply["state"]["session"]["id"], "")
+        self.assertEqual(reply["state"]["session"]["stored_id"], "stored-1")
+        self.assertEqual([m["text"] for m in reply["state"]["messages"]], ["from the db"])
+
+
+class GatewayLivenessTest(unittest.TestCase):
+    """Hermes leaves gateway_state=running after an unplanned kill and checks
+    the pid itself; the stock bridge trusted the record, so a dead gateway
+    read as running and auto-start never fired."""
+
+    def setUp(self) -> None:
+        self.home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+
+    def record(self, **fields) -> None:
+        (self.home / "gateway_state.json").write_text(json.dumps(dict({"gateway_state": "running"}, **fields)))
+
+    def statuses(self) -> tuple[str, str]:
+        return bridge.detect_gateway(self.home)["status"], bridge.scan_gateway_summary(self.home)["status"]
+
+    def dead_pid(self) -> int:
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        return proc.pid
+
+    def test_a_running_record_with_a_live_pid_stays_running(self) -> None:
+        import os
+        self.record(pid=os.getpid())
+        self.assertEqual(self.statuses(), ("running", "running"))
+
+    def test_a_running_record_whose_pid_is_gone_reads_stopped(self) -> None:
+        self.record(pid=self.dead_pid())
+        self.assertEqual(self.statuses(), ("stopped", "stopped"))
+
+    def test_a_reused_pid_with_another_start_time_reads_stopped(self) -> None:
+        import os
+        start = bridge.process_start_time(os.getpid())
+        if start is None:
+            self.skipTest("no /proc start time on this platform")
+        self.record(pid=os.getpid(), start_time=start + 1)
+        self.assertEqual(self.statuses(), ("stopped", "stopped"))
+        self.record(pid=os.getpid(), start_time=start)
+        self.assertEqual(self.statuses(), ("running", "running"))
+
+    def test_a_record_with_no_pid_or_a_stopped_state_is_left_alone(self) -> None:
+        self.record()
+        self.assertEqual(self.statuses(), ("running", "running"))
+        self.record(gateway_state="stopped", pid=1)
+        self.assertEqual(self.statuses(), ("stopped", "stopped"))
+
+
 # Functions the local changes may touch in the Task 3 copy (commit a8384bd):
 # Task 3a's approval and model handlers, _send_json, which keeps a client
 # hang-up from being recorded as a Hermes failure, and import_hermes_bootstrap
 # with its callers _load_server and main, which import hermes_bootstrap at
-# startup so newer Hermes can find its dependencies.
+# startup so newer Hermes can find its dependencies. _handle_session_resume
+# binds the session Hermes resumed, and gateway_record_state with
+# process_start_time and its callers detect_gateway and scan_gateway_summary
+# read a gateway whose process is gone as stopped (owner-approved
+# 2026-11-19).
 ALLOWED = {"_set_approval", "_handle_approval", "_handle_model", "apply_event", "_send_json",
-           "_load_server", "import_hermes_bootstrap", "main"}
+           "_load_server", "import_hermes_bootstrap", "main", "_handle_session_resume",
+           "gateway_record_state", "process_start_time", "detect_gateway", "scan_gateway_summary"}
 TASK3_COMMIT = "a8384bdeeff6d2f65b8ccbe475ed89fed2cd2329"
 
 

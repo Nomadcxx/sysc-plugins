@@ -79,7 +79,7 @@ def detect_gateway(hermes_home: str | Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {"status": "unknown", "pid": "", "platforms": {}}
     pid = str(data.get("pid") or "")
-    state = str(data.get("gateway_state") or data.get("status") or "unknown")
+    state = gateway_record_state(data)
     platforms = data.get("platforms") or {}
     if isinstance(platforms, dict):
         platforms = {
@@ -90,6 +90,41 @@ def detect_gateway(hermes_home: str | Path) -> dict[str, Any]:
     else:
         platforms = {}
     return {"status": state, "pid": pid, "platforms": platforms}
+
+
+def process_start_time(pid: int) -> int | None:
+    """Field 22 of /proc/<pid>/stat (start time in clock ticks), the value
+    Hermes records as the gateway's start_time, or None."""
+    try:
+        return int(Path(f"/proc/{pid}/stat").read_text().split()[21])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def gateway_record_state(data: dict[str, Any]) -> str:
+    """sysc-shell: the recorded gateway state, or stopped for a record whose
+    process is gone. Hermes leaves gateway_state=running after an unplanned
+    kill and checks the pid and its start time itself (gateway/status.py)."""
+    state = str(data.get("gateway_state") or data.get("status") or "unknown")
+    if state in ("stopped", "startup_failed", "unknown"):
+        return state
+    try:
+        pid = int(data.get("pid") or 0)
+    except (TypeError, ValueError):
+        return state
+    if pid <= 0:
+        return state
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "stopped"
+    except PermissionError:
+        pass  # alive, owned by someone else
+    recorded = data.get("start_time")
+    current = process_start_time(pid)
+    if isinstance(recorded, int) and current is not None and current != recorded:
+        return "stopped"
+    return state
 
 
 def detect_model(hermes_home: str | Path) -> dict[str, str]:
@@ -362,7 +397,7 @@ def scan_gateway_summary(hermes_home: Path | str) -> dict[str, Any]:
         return summary
     if not isinstance(data, dict):
         return summary
-    summary["status"] = str(data.get("gateway_state") or data.get("status") or "unknown")
+    summary["status"] = gateway_record_state(data)
     platforms = data.get("platforms")
     if isinstance(platforms, dict):
         summary["platforms"] = {
@@ -979,9 +1014,17 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
                 pass
         # Also dispatch session.resume to the gateway so it creates a proper
         # session object. The gateway needs this for prompt.submit to work.
-        self.server.rpc.dispatch("session.resume", {"session_id": session_id})
+        response = self.server.rpc.dispatch("session.resume", {"session_id": session_id})
+        # sysc-shell: bind the live session Hermes resumed, or the next prompt
+        # creates a new one. A reply with no messages keeps the stored ones.
+        result = response.get("result", response)
+        if isinstance(result, dict) and result.get("session_id") and "error" not in result:
+            stored = list(self.server.state._state["messages"])
+            self.server.state.set_session_from_resume(result)
+            if not result.get("messages") and loaded:
+                self.server.state._state["messages"] = stored
         self.server.state.write()
-        self._send_json(200, {"state": self.server.state.snapshot()})
+        self._send_json(200, {"result": result, "state": self.server.state.snapshot()})
 
     def _handle_prompt(self, payload: dict[str, Any]) -> None:
         text = str(payload.get("text") or "").strip()
