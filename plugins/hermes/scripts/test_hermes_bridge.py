@@ -277,6 +277,21 @@ class ModelNameTest(BridgeCase):
                 self.assertEqual(self.rpc.calls_to("config.set")[-1],
                                  {"key": "model", "value": value, "session_id": "sid-1"})
 
+    def test_a_refused_model_is_not_recorded_as_live(self) -> None:
+        """Hermes answers an unknown provider with a JSON-RPC error. The
+        stock handler took the error envelope as the result and showed the
+        refused model as the live one."""
+        before = dict(self.state.snapshot()["hermes"])
+        refusal = {"jsonrpc": "2.0", "id": "x", "error": {"code": 5001, "message": "Unknown provider 'nosuch'"}}
+        for response in (refusal, {"result": refusal}):
+            with self.subTest(response=response):
+                self.rpc.responses["config.set"] = response
+                status, reply = self.post("/model", {"model": "x1", "provider": "nosuch"})
+                self.assertEqual(status, 200)
+                self.assertEqual(reply["result"]["error"]["code"], 5001)
+                after = self.state.snapshot()["hermes"]
+                self.assertEqual((after["model"], after["provider"]), (before["model"], before["provider"]))
+
 
 # Functions the local changes may touch in the Task 3 copy (commit a8384bd):
 # Task 3a's approval and model handlers, _send_json, which keeps a client

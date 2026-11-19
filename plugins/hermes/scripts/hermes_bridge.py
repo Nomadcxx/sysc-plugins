@@ -1091,7 +1091,11 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
         response = self.server.rpc.dispatch("config.set", params)
         result = response.get("result", response)
-        if isinstance(result, dict):
+        # sysc-shell: a JSON-RPC error (an unknown provider, say) leaves the
+        # live model as it was; the stock code recorded the refused one.
+        if isinstance(result, dict) and "error" in result:
+            pass
+        elif isinstance(result, dict):
             self.server.state.set_model(provider, str(result.get("value") or model))
         else:
             self.server.state.set_model(provider, model)
