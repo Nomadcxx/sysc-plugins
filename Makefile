@@ -20,7 +20,8 @@ PLUGINS := \
 	sysc-plugin-moonbit:moonbit \
 	sysc-plugin-herdr:herdr \
 	sysc-plugin-updates:updates \
-	sysc-plugin-thinkpad:thinkpad
+	sysc-plugin-thinkpad:thinkpad \
+	sysc-plugin-vpn:vpn
 
 # Calendar is the only cgo plugin; skip it when its pkg-config modules are
 # missing so one optional plugin's headers do not block the remaining plugins.
