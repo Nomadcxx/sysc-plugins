@@ -276,13 +276,14 @@ func TestConnectionLineNamesTheTokenSourceAndNeverTheToken(t *testing.T) {
 		tokens     TokenCandidates
 		want       ConnectionTokenSource
 		mode       string
+		addr       string
 	}{
-		{true, TokenCandidates{Pasted: pastedToken, File: fileToken}, SourcePasted, "Client-only"},
-		{true, TokenCandidates{Pasted: "   ", File: fileToken}, SourceFile, "Client-only"},
-		{true, TokenCandidates{}, SourceNone, "Client-only"},
-		{true, TokenCandidates{Local: localToken}, SourceNone, "Client-only"},
-		{false, TokenCandidates{Local: localToken, Pasted: pastedToken}, SourceLocal, "Local"},
-		{false, TokenCandidates{Pasted: pastedToken}, SourceNone, "Local"},
+		{true, TokenCandidates{Pasted: pastedToken, File: fileToken}, SourcePasted, "Client-only", "192.168.0.10:19778"},
+		{true, TokenCandidates{Pasted: "   ", File: fileToken}, SourceFile, "Client-only", "192.168.0.10:19778"},
+		{true, TokenCandidates{}, SourceNone, "Client-only", "192.168.0.10:19778"},
+		{true, TokenCandidates{Local: localToken}, SourceNone, "Client-only", "192.168.0.10:19778"},
+		{false, TokenCandidates{Local: localToken, Pasted: pastedToken}, SourceLocal, "Local", "127.0.0.1:19777"},
+		{false, TokenCandidates{Pasted: pastedToken}, SourceNone, "Local", "127.0.0.1:19777"},
 	} {
 		// Errors that quote every token the runtime holds; each must be
 		// redacted, whichever one is the active source.
@@ -294,7 +295,7 @@ func TestConnectionLineNamesTheTokenSourceAndNeverTheToken(t *testing.T) {
 		s := SettingsState{Connection: conn}
 		tree := SettingsTree(s, SettingsInnerWidth(640))
 		line := strings.Join(texts(findKey(tree, "connection")), " ")
-		for _, want := range []string{c.mode, "192.168.0.10:19778", "token: " + string(c.want), "Last error:", "Last view error:"} {
+		for _, want := range []string{c.mode, c.addr, "token: " + string(c.want), "Last error:", "Last view error:"} {
 			if !strings.Contains(line, want) {
 				t.Errorf("connection line %q is missing %q", line, want)
 			}
@@ -618,5 +619,18 @@ func TestComposedSettingsPanelLaysOutAndCaptures(t *testing.T) {
 			}
 			t.Logf("wrote %s", out)
 		}
+	}
+}
+
+// Local mode always runs its bridge on 127.0.0.1:19777; the host and port
+// settings belong to client-only. The header once showed a client-only port
+// while the local bridge listened on 19777.
+func TestLocalConnectionShowsTheLocalBridge(t *testing.T) {
+	c := ConnectionFor(false, "192.168.0.10", 19778, TokenCandidates{Local: "tok"}, "", "")
+	if c.Host != LocalHost || c.Port != LocalPort {
+		t.Fatalf("local connection = %s:%d, want %s:%d", c.Host, c.Port, LocalHost, LocalPort)
+	}
+	if c := ConnectionFor(true, "192.168.0.10", 19778, TokenCandidates{File: "tok"}, "", ""); c.Host != "192.168.0.10" || c.Port != 19778 {
+		t.Fatalf("client-only connection = %s:%d, want the settings", c.Host, c.Port)
 	}
 }

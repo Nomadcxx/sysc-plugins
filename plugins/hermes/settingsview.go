@@ -77,11 +77,15 @@ type ConnectionInfo struct {
 
 const redacted = "[redacted]"
 
-// ConnectionFor picks the token source the way the runtime uses tokens: in
-// client-only mode the pasted token when it is not blank, else the token
-// file; in local mode the local bridge.token. Every candidate token is
-// redacted out of the last error and the last view.error.
+// ConnectionFor picks the endpoint and token source the way the runtime
+// does: in client-only mode the host and port settings and the pasted token
+// when it is not blank, else the token file; in local mode the local bridge
+// address and its bridge.token. Every candidate token is redacted out of the
+// last error and the last view.error.
 func ConnectionFor(clientOnly bool, host string, port int, tokens TokenCandidates, lastErr, viewErr string) ConnectionInfo {
+	if !clientOnly {
+		host, port = LocalHost, LocalPort
+	}
 	source := SourceNone
 	switch {
 	case clientOnly && strings.TrimSpace(tokens.Pasted) != "":
