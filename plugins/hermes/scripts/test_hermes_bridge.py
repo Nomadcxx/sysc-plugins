@@ -341,6 +341,49 @@ class ResumeTest(BridgeCase):
         self.assertEqual([m["text"] for m in reply["state"]["messages"]], ["from the db"])
 
 
+class PooledReplyTest(unittest.TestCase):
+    """Hermes runs session.list and session.resume on a worker pool:
+    dispatch returns None and the worker writes the reply to the transport.
+    The stock client answered {"status": "accepted"} and lost the reply."""
+
+    def setUp(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        (tmp / "home").mkdir()
+        (tmp / "home" / "config.yaml").write_text("model:\n  default: m0\n")
+        self.state = bridge.HermesState(tmp / "state.json", tmp / "home")
+        self.client = bridge.HermesRpcClient(self.state, tmp / "home")
+        self.seen: list[dict] = []
+        real_apply = self.state.apply_event
+        self.state.apply_event = lambda obj: (self.seen.append(obj), real_apply(obj))[1]
+
+    def pooled_server(self, reply: dict | None) -> None:
+        def dispatch(req: dict, transport) -> None:
+            def run() -> None:
+                transport.write({"jsonrpc": "2.0", "method": "event", "params": {"type": "noise"}})
+                if reply is not None:
+                    transport.write({"jsonrpc": "2.0", "id": req["id"], "result": reply})
+            threading.Thread(target=run, daemon=True).start()
+            return None
+        self.client._server = types.SimpleNamespace(dispatch=dispatch)
+
+    def test_the_pool_reply_is_returned(self) -> None:
+        self.pooled_server({"session_id": "live-2"})
+        response = self.client.dispatch("session.resume", {"session_id": "stored-1"})
+        self.assertEqual(response["result"], {"session_id": "live-2"})
+        # The reply is not applied as an event; the event is.
+        self.assertEqual([o.get("method") for o in self.seen], ["event"])
+
+    def test_no_reply_falls_back_to_accepted(self) -> None:
+        self.pooled_server(None)
+        response = self.client.dispatch("session.list", {}, reply_timeout=0.2)
+        self.assertEqual(response, {"result": {"status": "accepted"}})
+
+    def test_an_inline_reply_is_returned_without_waiting(self) -> None:
+        self.client._server = types.SimpleNamespace(dispatch=lambda req, transport: {"id": req["id"], "result": {"ok": 1}})
+        self.assertEqual(self.client.dispatch("session.create", {})["result"], {"ok": 1})
+
+
 class GatewayLivenessTest(unittest.TestCase):
     """Hermes leaves gateway_state=running after an unplanned kill and checks
     the pid itself; the stock bridge trusted the record, so a dead gateway
@@ -387,27 +430,43 @@ class GatewayLivenessTest(unittest.TestCase):
         self.assertEqual(self.statuses(), ("stopped", "stopped"))
 
 
-# Functions the local changes may touch in the Task 3 copy (commit a8384bd):
-# Task 3a's approval and model handlers, _send_json, which keeps a client
-# hang-up from being recorded as a Hermes failure, and import_hermes_bootstrap
-# with its callers _load_server and main, which import hermes_bootstrap at
-# startup so newer Hermes can find its dependencies. _handle_session_resume
-# binds the session Hermes resumed, and gateway_record_state with
-# process_start_time and its callers detect_gateway and scan_gateway_summary
-# read a gateway whose process is gone as stopped (owner-approved
-# 2026-11-19).
-ALLOWED = {"_set_approval", "_handle_approval", "_handle_model", "apply_event", "_send_json",
-           "_load_server", "import_hermes_bootstrap", "main", "_handle_session_resume",
-           "gateway_record_state", "process_start_time", "detect_gateway", "scan_gateway_summary"}
+# Functions the local changes may touch in the Task 3 copy (commit a8384bd),
+# methods named with their class:
+# - Task 3a's approval and model handlers;
+# - BridgeRequestHandler._send_json, which keeps a client hang-up from being
+#   recorded as a Hermes failure;
+# - import_hermes_bootstrap with its callers _load_server and main, which
+#   import hermes_bootstrap at startup so newer Hermes finds its dependencies;
+# - owner-approved 2026-11-19: _handle_session_resume, which binds the session
+#   Hermes resumed; StateTransport and HermesRpcClient.dispatch, which return
+#   the reply to an RPC Hermes ran on its worker pool; gateway_record_state,
+#   process_start_time and their callers detect_gateway and
+#   scan_gateway_summary, which read a gateway whose process is gone as
+#   stopped.
+ALLOWED = {
+    "HermesState._set_approval", "HermesState.apply_event",
+    "BridgeRequestHandler._handle_approval", "BridgeRequestHandler._handle_model",
+    "BridgeRequestHandler._send_json", "BridgeRequestHandler._handle_session_resume",
+    "HermesRpcClient._load_server", "HermesRpcClient.dispatch",
+    "StateTransport.__init__", "StateTransport.write",
+    "import_hermes_bootstrap", "main",
+    "gateway_record_state", "process_start_time", "detect_gateway", "scan_gateway_summary",
+}
 TASK3_COMMIT = "a8384bdeeff6d2f65b8ccbe475ed89fed2cd2329"
 
 
 def _function_at(lines: list[str], index: int) -> str:
-    """The method or top-level function enclosing line index (0-based), or
-    '' outside any. Nested helpers count as part of their method."""
+    """The top-level function or Class.method enclosing line index (0-based),
+    or '' outside any. Nested helpers count as part of their method."""
     for i in range(min(index, len(lines) - 1), -1, -1):
         m = re.match(r"( {0,4})def (\w+)\(", lines[i])
         if m:
+            if not m.group(1):
+                return m.group(2)
+            for j in range(i - 1, -1, -1):
+                c = re.match(r"class (\w+)", lines[j])
+                if c:
+                    return f"{c.group(1)}.{m.group(2)}"
             return m.group(2)
         if lines[i] and not lines[i][0].isspace() and not lines[i].startswith(("#", ")")):
             return ""

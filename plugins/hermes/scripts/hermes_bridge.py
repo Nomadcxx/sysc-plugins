@@ -788,9 +788,22 @@ class HermesState:
 
 class StateTransport:
     def __init__(self, state: HermesState):
+        import threading
+
         self.state = state
+        # sysc-shell: replies to RPCs Hermes ran on its worker pool, by
+        # request id, for the dispatch waiting on each.
+        self.replies: dict[str, Any] = {}
+        self.replies_lock = threading.Lock()
 
     def write(self, obj: dict[str, Any]) -> bool:
+        rid = obj.get("id") if isinstance(obj, dict) else None
+        if isinstance(rid, str) and ("result" in obj or "error" in obj):
+            with self.replies_lock:
+                waiting = self.replies.get(rid)
+            if waiting is not None:
+                waiting.put(obj)
+                return True
         self.state.apply_event(obj)
         self.state.write()
         return True
@@ -803,7 +816,9 @@ class HermesRpcClient:
         self.transport = StateTransport(state)
         self._server = None
 
-    def dispatch(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def dispatch(self, method: str, params: dict[str, Any], reply_timeout: float = 12.0) -> dict[str, Any]:
+        import queue
+
         server = self._load_server()
         request = {
             "jsonrpc": "2.0",
@@ -811,7 +826,23 @@ class HermesRpcClient:
             "method": method,
             "params": params,
         }
-        response = server.dispatch(request, self.transport)
+        # sysc-shell: Hermes runs some RPCs (session.list, session.resume) on
+        # a worker pool; dispatch returns None and the worker writes the reply
+        # to the transport. Wait for it, under the plugin's request deadlines,
+        # rather than answer "accepted" and lose it.
+        waiting: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
+        with self.transport.replies_lock:
+            self.transport.replies[request["id"]] = waiting
+        try:
+            response = server.dispatch(request, self.transport)
+            if response is None:
+                try:
+                    response = waiting.get(timeout=reply_timeout)
+                except queue.Empty:
+                    response = None
+        finally:
+            with self.transport.replies_lock:
+                self.transport.replies.pop(request["id"], None)
         return response or {"result": {"status": "accepted"}}
 
     def _load_server(self):
