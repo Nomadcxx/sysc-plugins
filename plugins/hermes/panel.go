@@ -599,35 +599,57 @@ func actionErrorRow(p PanelState, inner int) *v1.Node {
 	}
 }
 
+const composerPlaceholder = "Ask Hermes..."
+
+// panelComposer is the field, New Session, Reset, One-shot and Send (or
+// Interrupt). The field never gets less than its placeholder in the real
+// font, or the host refuses the row; on a panel too narrow for that,
+// One-shot and Send keep their glyphs and names and drop their words.
 func panelComposer(p PanelState, running bool, inner int) *v1.Node {
 	h := 40
-	oneShot := toggle("one-shot", "One-shot", "Send as a one-shot prompt", iconOneShot, p.Composer.OneShot, buttonWidth("One-shot", iconOneShot))
-	oneShot.Height = h
-	var send *v1.Node
-	if running {
-		send = autoButton("composer-interrupt", "Interrupt", "Interrupt", iconStop, h)
-	} else {
-		send = autoButton("send", "Send", "Send", iconSend, h)
-		send.Fill = "accent"
+	buttons := func(labels bool) []*v1.Node {
+		label := func(text string) string {
+			if labels {
+				return text
+			}
+			return ""
+		}
+		oneShot := toggle("one-shot", label("One-shot"), "Send as a one-shot prompt", iconOneShot, p.Composer.OneShot, buttonWidth(label("One-shot"), iconOneShot))
+		oneShot.Height = h
+		var send *v1.Node
+		if running {
+			send = autoButton("composer-interrupt", label("Interrupt"), "Interrupt", iconStop, h)
+		} else {
+			send = autoButton("send", label("Send"), "Send", iconSend, h)
+			send.Fill = "accent"
+		}
+		return []*v1.Node{
+			autoButton("composer-new-session", "", "New Session", iconChat, h),
+			autoButton("composer-reset", "", "Reset", iconReset, h),
+			oneShot,
+			send,
+		}
 	}
-	buttons := []*v1.Node{
-		autoButton("composer-new-session", "", "New Session", iconChat, h),
-		autoButton("composer-reset", "", "Reset", iconReset, h),
-		oneShot,
-		send,
+	width := func(bs []*v1.Node) int {
+		used := 0
+		for _, b := range bs {
+			used += b.Width + 8
+		}
+		return used
 	}
-	used := 0
-	for _, b := range buttons {
-		used += b.Width + 8
+	bs := buttons(true)
+	if inner-width(bs) < 2*10+realByteWidth*len(composerPlaceholder) {
+		bs = buttons(false)
 	}
+	used := width(bs)
 	input := &v1.Node{
 		Kind: v1.KindTextInput, ID: "composer", Key: "composer", Name: "Message Hermes", Role: "textbox",
-		Placeholder: "Ask Hermes...", SubmitOnEnter: true, Reseed: p.Composer.Reseed,
+		Placeholder: composerPlaceholder, SubmitOnEnter: true, Reseed: p.Composer.Reseed,
 		Width: inner - used, Height: h, Padding: 10,
 		Events: []v1.EventKind{v1.EventChange, v1.EventSubmit},
 	}
 	return &v1.Node{
 		Kind: v1.KindRow, Key: "composer-row", Width: inner, Height: panelComposerH, Gap: 8,
-		Children: append([]*v1.Node{input}, buttons...),
+		Children: append([]*v1.Node{input}, bs...),
 	}
 }

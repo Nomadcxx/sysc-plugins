@@ -895,3 +895,27 @@ func TestApprovalCardWithoutSignedChoicesOffersNoInertButtons(t *testing.T) {
 		})
 	}
 }
+
+// On a small output the host fits the panel down; the composer once gave
+// its field 116 px at 420, under the placeholder in the real font, and the
+// host refused the row. A narrow composer keeps the field and drops the
+// One-shot and Send words instead.
+func TestNarrowComposerKeepsTheFieldAndDropsLabels(t *testing.T) {
+	for _, running := range []bool{false, true} {
+		row := panelComposer(basePanel(StatusIdle), running, 420)
+		field := row.Children[0]
+		if min := 2*10 + realByteWidth*len(composerPlaceholder); field.Width < min {
+			t.Errorf("running=%v: field is %d wide, want at least %d", running, field.Width, min)
+		}
+		for _, b := range row.Children[3:] {
+			if b.Text != "" || b.Name == "" || b.Icon == "" {
+				t.Errorf("running=%v: %s = text %q name %q icon %q, want a named glyph", running, b.ID, b.Text, b.Name, b.Icon)
+			}
+		}
+		lintView(t, fmt.Sprintf("composer 420 running=%v", running), &v1.Node{Kind: v1.KindColumn, Width: 420, Children: []*v1.Node{row}}, v1.ViewPanel, 420, 48)
+	}
+	wide := panelComposer(basePanel(StatusIdle), false, 724)
+	if send := wide.Children[4]; send.Text != "Send" {
+		t.Errorf("wide composer Send = %q, want its label", send.Text)
+	}
+}
