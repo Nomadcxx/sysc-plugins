@@ -1314,6 +1314,9 @@ func (s *Service) runJob(j job) {
 		s.publish(func(v *View) { v.ActionError = MsgOffline })
 		return
 	}
+	// An interrupt with no session (a one-shot has none) has nothing to stop;
+	// Hermes's "session not found" for it is no refusal.
+	nothingToStop := j.path == "/interrupt" && s.Snapshot().State.Session.ID == ""
 	snap, err := b.Post(s.ctx, j.path, j.body)
 	if err == nil && !snap.HasState && j.refetch {
 		var st State
@@ -1334,7 +1337,7 @@ func (s *Service) runJob(j job) {
 		return
 	}
 	msg := ""
-	if refusal := b.HermesRefusal(snap); refusal != "" {
+	if refusal := b.HermesRefusal(snap); refusal != "" && !nothingToStop {
 		s.deps.Logf("hermes: %s: refused by Hermes", j.path)
 		msg = clip("Hermes: "+refusal, maxBridgeError)
 	}

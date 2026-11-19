@@ -47,6 +47,7 @@ type fakeBridge struct {
 	hermes    string
 	gateway   string
 	approval  *Approval
+	session   string
 	stateFail int // fail this many /state calls with 500
 	detect    Detect
 	handlers  map[string]http.HandlerFunc
@@ -54,7 +55,7 @@ type fakeBridge struct {
 
 func newFakeBridge(t *testing.T, token string) *fakeBridge {
 	t.Helper()
-	fb := &fakeBridge{t: t, token: token, hermes: "idle", gateway: "running", handlers: map[string]http.HandlerFunc{},
+	fb := &fakeBridge{t: t, token: token, hermes: "idle", gateway: "running", session: "s1", handlers: map[string]http.HandlerFunc{},
 		detect: Detect{Gateway: DetectGateway{Status: "running"}}}
 	fb.srv = httptest.NewServer(http.HandlerFunc(fb.serve))
 	t.Cleanup(fb.srv.Close)
@@ -78,7 +79,7 @@ func (fb *fakeBridge) stateJSON() map[string]any {
 	st := map[string]any{
 		"bridge":  map[string]any{"status": "online"},
 		"hermes":  map[string]any{"status": fb.hermes, "model": "m1"},
-		"session": map[string]any{"id": "s1", "running": fb.running},
+		"session": map[string]any{"id": fb.session, "running": fb.running},
 		"summary": map[string]any{"gateway": map[string]any{"status": fb.gateway}},
 	}
 	if fb.approval != nil {
@@ -1193,6 +1194,38 @@ func TestAHermesRefusalInASuccessfulReplyIsShown(t *testing.T) {
 	// A plain success still clears it.
 	h.svc.Submit("/refresh", map[string]any{})
 	h.waitFor("cleared", func(v View) bool { return v.ActionError == "" })
+}
+
+// Cancelling a one-shot posts /interrupt, and a one-shot runs with no
+// session, so Hermes answers "session not found". There was nothing to
+// interrupt; that is not a refusal to show.
+func TestInterruptWithNoSessionShowsNoRefusal(t *testing.T) {
+	h := newHarness(t)
+	remote := newFakeBridge(t, "remote-tok")
+	remote.set(func(fb *fakeBridge) { fb.session = "" })
+	remote.handle("/interrupt", func(w http.ResponseWriter, r *http.Request) {
+		remote.mu.Lock()
+		st := mustJSON(t, remote.stateJSON())
+		remote.mu.Unlock()
+		w.Write([]byte(`{"result":{"jsonrpc":"2.0","id":"x","error":{"code":4001,` +
+			`"message":"session not found"}},"state":` + st + `}`))
+	})
+	h.svc.Configure(h.clientSettings(remote, "remote-tok"))
+	h.waitFor("idle", func(v View) bool { return v.Status.Key == StatusIdle })
+
+	interrupt := func(n int) View {
+		h.svc.Submit("/interrupt", map[string]any{})
+		return h.waitFor("interrupt done", func(v View) bool { return !v.Pending && remote.count("/interrupt") == n })
+	}
+	if v := interrupt(1); v.ActionError != "" {
+		t.Fatalf("interrupt with no session showed %q", v.ActionError)
+	}
+	// With a session, the same answer is a real refusal.
+	remote.set(func(fb *fakeBridge) { fb.session = "s1" })
+	h.waitFor("session", func(v View) bool { return v.State.Session.ID == "s1" })
+	if v := interrupt(2); !strings.Contains(v.ActionError, "session not found") {
+		t.Fatalf("interrupt with a session showed %q, want the refusal", v.ActionError)
+	}
 }
 
 func mustJSON(t *testing.T, v any) string {
