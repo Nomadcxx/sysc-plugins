@@ -466,6 +466,32 @@ func TestLocalSpawnsOnceWithTheExactArgvWhenNoBridge(t *testing.T) {
 	}
 }
 
+// The bundled bridge runs hermes_bootstrap before it listens, and on a new
+// data root newer Hermes prepares its managed runtime there first: minutes,
+// not seconds. A bridge that is still starting must not be killed.
+func TestDefaultProbeTimeoutCoversHermesRuntimePreparation(t *testing.T) {
+	if got := DefaultOptions().ProbeTimeout; got != 5*time.Minute {
+		t.Fatalf("ProbeTimeout = %s, want 5m", got)
+	}
+}
+
+func TestLocalSaysStartingWhileAnOwnedBridgeComesUp(t *testing.T) {
+	h := newHarness(t)
+	h.svc.opts.ProbeTimeout = 4 * time.Second
+	h.writeToken(h.besideState(), "local-tok")
+	h.svc.Configure(h.localSettings())
+
+	v := h.waitFor("starting message", func(v View) bool { return v.Message == MsgStarting })
+	if v.Status.Key != StatusOffline || v.State.Bridge.Error != MsgStarting {
+		t.Fatalf("while starting: status=%s bridge error=%q", v.Status.Key, v.State.Bridge.Error)
+	}
+	h.local.online.Store(true)
+	h.waitFor("owned bridge online", func(v View) bool { return v.Owned && v.Status.Key == StatusIdle })
+	if specs, _ := h.starter.started(); len(specs) != 1 {
+		t.Fatalf("spawned %d times while it was starting, want once", len(specs))
+	}
+}
+
 func TestLocalAdoptsAHealthyBridgeAndNeverSpawns(t *testing.T) {
 	h := newHarness(t)
 	h.local.online.Store(true)

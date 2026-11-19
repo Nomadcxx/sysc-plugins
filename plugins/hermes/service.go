@@ -27,6 +27,7 @@ const (
 // Connection and action messages, from the design.
 const (
 	MsgFailedToStart   = "Bridge failed to start"
+	MsgStarting        = "Starting bridge…"
 	MsgOffline         = "Bridge offline"
 	MsgNoToken         = "No bridge token: paste it in Settings or set a token file"
 	MsgWrongToken      = "Wrong token"
@@ -224,7 +225,10 @@ func DefaultOptions() Options {
 		RunningPoll:   1500 * time.Millisecond,
 		Backoff:       []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second, 30 * time.Second},
 		ProbeInterval: 500 * time.Millisecond,
-		ProbeTimeout:  10 * time.Second,
+		// The bridge runs hermes_bootstrap before it listens; on a new data
+		// root newer Hermes prepares its managed runtime there, which can
+		// take minutes. A bridge that exits is noticed at once regardless.
+		ProbeTimeout:  5 * time.Minute,
 		StopGrace:     DefaultStopGrace,
 		WatchPoll:     DefaultWatchPoll,
 		SpawnAttempts: 3,
@@ -994,11 +998,19 @@ func (s *Service) spawn(ctx context.Context, set Settings) bool {
 	s.owned = o
 	s.mu.Unlock()
 	s.deps.Logf("hermes: started bridge pid %d", p.Pid())
+	s.publishConn("offline", MsgStarting)
 
 	probe, _ := NewBridge(s.opts.LocalHost, s.opts.LocalPort, "")
 	deadline := time.Now().Add(s.opts.ProbeTimeout)
 	for {
 		if _, err := probe.Health(ctx); err == nil {
+			s.publish(func(v *View) {
+				if v.Message == MsgStarting {
+					v.State.Bridge = BridgeInfo{Status: "online"}
+					v.Status = DeriveStatus(v.State)
+					v.Message = ""
+				}
+			})
 			return true
 		}
 		select {
