@@ -1052,6 +1052,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         if isinstance(result, dict) and result.get("session_id") and "error" not in result:
             stored = list(self.server.state._state["messages"])
             self.server.state.set_session_from_resume(result)
+            if not self.server.state._state["session"]["stored_id"]:
+                self.server.state._state["session"]["stored_id"] = session_id
             if not result.get("messages") and loaded:
                 self.server.state._state["messages"] = stored
         self.server.state.write()

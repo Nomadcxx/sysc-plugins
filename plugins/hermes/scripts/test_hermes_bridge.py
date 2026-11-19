@@ -322,6 +322,14 @@ class ResumeTest(BridgeCase):
         self.assertEqual(self.rpc.calls_to("prompt.submit")[-1]["session_id"], "live-2")
         self.assertEqual([m["text"] for m in reply["state"]["messages"]], ["hi", "hello", "and then?"])
 
+    def test_a_reply_with_no_stored_id_keeps_the_requested_one(self) -> None:
+        """Hermes reattaching a session that is still live may leave
+        stored_session_id blank; Resume latest needs it next time."""
+        self.rpc.responses["session.resume"] = {"result": dict(self.RESUMED, stored_session_id="")}
+        _, reply = self.post("/session/resume", {"session_id": "stored-1"})
+        self.assertEqual(reply["state"]["session"]["id"], "live-2")
+        self.assertEqual(reply["state"]["session"]["stored_id"], "stored-1")
+
     def test_a_reply_with_no_messages_keeps_the_stored_transcript(self) -> None:
         self.write_db([("stored-1", "user", "from the db", 1), ("stored-1", "assistant", "stored reply", 2)])
         self.rpc.responses["session.resume"] = {"result": dict(self.RESUMED, messages=[])}
