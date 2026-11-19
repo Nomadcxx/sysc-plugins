@@ -3,7 +3,6 @@ package vpn
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 	"unicode"
@@ -52,10 +51,10 @@ const (
 )
 
 type Observation struct {
-	Phase                                     Phase
-	Traffic                                   TrafficState
-	City, Country, Exit, Entry, IP, Transport string
-	Detail                                    string
+	Phase                                               Phase
+	Traffic                                             TrafficState
+	City, CityCode, Country, Exit, Entry, IP, Transport string
+	Detail                                              string
 }
 
 type ProviderState struct {
@@ -153,6 +152,10 @@ func (m *Machine) ApplyRead(p Provider, gen uint64, o Observation, err error, no
 		if m.pendingProvider == p && m.Pending == o.Phase {
 			m.Pending = ""
 		}
+		if m.ActionError != "" && p == Obscura && p == m.activeProvider &&
+			m.activeAction.Kind == "location" && o.matchesObscuraLocation(m.activeAction.Location) {
+			m.ActionError = ""
+		}
 	}
 	m.Providers[p] = s
 	return true
@@ -202,7 +205,7 @@ func (m *Machine) CompleteMutation(p Provider, gen uint64, err error, now time.T
 	s.ReadError = "Refreshing status after action"
 	m.Providers[p] = s
 	if err != nil {
-		m.ActionError = fmt.Sprintf("%s: %s", p.Name(), err)
+		m.ActionError = err.Error()
 		return true
 	}
 	var target Phase

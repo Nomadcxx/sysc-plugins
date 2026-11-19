@@ -82,6 +82,58 @@ func TestStateErrorsDoNotInventTunnelState(t *testing.T) {
 	}
 }
 
+func TestObscuraSwitchErrorClearsAtRequestedLocation(t *testing.T) {
+	const sydney = `{"vpnStatus":{"connected":{"exit":{"id":"SYD-001","city_code":"syd","city_name":"Sydney","country_code":"AU"}}}}`
+	const melbourne = `{"vpnStatus":{"connected":{"exit":{"id":"MEL-001","city_code":"mel","city_name":"Melbourne","country_code":"AU"}}}}`
+	const anotherMelbourneExit = `{"vpnStatus":{"connected":{"exit":{"id":"MEL-002","city_code":"mel","city_name":"Melbourne","country_code":"AU"}}}}`
+	const stockholm = `{"vpnStatus":{"connected":{"exit":{"id":"STO-001","city_code":"sto","city_name":"Stockholm","country_code":"SE"}}}}`
+	const notice = "Obscura: service unavailable; check the official app"
+
+	for _, tc := range []struct {
+		name, target, previous string
+	}{
+		{"country", "au::", stockholm},
+		{"city", "au:mel:", sydney},
+		{"exit", "au:mel:mel-001", anotherMelbourneExit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, now := readyMachine(t)
+			_ = m.Select(Obscura)
+			read := func(raw string) {
+				t.Helper()
+				o, err := ParseObscuraStatus([]byte(raw))
+				if err != nil {
+					t.Fatal(err)
+				}
+				gen, ok := m.BeginRead(Obscura)
+				if !ok || !m.ApplyRead(Obscura, gen, o, nil, now) {
+					t.Fatal("status read refused")
+				}
+			}
+			read(tc.previous)
+			gen, err := m.BeginMutation(Obscura, Action{Kind: "location", Location: tc.target}, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.CompleteMutation(Obscura, gen, errors.New(notice), now)
+
+			v := ViewState{Machine: m, Now: now}
+			read(tc.previous)
+			if got := status(v).detail; got != notice {
+				t.Errorf("still at the previous location: got %q, want %q", got, notice)
+			}
+			read(`{"vpnStatus":{"connecting":{}}}`)
+			if m.ActionError == "" {
+				t.Fatal("lost the error while reconnecting")
+			}
+			read(melbourne)
+			if got := status(v).detail; got != "MEL-001" {
+				t.Errorf("connected to the requested location: got %q, want the new exit", got)
+			}
+		})
+	}
+}
+
 func TestStatePendingExpiresWithoutDisconnecting(t *testing.T) {
 	m, now := readyMachine(t)
 	gen, err := m.BeginMutation(Mullvad, Action{Kind: "connect"}, now)
