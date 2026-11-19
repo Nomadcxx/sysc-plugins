@@ -509,6 +509,44 @@ func TestLocalAdoptsAHealthyBridgeAndNeverSpawns(t *testing.T) {
 	}
 }
 
+// The bridge recomputes the summary (models, cron, MCP) on every GET /state
+// but writes the state file only on Hermes events. Local mode used to read
+// /state once, at token load, so Refresh and the poll changed nothing.
+func TestLocalRefreshAndPollReadTheBridgeState(t *testing.T) {
+	start := func(t *testing.T, poll time.Duration) *harness {
+		h := newHarness(t)
+		h.local.online.Store(true)
+		h.writeToken(h.besideState(), "local-tok")
+		set := h.localSettings()
+		set.PollInterval = poll
+		h.svc.Configure(set)
+		h.waitFor("adopted", func(v View) bool { return v.Adopted && v.Status.Key == StatusIdle })
+		return h
+	}
+	t.Run("refresh", func(t *testing.T) {
+		h := start(t, time.Hour)
+		h.local.set(func(fb *fakeBridge) { fb.hermes = "busy" })
+		// A state-file change wakes the loop but does not read /state:
+		// the bridge rewrites the file on every streamed delta.
+		before := h.local.count("/state")
+		replaceFile(t, h.stateFile(), `{"bridge":{"status":"online"},"hermes":{"status":"idle"}}`)
+		time.Sleep(150 * time.Millisecond)
+		if n := h.local.count("/state"); n != before {
+			t.Fatalf("a state-file change read /state %d times", n-before)
+		}
+		if v := h.svc.Snapshot(); v.Status.Key != StatusIdle {
+			t.Fatalf("status changed to %s with no poll or Refresh", v.Status.Key)
+		}
+		h.svc.Refresh()
+		h.waitFor("Refresh reads /state", func(v View) bool { return v.Status.Key == StatusBusy })
+	})
+	t.Run("poll", func(t *testing.T) {
+		h := start(t, 30*time.Millisecond)
+		h.local.set(func(fb *fakeBridge) { fb.hermes = "busy" })
+		h.waitFor("the poll reads /state", func(v View) bool { return v.Status.Key == StatusBusy })
+	})
+}
+
 func TestLocalGivesUpAfterThreeFailedStarts(t *testing.T) {
 	h := newHarness(t)
 	h.svc.Configure(h.localSettings())
@@ -682,7 +720,10 @@ func TestLocalStateFileWatch(t *testing.T) {
 	h := newHarness(t)
 	h.local.online.Store(true)
 	h.writeToken(h.besideState(), "local-tok")
-	h.svc.Configure(h.localSettings())
+	// No timer polls: the fake bridge's /state does not follow the file.
+	set := h.localSettings()
+	set.PollInterval = time.Hour
+	h.svc.Configure(set)
 	h.waitFor("adopted", func(v View) bool { return v.Adopted && v.Status.Key == StatusIdle })
 
 	replaceFile(t, h.stateFile(), `{"bridge":{"status":"online"},"hermes":{"status":"busy"},"session":{"running":true}}`)

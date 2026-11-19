@@ -819,6 +819,9 @@ func (s *Service) connLocal(ctx context.Context, set Settings) {
 	attempts := 0
 	haveToken := false
 	gatewayTried := false
+	// Set when the poll timer or a Refresh woke the loop; a state-file
+	// change (one per streamed delta) does not read /state again.
+	pollDue := false
 
 	for ctx.Err() == nil {
 		s.reapOwned()
@@ -833,6 +836,8 @@ func (s *Service) connLocal(ctx context.Context, set Settings) {
 			s.publish(func(v *View) { v.Owned, v.Adopted = isOwned, !isOwned })
 			if !haveToken {
 				haveToken = s.loadLocalToken(ctx, set)
+			} else if pollDue && !s.pollLocalState(ctx) {
+				haveToken = false
 			}
 			if haveToken {
 				s.autoConfigure(ctx, set, false, &gatewayTried)
@@ -877,6 +882,7 @@ func (s *Service) connLocal(ctx context.Context, set Settings) {
 		if woke == wokeCancelled {
 			return
 		}
+		pollDue = woke == wokeTimer
 		if woke == 2 {
 			// A 403 on an action: the bridge may have a new token.
 			haveToken = false
@@ -896,6 +902,29 @@ func (s *Service) connLocal(ctx context.Context, set Settings) {
 			}
 		}
 	}
+}
+
+// pollLocalState reads GET /state on a Local-mode tick or Refresh. The
+// bridge writes its state file only on Hermes events, but it recomputes the
+// summary (models, cron, MCP, gateway) on every /state. It returns false
+// when the bridge refused the token, so the caller loads it again.
+func (s *Service) pollLocalState(ctx context.Context) bool {
+	b := s.currentBridge()
+	if b == nil {
+		return false
+	}
+	st, err := b.State(ctx)
+	switch {
+	case errors.Is(err, ErrAuth):
+		return false
+	case err != nil:
+		if ctx.Err() == nil {
+			s.deps.Logf("hermes: local /state: %v", err)
+		}
+	default:
+		s.publishState(st)
+	}
+	return true
 }
 
 // reapOwned notices an owned child that exited on its own.
