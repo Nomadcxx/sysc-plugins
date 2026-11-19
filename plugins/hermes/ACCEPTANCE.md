@@ -2,17 +2,88 @@
 
 This record contains only results that exist. The Task 11 live matrix was run
 on 2026-11-17, first in part (a crash, D1, blocked it) and then again on
-`bc810b9` after the fixes. The local re-run is **not accepted**: a host
-restart of the plugin left it on `Connecting…` (D2). D2 has since been fixed
-plugin-side (`9d10165`, `606c0e1`, `917e6ec`) and held up in a later nested
-live check (`d2b.md`). D7 and D8 are fixed and hold up live (see
-*D7 and D8 live check*). The b200f5b approval path is fixed in `25768b4`,
-unit-tested, live check pending. Client-only rows, including the VPS, are
-pending the owner. See *Task 11 local re-run* and *Defect status*.
-The final automated gate was run on the last commit of `feat/hermes-merge`;
-its raw output is in `evidence/task12/gate.txt`.
+`bc810b9` after the fixes; D1 to D8 from those runs are fixed. The rows those
+runs left open, and the client-only matrix, were run live on 2026-11-18 and
+2026-11-19 against a throwaway nested sysc-shell, a throwaway Hermes home and
+a second throwaway bridge standing in for the VPS. Every row passes now, and
+the defects those runs found are fixed (see *Live runs 2026-11-18 and
+2026-11-19*). Not run: client-only mode against the VPS, an approval through
+a stock bridge, and a side-by-side comparison with Noctalia. The automated
+gates pass on `9f2f8c7` (see *Automated gates*). Sections below that one are
+the earlier runs, kept as they were recorded.
+
+## Live runs 2026-11-18 and 2026-11-19
+
+**Where they ran.** archThink, in a nested `niri` with its own `HOME`, XDG
+directories and `HERMES_HOME` under `/tmp/hv1`, a scripted stub model on
+`127.0.0.1:18881` and Hermes `835a913`; input from a virtual pointer and
+`wtype` against the nested display only. Shell: v1 the installed shell at
+`3c0fe385`, v2 and v3 `bc9dc40f`. Plugin: v1 `8dbcc45` and `9c01c7e`, v2
+`cf89402`, v3 `6b6258a` through `9f2f8c7`, swapped in as each fix landed.
+Client-only ran against a second bundled bridge on `19778` with its own Hermes
+home, state directory and 0600 token, moved to the LAN address `192.168.0.64`
+for the LAN row. The b200f5b path ran on archPC (Hermes `b200f5bc60e`) over
+HTTP with a throwaway `HERMES_HOME`. Evidence: archThink
+`~/hermes-oc/evidence/v1`, `v2` and `v3/shots` (numbers below are v3 unless
+marked), harness scripts in `~/hermes-oc/v3-live`.
+
+| Check | Result |
+|---|---|
+| b200f5b approval path | PASS (archPC, 2026-11-18): the `approval` server request shows a card with `request_id` and the once/session/always/deny choices; a wrong `request_id` gets 409 and the card stays; deny blocks the command, allow-once runs it; Interrupt with a card pending clears it. Re-checked with `e8217e9` |
+| Approval choices (R4) | PASS (v1 shot 07): Deny, Allow and Allow Session for once, session, always and deny |
+| Stale approval click (O1) | PASS (v2 shots 07, 08): a click on a card that had been replaced shows `The approval changed; check the card again` and nothing runs |
+| Transcript paging | PASS (v1 shots 01 to 05): follows the tail, Older pages back, a paged-back view stays put while a reply streams, Latest returns |
+| Pinned composer | PASS (v1 shot 08): the whole composer shows under the host's sticky chrome |
+| Host respawn of the plugin (D2) | PASS (v1): settings restored and the bridge respawned |
+| One-shot (R11) | PASS (02 to 05): the reply is in the transcript within 9 s; the poll is 30 s |
+| Interrupt during one-shot, one-shot cancel | PASS after `03177d9` (09, 10): the bridge reports no error and the one-shot finishes on the bridge (documented as client-side cancel) |
+| Refused model Apply (R8) | PASS (12 to 14): `Hermes: Unknown provider 'nosuch'…` shows, the header keeps `custom / v1-stub` across a poll, `config.yaml` unchanged |
+| Model Apply and Persist | PASS (31 to 34): Persist writes `config.yaml`; after a bridge kill the respawned bridge and a new session run the persisted model |
+| Auto-start gateway toggle (R7) | PASS (24 to 27): off from plugin start, nothing starts over 45 s; on, the gateway starts 7 s later with the plugin and bridge pids unchanged |
+| Gateway killed outside a planned stop | PASS after `bb868da`: `/state` and `/detect` say stopped; the next plugin connection starts it |
+| New session and Reset | PASS (29, 30): Reset replaces the session and clears the transcript |
+| Sessions and Resume, Resume latest | PASS after `bb868da`, `879e81f`, `54258a6` (57 to 60): resuming keeps the session live, the transcript grows, and the model receives the whole conversation, also after a bridge restart |
+| Launcher | PASS (47 to 50): the four `/hermes` rows; Ask writes the hand-off file 0600 in a 0700 directory, it is deleted on read, the one-shot runs and the chat opens; Start session creates and opens one |
+| Control Center tile | PASS (40, 41): opens the chat. The host labels it `Guard On` (host gap) |
+| Open action with the panel already open | PASS after `a0304d1` (42): the chat stays open |
+| Small output | PASS after `954f264` (53, 55, 56): at output scale 2 (476x516) the chat panel is accepted idle and running, and Settings fits |
+| Local → client-only | PASS (64): the owned bridge exits 1 s after the switch, 19777 is free, the gateway is not stopped, and the plugin is online through the token file |
+| Client-only, tunnel down | PASS (65 to 67): `Last error: Bridge offline` within one poll; back within a poll |
+| Wrong or missing token | PASS (71, 73): `Wrong token`, and `No bridge token: paste it in Settings or set a token file`; the pasted field is masked and no token appears in the shell log or bridge state |
+| Client-only, LAN host | PASS (74 to 76): works; the cleartext warning shows in Settings and the tooltip |
+| Client-only → local | PASS (78): a local bridge is spawned in 2 s with the local token, no 403 |
+| Collision | PASS after `9f2f8c7` (83, 84): the warning shows in Settings and the tooltip; the adopted bridge is left running |
+
+Defects found and fixed in these runs:
+
+| Defect | Commit |
+|---|---|
+| Local mode stopped respawning after three crashes in a session | `9c01c7e` |
+| The bridge could not import Hermes on `b200f5b` (`hermes_bootstrap`), and a cold start outlasted the start probe | `e8217e9`, `cf89402` |
+| A model Hermes refused was shown as live, and the refusal was not shown | `c84755f`, `aa9221b` |
+| The Local-mode poll and Refresh did not re-read `/state` | `6b6258a` |
+| Cancelling a one-shot showed `Hermes: session not found` | `03177d9` |
+| Open, settings and launcher actions closed an already-open panel (the host's `panel.open` toggles) | `a0304d1` |
+| The host refused the composer row at a small output | `954f264` |
+| Resume did not continue the session | `bb868da`, `879e81f`, `54258a6` |
+| A killed gateway read as running, so auto-start never fired | `bb868da` |
+| Settings showed the client-only port in Local mode | `859778e` |
+| The collision warning was never rendered | `9f2f8c7` |
+
+Two approvals granted with no scripted input in the v1 run were the owner
+clicking the visible nested window, not a defect.
+
+Seen and left to the host: the 953-px nested bar with four plugins on the
+right overflows when the Hermes pill carries a label (Working, Error), and the
+shell paints the overflow at x=0; a hand edit of `config.json` does not reach
+a running plugin; the Settings panel loses its scroll position on updates.
+
+
 
 ## Task 11 local re-run (2026-11-17, 10:08 to 10:54 AEDT)
+
+*Kept as recorded. Every row marked NOT RUN, PARTIAL or FAIL here was run
+again later; see* Live runs 2026-11-18 and 2026-11-19.
 
 **Result: local matrix not accepted.** D1 and D3 to D8 are fixed and hold up
 live (D7 and D8 were checked on 2026-11-17, 11:50 to 11:54 AEDT). One problem
@@ -22,7 +93,7 @@ status*. Client-only rows wait on the owner.
 
 **b200f5b approval path:** Hermes `b200f5b` on archPC sends approvals as a
 server request that the bundled bridge used to drop (see *b200f5b approval
-path* below). Fixed in `25768b4`, unit-tested, live check pending.
+path* below). Fixed in `25768b4`; checked live on 2026-11-18.
 
 **Pending the owner:** every client-only row, including the VPS (see
 *Phase B*).
@@ -94,17 +165,17 @@ the daily session was not touched (see *Teardown*).
 
 ### Remediation fixes (rounds 1 and 2)
 
-Each is unit-tested; the live check is pending.
+Each is unit-tested and holds live; see *Live runs 2026-11-18 and 2026-11-19*.
 
 | ID | Status | Commit |
 |---|---|---|
-| b200f5b approval server request dropped by the bundled bridge | fixed, unit-tested, live check pending | `25768b4` |
-| O1 click resolves a card that replaced the one aimed at | fixed: a click is bound to the request_id its card was rendered for, or a per-card nonce for an id-less request; unit-tested, live check pending. The first pass `89d4093` (1 s time guard) is superseded | `1d8ece5` |
-| Composer one-shot held the action queue | fixed: runs off the queue, so Interrupt and approvals are not stuck behind it; unit-tested, live check pending | `ea33faa` |
-| R4 Allow Session offered when Hermes does not allow it | fixed: the card draws only the choices Hermes offers and refuses any other; unit-tested, live check pending | `be033ac` |
-| R7 auto-start gateway toggle waited for a reconnect | fixed: read at every poll, as Noctalia does; unit-tested, live check pending | `c95385f` |
-| R8 refused model apply said nothing | fixed: shown in the action error row, and the picker keeps the live model; unit-tested, live check pending | `5c605b1` |
-| R11 one-shot result fields unused | fixed: the reply shows in the transcript at once, the dead fields are gone; unit-tested, live check pending | `7c1ecbc` |
+| b200f5b approval server request dropped by the bundled bridge | fixed, holds live (archPC, 2026-11-18) | `25768b4` |
+| O1 click resolves a card that replaced the one aimed at | fixed: a click is bound to the request_id its card was rendered for, or a per-card nonce for an id-less request; holds live. The first pass `89d4093` (1 s time guard) is superseded | `1d8ece5` |
+| Composer one-shot held the action queue | fixed: runs off the queue, so Interrupt and approvals are not stuck behind it; holds live | `ea33faa` |
+| R4 Allow Session offered when Hermes does not allow it | fixed: the card draws only the choices Hermes offers and refuses any other; holds live | `be033ac` |
+| R7 auto-start gateway toggle waited for a reconnect | fixed: read at every poll, as Noctalia does; holds live | `c95385f` |
+| R8 refused model apply said nothing | fixed: shown in the action error row, and the picker keeps the live model; holds live | `5c605b1` |
+| R11 one-shot result fields unused | fixed: the reply shows in the transcript at once, the dead fields are gone; holds live | `7c1ecbc` |
 
 ### Open items
 
@@ -180,7 +251,7 @@ the pointer is moving to it. The node ID carries the new signature, so the
 click then resolves the next request. The stale-drop protection works only
 when the click carries the old ID. Whether Noctalia behaves the same was not checked.
 Since `1d8ece5` a click is bound to the request_id its card was rendered for
-(see *Remediation fixes*); unit-tested, live check pending.
+(see *Remediation fixes*); holds live since 2026-11-19.
 
 ### Teardown
 
@@ -342,7 +413,7 @@ Confirmed by reading the source:
 
 Evidence: `archpc-b200f5b-*.txt`. Fixed in `25768b4`: the bundled bridge
 also handles the `approval` server request (and its `request.cancel`), while
-the `approval.request` event still works. Unit-tested, live check pending.
+the `approval.request` event still works. Checked live on 2026-11-18.
 
 ### Phase B (VPS, client-only)
 
@@ -359,26 +430,29 @@ Phase B needs the owner to decide whether to:
 - use its single token, revoked by stopping the bridge and deleting the
   token file;
 - and confirm the b200f5b-style approval path live first, because the VPS
-  build is newer than `835a913` (fixed in `25768b4`, unit-tested, live check
-  pending).
+  build is newer than `835a913` (fixed in `25768b4`, checked live on archPC's
+  `b200f5b` on 2026-11-18).
 
 ## Automated gates
 
+On `9f2f8c7` (2026-11-19). Repository-wide runs are capped at `-p 2` and the
+race detector runs one package at a time, the machine's limits.
+
 | Gate | Result |
 |---|---|
-| `gofmt -l .` | clean |
-| `go vet ./...` | pass |
-| `go test -race -count=1 ./...` | pass |
+| `gofmt -l .` | clean (the untracked local `zz_dump_test.go` excluded) |
+| `go vet -p 2 ./...` | pass |
+| `go test -p 2 -count=1 ./...` | pass |
+| `go test -race -count=1` on `./plugins/hermes/` and `./cmd/sysc-plugin-hermes/` | pass |
+| `python3 -m unittest test_hermes_bridge` (42 tests) | pass |
 | `make validate` | pass |
-| `make thumbnails` (throwaway `git archive` copy) | no tracked-file changes |
-| `go run ./tools/catalog validate` | not run: no `hermes` row in `catalog.json` |
-| `git diff --exit-code -- go.mod go.sum catalog.json catalog-meta.json` | clean against base `e97f517` |
+| `go run ./tools/catalog validate` | not run: no `hermes` row in `catalog.json` yet |
 
 ## QA verdicts
 
-These are the reviews that were actually completed. Gate 3 is the live
-environment gate; it is deferred everywhere, which is why the Task 11 matrix is
-still outstanding.
+These are the reviews that were actually completed. Gate 3, the live
+environment gate, was deferred in each; the live matrix was run afterwards
+(see *Live runs 2026-11-18 and 2026-11-19*).
 
 | Commit | Task | Report | Verdict |
 |---|---|---|---|
@@ -404,81 +478,40 @@ still outstanding.
 
 ## Scroll spike
 
-**Status: not run as a comparison. No option has been chosen.** The 2026-11-17
-observation is under *Task 11 live run*.
-
-The plan asks for four transcript strategies to be compared in a real
-sysc-shell session while a reply streams:
-
-1. Full snapshot on every change.
-2. A patch to the streaming message's text node only.
-3. Fixed message slots whose text is patched in place.
-4. One text node for the transcript, plus `view.focus` to the newest line.
-
-This spike was not run for Task 7 (2026-11-11 UTC):
-
-- The only sysc-shell on the development machine is the owner's live
-  desktop session. Running the spike would mean installing a development
-  build of this plugin into that live configuration and running a Hermes
-  bridge behind it.
-- Each option has to be judged by scrolling the transcript by hand while a
-  reply streams. Rendered previews (`sysc-panel-preview`) are still images
-  and cannot show scroll behaviour.
-
-Static reading of the pinned host (sysc-shell v0.2.5). This is not a
-measured result:
+**Status: superseded.** The four-way comparison was never run. The host keeps
+no scroll position for a plugin list across an update and sends no wheel
+events (README host gap 5), so the plan's fallback shipped instead: since
+`f74206d` the transcript is a paged window over the wrapped lines. It follows
+the newest line, **Older** and **Newer** move a screen at a time, **Latest** or
+a new prompt returns to the tail, and a paged-back window stays put while a
+reply streams. It holds live (v1 shots 01 to 05, 2026-11-17 and -18). The
+static reading of sysc-shell v0.2.5 recorded for Task 7 is kept below.
 
 - `internal/shell/pluginhost.go` `onMessage`: a `view.snapshot` and a
   `view.patch` both produce a newly converted root, and `applyResult`
-  replaces `v.Root`. Options 1 to 3 therefore all rebuild the panel tree.
+  replaces `v.Root`, so every option rebuilds the panel tree.
 - `internal/shell/panelhost.go` `rebuildPanel` carries scroll offsets over
-  only for the host's own settings lists (`settingsRailKey`,
-  `settingsBodyKey`, `settingsSearchBodyKey`). A plugin list's
-  `ScrollOffset` does not appear to survive a rebuild. If that holds, the
-  transcript list would jump back to the top on every update, whatever the
-  option.
-- `view.focus` (`focusPanelView`) matches only focusable nodes, and
-  `setFocus` moves the roving focus index without scrolling. Text nodes
-  are not focusable, so option 4 looks unable to bring the newest message
-  into view by itself.
-
-What ships: the transcript is a `KindList` with key `transcript` and a stable
-`msg:<id>` key per message. It shows the newest 24 messages, with the caption
-"Showing the last 24 messages" when older ones exist. The list starts at its
-top, so in a long conversation the newest message can sit below the fold. The
-plan's fallback (a paged transcript of the last 12 messages with
-Older/Newer) is not built. That choice should follow a live run of this
-spike, not this static reading.
-
-To run it: install a development build into a throwaway sysc-shell
-session, point it at a Hermes bridge, stream a reply of 40+ lines with each
-option, and record here:
-
-- whether the scroll position survives each update
-- whether the newest line can be reached
-- what the frame cost is
+  only for the host's own settings lists, so a plugin list jumps back to the
+  top on every update.
+- `view.focus` matches only focusable nodes and does not scroll, so focusing
+  the newest line cannot bring it into view.
 
 ## Approval check
 
-**Status: partial (2026-11-17).** Deny, Allow and Allow Session were exercised
-through the bundled bridge on Hermes `835a913`; see *Task 11 live run*. The
-`b200f5b` delivery path and a stock bridge were not exercised live.
-
-Before that run, no approval had been exercised against a live Hermes gateway. The automated tests pin the plugin's request signature, the
-`request_id` payload and the 409 handling, but they use a fake bridge.
-
-On Hermes `b200f5b`, approvals arrive as an `approval` server request
-(`server_requests.send_async`) rather than an `approval.request` event. The
-bundled bridge handles both since `25768b4` (unit-tested, live check pending).
-A live check must drive one real approval through both
-the bundled bridge and a stock bridge, confirm that Deny, Allow and Allow
-Session resolve the request on screen, and confirm that a deliberately stale
-click is refused with `The approval changed; check the card again`.
+**Status: passes live for the bundled bridge.** Deny, Allow and Allow Session
+resolved real approvals on Hermes `835a913` (2026-11-17); the `approval`
+server request on Hermes `b200f5b` showed a card, refused a wrong
+`request_id` with 409, blocked on deny and ran on allow-once (archPC,
+2026-11-18); a click on a card that had just been replaced was refused with
+`The approval changed; check the card again` (2026-11-19). An approval through
+a **stock** bridge was not exercised; the README states what a stock bridge
+does differently.
 
 ## Parity matrix
 
-**Status: partial, not accepted.** See *Task 11 local re-run*. No side-by-side
-comparison against Noctalia was produced.
+**Status: not run as a side-by-side comparison.** Every row of the design's
+matrix has been run on the plugin (see *Live runs 2026-11-18 and
+2026-11-19*), but no comparison against a running Noctalia was produced.
 The design's surface inventory and host-gap list describe what should be
 compared; they are not a substitute for the matrix.
 
@@ -492,15 +525,30 @@ unpushed SessionDB `/sessions` and resume-history fixes.
 | Reference v5 source | archPC `~/projects/noctalia-hermes-agent/v5/hermes-agent/scripts/hermes_bridge.py` | `892e27f75ec9f771d2a4dc7178ca5afcf19b9198beed0c558e2d25064cc15178` |
 | Bundled before Task 3a (commit `a8384bd`) | `plugins/hermes/scripts/hermes_bridge.py` | `0be2bc3cffbc01a8573fa573673642e58a0fa3934b7de685af914c5606ae8e99` |
 | Bundled after Task 3a (`937ac1a`, unchanged through `917e6ec`) | `plugins/hermes/scripts/hermes_bridge.py` | `c658df456138eb6cfd6113c7a94ace79683177e30ebdc2c49d8447a4c5fac183` |
-| Bundled now (after `25768b4`) | `plugins/hermes/scripts/hermes_bridge.py` | `c0387bfdd1bb795ac837569c03993cc2b3ab8f358840eccaaa3ff0def25bd5cd` |
+| After `25768b4` | `plugins/hermes/scripts/hermes_bridge.py` | `c0387bfdd1bb795ac837569c03993cc2b3ab8f358840eccaaa3ff0def25bd5cd` |
+| Bundled now (after `54258a6`) | `plugins/hermes/scripts/hermes_bridge.py` | `b2e23bbc128264c37979c353970120af2ddae24c4a43e1f0bc3bf4784d44d1d6` |
 
-The pre-Task-3a bundle differed from the reference source only by a three-line
-comment after the shebang pointing at `ATTRIBUTION.md`. Commit `937ac1a` then
-made the two authorized changes: `request_id` approval resolution (with 409
-`approval_mismatch`) and the `/model` `invalid_model` guard. `25768b4` added
-the third: the `approval` server request and `request.cancel`. Those are the only
-local changes; the reference hash was recorded by the Task 3a audit and was not
-re-read for this record.
+The pre-Task-3a bundle differed from the reference source only by a comment
+after the shebang pointing at `ATTRIBUTION.md`. The local changes since, each
+marked `sysc-shell:` in the source:
+
+| Change | Commit |
+|---|---|
+| Resolve the shown approval by `request_id`, 409 `approval_mismatch` otherwise; refuse flag-like model names with 400 `invalid_model` | `937ac1a` |
+| Show approvals sent as an `approval` server request; withdraw the card on `request.cancel` | `25768b4` |
+| Keep a client hang-up (a cancelled one-shot) out of the bridge's error state | `9204603` |
+| Restore the stock `empty_model` reply; correct the provenance header | `8dbcc45` |
+| Import `hermes_bootstrap` at startup, before Hermes's modules | `e8217e9` |
+| Keep a model Hermes refused out of the live model | `c84755f` |
+| Bind the resumed session; read a gateway whose process is gone as stopped | `bb868da` |
+| Return the reply to an RPC Hermes runs on its worker pool | `879e81f` |
+| Keep the stored session id when Hermes reattaches a live session | `54258a6` |
+
+`937ac1a` was authorized with Task 3a. The owner approved `bb868da`, `879e81f`
+and `54258a6` on 2026-11-19. `25768b4`, `9204603`, `e8217e9` and `c84755f`
+were made to fix defects found in testing and are flagged here for the
+owner. `DiffScopeTest` in `scripts/test_hermes_bridge.py` fails if any
+function outside this list changes (methods named with their class).
 
 ## Approval resolver (Task 3a)
 
@@ -527,6 +575,5 @@ the one it shows, using the stock oldest-first call. The bridge cannot read the
 Hermes queue itself, so that fallback relies on the shown request being the
 oldest one.
 
-This is a source read, not a live test. The `b200f5b` server-request delivery
-path is fixed in `25768b4`, unit-tested, live check pending (see *Approval
-check*).
+This was a source read. The `b200f5b` server-request delivery path is fixed in
+`25768b4` and was checked live on 2026-11-18 (see *Approval check*).

@@ -6,13 +6,12 @@ machine (Local mode) or one running elsewhere (Client-only mode).
 
 ![Hermes Agent panel](screenshot.png)
 
-> **Status:** pre-release. The automated gates pass, and the individual
-> commits were reviewed as recorded in [ACCEPTANCE.md](ACCEPTANCE.md). The
-> Task 11 local matrix was re-run on 2026-11-17 after the crash fix and is
-> not accepted yet: the pinned panel is not restored at shell start.
-> Client-only rows are not run yet. Two known gaps are open: approval
-> delivery on the newest Hermes build (see *Approvals*), and the host gaps
-> listed at the end.
+> **Status:** pre-release. The automated gates pass. The local and
+> client-only matrices were run live in a throwaway nested sysc-shell on
+> 2026-11-17 to 2026-11-19, and every defect they found is fixed; see
+> [ACCEPTANCE.md](ACCEPTANCE.md). Not run: a side-by-side comparison with
+> Noctalia, and client-only mode against the VPS (a second throwaway bridge
+> stood in for it). The host gaps are listed at the end.
 
 ## Modes
 
@@ -153,22 +152,35 @@ second approval, and the stock bridge may then resolve the wrong one. The window
 is one round trip. Run the bundled bridge on the remote side too when approvals
 matter.
 
-**Open gap:** on Hermes `b200f5b` the gateway sends approvals to clients as an
+On Hermes `b200f5b` and later the gateway sends approvals to clients as an
 `approval` server request rather than an `approval.request` event. The bundled
-bridge handles only the event. That delivery path has not been exercised in a
-live session and is recorded as open in ACCEPTANCE.md.
+bridge handles both; a stock bridge handles only the event, so on a newer
+Hermes its approvals never reach the card.
 
 ## Bundled bridge
 
 `scripts/hermes_bridge.py` is the local v5 port of the Noctalia bridge,
 including its unpushed SessionDB `/sessions` route and resume-history fixes. It
 is the compatibility boundary: the plugin does not reimplement Hermes's RPC.
-Exactly two local changes were authorized and are present:
+Its local changes are marked `sysc-shell:` in the source, listed with their
+commits in ACCEPTANCE.md, and held to that list by a test:
 
 1. the shown approval is resolved by `request_id` (published as
    `approval.request_id`), with `approval_mismatch` when it cannot be targeted;
 2. `/model` refuses names that could inject flags, answering 400
-   `invalid_model` instead of passing them through.
+   `invalid_model` instead of passing them through, and a model Hermes refuses
+   is not recorded as the live one;
+3. approvals sent as an `approval` server request (Hermes `b200f5b` and later)
+   show a card, and `request.cancel` withdraws it;
+4. a client that hangs up (a cancelled one-shot) is not recorded as a Hermes
+   failure;
+5. `hermes_bootstrap` is imported at startup, before Hermes's modules, as
+   every Hermes entry point does on newer installs;
+6. RPCs Hermes runs on its worker pool (`session.list`, `session.resume`)
+   return their real reply instead of `accepted`, so a resumed session stays
+   live and the next prompt continues it;
+7. a gateway record whose process is gone reads as stopped, as Hermes's own
+   status check does, so auto-start can start it again.
 
 Bridges without `/sessions` (GitHub `main`) are detected: the sessions list is
 unavailable but the rest of the plugin works. The bundled bridge is recommended
@@ -250,6 +262,11 @@ These are host limitations, not plugin bugs:
    state, and host-rendered settings fields do not show the detected captions.
 7. There is no overlay badge on a bar icon. The status dot is a status icon.
 8. Amber and orange share one warning tone.
+9. Editing `config.json` by hand does not reach a running plugin: the shell
+   sends plugin settings when the plugin starts and when Settings saves a
+   field. Change the mode in Settings, or restart the shell after an edit.
+10. The Control Center tile reads `Guard On` rather than naming Hermes; the
+    shell labels every plugin tile that way. Its tooltip says `Hermes: On`.
 
 ## Launcher
 
@@ -281,7 +298,10 @@ session, and resume the latest session. **Resume latest** needs a session the
 plugin has already seen.
 
 `sysc-plugin-hermes` must be on the shell's `PATH`; otherwise use the full
-path to the plugin's `bin/sysc-plugin-hermes` in both argv lists. The prompt
+path to the plugin's `bin/sysc-plugin-hermes` in both argv lists. Ask Hermes
+also runs `sysc-shell ipc plugin.action`, so `sysc-shell` must be on the
+shell's `PATH` too (it is when the shell is installed in `~/.local/bin` and
+that directory is on the session's `PATH`). The prompt
 travels to the plugin in `$XDG_RUNTIME_DIR/sysc-hermes/ask` (mode `0600`, one
 pending item, at most 1 MB), because a service action carries no payload. The
 plugin reads and deletes it when it runs `launcher-ask`.
