@@ -36,6 +36,7 @@ it.
 | **ProtonVPN** | Quick connect, server picker and protection status | `protonvpn` |
 | **Screen Recorder** | Record the screen or a window, with optional audio and a replay buffer | `gpu-screen-recorder` |
 | **Screenshot** | Region, window or screen capture from a bar button, using the shell's own capture engine | |
+| **VPN** | Mullvad and Obscura status, connect and location picker, with quick tiles for auto-connect, local network, lockdown and DNS blocking | `mullvad` or `obscura` |
 | **ThinkPad** | Fan speed, keyboard backlight and the lid logo light, with profiles that come back on every boot | |
 | **System Updates** | Pending repo, AUR and Flatpak updates in the bar, a reboot-needed marker, and updates run in a terminal you can watch | `pacman` (`pacman-contrib` optional) |
 | **Wallpaper Depth** | Depth masks for image wallpapers, so scenery can sit in front of the shell's centred clock | `python3` |
@@ -118,6 +119,9 @@ make catalog-validate
 Several plugins port behavior from Noctalia and DankMaterialShell plugins. No runtime compatibility
 with either is claimed. Faith bundles public-domain and CC BY texts. Sources and licenses are listed
 in [ATTRIBUTION.md](ATTRIBUTION.md).
+
+The VPN plugin is not affiliated with Mullvad VPN AB or Sovereign Engineering Inc. (Obscura). Their
+names and marks identify the services the plugin controls.
 
 ## License
 

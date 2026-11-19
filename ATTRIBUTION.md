@@ -21,6 +21,7 @@ Where each plugin's behavior comes from:
 | Cat | port of noctalia cat and the DMS Cat Widget |
 | ProtonVPN | new; `protonvpn` CLI backend, prior art from Noctalia, DMS and the ProtonVPN GTK app |
 | Games | new; reference is the lutrisLauncher DMS plugin (hthienloc/dms-plugins) |
+| VPN | new; `mullvad` and `obscura` CLI backends, visual reference from bernardopg/dms-mullvad-vpn-plugin |
 
 Plugins marked "port of noctalia ..." are Go rewrites of behavior originally
 implemented by [noctalia-dev](https://github.com/noctalia-dev) for Noctalia v5
@@ -78,6 +79,13 @@ listed with commits and checksums in `plugins/faith/data/SOURCES.md`:
 Adam Clarke's commentary (public domain) is not bundled. When the panel is
 open, it is fetched from the [Free Use Bible API](https://bible.helloao.org),
 the only network request the plugin makes. Nothing about the user is sent.
+
+VPN takes its Mullvad behavior and panel layout from bernardopg's
+dms-mullvad-vpn-plugin (bernardopg/dms-mullvad-vpn-plugin, MIT), which targets
+DankMaterialShell. No QML is kept; the interface is sysc-shell's own. Obscura
+support runs the `obscura` CLI from Sovereign Engineering's obscuravpn-client
+as an external program. None of that client's code is copied into or linked
+with this plugin.
 
 ## Thumbnail assets
 

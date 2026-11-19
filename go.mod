@@ -6,11 +6,11 @@ module github.com/Nomadcxx/sysc-plugins
 // mime/multipart flaws fixed in go1.26.9 (GO-2026-6617, -6613, -6612, -6611,
 // -6610, -6608). CI reads this directive for the toolchain it installs, so
 // the floor here is the floor everywhere.
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/HugoSmits86/nativewebp v1.3.0
-	github.com/Nomadcxx/sysc-shell v0.2.5
+	github.com/Nomadcxx/sysc-shell v0.3.1-0.20261119024003-bc9dc40f6d79
 	github.com/godbus/dbus/v5 v5.2.4
 	golang.org/x/image v0.47.0
 	golang.org/x/sys v0.49.0

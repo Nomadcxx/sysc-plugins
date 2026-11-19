@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "id": "org.sysc.vpn",
+  "name": "VPN",
+  "description": "Mullvad and Obscura connection controls from the bar.",
+  "version": "0.2.0",
+  "protocol": {"major": 1, "minor": 28},
+  "exec": "bin/sysc-plugin-vpn",
+  "capabilities": ["panels", "settings", "state"],
+  "requires": {"commands": []},
+  "services": [{"id": "service"}],
+  "widgets": [{"id": "bar", "settings": []}],
+  "panels": [{"id": "panel", "width": 460, "height": 580,
+    "placement": "attached", "include_settings": false}],
+  "settings": [{"key": "bar_mode", "type": "select", "label": "Bar shows",
+    "default": "icon", "options": [
+      {"value": "icon", "label": "Icon only"},
+      {"value": "status", "label": "Connection status"},
+      {"value": "location", "label": "Location"}]}]
+}

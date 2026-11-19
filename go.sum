@@ -4,6 +4,8 @@ github.com/Nomadcxx/sysc-metrics v0.8.0 h1:N8eZJaRv4iIAnV5ZCtzC8L5+0/FD1WgXKpGcd
 github.com/Nomadcxx/sysc-metrics v0.8.0/go.mod h1:qIgYyJuuD0Ql7wlh3cN0kiHsSG/LEMczrq+vXA7rIQs=
 github.com/Nomadcxx/sysc-shell v0.2.5 h1:yD59t2Ov4jhpECzFqzSgNQwsRlu/iMiPRopO/bJxMbM=
 github.com/Nomadcxx/sysc-shell v0.2.5/go.mod h1:MwxO0mlTqYuDegeBZAzm+LyIrVYacFQ1uJpk3RLpHWM=
+github.com/Nomadcxx/sysc-shell v0.3.1-0.20261119024003-bc9dc40f6d79 h1:pDHKgTqBgoLr+Q8IH4/36n6ZF04YQaW9igBfuAGybRs=
+github.com/Nomadcxx/sysc-shell v0.3.1-0.20261119024003-bc9dc40f6d79/go.mod h1:iNIDjgnlOeZ7G9TGo3STAmoyvYDItb/D7d4la4yQFpA=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=
 github.com/dustin/go-humanize v1.1.0/go.mod h1:hc1CvRkJMsgxqjmjMQF3QNRAZBwY8AXBAzKYoSX9sFI=
 github.com/go-text/typesetting v0.3.5 h1:XZPUooClHY0Vf/rFyUyuPRNEkawARaFzLMQcXLSEyPk=
