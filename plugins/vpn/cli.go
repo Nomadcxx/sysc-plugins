@@ -121,7 +121,9 @@ func (c CLI) run(ctx context.Context, p Provider, timeout time.Duration, limit i
 			notice = "permission denied; check operator access"
 		case strings.Contains(detail, "not logged"), strings.Contains(detail, "revoked"):
 			notice = "sign in using the official app or CLI"
-		case strings.Contains(detail, "not running"), strings.Contains(detail, "daemon"), strings.Contains(detail, "service"):
+		case strings.Contains(detail, "not running"):
+			notice = "service is not running"
+		case strings.Contains(detail, "daemon"), strings.Contains(detail, "service"):
 			notice = "service unavailable; check the official app"
 		}
 		return nil, fmt.Errorf("%s: %s", p.Name(), notice)

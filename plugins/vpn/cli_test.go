@@ -30,6 +30,9 @@ func TestMain(m *testing.M) {
 		case "fail":
 			fmt.Fprint(os.Stderr, "secret-account 1234567890123456")
 			os.Exit(7)
+		case "stopped":
+			fmt.Fprint(os.Stderr, "The Obscura VPN service is not running.\n")
+			os.Exit(3)
 		case "slow":
 			time.Sleep(10 * time.Second)
 		case "overflow":
@@ -125,6 +128,10 @@ func TestCLIFailuresAreBoundedAndPrivate(t *testing.T) {
 	_, err := c.run(context.Background(), Mullvad, time.Second, 1024, "status")
 	if err == nil || strings.Contains(err.Error(), "123456") || strings.Contains(err.Error(), "secret-account") {
 		t.Fatalf("%v", err)
+	}
+	t.Setenv("SYSC_VPN_HELPER", "stopped")
+	if _, err := c.Status(context.Background(), Obscura); err == nil || err.Error() != "Obscura: service is not running" {
+		t.Fatalf("stopped service: %v", err)
 	}
 	t.Setenv("SYSC_VPN_HELPER", "overflow")
 	if _, err := c.run(context.Background(), Mullvad, time.Second, 64, "status"); err == nil {

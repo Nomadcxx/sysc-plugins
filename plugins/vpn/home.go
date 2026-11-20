@@ -152,7 +152,7 @@ func message(v ViewState) (string, v1.Tone) {
 		return v.Notice, v1.ToneError
 	case !s.Installed:
 		return "", v1.ToneNormal
-	case s.ReadError != "" && s.HasObservation && !strings.HasPrefix(s.ReadError, "Refreshing"):
+	case s.ReadError != "" && s.ReadError != waitingForStatus && !strings.HasPrefix(s.ReadError, "Refreshing"):
 		return s.ReadError, v1.ToneError
 	case m.Busy || m.Pending != "":
 		return "", v1.ToneNormal
@@ -208,7 +208,7 @@ func status(v ViewState) statusCard {
 	switch {
 	case c.spinner:
 	case !live:
-		c.detail = "Waiting for status"
+		c.detail = waitingForStatus
 	case o.Phase == Connected:
 		c.detail, c.mono = tunnelLine(o), true
 	case o.Phase == Disconnected && o.Traffic == TrafficBlocked:

@@ -57,6 +57,9 @@ type Observation struct {
 	Detail                                              string
 }
 
+// waitingForStatus is a provider's ReadError until its first read returns.
+const waitingForStatus = "Waiting for status"
+
 type ProviderState struct {
 	Installed      bool
 	Observed       Observation
@@ -95,8 +98,8 @@ type Machine struct {
 
 func NewMachine(mullvad, obscura bool) *Machine {
 	m := &Machine{Selected: Mullvad, Providers: map[Provider]ProviderState{}, epochs: map[Provider]uint64{}, reads: map[Provider]uint64{}}
-	m.Providers[Mullvad] = ProviderState{Installed: mullvad, ReadError: "Waiting for status"}
-	m.Providers[Obscura] = ProviderState{Installed: obscura, ReadError: "Waiting for status"}
+	m.Providers[Mullvad] = ProviderState{Installed: mullvad, ReadError: waitingForStatus}
+	m.Providers[Obscura] = ProviderState{Installed: obscura, ReadError: waitingForStatus}
 	if !mullvad && obscura {
 		m.Selected = Obscura
 	}
@@ -109,7 +112,7 @@ func (m *Machine) SetInstalled(p Provider, on bool) {
 	s := m.State(p)
 	if s.Installed != on {
 		m.epochs[p]++
-		s = ProviderState{Installed: on, ReadError: "Waiting for status"}
+		s = ProviderState{Installed: on, ReadError: waitingForStatus}
 		m.Providers[p] = s
 	}
 }
