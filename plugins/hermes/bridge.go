@@ -218,6 +218,7 @@ func (b *Bridge) Health(ctx context.Context) (Health, error) {
 	if err := decodeObject(data, &h); err != nil {
 		return Health{}, err
 	}
+	h.Bridge.Error = Redact(h.Bridge.Error, b.token)
 	return h, nil
 }
 
@@ -240,7 +241,7 @@ func (b *Bridge) State(ctx context.Context) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	snap, err := snapshotOf(data)
+	snap, err := snapshotOf(data, b.token)
 	if err != nil {
 		return State{}, err
 	}
@@ -289,7 +290,7 @@ func (b *Bridge) Post(ctx context.Context, path string, body any) (Snapshot, err
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return snapshotOf(data)
+	return snapshotOf(data, b.token)
 }
 
 // OneShot runs one prompt through /oneshot, with the long one-shot timeout.
@@ -335,7 +336,7 @@ func (b *Bridge) do(ctx context.Context, method, path string, body []byte, auth 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, statusError(resp)
+		return nil, statusError(resp, b.token)
 	}
 	limit := responseCapFor(path)
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
@@ -352,14 +353,14 @@ func (b *Bridge) do(ctx context.Context, method, path string, body []byte, auth 
 }
 
 // statusError maps a failure status and its {error,message} body.
-func statusError(resp *http.Response) error {
+func statusError(resp *http.Response, token string) error {
 	var body struct {
 		Error   string `json:"error"`
 		Message string `json:"message"`
 	}
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, errorResponseCap))
 	_ = json.Unmarshal(data, &body)
-	code := errorCode(body.Error)
+	code := errorCode(Redact(body.Error, token))
 	switch resp.StatusCode {
 	case http.StatusBadRequest:
 		return &ErrBadRequest{Code: code}
@@ -374,7 +375,7 @@ func statusError(resp *http.Response) error {
 			return ErrApprovalMismatch
 		}
 	}
-	return &ErrBridge{Status: resp.StatusCode, Code: code, message: body.Message}
+	return &ErrBridge{Status: resp.StatusCode, Code: code, message: Redact(body.Message, token)}
 }
 
 // errorCode keeps a bridge error code only if it looks like an identifier,
@@ -426,7 +427,7 @@ func (b *Bridge) HermesRefusal(snap Snapshot) string {
 
 // snapshotOf normalizes a bare snapshot, a {state} envelope, a
 // {result,state} envelope and a result-only {result} reply.
-func snapshotOf(data []byte) (Snapshot, error) {
+func snapshotOf(data []byte, token string) (Snapshot, error) {
 	var top map[string]json.RawMessage
 	if err := decodeObject(data, &top); err != nil {
 		return Snapshot{}, err
@@ -455,6 +456,7 @@ func snapshotOf(data []byte) (Snapshot, error) {
 		}
 		snap.State, snap.HasState = state, true
 	}
+	snap.State.redactDiagnostics(token)
 	return snap, nil
 }
 

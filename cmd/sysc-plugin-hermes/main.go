@@ -28,7 +28,7 @@ import (
 const (
 	pluginID      = "org.sysc.hermes"
 	pluginName    = "Hermes Agent"
-	pluginVersion = "0.1.0"
+	pluginVersion = "0.1.1"
 	serviceID     = "hermes"
 
 	connectingText = "Connecting…"
@@ -1011,8 +1011,8 @@ func (a *app) input(m *v1.InputEvent) {
 		a.loadSessions(m.ViewID)
 	case strings.HasPrefix(m.Node, "session:"):
 		if req, ok := hermes.ResumeFor(m.Node, v.sessions); ok {
+			v.transcript = hermes.TranscriptAnchor{}
 			a.svc.Submit("/session/resume", req)
-			a.openPanelFrom(v, "panel")
 		}
 	case strings.HasPrefix(m.Node, "provider:"):
 		if provider, ok := hermes.ProviderForNode(m.Node, state.Summary.Models); ok {

@@ -508,10 +508,9 @@ def section_enabled(value: Any) -> bool:
     return value is not None
 
 
-def health_payload(state: dict[str, Any]) -> dict[str, Any]:
-    snapshot = deepcopy(state)
-    snapshot["bridge"]["status"] = "online"
-    return {"bridge": snapshot["bridge"]}
+def health_payload() -> dict[str, Any]:
+    # sysc-shell: this endpoint is public, so serve liveness only.
+    return {"bridge": {"status": "online"}}
 
 
 def atomic_write_json(path: Path | str, data: dict[str, Any]) -> None:
@@ -572,17 +571,41 @@ def reexec_with_hermes_python(args: argparse.Namespace, argv: list[str]) -> None
 
 class HermesState:
     def __init__(self, state_file: Path | str, hermes_home: Path | str | None = None):
+        from collections import deque
+        from threading import Lock, RLock
+
         self.state_file = Path(state_file).expanduser()
         self.hermes_home = Path(hermes_home or "~/.hermes").expanduser()
         self._state = default_state()
         self._active_assistant_id: str | None = None
+        # sysc-shell: Hermes emits one serial stream per session. Keep the
+        # submitted user messages in the same order and track one-shots apart.
+        self._pending_prompts: deque[str] = deque()
+        self._oneshots: set[str] = set()
+        self.lock = RLock()
+        self.session_call_lock = Lock()
+        self.bridge_token = ""
 
     def snapshot(self) -> dict[str, Any]:
-        return refresh_summary(self._state, self.hermes_home)
+        with self.lock:
+            snapshot = refresh_summary(self._state, self.hermes_home)
+            if self._oneshots:
+                snapshot["session"]["running"] = True
+                if not snapshot["approval"]["pending"]:
+                    snapshot["hermes"]["status"] = "busy"
+            snapshot["bridge"]["error"] = self.redact_diagnostic(snapshot["bridge"]["error"])
+            for event in snapshot["events"]:
+                if event["type"] == "status.update" and event["name"] == "error":
+                    event["text"] = self.redact_diagnostic(event["text"])
+            return snapshot
+
+    def redact_diagnostic(self, text: str) -> str:
+        return text.replace(self.bridge_token, "[redacted]") if self.bridge_token else text
 
     def write(self) -> None:
-        self._state["updated_at"] = now_ts()
-        atomic_write_json(self.state_file, self.snapshot())
+        with self.lock:
+            self._state["updated_at"] = now_ts()
+            atomic_write_json(self.state_file, self.snapshot())
 
     def apply_event(self, obj: dict[str, Any]) -> None:
         params = obj.get("params", {}) if isinstance(obj, dict) else {}
@@ -605,6 +628,10 @@ class HermesState:
         if not isinstance(payload, dict):
             payload = {"text": str(payload)}
 
+        if event_type in ("message.start", "message.delta", "message.complete"):
+            sid = params.get("session_id")
+            if sid and sid != self._state["session"]["id"]:
+                return
         if event_type == "message.start":
             self._start_message()
         elif event_type == "message.delta":
@@ -633,6 +660,8 @@ class HermesState:
         self._state["updated_at"] = now_ts()
 
     def _start_message(self) -> None:
+        if self._active_assistant_id:
+            return
         message = {
             "id": f"msg-{uuid.uuid4().hex}",
             "role": "assistant",
@@ -640,7 +669,8 @@ class HermesState:
             "streaming": True,
             "ts": now_ts(),
         }
-        self._state["messages"].append(message)
+        user_id = self._pending_prompts.popleft() if self._pending_prompts else None
+        self._insert_reply(user_id, message)
         self._active_assistant_id = message["id"]
         self._state["session"]["running"] = True
         self._state["hermes"]["status"] = "busy"
@@ -657,9 +687,18 @@ class HermesState:
         if message is not None:
             message["streaming"] = False
         self._active_assistant_id = None
-        self._state["session"]["running"] = False
+        self._state["session"]["running"] = bool(self._pending_prompts)
         if not self._state["approval"]["pending"]:
-            self._state["hermes"]["status"] = "idle"
+            self._state["hermes"]["status"] = "busy" if self._pending_prompts else "idle"
+
+    def _insert_reply(self, user_id: str | None, message: dict[str, Any]) -> None:
+        messages = self._state["messages"]
+        if user_id:
+            for index, item in enumerate(messages):
+                if item["id"] == user_id:
+                    messages.insert(index + 1, message)
+                    return
+        messages.append(message)
 
     def _find_message(self, message_id: str | None) -> dict[str, Any] | None:
         if not message_id:
@@ -711,6 +750,9 @@ class HermesState:
         })
 
     def set_session_from_create(self, result: dict[str, Any]) -> None:
+        self._active_assistant_id = None
+        self._pending_prompts.clear()
+        self._oneshots.clear()
         self._state["session"]["id"] = str(result.get("session_id") or "")
         self._state["session"]["stored_id"] = str(result.get("stored_session_id") or "")
         self._state["session"]["running"] = False
@@ -742,30 +784,56 @@ class HermesState:
                 })
             self._state["messages"] = normalized
 
-    def append_user_message(self, text: str) -> None:
+    def append_user_message(self, text: str, *, oneshot: bool = False) -> str:
+        user_id = f"msg-{uuid.uuid4().hex}"
         self._state["messages"].append({
-            "id": f"msg-{uuid.uuid4().hex}",
+            "id": user_id,
             "role": "user",
             "text": text,
             "streaming": False,
             "ts": now_ts(),
         })
-        self._state["session"]["running"] = True
-        self._state["hermes"]["status"] = "busy"
+        if oneshot:
+            self._oneshots.add(user_id)
+        else:
+            self._pending_prompts.append(user_id)
+            self._state["session"]["running"] = True
+            self._state["hermes"]["status"] = "busy"
         self._state["updated_at"] = now_ts()
+        return user_id
 
-    def append_assistant_message(self, text: str) -> None:
-        self._state["messages"].append({
-            "id": f"msg-{uuid.uuid4().hex}",
-            "role": "assistant",
-            "text": text,
-            "streaming": False,
-            "ts": now_ts(),
-        })
+    def finish_oneshot(self, user_id: str, text: str, error: str) -> None:
+        self._oneshots.discard(user_id)
+        if self._find_message(user_id) is None:
+            return
+        if error:
+            self._state["bridge"]["error"] = error
+        else:
+            self._insert_reply(user_id, {
+                "id": f"msg-{uuid.uuid4().hex}",
+                "role": "assistant",
+                "text": text,
+                "streaming": False,
+                "ts": now_ts(),
+            })
+        if not self._state["session"]["running"] and not self._state["approval"]["pending"]:
+            self._state["hermes"]["status"] = "idle"
+
+    def stop_pending_turns(self) -> None:
+        self._oneshots.clear()
+        self._pending_prompts.clear()
         self._state["session"]["running"] = False
         if not self._state["approval"]["pending"]:
             self._state["hermes"]["status"] = "idle"
-        self._state["updated_at"] = now_ts()
+
+    def discard_prompt(self, user_id: str) -> None:
+        if user_id not in self._pending_prompts:
+            return
+        self._pending_prompts.remove(user_id)
+        if not self._pending_prompts and not self._active_assistant_id:
+            self._state["session"]["running"] = False
+            if not self._state["approval"]["pending"]:
+                self._state["hermes"]["status"] = "idle"
 
     def clear_approval(self) -> None:
         self._state["approval"] = {"pending": False, "message": "", "tool_name": "", "request": {}}
@@ -804,8 +872,9 @@ class StateTransport:
             if waiting is not None:
                 waiting.put(obj)
                 return True
-        self.state.apply_event(obj)
-        self.state.write()
+        with self.state.lock:
+            self.state.apply_event(obj)
+            self.state.write()
         return True
 
 
@@ -867,7 +936,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
     MAX_BODY_BYTES = 1_048_576  # ponytail: 1MB cap, prevents memory exhaustion
 
     def _check_token(self) -> bool:
-        token = getattr(self.server, "bridge_token", "")
+        token = self.server.state.bridge_token
         if not token:
             return True
         provided = self.headers.get("X-Bridge-Token", "")
@@ -875,7 +944,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            self._send_json(200, health_payload(self.server.state.snapshot()))
+            self._send_json(200, health_payload())
             return
         if self.path == "/detect":
             detected = detect_all(
@@ -921,14 +990,17 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            if self.path == "/session/create":
-                self._handle_session_create(payload)
-            elif self.path == "/session/resume":
-                self._handle_session_resume(payload)
-            elif self.path == "/prompt":
-                self._handle_prompt(payload)
-            elif self.path == "/interrupt":
-                self._handle_interrupt()
+            # Keep submissions and session changes in RPC order. Event delivery,
+            # one-shots and approvals can proceed while an RPC waits.
+            session_calls = {
+                "/session/create": self._handle_session_create,
+                "/session/resume": self._handle_session_resume,
+                "/prompt": self._handle_prompt,
+                "/interrupt": self._handle_interrupt,
+            }
+            if session_call := session_calls.get(self.path):
+                with self.server.state.session_call_lock:
+                    session_call(payload)
             elif self.path == "/approval":
                 self._handle_approval(payload)
             elif self.path == "/model":
@@ -945,8 +1017,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json(404, {"error": "not_found"})
         except Exception as exc:
-            self.server.state.fail_request(str(exc))
-            self.server.state.write()
+            with self.server.state.lock:
+                self.server.state.fail_request(str(exc))
+                self.server.state.write()
             self._send_json(500, {"error": "bridge_error"})
 
     def log_message(self, _format: str, *_args: Any) -> None:
@@ -999,65 +1072,52 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             params["cwd"] = str(payload["cwd"])
         response = self.server.rpc.dispatch("session.create", params)
         result = response.get("result", response)
-        if isinstance(result, dict):
-            self.server.state.set_session_from_create(result)
-            self.server.state.write()
-        self._send_json(200, self.server.state.snapshot())
+        state = self.server.state
+        if isinstance(result, dict) and result.get("session_id") and "error" not in result:
+            with state.lock:
+                state.set_session_from_create(result)
+                state.write()
+            self._send_json(200, state.snapshot())
+        else:
+            self._send_json(200, {"result": result, "state": state.snapshot()})
 
     def _handle_session_resume(self, payload: dict[str, Any]) -> None:
         session_id = str(payload.get("session_id") or "").strip()
         if not session_id:
             self._send_json(400, {"error": "missing_session_id"})
             return
-        # Load messages directly from the SessionDB for instant UI feedback.
-        db_path = self.server.state.hermes_home / "state.db"
-        loaded = False
-        if db_path.exists():
-            try:
-                import sqlite3
-                conn = sqlite3.connect(str(db_path))
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute(
-                    "SELECT role, content FROM messages WHERE session_id = ? ORDER BY timestamp",
-                    (session_id,),
-                ).fetchall()
-                if rows:
-                    normalized = [
-                        {
-                            "id": f"msg-{uuid.uuid4().hex}",
-                            "role": str(dict(r).get("role") or ""),
-                            "text": str(dict(r).get("content") or ""),
-                            "streaming": False,
-                            "ts": 0,
-                        }
-                        for r in rows
-                    ]
-                    self.server.state._state["messages"] = normalized
-                    self.server.state._state["session"]["id"] = ""
-                    self.server.state._state["session"]["stored_id"] = session_id
-                    self.server.state._state["session"]["running"] = False
-                    self.server.state._state["hermes"]["status"] = "idle"
-                    self.server.state._state["approval"] = (
-                        {"pending": False, "message": "", "tool_name": "", "request": {}}
-                    )
-                    loaded = True
-            except Exception:
-                pass
-        # Also dispatch session.resume to the gateway so it creates a proper
-        # session object. The gateway needs this for prompt.submit to work.
+        state = self.server.state
         response = self.server.rpc.dispatch("session.resume", {"session_id": session_id})
-        # sysc-shell: bind the live session Hermes resumed, or the next prompt
-        # creates a new one. A reply with no messages keeps the stored ones.
         result = response.get("result", response)
-        if isinstance(result, dict) and result.get("session_id") and "error" not in result:
-            stored = list(self.server.state._state["messages"])
-            self.server.state.set_session_from_resume(result)
-            if not self.server.state._state["session"]["stored_id"]:
-                self.server.state._state["session"]["stored_id"] = session_id
-            if not result.get("messages") and loaded:
-                self.server.state._state["messages"] = stored
-        self.server.state.write()
-        self._send_json(200, {"result": result, "state": self.server.state.snapshot()})
+        # sysc-shell: preserve the active conversation until Hermes binds a
+        # live session. History alone cannot accept a contextual follow-up.
+        if isinstance(result, dict) and "error" in result:
+            self._send_json(200, {"result": result, "state": state.snapshot()})
+            return
+        if not isinstance(result, dict) or not result.get("session_id"):
+            result = {"error": {"message": "Resume returned no live session"}}
+            self._send_json(200, {"result": result, "state": state.snapshot()})
+            return
+        result = dict(result)
+        result["stored_session_id"] = result.get("stored_session_id") or session_id
+        db_path = state.hermes_home / "state.db"
+        if not result.get("messages") and db_path.exists():
+            import sqlite3
+            from contextlib import closing
+
+            try:
+                with closing(sqlite3.connect(str(db_path))) as conn:
+                    rows = conn.execute(
+                        "SELECT role, content FROM messages WHERE session_id = ? ORDER BY timestamp",
+                        (result["stored_session_id"],),
+                    )
+                    result["messages"] = [{"role": role, "content": content} for role, content in rows]
+            except sqlite3.Error:
+                pass
+        with state.lock:
+            state.set_session_from_resume(result)
+            state.write()
+        self._send_json(200, {"result": response.get("result", response), "state": state.snapshot()})
 
     def _handle_prompt(self, payload: dict[str, Any]) -> None:
         text = str(payload.get("text") or "").strip()
@@ -1065,33 +1125,52 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "empty_prompt"})
             return
 
-        session_id = self.server.state.snapshot()["session"]["id"]
-        existing_messages = list(self.server.state._state["messages"])
+        state = self.server.state
+        with state.lock:
+            session_id = state._state["session"]["id"]
         if not session_id:
             create_response = self.server.rpc.dispatch("session.create", {})
             create_result = create_response.get("result", create_response)
-            if isinstance(create_result, dict):
-                self.server.state.set_session_from_create(create_result)
-                session_id = self.server.state.snapshot()["session"]["id"]
-                # Restore messages from a resumed session that were loaded from DB.
-                # set_session_from_create clears messages so only the new prompt
-                # would appear; we want the full history.
-                if existing_messages:
-                    self.server.state._state["messages"] = existing_messages
+            if not isinstance(create_result, dict) or not create_result.get("session_id") or "error" in create_result:
+                refusal = create_result if isinstance(create_result, dict) and "error" in create_result else {
+                    "error": {"message": "Hermes returned no live session"},
+                }
+                self._send_json(200, {"result": refusal, "state": state.snapshot()})
+                return
+            with state.lock:
+                state.set_session_from_create(create_result)
+                session_id = state._state["session"]["id"]
 
-        params = {"session_id": session_id, "text": text}
-        self.server.state.append_user_message(text)
-        self.server.state.write()
-        response = self.server.rpc.dispatch("prompt.submit", params)
-        self._send_json(200, {"result": response.get("result", response), "state": self.server.state.snapshot()})
+        # sysc-shell: an ordinary Send is a follow-up. Hermes otherwise
+        # redirects a busy turn in place and its deltas still target that turn.
+        params = {"session_id": session_id, "text": text, "queued": True}
+        with state.lock:
+            user_id = state.append_user_message(text)
+            state.write()
+        try:
+            response = self.server.rpc.dispatch("prompt.submit", params)
+        except Exception:
+            with state.lock:
+                state.discard_prompt(user_id)
+            raise
+        result = response.get("result", response)
+        if isinstance(result, dict) and "error" in result:
+            with state.lock:
+                state.discard_prompt(user_id)
+                state.write()
+        self._send_json(200, {"result": result, "state": state.snapshot()})
 
-    def _handle_interrupt(self) -> None:
-        session_id = self.server.state.snapshot()["session"]["id"]
+    def _handle_interrupt(self, _payload: dict[str, Any]) -> None:
+        state = self.server.state
+        with state.lock:
+            session_id = state._state["session"]["id"]
         response = self.server.rpc.dispatch("session.interrupt", {"session_id": session_id})
-        self.server.state._state["session"]["running"] = False
-        self.server.state._state["hermes"]["status"] = "idle"
-        self.server.state.write()
-        self._send_json(200, {"result": response.get("result", response), "state": self.server.state.snapshot()})
+        result = response.get("result", response)
+        if not session_id or "error" not in result:
+            with state.lock:
+                state.stop_pending_turns()
+                state.write()
+        self._send_json(200, {"result": result, "state": state.snapshot()})
 
     def _handle_approval(self, payload: dict[str, Any]) -> None:
         snapshot = self.server.state.snapshot()
@@ -1183,24 +1262,37 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         if not text:
             self._send_json(400, {"error": "empty_prompt"})
             return
-        self.server.state.append_user_message(text)
-        self.server.state.write()
-        result = self.server.command_runner(
-            [self.server.hermes_command, "-z", text],
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        if result.returncode != 0:
-            message = (result.stderr or result.stdout or "oneshot failed").strip()
-            self.server.state._state["session"]["running"] = False
-            self.server.state._state["bridge"]["error"] = message
-            self.server.state.write()
-            self._send_json(500, {"error": "oneshot_failed", "message": message, "state": self.server.state.snapshot()})
+        state = self.server.state
+        with state.lock:
+            user_id = state.append_user_message(text, oneshot=True)
+            state.write()
+        reply, error = "", ""
+        try:
+            result = self.server.command_runner(
+                [self.server.hermes_command, "-z", text],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if result.returncode != 0:
+                error = (result.stderr or result.stdout or "").strip() or "oneshot failed"
+            else:
+                reply = (result.stdout or "").strip()
+        except subprocess.TimeoutExpired:
+            error = "oneshot timed out"
+        except OSError:
+            error = "could not start Hermes for oneshot"
+        except UnicodeError:
+            error = "Hermes returned unreadable oneshot output"
+        with state.lock:
+            state.finish_oneshot(user_id, reply, error)
+            state.write()
+        if error:
+            self._send_json(500, {
+                "error": "oneshot_failed", "message": state.redact_diagnostic(error), "state": state.snapshot(),
+            })
             return
-        self.server.state.append_assistant_message((result.stdout or "").strip())
-        self.server.state.write()
-        self._send_json(200, {"result": {"status": "completed"}, "state": self.server.state.snapshot()})
+        self._send_json(200, {"result": {"status": "completed"}, "state": state.snapshot()})
 
     def _handle_gateway_start(self) -> None:
         result = self.server.command_runner(
@@ -1274,7 +1366,6 @@ def create_server(
     httpd.rpc = rpc
     httpd.hermes_command = hermes_command
     httpd.command_runner = subprocess.run
-    httpd.bridge_token = ""  # set by run_server after token load
     state._state["bridge"]["status"] = "online"
     state._state["bridge"]["error"] = ""
     state._state["updated_at"] = now_ts()
@@ -1297,7 +1388,7 @@ def run_server(
     httpd = create_server(host, port, state, rpc, hermes_command)
     token_path = state.state_file.parent / "bridge.token"
     token = load_or_create_token(token_path)
-    httpd.bridge_token = token
+    state.bridge_token = token
     state.write()
     httpd.serve_forever()
 
@@ -1347,7 +1438,7 @@ def main(argv: list[str] | None = None) -> int:
         except RuntimeError as exc:
             print(f"hermes bridge: {exc}", file=sys.stderr)
     if args.once_health:
-        print(json.dumps(health_payload(default_state()), ensure_ascii=False))
+        print(json.dumps(health_payload(), ensure_ascii=False))
         return 0
     run_server(args.host, args.port, args.state_file, args.hermes_home, args.hermes_command)
     return 0

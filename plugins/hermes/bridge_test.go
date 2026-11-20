@@ -17,6 +17,36 @@ import (
 	"time"
 )
 
+func TestBridgeRedactsDiagnosticsInSnapshots(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			fb := newFakeBridge(t, "remote-tok")
+			const payload = `{"bridge":{"status":"online","error":"invalid remote-tok"},"events":[{"type":"status.update","name":"error","text":"invalid remote-tok"}]}`
+			writeState := func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(payload)) }
+			fb.handle("/state", writeState)
+			fb.handle("/prompt", writeState)
+			b, err := NewBridge(fb.host, fb.port, "remote-tok")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var st State
+			if method == http.MethodGet {
+				st, err = b.State(context.Background())
+			} else {
+				var snap Snapshot
+				snap, err = b.Post(context.Background(), "/prompt", nil)
+				st = snap.State
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.Bridge.Error != "invalid [redacted]" || len(st.Events) != 1 || st.Events[0].Text != "invalid [redacted]" {
+				t.Fatalf("expected redacted diagnostics, got %q and %+v", st.Bridge.Error, st.Events)
+			}
+		})
+	}
+}
+
 // fakeToken is the only token these tests use.
 const fakeToken = "fake-bridge-token-9f3a"
 

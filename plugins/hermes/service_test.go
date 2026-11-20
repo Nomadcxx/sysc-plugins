@@ -727,8 +727,11 @@ func TestLocalStateFileWatch(t *testing.T) {
 	h.svc.Configure(set)
 	h.waitFor("adopted", func(v View) bool { return v.Adopted && v.Status.Key == StatusIdle })
 
-	replaceFile(t, h.stateFile(), `{"bridge":{"status":"online"},"hermes":{"status":"busy"},"session":{"running":true}}`)
-	h.waitFor("busy from the state file", func(v View) bool { return v.Status.Key == StatusBusy })
+	replaceFile(t, h.stateFile(), `{"bridge":{"status":"online","error":"invalid local-tok"},"hermes":{"status":"busy"},"session":{"running":true}}`)
+	v := h.waitFor("busy from the state file", func(v View) bool { return v.Status.Key == StatusBusy })
+	if v.State.Bridge.Error != "invalid [redacted]" {
+		t.Fatalf("state-file diagnostic = %q", v.State.Bridge.Error)
+	}
 
 	replaceFile(t, h.stateFile(), `{"bridge":`)
 	h.waitFor("invalid state file", func(v View) bool { return v.Message == "Invalid state file" })

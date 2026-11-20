@@ -257,6 +257,16 @@ func decodeMessage(raw json.RawMessage) (Message, bool) {
 	return m, true
 }
 
+func (s *State) redactDiagnostics(token string) {
+	s.Bridge.Error = Redact(s.Bridge.Error, token)
+	for i := range s.Events {
+		event := &s.Events[i]
+		if event.Type == "error" || event.Type == "status.update" && event.Name == "error" {
+			event.Text = Redact(event.Text, token)
+		}
+	}
+}
+
 // Normalize makes the state safe to render: collections are never nil,
 // lists are cut to the newest entries, text is sanitized and capped,
 // missing message ids get a stable hash, and a raw multi-line or long

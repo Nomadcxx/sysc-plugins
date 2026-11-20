@@ -526,7 +526,7 @@ unpushed SessionDB `/sessions` and resume-history fixes.
 | Bundled before Task 3a (commit `a8384bd`) | `plugins/hermes/scripts/hermes_bridge.py` | `0be2bc3cffbc01a8573fa573673642e58a0fa3934b7de685af914c5606ae8e99` |
 | Bundled after Task 3a (`937ac1a`, unchanged through `917e6ec`) | `plugins/hermes/scripts/hermes_bridge.py` | `c658df456138eb6cfd6113c7a94ace79683177e30ebdc2c49d8447a4c5fac183` |
 | After `25768b4` | `plugins/hermes/scripts/hermes_bridge.py` | `c0387bfdd1bb795ac837569c03993cc2b3ab8f358840eccaaa3ff0def25bd5cd` |
-| Bundled now (after `54258a6`) | `plugins/hermes/scripts/hermes_bridge.py` | `b2e23bbc128264c37979c353970120af2ddae24c4a43e1f0bc3bf4784d44d1d6` |
+| After `54258a6` | `plugins/hermes/scripts/hermes_bridge.py` | `b2e23bbc128264c37979c353970120af2ddae24c4a43e1f0bc3bf4784d44d1d6` |
 
 The pre-Task-3a bundle differed from the reference source only by a comment
 after the shebang pointing at `ATTRIBUTION.md`. The local changes since, each
@@ -543,6 +543,7 @@ marked `sysc-shell:` in the source:
 | Bind the resumed session; read a gateway whose process is gone as stopped | `bb868da` |
 | Return the reply to an RPC Hermes runs on its worker pool | `879e81f` |
 | Keep the stored session id when Hermes reattaches a live session | `54258a6` |
+| Preserve the active conversation when Resume fails, queue follow-ups as separate turns, isolate one-shot status, and redact bridge diagnostics | `0.1.1` (sysc-plugins-123–126) |
 
 `937ac1a` was authorized with Task 3a. The owner approved `bb868da`, `879e81f`
 and `54258a6` on 2026-11-19. `25768b4`, `9204603`, `e8217e9` and `c84755f`

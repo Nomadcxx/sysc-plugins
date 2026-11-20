@@ -3,7 +3,7 @@
   "id": "org.sysc.hermes",
   "name": "Hermes Agent",
   "description": "Hermes status, chat, approvals, sessions and models from the bar, for a local or remote bridge.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "protocol": {"major": 1, "minor": 27},
   "exec": "bin/sysc-plugin-hermes",
   "capabilities": ["notifications", "panels", "settings", "clipboard-write",

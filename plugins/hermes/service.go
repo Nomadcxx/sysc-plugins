@@ -892,12 +892,17 @@ func (s *Service) connLocal(ctx context.Context, set Settings) {
 				haveToken = false
 				continue
 			}
+			if !haveToken {
+				// The next authenticated /state supplies a fresh snapshot.
+				continue
+			}
 			st, err := ReadStateFile(p)
 			switch {
 			case errors.Is(err, os.ErrNotExist):
 			case err != nil:
 				s.publish(func(v *View) { v.Message = ErrInvalidStateFile.Error() })
 			default:
+				st.redactDiagnostics(s.currentBridge().token)
 				s.publishState(st)
 			}
 		}

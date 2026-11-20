@@ -888,6 +888,44 @@ func TestServiceActionSettingsOpensTheSettingsPanel(t *testing.T) {
 	}
 }
 
+func TestSessionsResumeKeepsTheCurrentChatView(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/sessions":
+			_, _ = io.WriteString(w, `{"sessions":[{"id":"saved","title":"Saved chat"}]}`)
+		case "/session/resume":
+			var req hermes.ResumeRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SessionID != "saved" {
+				http.Error(w, "wrong session", http.StatusBadRequest)
+				return
+			}
+			_, _ = io.WriteString(w, `{"bridge":{"status":"online"},"session":{"id":"live"},"messages":[{"role":"user","text":"Restored transcript"}]}`)
+		default:
+			_ = json.NewEncoder(w).Encode(idleState("picker-model"))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	host, portString, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	port, _ := strconv.Atoi(portString)
+	h, _ := startPlugin(t)
+	_ = h.send(&v1.SettingsChanged{Scope: v1.ScopePlugin, Values: clientOnlyValues(host, port)})
+	openTestView(t, h, &v1.ViewOpen{ViewID: "chat", Entry: "panel", View: v1.ViewPanel, Width: 780, Height: 720})
+	snap := h.waitSnapshot("chat", func(s *v1.ViewSnapshot) bool {
+		return strings.Contains(treeText(s.Root), "picker-model")
+	})
+	clickNode(t, h, "chat", snap.Revision, "section:sessions")
+	node := hermes.SessionNodeID("saved")
+	snap = h.waitSnapshot("chat", func(s *v1.ViewSnapshot) bool { return treeHasID(s.Root, node) })
+	clickNode(t, h, "chat", snap.Revision, node)
+	h.waitSnapshot("chat", func(s *v1.ViewSnapshot) bool {
+		return strings.Contains(treeText(s.Root), "Restored transcript")
+	})
+	settle(t, h, "chat")
+	if n := h.countCalls(v1.CallPanelOpen); n != 0 {
+		t.Fatalf("Resume issued %d panel.open calls for its current view", n)
+	}
+}
+
 func TestPinSidePanelOpensTheSurfaceAndOpenRaisesIt(t *testing.T) {
 	remoteHost, remotePort := fakeRemoteState(t, idleState("example-model"))
 	h, _ := startPluginWith(t, func(h *testHost) { h.reply = surfaceReply(false, "") })

@@ -55,7 +55,7 @@ class BridgeCase(unittest.TestCase):
         self.state._state["session"]["id"] = "sid-1"
         self.rpc = FakeRpc()
         self.httpd = bridge.create_server("127.0.0.1", 0, self.state, self.rpc, "hermes")
-        self.httpd.bridge_token = FAKE_TOKEN
+        self.state.bridge_token = FAKE_TOKEN
         thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(self.httpd.server_close)
@@ -337,16 +337,70 @@ class ResumeTest(BridgeCase):
         self.assertEqual(reply["state"]["session"]["id"], "live-2")
         self.assertEqual([m["text"] for m in reply["state"]["messages"]], ["from the db", "stored reply"])
 
-    def test_a_refused_resume_keeps_the_stored_transcript_and_says_why(self) -> None:
-        self.write_db([("stored-1", "user", "from the db", 1)])
-        refusal = {"jsonrpc": "2.0", "id": "x", "error": {"code": 4007, "message": "session not found"}}
-        self.rpc.responses["session.resume"] = refusal
-        status, reply = self.post("/session/resume", {"session_id": "stored-1"})
-        self.assertEqual(status, 200)
-        self.assertEqual(reply["result"]["error"]["code"], 4007)
-        self.assertEqual(reply["state"]["session"]["id"], "")
-        self.assertEqual(reply["state"]["session"]["stored_id"], "stored-1")
-        self.assertEqual([m["text"] for m in reply["state"]["messages"]], ["from the db"])
+    def test_failed_resume_leaves_the_current_session_and_history_in_place(self) -> None:
+        self.write_db([("stored-1", "user", "unrelated history", 1)])
+        self.state.set_session_from_resume({
+            "session_id": "active", "stored_session_id": "current",
+            "messages": [{"role": "user", "text": "active history"}],
+        })
+        for result in ({"error": {"code": 4007, "message": "session not found"}},
+                       {"result": {"status": "accepted"}}):
+            with self.subTest(result=result):
+                self.rpc.responses["session.resume"] = result
+                status, reply = self.post("/session/resume", {"session_id": "stored-1"})
+                self.assertEqual(status, 200)
+                self.assertTrue(reply["result"].get("error", {}).get("message"))
+                self.assertEqual(reply["state"]["session"]["id"], "active")
+                self.assertEqual(reply["state"]["session"]["stored_id"], "current")
+                self.assertEqual([m["text"] for m in reply["state"]["messages"]], ["active history"])
+        self.post("/prompt", {"text": "follow-up"})
+        self.assertEqual(self.rpc.calls_to("prompt.submit")[-1]["session_id"], "active")
+
+
+class TurnStateTest(BridgeCase):
+    def event(self, kind: str, **payload) -> None:
+        self.state.apply_event({"method": "event", "params": {
+            "type": kind, "session_id": "sid-1", "payload": payload,
+        }})
+
+    def test_one_shot_completion_does_not_end_a_normal_turn(self) -> None:
+        self.post("/prompt", {"text": "normal"})
+        self.event("message.start")
+        self.event("message.delta", text="normal reply")
+        for code in (0, 1):
+            with self.subTest(exit_code=code):
+                self.httpd.command_runner = lambda argv, **kw: subprocess.CompletedProcess(
+                    argv, code, stdout="one-shot reply", stderr="one-shot error" if code else "")
+                status, reply = self.post("/oneshot", {"text": "one-shot"})
+                self.assertEqual(status, 200 if code == 0 else 500)
+                self.assertTrue(reply["state"]["session"]["running"])
+                self.assertTrue(reply["state"]["messages"][1]["streaming"])
+        self.event("message.complete")
+        self.assertFalse(self.state.snapshot()["session"]["running"])
+
+    def test_busy_follow_ups_are_queued_with_their_own_reply(self) -> None:
+        self.post("/prompt", {"text": "first"})
+        self.event("message.start")
+        self.event("message.delta", text="first reply")
+        for text in ("second", "third"):
+            self.post("/prompt", {"text": text})
+        self.assertTrue(self.rpc.calls_to("prompt.submit")[-1].get("queued"))
+        self.event("message.complete")
+        for text in ("second", "third"):
+            self.event("message.start")
+            self.event("message.delta", text=text + " reply")
+            self.event("message.complete")
+        self.assertEqual([m["text"] for m in self.state.snapshot()["messages"]],
+                         ["first", "first reply", "second", "second reply", "third", "third reply"])
+
+    def test_public_health_omits_diagnostics(self) -> None:
+        self.state.fail_request(f"diagnostic with {FAKE_TOKEN}")
+        self.state.write()
+        with urllib.request.urlopen(self.base + "/health", timeout=10) as response:
+            self.assertEqual(json.load(response), {"bridge": {"status": "online"}})
+        self.assertNotIn(FAKE_TOKEN, self.state.state_file.read_text())
+        _, reply = self.request("GET", "/state")
+        self.assertEqual(reply["bridge"]["error"], "diagnostic with [redacted]")
 
 
 class PooledReplyTest(unittest.TestCase):
@@ -451,6 +505,8 @@ class GatewayLivenessTest(unittest.TestCase):
 #   process_start_time and their callers detect_gateway and
 #   scan_gateway_summary, which read a gateway whose process is gone as
 #   stopped.
+# - Owner-approved audit fixes 123–126 cover turn state, failed resume,
+#   diagnostic redaction and public health output.
 ALLOWED = {
     "HermesState._set_approval", "HermesState.apply_event",
     "BridgeRequestHandler._handle_approval", "BridgeRequestHandler._handle_model",
@@ -459,6 +515,13 @@ ALLOWED = {
     "StateTransport.__init__", "StateTransport.write",
     "import_hermes_bootstrap", "main",
     "gateway_record_state", "process_start_time", "detect_gateway", "scan_gateway_summary",
+    "health_payload", "run_server", "create_server", "BridgeRequestHandler._check_token",
+    "BridgeRequestHandler.do_GET", "BridgeRequestHandler.do_POST", "BridgeRequestHandler._handle_session_create",
+    "BridgeRequestHandler._handle_prompt", "BridgeRequestHandler._handle_interrupt", "BridgeRequestHandler._handle_oneshot",
+    "HermesState.__init__", "HermesState.snapshot", "HermesState.write", "HermesState.redact_diagnostic",
+    "HermesState._start_message", "HermesState._complete_message", "HermesState._insert_reply",
+    "HermesState.set_session_from_create", "HermesState.append_user_message", "HermesState.append_assistant_message",
+    "HermesState.finish_oneshot", "HermesState.stop_pending_turns", "HermesState.discard_prompt",
 }
 TASK3_COMMIT = "a8384bdeeff6d2f65b8ccbe475ed89fed2cd2329"
 
