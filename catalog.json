@@ -679,6 +679,55 @@
       "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/herdr-v0.1.0"
     },
     {
+      "id": "org.sysc.hermes",
+      "name": "Hermes Agent",
+      "author": "Nomadcxx",
+      "description": "Hermes status, chat, approvals, sessions and models from the bar, for a local or remote bridge.",
+      "category": "productivity",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/hermes-v0.1.1/plugins/hermes/thumbnail.webp",
+        "sha256": "9f1b7f636a6a7e2e426db2df3f5df21c063383d26ba0bb7d2c9a54f32020a6ee"
+      },
+      "readme": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/hermes-v0.1.1/plugins/hermes/README.md",
+        "sha256": "4f3c341678dd319d4c52a8a67d0b574e4deba4ee97c51b9d96cca5bca114bb19"
+      },
+      "added_at": "2026-11-20T13:24:46.349426336Z",
+      "updated_at": "2026-11-20T13:24:46.349426336Z",
+      "version": "0.1.1",
+      "protocol": {
+        "major": 1,
+        "minor": 27
+      },
+      "capabilities": [
+        "notifications",
+        "panels",
+        "settings",
+        "clipboard-write",
+        "state-read",
+        "state-write",
+        "floating_surfaces"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/hermes-v0.1.1/org.sysc.hermes-0.1.1-linux-amd64.tar.gz",
+          "sha256": "6ef3c566e471877ba1f0a43bd1a4d44755c2843d6fc969c812485f34f39997e1",
+          "size": 7475897
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/hermes-v0.1.1/org.sysc.hermes-0.1.1-linux-arm64.tar.gz",
+          "sha256": "7490335d2c363a0da7af9cdbade2be7f8cbdbae2c5611934b3c4501cd081b6b0",
+          "size": 5995194
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/hermes-v0.1.1"
+    },
+    {
       "id": "org.sysc.kdeconnect",
       "name": "Phone Connect",
       "author": "Nomadcxx",
