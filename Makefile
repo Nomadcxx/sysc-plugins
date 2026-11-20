@@ -19,6 +19,7 @@ PLUGINS := \
 	sysc-plugin-privacy:privacy \
 	sysc-plugin-moonbit:moonbit \
 	sysc-plugin-herdr:herdr \
+	sysc-plugin-hermes:hermes \
 	sysc-plugin-updates:updates \
 	sysc-plugin-thinkpad:thinkpad \
 	sysc-plugin-vpn:vpn

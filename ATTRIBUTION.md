@@ -13,6 +13,7 @@ Where each plugin's behavior comes from:
 | GitHub Notifications | port of noctalia community plugin |
 | Mini Docker | port of noctalia community plugin |
 | Herdr | port of the noctalia community plugin [herdr](https://github.com/noctalia-dev/community-plugins/tree/main/herdr) by Hy4ri |
+| Hermes Agent | Hermes Agent is a Go rewrite of the behavior of Nomadcxx/noctalia-hermes-agent, MIT. The bridge script is bundled from that project's v5 port, with the local changes listed in `plugins/hermes/README.md` (approvals, model names, session resume, startup and gateway status). |
 | Wallpaper Depth | port of noctalia official plugin |
 | Phone Connect | port of DMS DankKDEConnect |
 | AI Usage | new; patterns from noctalia ai-usagebar and DMS usage widgets |
@@ -35,6 +36,11 @@ Herdr ports the behaviour of noctalia's `herdr` community plugin (Hy4ri): a
 bar glyph and a panel that watch herdr terminal sessions and the coding agents
 running in them. It reads herdr's own session state over its local sockets,
 never the network. No reference code or artwork is used.
+
+The Hermes Agent bar avatar `plugins/hermes/assets/hermes-icon.png` is copied
+from [Nomadcxx/noctalia-hermes-agent](https://github.com/Nomadcxx/noctalia-hermes-agent)
+(`hermes-agent/assets/hermes-icon.png`), under that project's MIT license,
+Copyright (c) 2026 nomadx.
 
 Cat ports the behaviour of noctalia's `cat` community plugin (DotNetRob) and
 the DMS Cat Widget (xi-ve/cat-dms, dms-plugin-registry #562): a bar cat
