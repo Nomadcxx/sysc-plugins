@@ -157,13 +157,12 @@ func TestSettingsOrderFollowsDesign(t *testing.T) {
 // settingsFakeBridge answers /health and /state the way the bundled bridge does,
 // with knobs for each failure.
 type settingsFakeBridge struct {
-	mu          sync.Mutex
-	token       string
-	healthCode  int
-	stateCode   int
-	paths       []string
-	sentTokens  []string
-	stateNeedsT bool
+	mu         sync.Mutex
+	token      string
+	healthCode int
+	stateCode  int
+	paths      []string
+	sentTokens []string
 }
 
 func (f *settingsFakeBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {

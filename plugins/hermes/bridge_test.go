@@ -178,7 +178,10 @@ func TestForbiddenStateNeverEchoesTheToken(t *testing.T) {
 }
 
 func TestBridgeJSONOmitsTheToken(t *testing.T) {
-	b := Bridge{BaseURL: "http://127.0.0.1:19777", token: fakeToken}
+	b, err := NewBridge("127.0.0.1", 19777, fakeToken)
+	if err != nil {
+		t.Fatal(err)
+	}
 	data, err := json.Marshal(b)
 	if err != nil {
 		t.Fatal(err)

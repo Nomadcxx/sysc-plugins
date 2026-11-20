@@ -124,7 +124,7 @@ type SessionSummary struct {
 type Bridge struct {
 	BaseURL string
 	token   string
-	HTTP    *http.Client
+	HTTP    *http.Client `json:"-"`
 }
 
 // String never includes the token.
