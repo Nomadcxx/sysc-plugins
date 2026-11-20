@@ -192,6 +192,12 @@ func shown(s ProviderState, now time.Time) bool {
 		(s.ReadError == "" || strings.HasPrefix(s.ReadError, "Refreshing"))
 }
 
+// readFailed reports whether the last read failed, as opposed to the first
+// read or the refresh after an action still being on its way.
+func readFailed(s ProviderState) bool {
+	return s.ReadError != "" && s.ReadError != waitingForStatus && !strings.HasPrefix(s.ReadError, "Refreshing")
+}
+
 // look is p's state as one glyph, tone and word, shared by the bar, tooltip
 // and status card so they never disagree.
 func look(v ViewState, p Provider) (string, v1.Tone, string) {
@@ -528,12 +534,16 @@ func Bar(v ViewState, width int, mode string) *v1.Node {
 func Tooltip(v ViewState) *v1.Node {
 	p := barProvider(v)
 	_, tone, word := look(v, p)
-	o := v.Machine.State(p).Observed
+	s := v.Machine.State(p)
+	o := s.Observed
 	head := bold(p.Name() + " · " + word)
 	if tone == v1.ToneError {
 		head.Tone = tone
 	}
 	lines := []*v1.Node{head}
+	if readFailed(s) {
+		lines = append(lines, text(s.ReadError, v1.ToneError))
+	}
 	if o.Phase == Connected || o.Phase == Connecting {
 		if where := place(v, o.City, o.Country); where != "" {
 			lines = append(lines, text(where, v1.ToneNormal))

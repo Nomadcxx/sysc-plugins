@@ -426,6 +426,13 @@ func TestBarAndTooltip(t *testing.T) {
 	if tip := Tooltip(ViewState{Machine: m, Now: now}); !hasText(tip, "Melbourne, AU") {
 		t.Error("lowercase country code in the tooltip")
 	}
+	// A status that cannot be read says why on hover, not only in the panel.
+	m = NewMachine(false, true)
+	gen, _ := m.BeginRead(Obscura)
+	m.ApplyRead(Obscura, gen, Observation{}, errors.New("Obscura: service is not running"), now)
+	if tip := Tooltip(ViewState{Machine: m, Now: now}); !hasText(tip, "Obscura: service is not running") {
+		t.Error("tooltip hides why the status is unavailable")
+	}
 	// A running connect shows in the status card, with no message line.
 	m, now = readyMachine(t)
 	if _, err := m.BeginMutation(Mullvad, Action{Kind: "connect"}, now); err != nil {

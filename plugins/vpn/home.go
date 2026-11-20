@@ -152,7 +152,7 @@ func message(v ViewState) (string, v1.Tone) {
 		return v.Notice, v1.ToneError
 	case !s.Installed:
 		return "", v1.ToneNormal
-	case s.ReadError != "" && s.ReadError != waitingForStatus && !strings.HasPrefix(s.ReadError, "Refreshing"):
+	case readFailed(s):
 		return s.ReadError, v1.ToneError
 	case m.Busy || m.Pending != "":
 		return "", v1.ToneNormal
