@@ -1859,6 +1859,47 @@
       "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/updates-v0.1.0"
     },
     {
+      "id": "org.sysc.vpn",
+      "name": "VPN",
+      "author": "Nomadcxx",
+      "description": "Mullvad and Obscura connection controls from the bar.",
+      "category": "utilities",
+      "license": "MIT",
+      "homepage": "https://github.com/Nomadcxx/sysc-plugins",
+      "screenshot": {
+        "url": "https://raw.githubusercontent.com/Nomadcxx/sysc-plugins/vpn-v0.2.1/plugins/vpn/thumbnail.webp",
+        "sha256": "0dcb9211603a2ed04a034566472b580724e395749e59475bffa2517be7779980"
+      },
+      "added_at": "2026-11-20T06:39:23.969219397Z",
+      "updated_at": "2026-11-20T06:39:23.969219397Z",
+      "version": "0.2.1",
+      "protocol": {
+        "major": 1,
+        "minor": 28
+      },
+      "capabilities": [
+        "panels",
+        "settings",
+        "state"
+      ],
+      "requires": {
+        "commands": []
+      },
+      "assets": {
+        "linux-amd64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/vpn-v0.2.1/org.sysc.vpn-0.2.1-linux-amd64.tar.gz",
+          "sha256": "87f23f355c8e1566e59801bc4ba29a41e4934df9b1607187418c47634f256c3d",
+          "size": 3313614
+        },
+        "linux-arm64": {
+          "url": "https://github.com/Nomadcxx/sysc-plugins/releases/download/vpn-v0.2.1/org.sysc.vpn-0.2.1-linux-arm64.tar.gz",
+          "sha256": "815a372032488c3ac42833872e4b95bb2772d1e49ed58dfca3ef32cbe0530176",
+          "size": 2407192
+        }
+      },
+      "release_notes": "https://github.com/Nomadcxx/sysc-plugins/releases/tag/vpn-v0.2.1"
+    },
+    {
       "id": "org.sysc.wallpaper-depth",
       "name": "Wallpaper Depth",
       "author": "Nomadcxx",
