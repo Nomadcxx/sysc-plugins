@@ -3,7 +3,7 @@
   "id": "org.sysc.vpn",
   "name": "VPN",
   "description": "Mullvad and Obscura connection controls from the bar.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "protocol": {"major": 1, "minor": 28},
   "exec": "bin/sysc-plugin-vpn",
   "capabilities": ["panels", "settings", "state"],

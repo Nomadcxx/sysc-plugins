@@ -22,9 +22,10 @@ func ParseObscuraStatus(raw []byte) (Observation, error) {
 		}
 		var d struct {
 			Exit struct {
-				ID      string
-				City    string `json:"city_name"`
-				Country string `json:"country_code"`
+				ID       string
+				City     string `json:"city_name"`
+				CityCode string `json:"city_code"`
+				Country  string `json:"country_code"`
 			}
 			Relay        struct{ ID string }
 			ConnectError *string `json:"connectError"`
@@ -44,6 +45,7 @@ func ParseObscuraStatus(raw []byte) (Observation, error) {
 		case "connected":
 			s.Phase = Connected
 			s.City, s.Country, s.Exit, s.Entry = display(d.Exit.City), display(d.Exit.Country), display(d.Exit.ID), display(d.Relay.ID)
+			s.CityCode = display(d.Exit.CityCode)
 			var transport string
 			if json.Unmarshal(d.Transport, &transport) == nil {
 				s.Transport = display(transport)
@@ -53,6 +55,19 @@ func ParseObscuraStatus(raw []byte) (Observation, error) {
 		}
 	}
 	return s, nil
+}
+
+// matchesObscuraLocation checks the same country, city, or exit target that
+// the CLI accepted. A connected status alone may still be for the old exit.
+func (o Observation) matchesObscuraLocation(id string) bool {
+	parts := strings.Split(id, ":")
+	if o.Phase != Connected || len(parts) != 3 || parts[0] == "" {
+		return false
+	}
+	if parts[2] != "" {
+		return strings.EqualFold(o.Exit, parts[2])
+	}
+	return strings.EqualFold(o.Country, parts[0]) && (parts[1] == "" || strings.EqualFold(o.CityCode, parts[1]))
 }
 
 // countryNames covers the countries Mullvad (and so Obscura's Mullvad exits)

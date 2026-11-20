@@ -3,7 +3,6 @@ package vpn
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 	"unicode"
@@ -52,11 +51,14 @@ const (
 )
 
 type Observation struct {
-	Phase                                     Phase
-	Traffic                                   TrafficState
-	City, Country, Exit, Entry, IP, Transport string
-	Detail                                    string
+	Phase                                               Phase
+	Traffic                                             TrafficState
+	City, CityCode, Country, Exit, Entry, IP, Transport string
+	Detail                                              string
 }
+
+// waitingForStatus is a provider's ReadError until its first read returns.
+const waitingForStatus = "Waiting for status"
 
 type ProviderState struct {
 	Installed      bool
@@ -96,8 +98,8 @@ type Machine struct {
 
 func NewMachine(mullvad, obscura bool) *Machine {
 	m := &Machine{Selected: Mullvad, Providers: map[Provider]ProviderState{}, epochs: map[Provider]uint64{}, reads: map[Provider]uint64{}}
-	m.Providers[Mullvad] = ProviderState{Installed: mullvad, ReadError: "Waiting for status"}
-	m.Providers[Obscura] = ProviderState{Installed: obscura, ReadError: "Waiting for status"}
+	m.Providers[Mullvad] = ProviderState{Installed: mullvad, ReadError: waitingForStatus}
+	m.Providers[Obscura] = ProviderState{Installed: obscura, ReadError: waitingForStatus}
 	if !mullvad && obscura {
 		m.Selected = Obscura
 	}
@@ -110,7 +112,7 @@ func (m *Machine) SetInstalled(p Provider, on bool) {
 	s := m.State(p)
 	if s.Installed != on {
 		m.epochs[p]++
-		s = ProviderState{Installed: on, ReadError: "Waiting for status"}
+		s = ProviderState{Installed: on, ReadError: waitingForStatus}
 		m.Providers[p] = s
 	}
 }
@@ -152,6 +154,10 @@ func (m *Machine) ApplyRead(p Provider, gen uint64, o Observation, err error, no
 		s.Observed, s.HasObservation, s.LastSuccess, s.ReadError = o, true, now, ""
 		if m.pendingProvider == p && m.Pending == o.Phase {
 			m.Pending = ""
+		}
+		if m.ActionError != "" && p == Obscura && p == m.activeProvider &&
+			m.activeAction.Kind == "location" && o.matchesObscuraLocation(m.activeAction.Location) {
+			m.ActionError = ""
 		}
 	}
 	m.Providers[p] = s
@@ -202,7 +208,7 @@ func (m *Machine) CompleteMutation(p Provider, gen uint64, err error, now time.T
 	s.ReadError = "Refreshing status after action"
 	m.Providers[p] = s
 	if err != nil {
-		m.ActionError = fmt.Sprintf("%s: %s", p.Name(), err)
+		m.ActionError = err.Error()
 		return true
 	}
 	var target Phase

@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -225,6 +226,22 @@ func TestStatusCardStates(t *testing.T) {
 	if find(root, "action") != nil || find(root, "retry-read") == nil {
 		t.Error("unavailable status should offer Refresh")
 	}
+	// A provider that has never answered still says why: after a boot with
+	// the service stopped, "Waiting for status" would hide it for good.
+	m = NewMachine(true, true)
+	m.Selected = Obscura
+	gen, _ := m.BeginRead(Obscura)
+	m.ApplyRead(Obscura, gen, Observation{}, errors.New("Obscura: service is not running"), now)
+	v = ViewState{Machine: m, Now: now}
+	if c := status(v); c.detail != "Obscura: service is not running" || c.detailTone != v1.ToneError {
+		t.Errorf("first read failure hidden: %+v", c)
+	}
+	if find(Panel(v), "retry-read") == nil {
+		t.Error("first read failure should offer Refresh")
+	}
+	if c := status(ViewState{Machine: NewMachine(true, false), Now: now}); c.detail != "Waiting for status" || c.detailTone == v1.ToneError {
+		t.Errorf("first read pending: %+v", c)
+	}
 }
 
 func TestPanelStatesReadDistinctly(t *testing.T) {
@@ -408,6 +425,13 @@ func TestBarAndTooltip(t *testing.T) {
 	// L11: the code is shown as a code, uppercased.
 	if tip := Tooltip(ViewState{Machine: m, Now: now}); !hasText(tip, "Melbourne, AU") {
 		t.Error("lowercase country code in the tooltip")
+	}
+	// A status that cannot be read says why on hover, not only in the panel.
+	m = NewMachine(false, true)
+	gen, _ := m.BeginRead(Obscura)
+	m.ApplyRead(Obscura, gen, Observation{}, errors.New("Obscura: service is not running"), now)
+	if tip := Tooltip(ViewState{Machine: m, Now: now}); !hasText(tip, "Obscura: service is not running") {
+		t.Error("tooltip hides why the status is unavailable")
 	}
 	// A running connect shows in the status card, with no message line.
 	m, now = readyMachine(t)
