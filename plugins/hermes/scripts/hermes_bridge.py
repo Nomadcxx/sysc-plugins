@@ -1145,6 +1145,10 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         # redirects a busy turn in place and its deltas still target that turn.
         params = {"session_id": session_id, "text": text, "queued": True}
         with state.lock:
+            if state._state["session"]["running"]:
+                # Hermes coalesces queued strings. A supported text part
+                # preserves each submission as its own turn.
+                params["text"] = [{"type": "text", "text": text}]
             user_id = state.append_user_message(text)
             state.write()
         try:

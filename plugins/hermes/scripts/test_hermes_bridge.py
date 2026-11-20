@@ -384,7 +384,11 @@ class TurnStateTest(BridgeCase):
         self.event("message.delta", text="first reply")
         for text in ("second", "third"):
             self.post("/prompt", {"text": text})
-        self.assertTrue(self.rpc.calls_to("prompt.submit")[-1].get("queued"))
+        calls = self.rpc.calls_to("prompt.submit")
+        self.assertEqual(calls[0]["text"], "first")
+        for call, text in zip(calls[1:], ("second", "third"), strict=True):
+            self.assertTrue(call["queued"])
+            self.assertEqual(call["text"], [{"type": "text", "text": text}])
         self.event("message.complete")
         for text in ("second", "third"):
             self.event("message.start")
