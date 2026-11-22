@@ -19,6 +19,13 @@ func decodeBoundedFile(path string, what string) (image.Image, error) {
 		return nil, fmt.Errorf("kdeconnect: open %s: %w", path, err)
 	}
 	defer f.Close()
+	return decodeBounded(f, path, what)
+}
+
+// decodeBounded is decodeBoundedFile for a source that is already open.
+// Images from the phone are decoded through the handle that passed the mount
+// check, never reopened by name. path names the source in the error.
+func decodeBounded(f io.Reader, path string, what string) (image.Image, error) {
 	raw, err := io.ReadAll(io.LimitReader(f, recentImageMaxSourceBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("kdeconnect: read %s: %w", path, err)
