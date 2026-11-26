@@ -43,7 +43,7 @@ func TestComposeMockupRefusesAlbumArtOverThePixelLimit(t *testing.T) {
 	// file stays tiny because only the header is written.
 	writePNGHeader(t, art, 8000, 8000)
 
-	_, err := composeMockup("phone", art)
+	_, err := composeMockup("phone", art, filepath.Dir(art))
 	if err == nil {
 		t.Fatal("composeMockup accepted album art over the pixel limit")
 	}
@@ -65,7 +65,7 @@ func TestComposeMockupRefusesAlbumArtOverTheByteLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := composeMockup("phone", art)
+	_, err := composeMockup("phone", art, filepath.Dir(art))
 	if err == nil {
 		t.Fatal("composeMockup accepted album art over the byte limit")
 	}

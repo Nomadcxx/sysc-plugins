@@ -8,6 +8,7 @@ import (
 	"hash/crc32"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -1421,7 +1422,7 @@ func TestRefreshRecentImagesAlbumArtWinsOverPhoto(t *testing.T) {
 	useRecentImageCaches(t)
 	mount := t.TempDir()
 	writeTimedPNG(t, filepath.Join(mount, "DCIM", "Camera", "photo.png"), time.Now())
-	art := filepath.Join(t.TempDir(), "cover.png")
+	art := filepath.Join(albumArtRoot, "cover.png")
 	writeArt(t, art, color.RGBA{G: 200, A: 255})
 
 	bus := recentImagesBus(mount)
@@ -1912,5 +1913,126 @@ func TestCloseAbandonsAStalledDaemonCall(t *testing.T) {
 	case <-closed:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Close did not return: the stalled daemon call was not abandoned")
+	}
+}
+
+// TestThumbnailDecodesTheValidatedHandle is the guard for issue #21's jail
+// after the open: a device that swaps the scanned file for a symlink once it
+// is validated must not get the link target decoded.
+func TestThumbnailDecodesTheValidatedHandle(t *testing.T) {
+	cache := t.TempDir()
+	mount := t.TempDir()
+	src := filepath.Join(mount, "photo.png")
+	writeSizedPNG(t, src, 2, 2)
+	outside := filepath.Join(t.TempDir(), "private.png")
+	writeSizedPNG(t, outside, 9, 3)
+
+	afterThumbnailOpen = func(path string) {
+		if err := os.Remove(path); err != nil {
+			t.Error(err)
+		}
+		if err := os.Symlink(outside, path); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { afterThumbnailOpen = nil })
+
+	got, err := thumbnail(src, cache, mount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	cfg, err := jpeg.DecodeConfig(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Width != 2 || cfg.Height != 2 {
+		t.Fatalf("thumbnail is %dx%d, want the validated 2x2 file, not the swapped-in target", cfg.Width, cfg.Height)
+	}
+}
+
+func writeSizedPNG(t *testing.T, path string, width, height int) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(f, image.NewRGBA(image.Rect(0, 0, width, height))); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCacheDirsRefuseTheSharedTempFallback is the guard for a session with
+// no user cache directory: the caches used to fall back to a predictable
+// directory in /tmp that another local user could create first.
+func TestCacheDirsRefuseTheSharedTempFallback(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", "")
+	if thumbs, mockups, art := cacheDirs(); thumbs != "" || mockups != "" || art != "" {
+		t.Fatalf("cacheDirs() = %q, %q, %q; want none without a user cache", thumbs, mockups, art)
+	}
+	mount := t.TempDir()
+	src := filepath.Join(mount, "photo.png")
+	writeSizedPNG(t, src, 2, 2)
+	if got, err := thumbnail(src, "", mount); !errors.Is(err, errNoPrivateCache) {
+		t.Fatalf("thumbnail without a cache = %q, %v; want errNoPrivateCache", got, err)
+	}
+}
+
+// TestThumbnailKeepsItsCachePrivate is the guard for the cache itself:
+// it is tightened to 0700, a linked cache directory is refused, and a
+// planted cache entry is replaced rather than served or written through.
+func TestThumbnailKeepsItsCachePrivate(t *testing.T) {
+	mount := t.TempDir()
+	src := filepath.Join(mount, "photo.png")
+	writeSizedPNG(t, src, 2, 2)
+
+	cache := filepath.Join(t.TempDir(), "thumbs")
+	if err := os.Mkdir(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	first, err := thumbnail(src, cache, mount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(cache); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("cache mode = %v, %v; want 0700", info.Mode().Perm(), err)
+	}
+
+	// A planted entry under the expected name points at a file elsewhere.
+	elsewhere := filepath.Join(t.TempDir(), "victim.jpg")
+	if err := os.WriteFile(elsewhere, append(append([]byte{}, jpegMagic...), "keep"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, first); err != nil {
+		t.Fatal(err)
+	}
+	again, err := thumbnail(src, cache, mount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(again); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("cache entry after a planted link: %v, %v; want a regular file", info, err)
+	}
+	if body, _ := os.ReadFile(elsewhere); string(body[len(jpegMagic):]) != "keep" {
+		t.Fatalf("the link target was written through: %q", body)
+	}
+
+	linked := filepath.Join(t.TempDir(), "linked")
+	if err := os.Symlink(cache, linked); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := thumbnail(src, linked, mount); err == nil {
+		t.Fatal("thumbnail accepted a symlinked cache directory")
 	}
 }

@@ -12,17 +12,18 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-// useRealMockups points the resolver at the shipped artwork and the
-// composite cache at a temp directory. Sequential, as useMockupAssets is.
+// useRealMockups points the resolver at the shipped artwork, and the
+// composite cache and the daemon's album-art cache at temp directories.
+// Sequential, as useMockupAssets is.
 func useRealMockups(t *testing.T) string {
 	t.Helper()
 	assets, err := filepath.Abs("assets")
 	if err != nil {
 		t.Fatal(err)
 	}
-	prevAssets, prevCache := mockupAssetDir, mockupArtDir
-	mockupAssetDir, mockupArtDir = assets, t.TempDir()
-	t.Cleanup(func() { mockupAssetDir, mockupArtDir = prevAssets, prevCache })
+	prevAssets, prevCache, prevArt := mockupAssetDir, mockupArtDir, albumArtRoot
+	mockupAssetDir, mockupArtDir, albumArtRoot = assets, t.TempDir(), t.TempDir()
+	t.Cleanup(func() { mockupAssetDir, mockupArtDir, albumArtRoot = prevAssets, prevCache, prevArt })
 	return mockupArtDir
 }
 
@@ -68,7 +69,7 @@ func TestComposeMockupFillsOnlyTheScreen(t *testing.T) {
 	red := color.RGBA{R: 220, A: 255}
 	writeArt(t, art, red)
 
-	got, err := composeMockup("phone", art)
+	got, err := composeMockup("phone", art, filepath.Dir(art))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +94,7 @@ func TestComposeMockupFillsOnlyTheScreen(t *testing.T) {
 
 	// The same cover is served from the cache; a new cover replaces the
 	// old composite rather than piling up beside it.
-	again, err := composeMockup("phone", art)
+	again, err := composeMockup("phone", art, filepath.Dir(art))
 	if err != nil || again != got {
 		t.Fatalf("recompose = %q, %v, want the cached %q", again, err, got)
 	}
@@ -102,7 +103,7 @@ func TestComposeMockupFillsOnlyTheScreen(t *testing.T) {
 	if err := os.Chtimes(art, later, later); err != nil {
 		t.Fatal(err)
 	}
-	next, err := composeMockup("phone", art)
+	next, err := composeMockup("phone", art, filepath.Dir(art))
 	if err != nil || next == got {
 		t.Fatalf("new cover composite = %q, %v, want a fresh file", next, err)
 	}
@@ -113,10 +114,11 @@ func TestComposeMockupFillsOnlyTheScreen(t *testing.T) {
 
 func TestComposeMockupRefusesMissingArt(t *testing.T) {
 	useRealMockups(t)
-	if _, err := composeMockup("phone", filepath.Join(t.TempDir(), "gone.png")); err == nil {
+	gone := t.TempDir()
+	if _, err := composeMockup("phone", filepath.Join(gone, "gone.png"), gone); err == nil {
 		t.Fatal("composed a mockup from a missing cover")
 	}
-	if _, err := composeMockup("tv", ""); err == nil {
+	if _, err := composeMockup("tv", "", ""); err == nil {
 		t.Fatal("composed a mockup for a type with no artwork")
 	}
 }
@@ -142,7 +144,7 @@ func TestDeviceMockupPrefersTheAlbumArtComposite(t *testing.T) {
 
 func TestMediaArtReachesTheSnapshot(t *testing.T) {
 	useRealMockups(t)
-	art := filepath.Join(t.TempDir(), "cover.png")
+	art := filepath.Join(albumArtRoot, "cover.png")
 	writeArt(t, art, color.RGBA{G: 200, A: 255})
 
 	bus := testBus()
@@ -194,5 +196,37 @@ func TestMockupArtChangeIsStructural(t *testing.T) {
 	next.Devices[0].MockupArt = "/cache/phone-cover.png"
 	if PanelDelta(prev, next) != nil {
 		t.Fatal("a new cover patched the panel; the mockup image needs a full snapshot")
+	}
+}
+
+// TestMediaMockupReadsOnlyTheAlbumArtCache is the guard for the album-art
+// URL. It arrives over the session bus, so a value naming another file the
+// user can read, directly or through a link in the cache, must not be
+// composed onto the desktop.
+func TestMediaMockupReadsOnlyTheAlbumArtCache(t *testing.T) {
+	dir := useRealMockups(t)
+	phone := &Device{Type: "phone"}
+	outside := filepath.Join(t.TempDir(), "private.png")
+	writeArt(t, outside, color.RGBA{R: 200, A: 255})
+	link := filepath.Join(albumArtRoot, "link.png")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, url := range []string{"file://" + outside, "file://" + link} {
+		if got, err := mediaMockup(phone, url); err == nil {
+			t.Errorf("mediaMockup(%q) = %q, want a refusal", url, got)
+		}
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("the composite directory holds %d files, want none", len(entries))
+	}
+
+	cover := filepath.Join(albumArtRoot, "cover.png")
+	writeArt(t, cover, color.RGBA{G: 200, A: 255})
+	if got, err := mediaMockup(phone, "file://elsewhere"+cover); got != "" || err != nil {
+		t.Errorf("remote-host URL = %q, %v; want it ignored", got, err)
+	}
+	if got, err := mediaMockup(phone, "file://"+cover); got == "" || err != nil {
+		t.Fatalf("cover in the album-art cache = %q, %v; want a composite", got, err)
 	}
 }

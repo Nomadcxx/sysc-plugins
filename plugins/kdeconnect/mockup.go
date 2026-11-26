@@ -7,6 +7,7 @@ import (
 	"image"
 	_ "image/jpeg"
 	"image/png"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,28 +18,34 @@ import (
 )
 
 // mockupArtDir holds the album-art composites, beside the recent-image
-// thumbnails. Tests point it at a temp directory. It is filled in by the
-// init() that fixes recentImageThumbDir: a package-level initialiser runs
-// before every init() and would derive the path from the temporary
-// fallback, which would put the composites in a shared directory.
+// thumbnails. init() fills it in through cacheDirs, and leaves it empty when
+// there is no user cache directory. Tests point it at a temp directory.
 var mockupArtDir string
 
-// composeMockup draws the album art at art into the screen of the kind's
+// albumArtRoot is the daemon's album-art cache. A localAlbumArtUrl outside
+// it is ignored: the value arrives over the session bus and may name any
+// file the user can read. Set with mockupArtDir; tests point it at a temp
+// directory.
+var albumArtRoot string
+
+// composeMockup draws the album art at art, which must be a regular file
+// under artRoot, into the screen of the kind's
 // mockup and returns the cached PNG. The wire has no overlay, so the
 // cover rides inside the mockup image itself. The screen is the dark
 // region connected to the artwork's centre, which follows the rounded
 // screen corners; the bezel, camera cutouts outside it and the transparent
 // canvas keep the frame's own pixels. A new cover replaces the kind's old
 // composite.
-func composeMockup(kind, art string) (string, error) {
+func composeMockup(kind, art, artRoot string) (string, error) {
 	asset, ok := mockupAsset(kind)
 	if !ok {
 		return "", fmt.Errorf("kdeconnect: no mockup artwork for %q", kind)
 	}
-	artInfo, err := os.Stat(art)
+	artFile, artInfo, err := openUnder(art, artRoot, "album art")
 	if err != nil {
-		return "", fmt.Errorf("kdeconnect: stat album art: %w", err)
+		return "", err
 	}
+	defer artFile.Close()
 	assetInfo, err := os.Stat(asset)
 	if err != nil {
 		return "", fmt.Errorf("kdeconnect: stat mockup: %w", err)
@@ -47,8 +54,11 @@ func composeMockup(kind, art string) (string, error) {
 		asset, strconv.FormatInt(assetInfo.ModTime().UnixNano(), 10),
 		art, strconv.FormatInt(artInfo.ModTime().UnixNano(), 10),
 	}, "|"))))
+	if err := ensurePrivateDir(mockupArtDir); err != nil {
+		return "", err
+	}
 	cached := filepath.Join(mockupArtDir, kind+"-"+key+".png")
-	if _, err := os.Stat(cached); err == nil {
+	if cacheHit(cached, pngMagic) {
 		return cached, nil
 	}
 
@@ -56,7 +66,7 @@ func composeMockup(kind, art string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cover, err := decodeBoundedFile(art, "album art")
+	cover, err := decodeBounded(artFile, art, "album art")
 	if err != nil {
 		return "", err
 	}
@@ -80,24 +90,8 @@ func composeMockup(kind, art string) (string, error) {
 		}
 	}
 
-	if err := os.MkdirAll(mockupArtDir, 0o755); err != nil {
-		return "", fmt.Errorf("kdeconnect: mkdir %s: %w", mockupArtDir, err)
-	}
-	tmp := cached + ".part"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return "", fmt.Errorf("kdeconnect: create %s: %w", tmp, err)
-	}
-	err = png.Encode(f, out)
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err == nil {
-		err = os.Rename(tmp, cached)
-	}
-	if err != nil {
-		os.Remove(tmp)
-		return "", fmt.Errorf("kdeconnect: write %s: %w", cached, err)
+	if err := writeCacheFile(cached, func(w io.Writer) error { return png.Encode(w, out) }); err != nil {
+		return "", err
 	}
 	// Drop the kind's earlier composites: one cover per mockup is live.
 	if stale, _ := filepath.Glob(filepath.Join(mockupArtDir, kind+"-*.png")); len(stale) > 0 {
@@ -156,10 +150,10 @@ func coverCrop(src image.Rectangle, w, h int) image.Rectangle {
 }
 
 // localFilePath turns the daemon's file:// album-art URL into a path; any
-// other scheme, or none, yields "".
+// other scheme, none, or a remote host yields "".
 func localFilePath(raw string) string {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "file" {
+	if err != nil || u.Scheme != "file" || (u.Host != "" && u.Host != "localhost") {
 		return ""
 	}
 	return u.Path
@@ -178,5 +172,5 @@ func mediaMockup(dev *Device, artURL string) (string, error) {
 	if kind == "" {
 		return "", errNoMockup
 	}
-	return composeMockup(kind, art)
+	return composeMockup(kind, art, albumArtRoot)
 }

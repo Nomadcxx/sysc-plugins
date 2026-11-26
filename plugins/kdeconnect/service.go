@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -36,18 +37,28 @@ const recentImageStageTTL = 24 * time.Hour
 
 // recentImageThumbDir lives under os.UserCacheDir()/sysc-plugins/kdeconnect/
 // so per-thumb filenames stay short (sysc-shell's icons.FileResolver rejects
-// paths past 4096 bytes; a SHA-1 hex + .jpg stays well under that).
-var recentImageThumbDir = filepath.Join(os.TempDir(), "sysc-kdeconnect-thumbs")
+// paths past 4096 bytes; a SHA-1 hex + .jpg stays well under that). It is
+// empty when there is no user cache directory, and thumbnails are then off.
+var recentImageThumbDir string
 
 func init() {
-	if base, err := os.UserCacheDir(); err == nil {
-		recentImageThumbDir = filepath.Join(base, "sysc-plugins", "kdeconnect", "thumbs")
+	recentImageThumbDir, mockupArtDir, albumArtRoot = cacheDirs()
+}
+
+// cacheDirs derives the plugin's caches and the daemon's album-art cache from
+// the user cache directory. Without one, every path is empty: the plugin
+// keeps no images rather than fall back to the shared temporary directory,
+// where another local user could plant or read them.
+func cacheDirs() (thumbs, mockups, albumArt string) {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return "", "", ""
 	}
-	// The composite cache sits beside the thumbnails, so it is derived after
-	// the cache directory is fixed. A package-level initialiser would run
-	// before this and would derive it from the temporary fallback, which
-	// would leave the composites in a directory every local user can write.
-	mockupArtDir = filepath.Join(filepath.Dir(recentImageThumbDir), "mockups")
+	root := filepath.Join(base, "sysc-plugins", "kdeconnect")
+	// kdeconnectd keeps the covers it mirrors from the phone here, and
+	// publishes them as localAlbumArtUrl.
+	return filepath.Join(root, "thumbs"), filepath.Join(root, "mockups"),
+		filepath.Join(base, "kdeconnect.daemon", "kdeconnect", "albumart")
 }
 
 // The service owns one connection to the daemon. It reconnects for as long
@@ -1213,38 +1224,17 @@ func StageRecentImage(img RecentImage) (string, error) {
 	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
 		return "", fmt.Errorf("kdeconnect: unsupported recent image extension %q", ext)
 	}
-	resolved, cleanedMount, err := resolveUnderMount(img.Source, img.Mount)
+	file, _, err := openUnder(img.Source, img.Mount, "thumbnail")
 	if err != nil {
 		return "", err
 	}
-	file, err := openThumbnailSource(cleanedMount, resolved)
-	if err != nil {
-		return "", fmt.Errorf("kdeconnect: open %s: %w", img.Source, err)
-	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return "", fmt.Errorf("kdeconnect: stat %s: %w", img.Source, err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("kdeconnect: %s is not a regular file", img.Source)
-	}
-	if info.Size() > recentImageMaxSourceBytes {
-		return "", fmt.Errorf("kdeconnect: %s exceeds the %d-byte thumbnail source limit", img.Source, recentImageMaxSourceBytes)
+	if recentImageThumbDir == "" {
+		return "", errNoPrivateCache
 	}
 	stageRoot := filepath.Join(recentImageThumbDir, "sources")
-	if err := os.MkdirAll(stageRoot, 0o700); err != nil {
-		return "", fmt.Errorf("kdeconnect: mkdir %s: %w", stageRoot, err)
-	}
-	rootInfo, err := os.Lstat(stageRoot)
-	if err != nil {
-		return "", fmt.Errorf("kdeconnect: stat %s: %w", stageRoot, err)
-	}
-	if !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("kdeconnect: staging path %s is not a directory", stageRoot)
-	}
-	if err := os.Chmod(stageRoot, 0o700); err != nil {
-		return "", fmt.Errorf("kdeconnect: protect %s: %w", stageRoot, err)
+	if err := ensurePrivateDir(stageRoot); err != nil {
+		return "", err
 	}
 	pruneStagedRecentImages(stageRoot, time.Now())
 	stageDir, err := os.MkdirTemp(stageRoot, "recent-image-*")
@@ -1293,65 +1283,148 @@ func pruneStagedRecentImages(stageRoot string, now time.Time) {
 	}
 }
 
+// afterThumbnailOpen, when set by a test, runs once the validated source is
+// open, standing in for a paired device that changes the path at that moment.
+var afterThumbnailOpen func(src string)
+
 func thumbnail(src, cacheDir, mount string) (string, error) {
 	if src == "" {
 		return "", errors.New("kdeconnect: thumbnail needs a source path")
 	}
-	// find -P prints matching symlinks by name, so the bytes to read must
-	// be re-confirmed after resolution: a paired device cannot plant
-	// photo.jpg -> /home/<user>/... and have the panel open it (issue #21).
-	resolved, cleanedMount, err := resolveUnderMount(src, mount)
+	file, info, err := openUnder(src, mount, "thumbnail")
 	if err != nil {
 		return "", err
 	}
-	file, err := openThumbnailSource(cleanedMount, resolved)
-	if err != nil {
-		return "", fmt.Errorf("kdeconnect: open %s: %w", src, err)
-	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return "", fmt.Errorf("kdeconnect: stat %s: %w", src, err)
+	if afterThumbnailOpen != nil {
+		afterThumbnailOpen(src)
 	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("kdeconnect: %s is not a regular file", src)
-	}
-	if info.Size() > recentImageMaxSourceBytes {
-		return "", fmt.Errorf("kdeconnect: %s exceeds the %d-byte thumbnail source limit", src, recentImageMaxSourceBytes)
-	}
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		return "", fmt.Errorf("kdeconnect: mkdir %s: %w", cacheDir, err)
+	if err := ensurePrivateDir(cacheDir); err != nil {
+		return "", err
 	}
 	key := fmt.Sprintf("%x", sha1.Sum([]byte(src+"|"+strconv.FormatInt(info.ModTime().UnixNano(), 10))))
 	cached := filepath.Join(cacheDir, key+".jpg")
-	if body, err := os.ReadFile(cached); err == nil && len(body) >= 4 && body[0] == 0xff && body[1] == 0xd8 {
+	if cacheHit(cached, jpegMagic) {
 		return cached, nil
 	}
-	img, err := decodeBoundedFile(src, "thumbnail")
+	img, err := decodeBounded(file, src, "thumbnail")
 	if err != nil {
 		return "", err
 	}
 	dw, dh := thumbnailSize(img.Bounds().Dx(), img.Bounds().Dy(), recentImageMaxLongEdge)
 	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
 	draw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
-	tmp := cached + ".part"
-	out, err := os.Create(tmp)
-	if err != nil {
-		return "", fmt.Errorf("kdeconnect: create %s: %w", tmp, err)
-	}
-	err = jpeg.Encode(out, dst, &jpeg.Options{Quality: 80})
-	if closeErr := out.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		os.Remove(tmp)
-		return "", fmt.Errorf("kdeconnect: encode %s: %w", cached, err)
-	}
-	if err := os.Rename(tmp, cached); err != nil {
-		os.Remove(tmp)
-		return "", fmt.Errorf("kdeconnect: rename %s: %w", cached, err)
+	if err := writeCacheFile(cached, func(w io.Writer) error {
+		return jpeg.Encode(w, dst, &jpeg.Options{Quality: 80})
+	}); err != nil {
+		return "", err
 	}
 	return cached, nil
+}
+
+var errNoPrivateCache = errors.New("kdeconnect: no private cache directory")
+
+var (
+	jpegMagic = []byte{0xff, 0xd8, 0xff}
+	pngMagic  = []byte("\x89PNG\r\n\x1a\n")
+)
+
+// openUnder opens src, which a paired device controls, only if it resolves
+// to a regular file under root within the byte limit. find -P prints
+// matching symlinks by name, so the bytes to read are re-confirmed after
+// resolution: a paired device cannot plant photo.jpg -> /home/<user>/... and
+// have the panel open it (issue #21). Callers read the returned handle and
+// never reopen src. what names the image in the error.
+func openUnder(src, root, what string) (*os.File, os.FileInfo, error) {
+	resolved, cleanedRoot, err := resolveUnderMount(src, root)
+	if err != nil {
+		return nil, nil, err
+	}
+	file, err := openThumbnailSource(cleanedRoot, resolved)
+	if err != nil {
+		return nil, nil, fmt.Errorf("kdeconnect: open %s: %w", src, err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, nil, fmt.Errorf("kdeconnect: stat %s: %w", src, err)
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, nil, fmt.Errorf("kdeconnect: %s is not a regular file", src)
+	}
+	if info.Size() > recentImageMaxSourceBytes {
+		file.Close()
+		return nil, nil, fmt.Errorf("kdeconnect: %s exceeds the %d-byte %s source limit", src, recentImageMaxSourceBytes, what)
+	}
+	return file, info, nil
+}
+
+// ensurePrivateDir creates dir 0700 and refuses one that is a symlink, not a
+// directory, or owned by another user. An existing directory is tightened to
+// 0700, since earlier versions created the caches 0755.
+func ensurePrivateDir(dir string) error {
+	if dir == "" {
+		return errNoPrivateCache
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("kdeconnect: mkdir %s: %w", dir, err)
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("kdeconnect: stat %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("kdeconnect: cache path %s is not a directory", dir)
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || stat.Uid != uint32(os.Getuid()) {
+		return fmt.Errorf("kdeconnect: cache directory %s is not owned by the current user", dir)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("kdeconnect: protect %s: %w", dir, err)
+	}
+	return nil
+}
+
+// cacheHit reports whether path is a regular file that starts with magic.
+// It reads only the magic bytes and does not follow a symlink.
+func cacheHit(path string, magic []byte) bool {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return false
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	head := make([]byte, len(magic))
+	if _, err := io.ReadFull(f, head); err != nil {
+		return false
+	}
+	return bytes.Equal(head, magic)
+}
+
+// writeCacheFile writes through a new temporary file with a random name in
+// dest's directory, then renames it over dest. A planted dest or .part name
+// cannot redirect the write.
+func writeCacheFile(dest string, encode func(io.Writer) error) error {
+	tmp, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".*.part")
+	if err != nil {
+		return fmt.Errorf("kdeconnect: create %s: %w", dest, err)
+	}
+	err = encode(tmp)
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), dest)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		return fmt.Errorf("kdeconnect: write %s: %w", dest, err)
+	}
+	return nil
 }
 
 // openThumbnailSource walks from the already-resolved mount directory and
@@ -1597,7 +1670,7 @@ func (st *daemonState) applyIdleMockup(dev *Device, images []RecentImage) {
 			return
 		}
 	}
-	art, err := composeMockup(MockupKind(dev), images[0].Thumb)
+	art, err := composeMockup(MockupKind(dev), images[0].Thumb, recentImageThumbDir)
 	if err != nil {
 		return
 	}
