@@ -2036,3 +2036,64 @@ func TestThumbnailKeepsItsCachePrivate(t *testing.T) {
 		t.Fatal("thumbnail accepted a symlinked cache directory")
 	}
 }
+
+func TestScanRecentImagesStopsWhenContextExpires(t *testing.T) {
+	mount := t.TempDir()
+	root := filepath.Join(mount, "DCIM")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stubDir := t.TempDir()
+	stub := filepath.Join(stubDir, "find")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := scanRecentImagesAtContext(ctx, []string{root}, mount, 6, false)
+	if err == nil {
+		t.Fatal("scan returned no error after the deadline expired")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("scan took %v after a 100ms deadline", elapsed)
+	}
+}
+
+func TestScanRecentImagesBoundsResultCount(t *testing.T) {
+	t.Parallel()
+	mount := t.TempDir()
+	root := filepath.Join(mount, "DCIM")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < recentImageScanMaxResults+40; i++ {
+		writeTouch(t, filepath.Join(root, fmt.Sprintf("img%03d.png", i)), base.Add(time.Duration(i)*time.Minute), "x")
+	}
+	got, err := scanRecentImages(root, mount, 0, false)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(got) != recentImageScanMaxResults {
+		t.Fatalf("scan returned %d entries, want the %d result cap", len(got), recentImageScanMaxResults)
+	}
+}
+
+func TestCappedBufferStopsAtItsLimit(t *testing.T) {
+	t.Parallel()
+	var buf cappedBuffer
+	buf.max = 8
+	n, err := buf.Write([]byte("123456789012345"))
+	if err != nil || n != 15 {
+		t.Fatalf("Write() = %d, %v; want all input accepted", n, err)
+	}
+	if got := buf.buf.String(); got != "12345678" {
+		t.Fatalf("buffer = %q, want the first 8 bytes", got)
+	}
+	if !buf.overflow {
+		t.Fatal("overflow was not recorded")
+	}
+}
