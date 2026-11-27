@@ -245,7 +245,7 @@ func TestGoogleRowsAreNeverStored(t *testing.T) {
 	stored, _ := cache.Get()
 	assertNoGoogle("Put/Get", stored)
 
-	live := cache.Merge(report)
+	live := cache.Merge(report, Sources{AirHealth: true, OpenMeteo: true, GoogleKey: "key"})
 	if _, ok := live.Snapshot.Measure(MeasureGrass); !ok || !strings.Contains(live.Snapshot.Attribution, GoogleAttribution) {
 		t.Fatalf("the current live response lost Google pollen: %+v", live.Snapshot)
 	}

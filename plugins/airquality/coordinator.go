@@ -369,6 +369,22 @@ func sortMeasures(measures []Measure) []Measure {
 // afternoon outage without presenting yesterday's forecast as today's.
 const CarryLimit = 12 * time.Hour
 
+// AllowsSource reports whether a measure from source belongs in the current
+// request. Unknown credits are refused, so a row from a provider this build no
+// longer understands is never carried forward.
+func (s Sources) AllowsSource(source string) bool {
+	switch source {
+	case "airhealth":
+		return s.AirHealth
+	case "open-meteo":
+		return s.OpenMeteo
+	case "google":
+		return s.GoogleKey != ""
+	default:
+		return false
+	}
+}
+
 // Cache keeps the last good report so a refresh failure shows stale data
 // rather than an empty panel, and so a restart does not begin blank.
 type Cache struct {
@@ -393,16 +409,34 @@ func (c *Cache) Put(report Report) {
 // carried row's, so the panel's age never understates what it shows. The return
 // value includes this refresh's Google rows for live display; retained state
 // does not.
-func (c *Cache) Merge(fresh Report) Report {
+func (c *Cache) Merge(fresh Report, sources Sources) Report {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	merged := fresh
 	merged.Stale = false
 	if c.seen && sameOrigin(c.report, fresh) {
-		merged = carryOver(fresh, c.report)
+		merged = carryOver(fresh, c.report, sources)
 	}
 	c.report, c.seen = WithoutGoogle(merged), true
 	return merged
+}
+
+// Retain drops rows and context belonging to providers the current request no
+// longer enables. It runs when source settings change, before the replacement
+// refresh finishes: otherwise a failed refresh would keep showing readings the
+// user just turned off for the whole carry window.
+func (c *Cache) Retain(sources Sources) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.seen {
+		return
+	}
+	filtered := filterReport(c.report, sources)
+	if len(filtered.Snapshot.Measures) == 0 {
+		c.report, c.seen = Report{}, false
+		return
+	}
+	c.report = WithoutGoogle(filtered)
 }
 
 // Keep marks the stored report stale and records why, returning it. It is
@@ -452,10 +486,10 @@ func sameOrigin(a, b Report) bool {
 	return a.Origin != nil && b.Origin != nil && a.Origin.Same(*b.Origin)
 }
 
-// carryOver adds previous's still-current rows that fresh lacks. AirHealth is
-// the only source of the forecast, the advisory and the suburb, so those come
-// along with its rows.
-func carryOver(fresh, previous Report) Report {
+// carryOver adds previous's still-current rows that fresh lacks, but only for
+// providers the current request still enables. AirHealth is the only source of
+// the forecast, the advisory and the suburb, so those come along with its rows.
+func carryOver(fresh, previous Report, sources Sources) Report {
 	merged := fresh
 	merged.Snapshot.Measures = append([]Measure(nil), fresh.Snapshot.Measures...)
 	oldest := fresh.UpdatedAt
@@ -466,7 +500,7 @@ func carryOver(fresh, previous Report) Report {
 		}
 		// Google's terms prohibit caching its data, so a Google row is never
 		// shown past the refresh that fetched it.
-		if m.Source == "google" || m.Updated.IsZero() || fresh.UpdatedAt.Sub(m.Updated) > CarryLimit {
+		if !sources.AllowsSource(m.Source) || m.Source == "google" || m.Updated.IsZero() || fresh.UpdatedAt.Sub(m.Updated) > CarryLimit {
 			continue
 		}
 		merged.Snapshot.Measures = append(merged.Snapshot.Measures, m)
@@ -505,14 +539,47 @@ func carryOver(fresh, previous Report) Report {
 	return merged
 }
 
+// filterReport removes measures from providers sources does not enable and
+// rebuilds the context and attribution that depended on them. It is used when
+// source settings change, before a replacement reading arrives.
+func filterReport(report Report, sources Sources) Report {
+	kept := make([]Measure, 0, len(report.Snapshot.Measures))
+	credits := map[string]bool{}
+	for _, m := range report.Snapshot.Measures {
+		if !sources.AllowsSource(m.Source) {
+			continue
+		}
+		kept = append(kept, m)
+		credits[m.Source] = true
+	}
+	report.Snapshot.Measures = kept
+	if !sources.AllowsSource("airhealth") {
+		// The forecast, suburb, date and advisory are AirHealth's alone.
+		report.Snapshot.Location = Location{}
+		report.Snapshot.Forecast = nil
+		report.Snapshot.Weather = nil
+		report.Snapshot.Alert = nil
+		report.Snapshot.Date, report.Snapshot.Title, report.Snapshot.Advice = "", "", ""
+	}
+	attribution := ""
+	for source := range credits {
+		attribution = joinAttribution(attribution, sourceCredit(report.Snapshot.Attribution, source))
+	}
+	report.Snapshot.Attribution = attribution
+	return report
+}
+
 // sourceCredit finds one source's credit in a joined attribution. AirHealth
 // sends its own wording, so it is whichever credit is not one of the others.
 func sourceCredit(attribution, source string) string {
 	if source == "open-meteo" {
 		return OpenMeteoAttribution
 	}
+	if source == "google" {
+		return GoogleAttribution
+	}
 	for _, credit := range strings.Split(attribution, " · ") {
-		if credit != OpenMeteoAttribution {
+		if credit != OpenMeteoAttribution && credit != GoogleAttribution {
 			return credit
 		}
 	}
