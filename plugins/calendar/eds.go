@@ -11,6 +11,17 @@ static void sysc_json_string(JsonBuilder *builder, const gchar *name, const gcha
 	json_builder_add_string_value(builder, value ? value : "");
 }
 
+// SYSC_MAX_ICAL_BYTES bounds the iCalendar text collected for one query.
+// The per-event cap alone permits 2048 * 64 KiB, and building that JSON before
+// the Go side truncates descriptions multiplies the memory again.
+#define SYSC_MAX_ICAL_BYTES (16 * 1024 * 1024)
+
+// sysc_ical_budget_allows reports whether one more event fits in the query's
+// aggregate iCalendar budget. Kept separate so the boundary is testable.
+gboolean sysc_ical_budget_allows(guint64 used, gsize add) {
+	return used <= SYSC_MAX_ICAL_BYTES && add <= SYSC_MAX_ICAL_BYTES - used;
+}
+
 // SyscEventSink collects one calendar source's expanded instances into the
 // shared JSON event array, reusing the caps the pre-expansion query used.
 typedef struct {
@@ -19,6 +30,7 @@ typedef struct {
 	const gchar *calendar;
 	const gchar *color;
 	guint *event_count;
+	guint64 *ical_bytes;
 	gboolean *truncated;
 	GPtrArray *errors;
 } SyscEventSink;
@@ -68,6 +80,13 @@ static gboolean sysc_record_instance(ICalComponent *icomp, ICalTime *instance_st
 		g_free(ical);
 		return TRUE;
 	}
+	gsize ical_length = strlen(ical);
+	if (!sysc_ical_budget_allows(*sink->ical_bytes, ical_length)) {
+		*sink->truncated = TRUE;
+		g_free(ical);
+		return FALSE;
+	}
+	*sink->ical_bytes += (guint64) ical_length;
 	json_builder_begin_object(sink->builder);
 	sysc_json_string(sink->builder, "calendar_id", sink->calendar_id);
 	sysc_json_string(sink->builder, "calendar", sink->calendar);
@@ -115,6 +134,7 @@ static gchar *sysc_calendar_query(gint64 start, gint64 end, GCancellable *cancel
 		g_ptr_array_add(errors, g_strdup(fatal_error));
 	}
 	guint event_count = 0;
+	guint64 ical_bytes = 0;
 	gboolean truncated = FALSE;
 	for (GList *link = sources; link; link = link->next) {
 		ESource *source = E_SOURCE(link->data);
@@ -137,6 +157,7 @@ static gchar *sysc_calendar_query(gint64 start, gint64 end, GCancellable *cancel
 			e_source_get_display_name(source),
 			color,
 			&event_count,
+			&ical_bytes,
 			&truncated,
 			errors,
 		};
@@ -187,6 +208,12 @@ import (
 	"unicode/utf8"
 	"unsafe"
 )
+
+// icalBudgetAllows mirrors the C aggregate budget check so the boundary can be
+// exercised without a configured EDS account.
+func icalBudgetAllows(used, add uint64) bool {
+	return C.sysc_ical_budget_allows(C.guint64(used), C.gsize(add)) != 0
+}
 
 type CalendarSource struct {
 	ID    string `json:"id"`

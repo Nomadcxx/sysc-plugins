@@ -1129,6 +1129,48 @@ func scanRecentImages(root, mountPoint string, max int, sub bool) ([]string, err
 }
 
 func scanRecentImagesAt(roots []string, mountPoint string, max int, sub bool) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), recentImageScanTimeout)
+	defer cancel()
+	return scanRecentImagesAtContext(ctx, roots, mountPoint, max, sub)
+}
+
+// recentImageScanTimeout bounds one `find` walk. The mount is supplied by a
+// remote device, so the walk can stall indefinitely; the service loop, which
+// calls this synchronously, must not stall with it.
+const recentImageScanTimeout = 10 * time.Second
+
+// recentImageScanMaxBytes and recentImageScanMaxResults bound memory even
+// when the remote directory contains far more images than the UI displays.
+const (
+	recentImageScanMaxBytes   = 4 << 20
+	recentImageScanMaxResults = 256
+)
+
+// cappedBuffer keeps at most max bytes and silently discards the rest. The
+// writer still reports every byte as written so the child never blocks on a
+// full pipe.
+type cappedBuffer struct {
+	buf      bytes.Buffer
+	max      int
+	overflow bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	remaining := b.max - b.buf.Len()
+	if remaining > 0 {
+		if len(p) > remaining {
+			b.buf.Write(p[:remaining])
+			b.overflow = true
+		} else {
+			b.buf.Write(p)
+		}
+	} else {
+		b.overflow = true
+	}
+	return len(p), nil
+}
+
+func scanRecentImagesAtContext(ctx context.Context, roots []string, mountPoint string, max int, sub bool) ([]string, error) {
 	if len(roots) == 0 || mountPoint == "" {
 		return nil, errors.New("kdeconnect: scanRecentImages needs a root and a mount point")
 	}
@@ -1152,13 +1194,27 @@ func scanRecentImagesAt(roots []string, mountPoint string, max int, sub bool) ([
 		"-maxdepth", depth,
 		"(", "-iname", "*.png", "-o", "-iname", "*.jpg", "-o", "-iname", "*.jpeg", ")",
 		"-printf", "%T@ %p\n")
-	cmd := exec.Command("find", args...)
-	out, err := cmd.Output()
+	cmd := exec.CommandContext(ctx, "find", args...)
+	// WaitDelay matters as much as cancellation: killing find is not enough
+	// if a helper it spawned still holds the output pipe.
+	cmd.WaitDelay = time.Second
+	var stdout cappedBuffer
+	stdout.max = recentImageScanMaxBytes
+	var stderr cappedBuffer
+	stderr.max = 4 << 10
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	out := stdout.buf.Bytes()
 	// find exits nonzero on any error — one unreadable subdirectory under
-	// scan_subdirectories — while still printing what it walked. Keep the
-	// partial listing; only a walk that produced nothing is a failure.
+	// scan_subdirectories, or cancellation — while still printing what it
+	// walked. Keep the partial listing; only a walk that produced nothing is
+	// a failure.
 	if err != nil && len(bytes.TrimSpace(out)) == 0 {
-		return nil, fmt.Errorf("kdeconnect: find %s: %w", strings.Join(cleaned, " "), err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("kdeconnect: find %s: %w", strings.Join(cleaned, " "), ctxErr)
+		}
+		return nil, fmt.Errorf("kdeconnect: find %s: %w (%s)", strings.Join(cleaned, " "), err, strings.TrimSpace(stderr.buf.String()))
 	}
 	if len(bytes.TrimSpace(out)) == 0 {
 		return nil, nil
@@ -1167,7 +1223,11 @@ func scanRecentImagesAt(roots []string, mountPoint string, max int, sub bool) ([
 		mtime float64
 		path  string
 	}
-	var entries []entry
+	limit := max
+	if limit <= 0 || limit > recentImageScanMaxResults {
+		limit = recentImageScanMaxResults
+	}
+	entries := make([]entry, 0, limit+1)
 	for _, line := range bytes.Split(bytes.TrimSpace(out), []byte("\n")) {
 		space := bytes.IndexByte(line, ' ')
 		if space < 0 {
@@ -1178,10 +1238,16 @@ func scanRecentImagesAt(roots []string, mountPoint string, max int, sub bool) ([
 			continue
 		}
 		entries = append(entries, entry{mtime: mtime, path: string(line[space+1:])})
+		// Keep only the newest candidates while streaming so a huge
+		// directory cannot grow memory without bound.
+		if len(entries) > limit*2 {
+			sort.Slice(entries, func(i, j int) bool { return entries[i].mtime > entries[j].mtime })
+			entries = entries[:limit]
+		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].mtime > entries[j].mtime })
-	if max > 0 && len(entries) > max {
-		entries = entries[:max]
+	if len(entries) > limit {
+		entries = entries[:limit]
 	}
 	paths := make([]string, len(entries))
 	for i, e := range entries {
@@ -1559,16 +1625,18 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 		return
 	}
 	dev.SFTPError = ""
+	scanCtx, cancelScan := context.WithTimeout(st.svc.serviceContext(), recentImageScanTimeout)
+	defer cancelScan()
 	var paths []string
 	if gridPath != "" {
-		found, err := scanRecentImages(filepath.Join(mount, gridPath), mount,
+		found, err := scanRecentImagesAtContext(scanCtx, []string{filepath.Join(mount, gridPath)}, mount,
 			st.svc.settings.MaxRecentImages, st.svc.settings.ScanSubdirectories)
 		if err != nil {
 			return
 		}
 		paths = found
 	} else {
-		paths = newestIdleImage(mount)
+		paths = newestIdleImage(scanCtx, mount)
 	}
 	images := make([]RecentImage, 0, len(paths))
 	for _, p := range paths {
@@ -1589,7 +1657,7 @@ func (st *daemonState) refreshRecentImages(bus daemonBus, saved *string) {
 
 // newestIdleImage is the newest png/jpg under DCIM or Pictures, one level
 // of subdirectory included so Camera and Screenshots both hit.
-func newestIdleImage(mount string) []string {
+func newestIdleImage(ctx context.Context, mount string) []string {
 	var roots []string
 	for _, name := range mockupIdleRoots {
 		p := filepath.Join(mount, name)
@@ -1600,7 +1668,7 @@ func newestIdleImage(mount string) []string {
 	if len(roots) == 0 {
 		return nil
 	}
-	found, err := scanRecentImagesAt(roots, mount, 1, true)
+	found, err := scanRecentImagesAtContext(ctx, roots, mount, 1, true)
 	if err != nil || len(found) == 0 {
 		return nil
 	}

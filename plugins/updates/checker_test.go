@@ -113,6 +113,28 @@ func TestCheckAURNonZeroEmptyIsNoUpdates(t *testing.T) {
 	}
 }
 
+func TestCheckAURReportsHelperErrorOnStderr(t *testing.T) {
+	run := runnerWith(nil, []byte("error: failed to connect to the AUR\n"), 1, nil)
+	updates, err := CheckAUR(context.Background(), run, "paru")
+	if err == nil {
+		t.Fatal("want an error when the helper writes to stderr")
+	}
+	if !strings.Contains(err.Error(), "failed to connect to the AUR") {
+		t.Fatalf("error %q should carry the helper's reason", err)
+	}
+	if updates != nil {
+		t.Fatalf("got updates %+v, want none", updates)
+	}
+}
+
+func TestCheckAURTreatsWhitespaceStderrAsEmpty(t *testing.T) {
+	run := runnerWith(nil, []byte(" \n\t"), 1, nil)
+	updates, err := CheckAUR(context.Background(), run, "paru")
+	if err != nil || updates != nil {
+		t.Fatalf("got %v, %v; want no updates and no error", updates, err)
+	}
+}
+
 func TestCheckFlatpak(t *testing.T) {
 	run := runnerWith(sample(t, "flatpak.txt"), nil, 0, nil)
 	updates, err := CheckFlatpak(context.Background(), run)

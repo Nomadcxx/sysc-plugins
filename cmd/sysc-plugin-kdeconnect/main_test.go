@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -353,6 +354,8 @@ func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
 
 	held := make(chan struct{}, 1)
 	snapshotted := make(chan struct{}, 1)
+	panelSeen := make(chan struct{}, 1)
+	var panelRevision atomic.Uint64
 	go func() {
 		dec := v1.NewDecoder(hostInR, v1.ToHost)
 		for {
@@ -375,6 +378,13 @@ func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
 				}
 				_ = send(&v1.HostReply{ID: msg.ID, OK: true, Result: result})
 			case *v1.ViewSnapshot:
+				if msg.ViewID == "panel" {
+					panelRevision.Store(msg.Revision)
+					select {
+					case panelSeen <- struct{}{}:
+					default:
+					}
+				}
 				if msg.ViewID == "bar-after" {
 					select {
 					case snapshotted <- struct{}{}:
@@ -394,13 +404,39 @@ func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
 	if err := send(hello); err != nil {
 		t.Fatalf("send hello: %v", err)
 	}
-	if err := send(&v1.InputEvent{ViewID: "panel", Node: "open", Event: v1.EventActivate}); err != nil {
-		t.Fatalf("send open: %v", err)
+	if err := send(&v1.ViewOpen{ViewID: "panel", View: v1.ViewPanel, Width: 120}); err != nil {
+		t.Fatalf("open panel: %v", err)
+	}
+	select {
+	case <-panelSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("plugin never published the panel")
+	}
+	// Revision zero predates every published panel revision, so it can never
+	// become current while this test runs.
+	if err := send(&v1.InputEvent{ViewID: "panel", Node: "open", Event: v1.EventActivate, Revision: 0}); err != nil {
+		t.Fatalf("send stale open: %v", err)
 	}
 	select {
 	case <-held:
-	case <-time.After(3 * time.Second):
-		t.Fatal("plugin never reached the panel.open call")
+		t.Fatal("plugin acted on an input from a superseded view revision")
+	case <-time.After(100 * time.Millisecond):
+	}
+	// A concurrent service refresh can publish another revision between the
+	// observation and the plugin handling the input. Retry with the newest
+	// revision rather than depending on scheduler timing.
+	deadline := time.After(5 * time.Second)
+	for opened := false; !opened; {
+		if err := send(&v1.InputEvent{ViewID: "panel", Node: "open", Event: v1.EventActivate, Revision: panelRevision.Load()}); err != nil {
+			t.Fatalf("send open: %v", err)
+		}
+		select {
+		case <-held:
+			opened = true
+		case <-time.After(100 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("plugin never reached the panel.open call")
+		}
 	}
 
 	go func() {
@@ -465,4 +501,17 @@ func assertHelperReaped(t *testing.T, pidFile string) {
 	}
 	stat, _ := os.ReadFile(statPath)
 	t.Fatalf("helper process %d was not reaped; /proc state: %s", pid, stat)
+}
+
+func TestInputMatchesView(t *testing.T) {
+	views := map[string]panelView{"panel": {kind: v1.ViewPanel, rev: 3}}
+	if inputMatchesView(views, &v1.InputEvent{ViewID: "panel", Revision: 3}) != true {
+		t.Error("current view revision was rejected")
+	}
+	if inputMatchesView(views, &v1.InputEvent{ViewID: "panel", Revision: 2}) {
+		t.Error("stale view revision was accepted")
+	}
+	if inputMatchesView(views, &v1.InputEvent{ViewID: "closed", Revision: 3}) {
+		t.Error("input for a closed view was accepted")
+	}
 }

@@ -1048,3 +1048,37 @@ func TestOwnCoordinatesWhenNotFollowingTheShell(t *testing.T) {
 		})
 	}
 }
+
+// Turning a source off must remove its cached rows before the replacement
+// refresh runs, or a failed refresh would keep them for the carry window.
+func TestSourcesChangedDropsRowsFromDisabledSource(t *testing.T) {
+	s := &session{settings: defaultSettings(), wake: make(chan refreshRequest, 1)}
+	origin := &airquality.Coordinates{Latitude: airquality.DefaultLatitude, Longitude: airquality.DefaultLongitude}
+	now := time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC)
+	s.cache.Put(airquality.Report{Origin: origin, UpdatedAt: now, Snapshot: airquality.Snapshot{
+		Measures: []airquality.Measure{
+			{Name: airquality.MeasureGrass, Source: "airhealth", Updated: now},
+			{Name: airquality.MeasureUV, Source: "open-meteo", Updated: now},
+		},
+	}})
+
+	before := s.sources()
+	s.settings.airHealth = false
+	if !s.sourcesChanged(before) {
+		t.Fatal("disabling AirHealth did not queue a refresh")
+	}
+
+	retained, ok := s.cache.Get()
+	if !ok {
+		t.Fatal("cache dropped the report even though Open-Meteo remains enabled")
+	}
+	if _, ok := retained.Snapshot.Measure(airquality.MeasureGrass); ok {
+		t.Fatal("disabled AirHealth rows survived in the cache")
+	}
+	if _, ok := retained.Snapshot.Measure(airquality.MeasureUV); !ok {
+		t.Fatal("enabled Open-Meteo rows were dropped with AirHealth")
+	}
+	if len(s.wake) != 1 {
+		t.Fatalf("queued %d refreshes, want one", len(s.wake))
+	}
+}
