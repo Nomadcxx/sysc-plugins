@@ -32,6 +32,10 @@ MODEL_PATCH_SIZE = 14
 DEPTH_PIPELINE_VERSION = 2
 MASK_PIPELINE_VERSION = 3
 REFINEMENT_MAX_DIMENSION = 1920
+# The host rejects wallpaper masks above 64 Mi pixels. Check the source before
+# decoding it so an oversized wallpaper cannot allocate full-size buffers here
+# only to be rejected afterwards.
+MAX_SOURCE_PIXELS = 64 * 1024 * 1024
 GUIDED_FILTER_RADIUS = 8
 GUIDED_FILTER_EPSILON = 0.001
 PYTHON_MIN = (3, 11)
@@ -265,6 +269,17 @@ def refine_depth(source_rgb, depth):
     return refined
 
 
+def validate_source_size(width: int, height: int) -> None:
+    if width <= 0 or height <= 0:
+        raise RuntimeError("wallpaper has invalid dimensions")
+    pixels = width * height
+    if pixels > MAX_SOURCE_PIXELS:
+        raise RuntimeError(
+            f"wallpaper is {width}x{height} ({pixels} pixels); "
+            f"the maximum supported size is {MAX_SOURCE_PIXELS} pixels"
+        )
+
+
 def prune(directory: Path, maximum: int) -> None:
     if not directory.is_dir():
         return
@@ -308,10 +323,9 @@ def generate(data_dir: Path, wallpaper: Path, threshold: float, feather: float) 
         fcntl.flock(lock, fcntl.LOCK_EX)
         cache_hit = depth_path.is_file()
         with Image.open(wallpaper) as source:
+            source_width, source_height = source.size
+            validate_source_size(source_width, source_height)
             source_rgb = source.convert("RGB")
-            source_width, source_height = source_rgb.size
-            if source_width <= 0 or source_height <= 0:
-                raise RuntimeError("wallpaper has invalid dimensions")
             model_width, model_height = inference_size(source_width, source_height)
             if cache_hit:
                 depth = np.load(depth_path, allow_pickle=False)
