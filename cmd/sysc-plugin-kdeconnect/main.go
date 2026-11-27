@@ -45,6 +45,22 @@ type filesBrowseResult struct {
 	err   error
 }
 
+// panelView records where a published view is in its revision sequence.
+type panelView struct {
+	kind  v1.ViewKind
+	rev   uint64
+	width int
+}
+
+// inputMatchesView reports whether an input event belongs to the view tree
+// the user is currently interacting with. Events for closed views, or for a
+// revision that has already been replaced by a newer publish, must not change
+// the selection or dispatch actions.
+func inputMatchesView(views map[string]panelView, m *v1.InputEvent) bool {
+	v, ok := views[m.ViewID]
+	return ok && v.rev == m.Revision
+}
+
 func run(in *os.File, out *os.File) error {
 	c := v1.NewClient(in, out)
 	if _, err := c.Handshake(identity.FromManifest(v1.Identity{ID: "org.sysc.kdeconnect", Name: "Phone Connect", Version: "0.2.0"})); err != nil {
@@ -53,12 +69,7 @@ func run(in *os.File, out *os.File) error {
 	svc := kdeconnect.New()
 	defer svc.Close()
 
-	type view struct {
-		kind  v1.ViewKind
-		rev   uint64
-		width int
-	}
-	views := map[string]view{}
+	views := map[string]panelView{}
 	var snap kdeconnect.Snapshot
 	settings := kdeconnect.DefaultSettings()
 	ui := uiState{}
@@ -129,6 +140,9 @@ func run(in *os.File, out *os.File) error {
 		}
 	}
 	processInput := func(m *v1.InputEvent) {
+		if !inputMatchesView(views, m) {
+			return
+		}
 		previousComposer := ui.composer
 		if strings.HasPrefix(m.Node, "select-") {
 			selectionChanged = true
@@ -188,7 +202,7 @@ func run(in *os.File, out *os.File) error {
 			case *v1.HostShutdown:
 				return nil
 			case *v1.ViewOpen:
-				views[m.ViewID] = view{kind: m.View, width: m.Width}
+				views[m.ViewID] = panelView{kind: m.View, width: m.Width}
 				if m.View == v1.ViewPanel {
 					// Opening the panel re-reads the daemon first, so the
 					// device state is fresh, the reference shell's behaviour
