@@ -200,6 +200,9 @@ func (s *session) sourcesChanged(before airquality.Sources) bool {
 	after := s.sources()
 	origin := airquality.Coordinates{Latitude: after.Latitude, Longitude: after.Longitude}
 	s.cache.Relocate(origin)
+	// Drop rows from providers the new request turned off before its refresh
+	// starts; a failed refresh must not resurrect them through Keep.
+	s.cache.Retain(after)
 	if !origin.Same(airquality.Coordinates{Latitude: before.Latitude, Longitude: before.Longitude}) {
 		s.notified = map[string]airquality.Severity{}
 	}
@@ -497,7 +500,7 @@ func (s *session) handleRefresh(ctx context.Context, result refreshResult) {
 	// rows are carried over, so a partial refresh neither discards its last
 	// reading nor freezes the others. Alerts come only from what this refresh
 	// returned, so a carried row cannot raise a warning twice.
-	merged := s.cache.Merge(result.report)
+	merged := s.cache.Merge(result.report, s.sources())
 	s.live = &merged
 	s.lastErr = strings.Join(result.report.Errors, "; ")
 	s.save(ctx, merged)

@@ -592,7 +592,7 @@ func TestCacheMergeCarriesRecentRowsFromFailedSource(t *testing.T) {
 		Attribution: OpenMeteoAttribution,
 		Measures:    []Measure{row(MeasureUV, "open-meteo", now)},
 	}}
-	merged := cache.Merge(fresh)
+	merged := cache.Merge(fresh, Sources{AirHealth: true, OpenMeteo: true})
 	if uv, _ := merged.Snapshot.Measure(MeasureUV); !uv.Updated.Equal(now) {
 		t.Errorf("UV row was not replaced by the fresh reading: %v", uv.Updated)
 	}
@@ -613,7 +613,7 @@ func TestCacheMergeCarriesRecentRowsFromFailedSource(t *testing.T) {
 	later := fresh
 	later.UpdatedAt = earlier.Add(CarryLimit + time.Minute)
 	later.Snapshot.Measures = []Measure{row(MeasureUV, "open-meteo", later.UpdatedAt)}
-	merged = cache.Merge(later)
+	merged = cache.Merge(later, Sources{AirHealth: true, OpenMeteo: true})
 	if _, ok := merged.Snapshot.Measure(MeasureGrass); ok {
 		t.Fatal("a row older than the carry limit was still shown")
 	}
@@ -631,7 +631,7 @@ func TestCacheNeverMixesPlaces(t *testing.T) {
 	cache.Put(Report{Origin: melbourne, UpdatedAt: now, Snapshot: Snapshot{Measures: []Measure{row(MeasureGrass, "airhealth", now)}}})
 	merged := cache.Merge(Report{Origin: london, UpdatedAt: now, Errors: []string{"x"}, Snapshot: Snapshot{
 		Measures: []Measure{row(MeasureUV, "open-meteo", now)},
-	}})
+	}}, Sources{AirHealth: true, OpenMeteo: true})
 	if _, ok := merged.Snapshot.Measure(MeasureGrass); ok {
 		t.Fatal("Melbourne grass was carried into a London report")
 	}
@@ -696,3 +696,93 @@ func TestShortErrorUsesPlainWords(t *testing.T) {
 
 // fixtureNow is a fixed time on the fixtures' day.
 func fixtureNow() time.Time { return time.Date(2026, 10, 31, 10, 0, 0, 0, time.UTC) }
+
+// Retain applies a source-settings change immediately: readings from the
+// provider the user just turned off disappear before the replacement refresh
+// has a chance to fail, and its context and credit go with them.
+func TestCacheRetainDropsRowsFromDisabledSources(t *testing.T) {
+	now := time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC)
+	melbourne := &Coordinates{Latitude: DefaultLatitude, Longitude: DefaultLongitude}
+	cache := &Cache{}
+	cache.Put(Report{Origin: melbourne, UpdatedAt: now, Snapshot: Snapshot{
+		Location:    Location{Suburb: "Melbourne", State: "VIC"},
+		Date:        "2026-11-01",
+		Title:       "Today",
+		Forecast:    []Day{{Date: "2026-11-02"}},
+		Attribution: AirHealthAttribution + " · " + OpenMeteoAttribution,
+		Measures:    []Measure{row(MeasureGrass, "airhealth", now), row(MeasureUV, "open-meteo", now)},
+	}})
+
+	cache.Retain(Sources{OpenMeteo: true})
+
+	retained, ok := cache.Get()
+	if !ok {
+		t.Fatal("cache dropped the report even though Open-Meteo remains enabled")
+	}
+	if _, ok := retained.Snapshot.Measure(MeasureGrass); ok {
+		t.Fatal("AirHealth grass survived the source being turned off")
+	}
+	if _, ok := retained.Snapshot.Measure(MeasureUV); !ok {
+		t.Fatal("Open-Meteo UV was dropped with the disabled source")
+	}
+	if retained.Snapshot.Location.Suburb != "" || retained.Snapshot.Date != "" || len(retained.Snapshot.Forecast) != 0 {
+		t.Errorf("AirHealth context survived: %+v", retained.Snapshot)
+	}
+	if strings.Contains(retained.Snapshot.Attribution, AirHealthAttribution) {
+		t.Errorf("attribution still credits the disabled source: %q", retained.Snapshot.Attribution)
+	}
+
+	// A failed refresh keeps only what is still enabled.
+	kept, ok := cache.Keep([]string{"Open-Meteo: down"})
+	if !ok {
+		t.Fatal("Keep dropped a report with an enabled source")
+	}
+	if _, ok := kept.Snapshot.Measure(MeasureGrass); ok {
+		t.Fatal("Keep resurrected a row from the disabled source")
+	}
+}
+
+// A partial refresh must not carry rows from a source the request did not
+// enable, even while they are younger than CarryLimit.
+func TestCacheMergeDoesNotCarryDisabledSources(t *testing.T) {
+	earlier := time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC)
+	now := earlier.Add(time.Hour)
+	melbourne := &Coordinates{Latitude: DefaultLatitude, Longitude: DefaultLongitude}
+	cache := &Cache{}
+	cache.Put(Report{Origin: melbourne, UpdatedAt: earlier, Snapshot: Snapshot{
+		Attribution: AirHealthAttribution + " · " + OpenMeteoAttribution,
+		Measures:    []Measure{row(MeasureGrass, "airhealth", earlier), row(MeasureUV, "open-meteo", earlier)},
+	}})
+
+	merged := cache.Merge(Report{Origin: melbourne, UpdatedAt: now, Snapshot: Snapshot{
+		Measures: []Measure{row(MeasureUV, "open-meteo", now)},
+	}}, Sources{OpenMeteo: true})
+
+	if _, ok := merged.Snapshot.Measure(MeasureGrass); ok {
+		t.Fatal("Merge carried a disabled source's row")
+	}
+	if merged.Stale {
+		t.Error("a report carrying nothing from the disabled source was marked stale")
+	}
+	if strings.Contains(merged.Snapshot.Attribution, AirHealthAttribution) {
+		t.Errorf("attribution credits the disabled source: %q", merged.Snapshot.Attribution)
+	}
+}
+
+func TestSourcesAllowsSourceRejectsUnknownCredits(t *testing.T) {
+	sources := Sources{AirHealth: true, OpenMeteo: true, GoogleKey: "key"}
+	for source, want := range map[string]bool{
+		"airhealth":  true,
+		"open-meteo": true,
+		"google":     true,
+		"epa":        false,
+		"":           false,
+	} {
+		if got := sources.AllowsSource(source); got != want {
+			t.Errorf("AllowsSource(%q) = %v, want %v", source, got, want)
+		}
+	}
+	if (Sources{}).AllowsSource("airhealth") || (Sources{}).AllowsSource("open-meteo") {
+		t.Error("zero sources enabled a provider")
+	}
+}
