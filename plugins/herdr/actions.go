@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Nomadcxx/sysc-plugins/internal/childproc"
 )
 
 // Default action timeouts. Timeout bounds socket calls and one-shot commands;
@@ -262,10 +264,7 @@ func (a *Actions) defaultRun(ctx context.Context, bin string, args ...string) ([
 func defaultSpawn(cmd string, args ...string) error {
 	c := exec.Command(cmd, args...)
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := c.Start(); err != nil {
-		return err
-	}
-	return c.Process.Release()
+	return childproc.Start(c)
 }
 
 // capWriter buffers up to limit bytes and silently drops the rest, so a chatty
