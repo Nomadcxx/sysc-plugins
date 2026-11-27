@@ -78,8 +78,9 @@ func CheckRepo(ctx context.Context, run Runner) ([]Update, error) {
 	}
 }
 
-// CheckAUR runs the AUR helper's -Qua. A non-zero exit with no output means
-// "nothing to report"; helpers exit non-zero on an empty queue too.
+// CheckAUR runs the AUR helper's -Qua. A non-zero exit with no output on
+// either stream means "nothing to report"; helpers exit non-zero on an empty
+// queue too. Output on stderr is a real failure, not an empty queue.
 func CheckAUR(ctx context.Context, run Runner, helper string) ([]Update, error) {
 	ctx, cancel := context.WithTimeout(ctx, AURTimeout)
 	defer cancel()
@@ -88,7 +89,10 @@ func CheckAUR(ctx context.Context, run Runner, helper string) ([]Update, error) 
 		return nil, fmt.Errorf("%s: %w", helper, err)
 	}
 	if exit != 0 && len(bytes.TrimSpace(stdout)) == 0 {
-		return nil, nil
+		if len(bytes.TrimSpace(stderr)) == 0 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%s: %s", helper, failureReason(stderr, exit))
 	}
 	if exit != 0 {
 		return nil, fmt.Errorf("%s: %s", helper, failureReason(stderr, exit))
