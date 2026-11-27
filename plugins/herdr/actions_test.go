@@ -5,10 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 // startFakeAPI stands up a one-shot unix-socket server, records the single
@@ -354,4 +359,40 @@ func TestTerminalsOverrideFallback(t *testing.T) {
 	if !reflect.DeepEqual(got, []string{"wezterm"}) {
 		t.Errorf("looked up %v; override list should replace the default fallbacks", got)
 	}
+}
+
+// TestDefaultSpawnReapsTheTerminal covers #129: the detached terminal is
+// released from the session but must still be waited for when it exits.
+func TestDefaultSpawnReapsTheTerminal(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	if err := defaultSpawn("sh", "-c", "echo $$ > "+pidFile+"; exit 0"); err != nil {
+		t.Fatal(err)
+	}
+	var data []byte
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var err error
+		data, err = os.ReadFile(pidFile)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("terminal did not run: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("parse terminal pid %q: %v", data, err)
+	}
+	statPath := fmt.Sprintf("/proc/%d/stat", pid)
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(statPath); os.IsNotExist(err) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stat, _ := os.ReadFile(statPath)
+	t.Fatalf("terminal process %d was not reaped; /proc state: %s", pid, stat)
 }

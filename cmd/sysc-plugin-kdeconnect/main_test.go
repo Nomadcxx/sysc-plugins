@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -447,6 +451,56 @@ func TestReplyBehindInputBurstDoesNotWedge(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 		t.Fatal("plugin is wedged: it never rendered the view opened after the input burst")
 	}
+}
+
+// TestOpenRecentImageReapsTheOpener covers #129: xdg-open exits long before
+// the plugin does, so it must be reaped instead of staying a zombie.
+func TestOpenRecentImageReapsTheOpener(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	stub := filepath.Join(dir, "xdg-open")
+	script := "#!/bin/sh\necho $$ > \"$SYSC_TEST_PID\"\nexit 0\n"
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("SYSC_TEST_PID", pidFile)
+
+	if err := openRecentImage(filepath.Join(dir, "image.png")); err != nil {
+		t.Fatal(err)
+	}
+	assertHelperReaped(t, pidFile)
+}
+
+func assertHelperReaped(t *testing.T, pidFile string) {
+	t.Helper()
+	var data []byte
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var err error
+		data, err = os.ReadFile(pidFile)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("helper did not run: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("parse helper pid %q: %v", data, err)
+	}
+	statPath := fmt.Sprintf("/proc/%d/stat", pid)
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(statPath); os.IsNotExist(err) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stat, _ := os.ReadFile(statPath)
+	t.Fatalf("helper process %d was not reaped; /proc state: %s", pid, stat)
 }
 
 func TestInputMatchesView(t *testing.T) {

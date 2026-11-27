@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/childproc"
 	"github.com/Nomadcxx/sysc-plugins/internal/hostcall"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	"github.com/Nomadcxx/sysc-plugins/plugins/kdeconnect"
@@ -467,12 +468,16 @@ func finishRecentImageAction(ctx context.Context, c *v1.Client, svc *kdeconnect.
 		return
 	}
 	if result.open {
-		if err := exec.Command("xdg-open", result.path).Start(); err != nil {
+		if err := openRecentImage(result.path); err != nil {
 			notifyRecentImageFailure(ctx, c, result, err)
 		}
 		return
 	}
 	svc.Do(kdeconnect.Action{Kind: kdeconnect.ActionShareFile, DeviceID: result.deviceID, Arg: result.path})
+}
+
+func openRecentImage(path string) error {
+	return childproc.Start(exec.Command("xdg-open", path))
 }
 
 func notifyRecentImageFailure(ctx context.Context, c *v1.Client, result recentImageResult, err error) {

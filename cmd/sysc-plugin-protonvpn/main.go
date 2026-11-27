@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nomadcxx/sysc-plugins/internal/childproc"
 	identity "github.com/Nomadcxx/sysc-plugins/internal/identity"
 	"github.com/Nomadcxx/sysc-plugins/plugins/protonvpn"
 	v1 "github.com/Nomadcxx/sysc-shell/plugin/v1"
@@ -797,13 +798,17 @@ func (s *session) spawnSignIn() {
 			continue
 		}
 		args := append(append([]string{}, t.prefix...), s.env.cliBin, "signin", s.userDraft)
-		if err := exec.Command(bin, args...).Start(); err != nil {
+		if err := startTerminal(bin, args...); err != nil {
 			continue
 		}
 		s.signInErr = ""
 		return
 	}
 	s.signInErr = fmt.Sprintf("No terminal found; run: %s signin %s", s.env.cliBin, s.userDraft)
+}
+
+func startTerminal(bin string, args ...string) error {
+	return childproc.Start(exec.Command(bin, args...))
 }
 
 func (s *session) signOut() {

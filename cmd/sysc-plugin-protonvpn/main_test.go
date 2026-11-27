@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -688,4 +690,41 @@ func TestSignoutStatusReadFailureEndsTransition(t *testing.T) {
 	if got := s.machine.Snapshot().Phase; got != protonvpn.PhaseConnected {
 		t.Fatalf("phase after successful signout with failed status read = %v, want connected", got)
 	}
+}
+
+// TestStartTerminalReapsTheSignInTerminal covers #129: the terminal outlives
+// the plugin, so it must be reaped once it exits.
+func TestStartTerminalReapsTheSignInTerminal(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	script := "echo $$ > " + pidFile + "; exit 0"
+	if err := startTerminal("sh", "-c", script); err != nil {
+		t.Fatal(err)
+	}
+	var data []byte
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var err error
+		data, err = os.ReadFile(pidFile)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("terminal did not run: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("parse terminal pid %q: %v", data, err)
+	}
+	statPath := fmt.Sprintf("/proc/%d/stat", pid)
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(statPath); os.IsNotExist(err) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stat, _ := os.ReadFile(statPath)
+	t.Fatalf("terminal process %d was not reaped; /proc state: %s", pid, stat)
 }
