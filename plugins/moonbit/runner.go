@@ -125,7 +125,8 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 	// Setpgid makes sudo the group leader; keep its group ID even if sudo exits
 	// before Cancel's grace timer fires.
 	pgid := cmd.Process.Pid
-	kill := func() { stopCommand(cmd, stdout, pgid) }
+	var killOnce sync.Once
+	kill := func() { killOnce.Do(func() { stopCommand(cmd, stdout, pgid) }) }
 
 	prompts := make(chan struct{}, 4)
 	tail := &lastLine{}
@@ -155,6 +156,21 @@ func (r Runner) Start(password []byte, req Request) (*Op, error) {
 				continue
 			}
 			events <- ev
+		}
+		if err := sc.Err(); err != nil {
+			// Scanner stops at the first line past maxEventLine without
+			// consuming the rest. The writer can still be blocked on the
+			// unread pipe, so waiting for it here would hang the panel until
+			// the user cancels. Stop the run and report the bound instead.
+			// Other read errors come from closing the pipe during shutdown,
+			// and need no event of their own.
+			if errors.Is(err, bufio.ErrTooLong) {
+				select {
+				case events <- Event{T: "error", Msg: fmt.Sprintf("moonbit event exceeded %d bytes", maxEventLine)}:
+				default:
+				}
+				kill()
+			}
 		}
 		// Wait closes the pipes it made for the child, so let the stderr
 		// watcher take sudo's last words first. Bounded: a descendant can

@@ -35,6 +35,9 @@ echo "$req" > "$FAKE_DIR/request"
 case "$FAKE_MODE" in
   cancel) echo '{"t":"category","name":"a","i":1,"total":9}'; cat >/dev/null; echo '{"t":"cancelled"}';;
   long) printf '{"t":"clean_done","deleted":3,"errors":["%s"]}\n' "$(head -c 200000 /dev/zero | tr '\0' x)";;
+  # One line past the event limit, written slowly enough that the run is
+  # blocked on the pipe when the scanner gives up.
+  oversize) head -c 50000000 /dev/zero | tr '\0' a; echo; sleep 100;;
   # Grandchild keeps stdout open and ignores stdin EOF and catchable signals.
   # Killing the parent script must not be enough to end the run.
   hung)
@@ -456,5 +459,25 @@ exec sleep 100000
 	}
 	if !processEnded(child) {
 		t.Fatalf("root child %d still running", child)
+	}
+}
+
+// TestOversizedEventStopsTheRun makes sure a line past maxEventLine ends the
+// run instead of waiting forever for a writer that is blocked on the pipe.
+func TestOversizedEventStopsTheRun(t *testing.T) {
+	r := fakeSudo(t, "oversize")
+	op, err := r.Start([]byte("hunter2"), Request{Cmd: "scan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := drain(t, op)
+	found := false
+	for _, ev := range evs {
+		if ev.T == "error" && strings.Contains(ev.Msg, "exceeded") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("events = %+v, want a bounded size error", evs)
 	}
 }
