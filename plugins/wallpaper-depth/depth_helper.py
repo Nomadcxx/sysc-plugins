@@ -96,12 +96,18 @@ def download_model(destination: Path) -> None:
     temporary.unlink(missing_ok=True)
     request = urllib.request.Request(MODEL_URL, headers={"User-Agent": "Noctalia-Wallpaper-Depth/1.0"})
     try:
+        received = 0
         with urllib.request.urlopen(request, timeout=60) as response, temporary.open("wb") as stream:
             while chunk := response.read(1024 * 1024):
+                received += len(chunk)
+                if received > MODEL_SIZE:
+                    raise RuntimeError(
+                        f"model size mismatch: expected {MODEL_SIZE} bytes, received more than {MODEL_SIZE}"
+                    )
                 stream.write(chunk)
-        if temporary.stat().st_size != MODEL_SIZE:
+        if received != MODEL_SIZE:
             raise RuntimeError(
-                f"model size mismatch: expected {MODEL_SIZE} bytes, received {temporary.stat().st_size}"
+                f"model size mismatch: expected {MODEL_SIZE} bytes, received {received}"
             )
         checksum = sha256_file(temporary)
         if checksum != MODEL_SHA256:
