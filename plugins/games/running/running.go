@@ -58,7 +58,7 @@ func ScanGames(ctx context.Context, gameDirs, names []string, procRoot string) (
 			}
 		}
 		for dir := range pending {
-			if matchesDir(args, dir) {
+			if matchesDir(procRoot, m.PID, args, dir) {
 				dirs[dir] = m
 				delete(pending, dir)
 			}
@@ -130,21 +130,65 @@ func eachProc(ctx context.Context, procRoot string, fn func(Match, [][]byte) boo
 	return nil
 }
 
-// matchesDir reports whether any argv entry is the install dir itself or a
-// path inside it. Matching per argument (not substring) keeps sibling
-// installs like "Hades" and "Hades II" from sharing a process.
-func matchesDir(args [][]byte, dir string) bool {
+// matchesDir reports whether the process is a verified game process for dir,
+// rather than an unrelated app that merely names a file in the install tree.
+// Native games launched from the directory qualify through argv[0] or the
+// executable path. Known launchers qualify when they carry a game executable
+// or script from the directory, which covers Wine and Proton prefixes while
+// rejecting an editor opened on README.md or even on a game binary.
+func matchesDir(procRoot string, pid int, args [][]byte, dir string) bool {
 	dir = strings.TrimSuffix(dir, "/")
-	if dir == "" {
+	if dir == "" || len(args) == 0 {
 		return false
 	}
-	prefix := dir + "/"
-	for _, arg := range args {
-		if string(arg) == dir || strings.HasPrefix(string(arg), prefix) {
+	if exe, err := os.Readlink(filepath.Join(procRoot, strconv.Itoa(pid), "exe")); err == nil && pathWithin(exe, dir) {
+		return true
+	}
+	argv0 := string(args[0])
+	if pathWithin(argv0, dir) {
+		return true
+	}
+	if !knownLauncher(filepath.Base(argv0)) {
+		return false
+	}
+	for _, arg := range args[1:] {
+		candidate := string(arg)
+		if pathWithin(candidate, dir) && gameExecutable(candidate) {
 			return true
 		}
 	}
 	return false
+}
+
+func pathWithin(path, dir string) bool {
+	return path == dir || strings.HasPrefix(path, dir+"/")
+}
+
+// knownLauncher reports whether base is a runtime that may carry the game
+// path as one of its arguments rather than as argv[0].
+func knownLauncher(base string) bool {
+	switch strings.ToLower(base) {
+	case "wine", "wine64", "wine-preloader", "wineserver", "proton",
+		"python", "python3", "bash", "sh", "dash",
+		"gamescope", "gamemoderun", "mangohud", "box64", "box86":
+		return true
+	}
+	return false
+}
+
+// gameExecutable accepts a game binary, script, or Wine/Proton image. The
+// executable bit covers native launches; the suffix covers Windows images
+// that Wine runs without a Unix execute bit.
+func gameExecutable(path string) bool {
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".exe", ".appimage", ".sh", ".bin", ".x86_64", ".x86":
+		return true
+	}
+	// Windows and wrapped launchers often name an extensionless image.
+	return !strings.Contains(filepath.Base(path), ".")
 }
 
 // Stop signals the whole process group: TERM, then KILL after grace. The

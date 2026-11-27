@@ -89,6 +89,34 @@ func TestScanEmptyInputs(t *testing.T) {
 	}
 }
 
+func TestScanRejectsEditorOpenedOnAGameFile(t *testing.T) {
+	root := fakeProc(t, map[string]string{
+		"20": "/usr/bin/vim\x00/Games/Hades/README.md\x00",
+		"21": "/usr/bin/vim\x00/Games/Hades/Hades.exe\x00",
+	})
+	got, err := Scan([]string{"/Games/Hades"}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("editor matched a game directory: %v", got)
+	}
+}
+
+func TestScanAcceptsKnownLauncherCarryingAGameImage(t *testing.T) {
+	root := fakeProc(t, map[string]string{
+		"30": "/usr/bin/wine\x00/Games/Hades/Hades.exe\x00",
+		"31": "/usr/bin/sh\x00/Games/Beta/start.sh\x00",
+	})
+	got, err := Scan([]string{"/Games/Hades", "/Games/Beta"}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["/Games/Hades"].PID != 30 || got["/Games/Beta"].PID != 31 {
+		t.Fatalf("launcher matches = %v, want PIDs 30 and 31", got)
+	}
+}
+
 func TestScanSiblingPrefixes(t *testing.T) {
 	root := fakeProc(t, map[string]string{
 		"10": "/Games/Hades II/start.sh\x00",
