@@ -554,6 +554,21 @@ func (s *Service) probablyCharged(tx *store.Tx, sub subs.Subscription) (bool, er
 	return false, nil
 }
 
+// Active returns the live (active, not deleted) subscriptions.
+func (s *Service) Active(ctx context.Context) ([]subs.Subscription, error) {
+	var out []subs.Subscription
+	err := s.st.Tx(ctx, func(tx *store.Tx) error {
+		all, err := tx.ListSubscriptions(false)
+		for _, sub := range all {
+			if sub.Status == subs.Active {
+				out = append(out, sub)
+			}
+		}
+		return err
+	})
+	return out, err
+}
+
 const maxUpcomingDays = 366
 
 // Upcoming lists active items whose next target falls within days (default 30).

@@ -336,3 +336,16 @@ func TestSnapshotOrdersByTargetAndSkipsCancelledNotifications(t *testing.T) {
 		t.Fatalf("since=2 gave %d", n)
 	}
 }
+
+func TestActiveReturnsLiveSubscriptions(t *testing.T) {
+	h := newHarness(t, "2026-11-29")
+	a := mustAdd(t, h.svc, netflix())
+	b := mustAdd(t, h.svc, AddInput{Name: "Stan", Amount: "17", Currency: "AUD", Cycle: subs.Month, AnchorDate: "2026-12-10"})
+	c := mustAdd(t, h.svc, AddInput{Name: "Spotify", Amount: "13.99", Currency: "AUD", Cycle: subs.Month, AnchorDate: "2026-12-01"})
+	h.svc.ConfirmCancelled(ctx, "t", b.ID, "")
+	h.svc.Delete(ctx, "t", c.ID)
+	got, err := h.svc.Active(ctx)
+	if err != nil || len(got) != 1 || got[0].ID != a.ID {
+		t.Fatalf("%+v %v", got, err)
+	}
+}

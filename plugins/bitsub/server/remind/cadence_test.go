@@ -1,6 +1,7 @@
 package remind
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/Nomadcxx/sysc-plugins/plugins/bitsub/subs"
@@ -164,5 +165,28 @@ func TestStepCopyWithoutRates(t *testing.T) {
 	steps := DueSteps(s, subs.MustDate("2026-11-29"), subs.Rates{}, false)
 	if len(steps) != 1 || steps[0].Body != "US$30.00/mo · Keep or cancel?" {
 		t.Fatalf("%+v", steps)
+	}
+}
+
+func TestOffsets(t *testing.T) {
+	s := trial("2026-12-09", subs.Undecided)
+	cases := []struct {
+		intent subs.Intent
+		kind   subs.TargetKind
+		days   []int
+		want   []int
+	}{
+		{subs.Undecided, subs.TargetTrialEnd, nil, []int{7, 2, 1}},
+		{subs.Undecided, subs.TargetRenewal, nil, []int{7, 2}},
+		{subs.Keep, subs.TargetTrialEnd, nil, []int{1}},
+		{subs.Cancel, subs.TargetRenewal, nil, []int{3, 2, 1}},
+		{subs.Undecided, subs.TargetRenewal, []int{14, 3}, []int{14, 3}},
+		{subs.Cancel, subs.TargetRenewal, []int{14, 3}, []int{3, 2, 1}},
+	}
+	for _, c := range cases {
+		s.Intent, s.ReminderDays = c.intent, c.days
+		if got := Offsets(s, c.kind); !slices.Equal(got, c.want) {
+			t.Errorf("%s/%s/%v: %v want %v", c.intent, c.kind, c.days, got, c.want)
+		}
 	}
 }

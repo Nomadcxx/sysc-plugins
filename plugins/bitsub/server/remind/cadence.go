@@ -34,6 +34,7 @@ var (
 	trialOffsets     = []int{7, 2, 1}
 	undecidedOffsets = []int{7, 2}
 	keepOffsets      = []int{1}
+	cancelOffsets    = []int{cancelLeadDays, 2, 1}
 )
 
 // DueSteps returns at most one step: the latest whose day has arrived while
@@ -68,20 +69,14 @@ func DueSteps(s subs.Subscription, today subs.Date, rates subs.Rates, charged bo
 		return []Step{st}
 	}
 
-	var prefix string
-	var offsets []int
+	prefix := "undecided"
 	switch {
 	case s.Intent == subs.Keep:
-		prefix, offsets = "keep", keepOffsets
+		prefix = "keep"
 	case kind == subs.TargetTrialEnd:
-		prefix, offsets = "trial", trialOffsets
-	default:
-		prefix, offsets = "undecided", undecidedOffsets
+		prefix = "trial"
 	}
-	if len(s.ReminderDays) > 0 {
-		offsets = s.ReminderDays
-	}
-	offset, ok := latestArrived(offsets, days)
+	offset, ok := latestArrived(Offsets(s, kind), days)
 	if !ok {
 		return nil
 	}
@@ -101,6 +96,23 @@ func DueSteps(s subs.Subscription, today subs.Date, rates subs.Rates, charged bo
 	}
 	st.Email = st.Urgency == urgencyCritical
 	return []Step{st}
+}
+
+// Offsets are the days before the target on which steps fire. The calendar
+// mirror uses the same list for its alarms. ReminderDays replaces them
+// except for a cancel intent, whose nag runs from cancel-by − 3.
+func Offsets(s subs.Subscription, kind subs.TargetKind) []int {
+	switch {
+	case s.Intent == subs.Cancel:
+		return cancelOffsets
+	case len(s.ReminderDays) > 0:
+		return s.ReminderDays
+	case s.Intent == subs.Keep:
+		return keepOffsets
+	case kind == subs.TargetTrialEnd:
+		return trialOffsets
+	}
+	return undecidedOffsets
 }
 
 // latestArrived is the smallest offset ≥ days: the most recent step whose
