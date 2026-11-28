@@ -36,7 +36,7 @@ ifeq ($(shell $(PKG_CONFIG) --exists $(CALENDAR_PC) 2>/dev/null && echo yes),)
 endif
 USER_PLUGIN_ROOT := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/sysc-shell/plugins
 
-.PHONY: build install link test vet fmt validate thumbnails capture-check capture captures catalog-validate thinkpad-screenshots clean
+.PHONY: build bitsubd install link test vet fmt validate thumbnails capture-check capture captures catalog-validate thinkpad-screenshots clean
 
 build:
 	@set -e; for entry in $(PLUGINS); do \
@@ -44,6 +44,10 @@ build:
 		echo "go build -o plugins/$$dir/bin/$$cmd ./cmd/$$cmd"; \
 		go build -trimpath -o "plugins/$$dir/bin/$$cmd" "./cmd/$$cmd"; \
 	done
+
+# bitsubd is bitsub's always-on service (not a shell plugin); see plugins/bitsub/README.md.
+bitsubd:
+	go build -trimpath -o plugins/bitsub/bin/bitsubd ./cmd/bitsubd
 
 install: build link
 

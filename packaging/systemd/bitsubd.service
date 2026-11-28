@@ -1,0 +1,13 @@
+[Unit]
+Description=bitsub subscription tracker
+Documentation=https://github.com/Nomadcxx/sysc-plugins/tree/main/plugins/bitsub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/bitsubd
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
