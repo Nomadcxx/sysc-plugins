@@ -107,3 +107,15 @@ func TestRolloverWithoutRatesKeepsHistoryApproximate(t *testing.T) {
 		t.Fatalf("series %+v", last)
 	}
 }
+
+func TestItemForOneSubscription(t *testing.T) {
+	h := newHarness(t, "2026-11-29")
+	s := mustAdd(t, h.svc, AddInput{Name: "Speechify", Amount: "139", Currency: "USD", Cycle: subs.Year, TrialEnd: "2026-12-02", Intent: subs.Cancel})
+	h.clock.set("2026-12-03")
+	h.svc.Rollover(ctx)
+	sub, _ := h.svc.Get(ctx, s.ID)
+	it, err := h.svc.Item(ctx, sub)
+	if err != nil || !it.ProbablyCharged || it.PriceAUD != 21550 || it.Target.String() != "2027-12-02" {
+		t.Fatalf("%+v %v", it, err)
+	}
+}

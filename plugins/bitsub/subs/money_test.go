@@ -110,3 +110,14 @@ func TestParseCurrency(t *testing.T) {
 		}
 	}
 }
+
+func TestMoneyDecimal(t *testing.T) {
+	for m, want := range map[Money]string{{2000, "USD"}: "20.00", {123456789, "AUD"}: "1234567.89", {500, "JPY"}: "500", {5, "EUR"}: "0.05"} {
+		if got := m.Decimal(); got != want {
+			t.Errorf("%v.Decimal() = %q want %q", m, got, want)
+		}
+		if back, err := ParseAmount(m.Decimal(), m.Currency); err != nil || back != m {
+			t.Errorf("round trip %v: %v %v", m, back, err)
+		}
+	}
+}

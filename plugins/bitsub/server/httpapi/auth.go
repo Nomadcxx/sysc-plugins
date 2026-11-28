@@ -33,21 +33,28 @@ func ActorFrom(ctx context.Context) string {
 	return name
 }
 
-// Wrap admits requests carrying a known bearer token, comparing every token
-// in constant time.
+// Actor is the name of the token in h's bearer Authorization, or "" when
+// it is missing or unknown. Every token is compared in constant time.
+func (a *Auth) Actor(h http.Header) string {
+	plain, ok := strings.CutPrefix(h.Get("Authorization"), "Bearer ")
+	if !ok || plain == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(plain))
+	got := []byte(hex.EncodeToString(sum[:]))
+	name := ""
+	for _, t := range a.tokens {
+		if subtle.ConstantTimeCompare(got, []byte(strings.ToLower(t.SHA256))) == 1 {
+			name = t.Name
+		}
+	}
+	return name
+}
+
+// Wrap admits requests carrying a known bearer token.
 func (a *Auth) Wrap(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		plain, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		name := ""
-		if ok && plain != "" {
-			sum := sha256.Sum256([]byte(plain))
-			got := []byte(hex.EncodeToString(sum[:]))
-			for _, t := range a.tokens {
-				if subtle.ConstantTimeCompare(got, []byte(strings.ToLower(t.SHA256))) == 1 {
-					name = t.Name
-				}
-			}
-		}
+		name := a.Actor(r.Header)
 		if name == "" {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return

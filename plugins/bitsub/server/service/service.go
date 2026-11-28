@@ -246,7 +246,7 @@ func (s *Service) Update(ctx context.Context, actor, id string, in UpdateInput) 
 					return err
 				}
 			}
-			amount := formatPlain(sub.Price)
+			amount := sub.Price.Decimal()
 			if in.Amount != nil {
 				amount = *in.Amount
 			}
@@ -331,15 +331,6 @@ func (s *Service) Update(ctx context.Context, actor, id string, in UpdateInput) 
 		return tx.Audit(actor, "update", sub.ID, before, sub)
 	})
 	return after, err
-}
-
-// formatPlain renders m as a bare decimal ParseAmount accepts.
-func formatPlain(m subs.Money) string {
-	s := m.String()
-	if i := strings.IndexAny(s, "0123456789"); i >= 0 {
-		s = s[i:]
-	}
-	return strings.ReplaceAll(s, ",", "")
 }
 
 func (s *Service) SetIntent(ctx context.Context, actor, id string, intent subs.Intent) (subs.Subscription, error) {
@@ -526,6 +517,18 @@ func (s *Service) items(tx *store.Tx, f Filter) ([]subs.Item, error) {
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
+}
+
+// Item is sub's list row, with ProbablyCharged filled.
+func (s *Service) Item(ctx context.Context, sub subs.Subscription) (subs.Item, error) {
+	rates, _ := s.currentRates()
+	it := subs.ItemOf(sub, rates, s.Today())
+	err := s.st.Tx(ctx, func(tx *store.Tx) error {
+		var err error
+		it.ProbablyCharged, err = s.probablyCharged(tx, sub)
+		return err
+	})
+	return it, err
 }
 
 // probablyCharged: intent cancel and an assumed charge on or after the day

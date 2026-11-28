@@ -210,3 +210,20 @@ func TestWrongMethodRejected(t *testing.T) {
 		t.Fatalf("%d", code)
 	}
 }
+
+func TestActorFromHeader(t *testing.T) {
+	plain, sha, _ := GenerateToken()
+	a := NewAuth([]Token{{Name: "codex-laptop", SHA256: sha}})
+	h := http.Header{}
+	if got := a.Actor(h); got != "" {
+		t.Fatalf("no header: %q", got)
+	}
+	h.Set("Authorization", "Bearer "+plain)
+	if got := a.Actor(h); got != "codex-laptop" {
+		t.Fatalf("%q", got)
+	}
+	h.Set("Authorization", "Bearer nope")
+	if got := a.Actor(h); got != "" {
+		t.Fatalf("unknown token: %q", got)
+	}
+}

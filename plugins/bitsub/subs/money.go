@@ -83,6 +83,11 @@ func (m Money) String() string {
 	return sym + formatMinor(m.Minor, m.Currency.Decimals())
 }
 
+// Decimal is the bare amount ParseAmount reads back, e.g. "20.00" or "500".
+func (m Money) Decimal() string {
+	return strings.ReplaceAll(formatMinor(m.Minor, m.Currency.Decimals()), ",", "")
+}
+
 func formatMinor(minor int64, dec int) string {
 	sign := ""
 	if minor < 0 {
