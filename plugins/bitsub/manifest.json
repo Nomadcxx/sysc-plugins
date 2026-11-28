@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "id": "org.sysc.bitsub",
+  "name": "bitsub",
+  "description": "Subscriptions, renewals and trials — keep or cancel before you're charged.",
+  "version": "0.1.0",
+  "protocol": { "major": 1, "minor": 28 },
+  "exec": "bin/sysc-plugin-bitsub",
+  "capabilities": ["notifications", "panels", "settings", "state"],
+  "requires": { "commands": [] },
+  "widgets": [ { "id": "bar", "settings": [] } ],
+  "panels": [
+    {
+      "id": "panel",
+      "width": 758,
+      "height": 600,
+      "placement": "attached",
+      "include_settings": false
+    }
+  ],
+  "settings": [
+    {
+      "key": "client_config",
+      "type": "string",
+      "label": "Client config file",
+      "description": "JSON file with bitsubd's URL and this machine's token, mode 0600. The token stays out of the shell's settings.",
+      "default": "~/.config/bitsub/client.json"
+    }
+  ]
+}

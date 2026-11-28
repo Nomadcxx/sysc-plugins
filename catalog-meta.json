@@ -10,6 +10,12 @@
     "author": "Nomadcxx",
     "homepage": "https://github.com/Nomadcxx/sysc-plugins"
   },
+  "org.sysc.bitsub": {
+    "category": "productivity",
+    "author": "Nomadcxx",
+    "license": "MIT",
+    "homepage": "https://github.com/Nomadcxx/sysc-plugins"
+  },
   "org.sysc.calendar": {
     "category": "productivity",
     "author": "Nomadcxx",
