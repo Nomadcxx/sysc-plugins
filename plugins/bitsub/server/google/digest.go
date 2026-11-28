@@ -29,7 +29,7 @@ func Digest(s subs.Snapshot, today subs.Date) (subject, body string) {
 			soon = append(soon, line)
 		}
 	}
-	monthly := subs.FormatAUD(s.Totals.MonthlyAUD, subs.Money{Currency: subs.AUD}, s.Totals.Approx)
+	monthly := subs.FormatTotal(s.Totals.MonthlyAUD, s.Totals.Approx)
 	subject = fmt.Sprintf("bitsub: %d to decide · %s/mo", len(decide), monthly)
 
 	var b strings.Builder
@@ -42,7 +42,7 @@ func Digest(s subs.Snapshot, today subs.Date) (subject, body string) {
 	section("Decide", decide)
 	section("Cancelling", cancelling)
 	section("Next 14 days", soon)
-	next30 := subs.FormatAUD(s.Totals.Next30AUD, subs.Money{Currency: subs.AUD}, s.Totals.Approx)
+	next30 := subs.FormatTotal(s.Totals.Next30AUD, s.Totals.Approx)
 	section("Totals", []string{
 		fmt.Sprintf("- %s a month", monthly),
 		fmt.Sprintf("- %s in the next 30 days (%d renewals)", next30, s.Totals.Next30Count),

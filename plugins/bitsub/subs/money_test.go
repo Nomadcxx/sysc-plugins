@@ -121,3 +121,15 @@ func TestMoneyDecimal(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatTotalNeverShowsUnknownAsZero(t *testing.T) {
+	if got := FormatTotal(0, true); got != "—" {
+		t.Errorf("unknown total: %q", got)
+	}
+	if got := FormatTotal(0, false); got != "A$0.00" {
+		t.Errorf("real zero: %q", got)
+	}
+	if got := FormatTotal(34280, true); got != "≈A$342.80" {
+		t.Errorf("partial: %q", got)
+	}
+}

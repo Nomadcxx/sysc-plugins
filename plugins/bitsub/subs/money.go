@@ -134,6 +134,15 @@ func FormatAUD(aud int64, orig Money, approx bool) string {
 	return FormatPrice(aud, orig, approx, "")
 }
 
+// FormatTotal renders a summed AUD figure. An approximate zero means no
+// price could be converted yet, so it shows "—" rather than A$0.00.
+func FormatTotal(aud int64, approx bool) string {
+	if approx && aud == 0 {
+		return "—"
+	}
+	return FormatAUD(aud, Money{Currency: AUD}, approx)
+}
+
 // FormatPrice is FormatAUD with a cycle suffix after the AUD figure, e.g.
 // "A$215.50/yr (US$139.00)". A non-AUD price with no AUD figure (no rate
 // yet) shows only the original rather than a misleading A$0.00.

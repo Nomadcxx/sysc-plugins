@@ -389,12 +389,13 @@ func hasForeign(items []subs.Item) bool {
 	return false
 }
 
-func aud(minor int64, approx bool) string {
-	return subs.FormatAUD(minor, subs.Money{Currency: subs.AUD}, approx)
-}
+func aud(minor int64, approx bool) string { return subs.FormatTotal(minor, approx) }
 
 // wholeAUD rounds to dollars for the bar and the graph peak, e.g. "A$342".
 func wholeAUD(minor int64, approx bool) string {
+	if approx && minor == 0 {
+		return "—"
+	}
 	s := subs.Money{Minor: (minor + 50) / 100 * 100, Currency: subs.AUD}.String()
 	s = strings.TrimSuffix(s, ".00")
 	if approx {

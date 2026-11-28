@@ -70,3 +70,10 @@ func TestDigestSections(t *testing.T) {
 		t.Errorf("totals missing:\n%s", quiet)
 	}
 }
+
+func TestDigestNoRatesSaysPending(t *testing.T) {
+	subject, body := Digest(subs.Snapshot{Totals: subs.Totals{Approx: true}}, subs.MustDate("2026-11-30"))
+	if strings.Contains(subject+body, "A$0") {
+		t.Fatalf("%s\n%s", subject, body)
+	}
+}

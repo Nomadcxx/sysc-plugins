@@ -303,7 +303,7 @@ func NewServer(svc *service.Service, version string, auth *httpapi.Auth) *mcp.Se
 			if err != nil {
 				return nil, totalsOut{}, toolError(err)
 			}
-			aud := func(m int64) string { return subs.FormatAUD(m, subs.Money{Currency: subs.AUD}, t.Approx) }
+			aud := func(m int64) string { return subs.FormatTotal(m, t.Approx) }
 			return nil, totalsOut{PerMonth: aud(t.MonthlyAUD), PerYear: aud(t.YearlyAUD), Next30Days: aud(t.Next30AUD),
 				Next30Count: t.Next30Count, Approx: t.Approx}, nil
 		})

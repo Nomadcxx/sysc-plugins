@@ -313,3 +313,13 @@ func TestConfigErrorShownInsteadOfOffline(t *testing.T) {
 	checkView(t, "panel config error", p, v1.ViewPanel, PanelWidth, PanelHeight)
 	checkView(t, "tooltip config error", Tooltip(s), v1.ViewTooltip, 280, 200)
 }
+
+func TestNoRatesNeverShowsZeroDollars(t *testing.T) {
+	s := state()
+	s.Snap.Totals = subs.Totals{Approx: true, Next30Count: 3}
+	for name, tree := range map[string]*v1.Node{"bar": Bar(s, 240), "panel": Panel(s), "tooltip": Tooltip(s)} {
+		if txt := allText(tree); strings.Contains(txt, "A$0") {
+			t.Errorf("%s shows a zero total:\n%s", name, txt)
+		}
+	}
+}
