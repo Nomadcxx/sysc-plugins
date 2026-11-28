@@ -34,18 +34,9 @@ func ItemOf(s Subscription, r Rates, today Date) Item {
 	}
 }
 
-// Display is the item's price as shown everywhere, e.g. "A$31.00 (US$20.00)/mo".
+// Display is the item's price as shown everywhere, e.g. "A$31.00/mo (US$20.00)".
 func (it Item) Display() string {
-	return FormatAUDKnown(it.PriceAUD, it.Price, it.PriceApprox) + PriceSuffix(it.Cycle, it.Interval)
-}
-
-// FormatAUDKnown is FormatAUD, except that a non-AUD price with no AUD
-// figure shows only the original instead of a misleading A$0.00.
-func FormatAUDKnown(aud int64, orig Money, approx bool) string {
-	if aud == 0 && orig.Currency != AUD && orig.Minor != 0 {
-		return orig.String()
-	}
-	return FormatAUD(aud, orig, approx)
+	return FormatPrice(it.PriceAUD, it.Price, it.PriceApprox, PriceSuffix(it.Cycle, it.Interval))
 }
 
 type Action struct {

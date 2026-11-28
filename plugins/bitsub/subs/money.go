@@ -126,7 +126,17 @@ func (r Rates) ToAUD(m Money) (int64, bool) {
 // FormatAUD renders AUD first with the original in brackets when it isn't
 // AUD, e.g. "A$31.00 (US$20.00)"; approx prefixes "≈".
 func FormatAUD(aud int64, orig Money, approx bool) string {
-	s := Money{aud, AUD}.String()
+	return FormatPrice(aud, orig, approx, "")
+}
+
+// FormatPrice is FormatAUD with a cycle suffix after the AUD figure, e.g.
+// "A$215.50/yr (US$139.00)". A non-AUD price with no AUD figure (no rate
+// yet) shows only the original rather than a misleading A$0.00.
+func FormatPrice(aud int64, orig Money, approx bool, suffix string) string {
+	if aud == 0 && orig.Currency != AUD && orig.Currency != "" && orig.Minor != 0 {
+		return orig.String() + suffix
+	}
+	s := Money{aud, AUD}.String() + suffix
 	if approx {
 		s = "≈" + s
 	}

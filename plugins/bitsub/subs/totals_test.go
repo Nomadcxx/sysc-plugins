@@ -104,3 +104,20 @@ func TestItemOf(t *testing.T) {
 		t.Fatalf("no rate: %+v", it)
 	}
 }
+
+func TestItemDisplaySuffixFollowsAUD(t *testing.T) {
+	cases := []struct {
+		it   Item
+		want string
+	}{
+		{Item{Price: Money{13900, "USD"}, PriceAUD: 21550, Cycle: Year, Interval: 1}, "A$215.50/yr (US$139.00)"},
+		{Item{Price: Money{1899, "AUD"}, PriceAUD: 1899, Cycle: Month, Interval: 1}, "A$18.99/mo"},
+		{Item{Price: Money{2000, "USD"}, PriceAUD: 3101, PriceApprox: true, Cycle: Month, Interval: 3}, "≈A$31.01/3mo (US$20.00)"},
+		{Item{Price: Money{3000, "USD"}, Cycle: Month, Interval: 1, PriceApprox: true}, "US$30.00/mo"},
+	}
+	for _, c := range cases {
+		if got := c.it.Display(); got != c.want {
+			t.Errorf("Display() = %q want %q", got, c.want)
+		}
+	}
+}
