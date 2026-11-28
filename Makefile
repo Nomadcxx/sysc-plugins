@@ -22,7 +22,8 @@ PLUGINS := \
 	sysc-plugin-hermes:hermes \
 	sysc-plugin-updates:updates \
 	sysc-plugin-thinkpad:thinkpad \
-	sysc-plugin-vpn:vpn
+	sysc-plugin-vpn:vpn \
+	sysc-plugin-bitsub:bitsub
 
 # Calendar is the only cgo plugin; skip it when its pkg-config modules are
 # missing so one optional plugin's headers do not block the remaining plugins.

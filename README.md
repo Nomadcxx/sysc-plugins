@@ -19,6 +19,7 @@ it.
 |---|---|---|
 | **AI Usage** | AI coding-assistant quotas in the bar, with a detail panel and threshold alerts | |
 | **Air Quality & Pollen** | Global air quality and UV, with Australian pollen and thunderstorm asthma alerts for supported locations | |
+| **bitsub** | Subscriptions, renewals and trials: keep or cancel from the bar, with reminders, a calendar mirror and MCP tools | `bitsubd` (archPC or any reachable host); [setup](plugins/bitsub/README.md) |
 | **Calendar** | Read-only calendar with event views and details | evolution-data-server |
 | **Cat** | A bar cat that walks and gallops with CPU load, and grooms, stretches and naps when the machine is idle | |
 | **Faith** | A cross in the bar that offers a prayer, and a Scripture panel with cross-references and commentary | |

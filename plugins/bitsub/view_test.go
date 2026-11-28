@@ -303,3 +303,13 @@ func TestBarLabelFitsWidth(t *testing.T) {
 		t.Errorf("120: %q", got)
 	}
 }
+
+func TestConfigErrorShownInsteadOfOffline(t *testing.T) {
+	s := &State{Now: now, ConfigErr: "open /home/x/.config/bitsub/client.json: no such file or directory"}
+	p := Panel(s)
+	if !strings.Contains(allText(p), "Client config: open /home/x/.config/bitsub/client.json: no such file or directory") {
+		t.Fatalf("%s", allText(p))
+	}
+	checkView(t, "panel config error", p, v1.ViewPanel, PanelWidth, PanelHeight)
+	checkView(t, "tooltip config error", Tooltip(s), v1.ViewTooltip, 280, 200)
+}

@@ -22,8 +22,8 @@ const (
 	cardPad    = 12
 	controlH   = 32
 	rowPad     = 6
-	listHeight = 368
-	statH      = 92
+	listHeight = 360
+	statH      = 100
 	offlineH   = 40
 	// pendingDays: undecided and cancelling items this close show on the bar.
 	pendingDays = 7
@@ -43,6 +43,7 @@ type State struct {
 	Confirming   string // subscription id awaiting "Have you cancelled it?"
 	HostMinor    int
 	ClientConfig string
+	ConfigErr    string // client.json could not be loaded
 }
 
 func (s *State) items() []subs.Item {
@@ -182,6 +183,8 @@ func Panel(s *State) *v1.Node {
 
 func offlineLine(s *State) string {
 	switch {
+	case s.ConfigErr != "":
+		return "Client config: " + s.ConfigErr
 	case s.AuthFailed:
 		return "Token rejected: check " + s.ClientConfig + "."
 	case s.Online:
@@ -214,13 +217,13 @@ func list(s *State, height int) *v1.Node {
 func row(s *State, it subs.Item, today subs.Date) *v1.Node {
 	line, tone := dateLine(it, today)
 	main, orig := priceParts(it)
+	// Always three children: the host lays out a two-child row differently,
+	// which pushed AUD-only prices to the far edge.
 	title := &v1.Node{Kind: v1.KindRow, Gap: 8, Children: []*v1.Node{
 		{Kind: v1.KindText, Text: it.Name, Bold: true},
 		{Kind: v1.KindText, Text: main, Tabular: true},
+		subtle(orig),
 	}}
-	if orig != "" {
-		title.Children = append(title.Children, subtle(orig))
-	}
 	left := &v1.Node{Kind: v1.KindColumn, Gap: 2, Children: []*v1.Node{title, {Kind: v1.KindText, Text: line, Tone: tone}}}
 	return &v1.Node{Kind: v1.KindRow, Key: "row:" + it.ID, PinEnd: true, Padding: rowPad, Fill: "surface", Shape: "medium",
 		Children: []*v1.Node{left, controls(s, it)}}
