@@ -221,7 +221,7 @@ All views are validated with `v1.Validate` and linted with `plugin/lint` at the 
 Both are protocol additions with their own minor bumps (current `origin/main`: `ProtocolMinor = 28`), each in its own PR, following the repo's deploy rules.
 
 **A. Plugin notification actions (minor 29)**
-- Today `Registry.PluginNotify` (`internal/shell/notifications.go`) drops `NotifyParams.Actions` entirely. They're validated and then discarded, so plugin notifications never show buttons.
+- Today `Registry.PluginNotify` (`internal/shell/notifications.go`) drops `NotifyParams.Actions` entirely. They're validated and then discarded, so plugin notifications never show buttons. The root cause is in **sysc-notify**: plugin toasts go through its producer protocol, and `protocol.ProducerRequest` has no actions field. So change A starts with a sysc-notify release that adds actions to producer requests. sysc-shell then bumps to that release.
 - Change: pass the actions through to the published toast, remember notification id → owning plugin instance (bounded, expiring with the notification), and when the shell's toast host invokes an action on a plugin-owned notification, deliver a new host→plugin message:
   `notify.action { id: uint32, key: string }`. `key` = `default` for a body click.
 - Only plugins that negotiated ≥ 29 receive it. Older plugins keep today's behaviour.
